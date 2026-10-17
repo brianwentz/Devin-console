@@ -380,6 +380,10 @@ const api = {
       ipcRenderer.removeListener(IpcChannels.notificationBanner, listener);
     };
   },
+  // Test mode only: dispatch into the main-process __devinworkspaces hooks.
+  // The channel exists only when test hooks are registered.
+  testHook: (name: string, ...args: unknown[]) =>
+    ipcRenderer.invoke('test:hook', name, args),
 };
 
 export type SecretResult = { ok: true } | { ok: false; error: string };

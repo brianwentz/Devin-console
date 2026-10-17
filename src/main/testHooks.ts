@@ -5,7 +5,7 @@ import { clampFraction01, clampTerminalHeight } from '../core/layout';
 import { auditCookies } from './cookieAudit';
 import { refreshAnalyticsView } from './analytics';
 import { cloudViews } from './cloudViews';
-import { fromHostedView, fromShell } from './ipcGuard';
+import { fromHostedView, fromShell, guardedHandle } from './ipcGuard';
 import { terminalHost } from './local/terminalHost';
 import type { Surface } from '../shared/ipc';
 import { identityResolver } from './identity';
@@ -25,6 +25,7 @@ import { state, testMode } from './state';
 import { applyLayout, layoutState, publicState, setPaneOpen, setSessionsOpen } from './window';
 import { shutdown } from './index';
 import { localHost } from './local/ipc';
+import { loadSdk } from './claude/sdk';
 import { publicLocalState } from './local/localState';
 
 export function registerTestHooks(): void {
@@ -258,6 +259,26 @@ export function registerTestHooks(): void {
       terminalPid: (id: string) => terminalHost.pid(id),
       clipboardWrite: (text: string) => clipboard.writeText(text),
       clipboardRead: () => clipboard.readText(),
+      claudeSdkProbe: async () => {
+        const t0 = Date.now();
+        try {
+          const sdk = await loadSdk();
+          return { ok: true, ms: Date.now() - t0, hasListSessions: typeof sdk.listSessions === 'function' };
+        } catch {
+          return { ok: false, ms: Date.now() - t0, hasListSessions: false };
+        }
+      },
     },
+  });
+  // Lets the shell page (and therefore the installed smoke spec, which cannot
+  // evaluate in the main context over CDP) dispatch into the hooks above.
+  // Test-mode only: this handler simply is not registered otherwise.
+  guardedHandle('test:hook', (_event, name: unknown, args: unknown) => {
+    const hooks = (globalThis as Record<string, unknown>).__devinworkspaces as
+      | Record<string, unknown>
+      | undefined;
+    const fn = typeof name === 'string' ? hooks?.[name] : undefined;
+    if (typeof fn !== 'function') return undefined;
+    return (fn as (...a: unknown[]) => unknown)(...(Array.isArray(args) ? args : []));
   });
 }
