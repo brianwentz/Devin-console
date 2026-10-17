@@ -132,6 +132,16 @@ export const IpcChannels = {
   claudeFolderReorder: 'claude:folderReorder',
   claudeShowArchived: 'claude:showArchived',
   claudeContextMenu: 'claude:contextMenu',
+  // Claude chat (Phase 2): SDK-backed chat per session.
+  claudeChatState: 'claude:chatState',
+  claudeChatUpdate: 'claude:chatUpdate',
+  claudeNewSession: 'claude:newSession',
+  claudePrompt: 'claude:prompt',
+  claudeCancel: 'claude:cancel',
+  claudePermission: 'claude:permission',
+  claudeSetPermissionMode: 'claude:setPermissionMode',
+  claudeSetModel: 'claude:setModel',
+  claudeLoadHistory: 'claude:loadHistory',
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
@@ -235,6 +245,11 @@ const ClaudeFields = {
   collapsedFolders: z.array(z.string().max(256)).max(200),
   showArchived: z.boolean(),
   autoArchiveDays: z.number().int().min(0).max(365),
+  defaultPermissionMode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto']),
+  model: z.string().max(200).nullable(),
+  keepAliveMinutes: z.number().int().min(1).max(240),
+  maxLiveAgents: z.number().int().min(1).max(10),
+  lastSessionId: z.string().nullable(),
 };
 const TerminalFields = {
   allSurfaces: z.boolean(),
@@ -333,8 +348,23 @@ export const SettingsObject = z.object({
       collapsedFolders: ClaudeFields.collapsedFolders.default([]),
       showArchived: ClaudeFields.showArchived.default(false),
       autoArchiveDays: ClaudeFields.autoArchiveDays.default(0),
+      defaultPermissionMode: ClaudeFields.defaultPermissionMode.default('default'),
+      model: ClaudeFields.model.default(null),
+      keepAliveMinutes: ClaudeFields.keepAliveMinutes.default(15),
+      maxLiveAgents: ClaudeFields.maxLiveAgents.default(3),
+      lastSessionId: ClaudeFields.lastSessionId.default(null),
     })
-    .default({ path: null, collapsedFolders: [], showArchived: false, autoArchiveDays: 0 }),
+    .default({
+      path: null,
+      collapsedFolders: [],
+      showArchived: false,
+      autoArchiveDays: 0,
+      defaultPermissionMode: 'default',
+      model: null,
+      keepAliveMinutes: 15,
+      maxLiveAgents: 3,
+      lastSessionId: null,
+    }),
 });
 
 // Every field has a default or is optional, so parse({}) yields valid Settings.
@@ -499,6 +529,12 @@ export const ClaudeStateSchema = z.object({
   showArchived: z.boolean(),
   // Transient mutation failure; cleared by the next successful refresh.
   lastError: z.object({ op: z.string(), message: z.string() }).nullable(),
+  // `claude --version` vs the CLI version the pinned SDK targets.
+  versions: z.object({
+    cli: z.string().nullable(),
+    sdkTarget: z.string().nullable(),
+    mismatch: z.boolean(),
+  }),
 });
 export type ClaudeState = z.infer<typeof ClaudeStateSchema>;
 export const UpdateCheckSourceSchema = z.enum([
@@ -767,6 +803,35 @@ export const ClaudeFolderReorderArg = z.object({
   names: z.array(ClaudeFolderName).max(200),
 });
 export const ClaudeShowArchivedArg = z.object({ value: z.boolean() });
+export const ClaudePermissionModeSchema = z.enum([
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'plan',
+  'dontAsk',
+  'auto',
+]);
+export type ClaudePermissionMode = z.infer<typeof ClaudePermissionModeSchema>;
+export const ClaudeNewSessionArg = z.object({ cwd: z.string().min(1).max(4096).nullable() });
+export const ClaudePromptArg = z.object({
+  sessionId: ClaudeSessionId,
+  text: z.string().min(1).max(200_000),
+});
+export const ClaudeCancelArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudePermissionArg = z.object({
+  sessionId: ClaudeSessionId,
+  requestId: z.string().min(1).max(128),
+  optionId: z.string().min(1).max(256),
+});
+export const ClaudeSetPermissionModeArg = z.object({
+  sessionId: ClaudeSessionId,
+  mode: ClaudePermissionModeSchema,
+});
+export const ClaudeSetModelArg = z.object({
+  sessionId: ClaudeSessionId,
+  model: z.string().min(1).max(200).nullable(),
+});
+export const ClaudeLoadHistoryArg = z.object({ sessionId: ClaudeSessionId });
 export const ClaudeContextMenuArg = z.object({
   kind: z.enum(['session', 'folder', 'header']),
   sessionId: ClaudeSessionId.optional(),
@@ -837,9 +902,10 @@ export const LocalStopReasonSchema = z.enum([
   'error',
 ]);
 
-const LocalSessionSchema = z.object({
+// Chat session shared by Devin Local and Claude: everything but the
+// source-specific identity fields (Local adds `workspace`, Claude adds `cwd`…).
+const ChatSessionSchema = z.object({
   id: z.string(),
-  workspace: z.string(),
   title: z.string(),
   createdAt: z.string(),
   messages: z.array(LocalMessageSchema),
@@ -867,6 +933,22 @@ const LocalSessionSchema = z.object({
   historySource: z.enum(['agent', 'local-index']),
   loaded: z.boolean(),
 });
+export type ChatSessionPublic = z.infer<typeof ChatSessionSchema>;
+
+const LocalSessionSchema = ChatSessionSchema.extend({ workspace: z.string() });
+
+export const ClaudeChatSessionSchema = ChatSessionSchema.extend({
+  cwd: z.string(),
+  permissionMode: ClaudePermissionModeSchema,
+  model: z.string().nullable(),
+  // Whether an SDK query is open for this session.
+  live: z.enum(['idle', 'starting', 'live', 'stopped']),
+});
+export type ClaudeChatSessionPublic = z.infer<typeof ClaudeChatSessionSchema>;
+export const ClaudeChatStateSchema = z.object({
+  sessions: z.record(z.string(), ClaudeChatSessionSchema),
+});
+export type ClaudeChatStatePublic = z.infer<typeof ClaudeChatStateSchema>;
 
 const LocalAgentSchema = z.object({
   workspace: z.string(),

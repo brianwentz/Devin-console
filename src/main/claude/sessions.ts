@@ -47,6 +47,8 @@ export class ClaudeSessions {
   private lastSyncAt: string | null = null;
   private lastError: { op: string; message: string } | null = null;
   private showArchived = false;
+  // Filled by the Phase 2 version check (`claude --version` vs the SDK manifest).
+  versions: ClaudeState['versions'] = { cli: null, sdkTarget: null, mismatch: false };
   private refreshInFlight = false;
   private refreshDirty: string | null = null;
   private started = false;
@@ -84,6 +86,7 @@ export class ClaudeSessions {
       sessions: this.showArchived ? this.sessions : this.sessions.filter((s) => !s.isArchived),
       showArchived: this.showArchived,
       lastError: this.lastError,
+      versions: this.versions,
     };
   }
 
