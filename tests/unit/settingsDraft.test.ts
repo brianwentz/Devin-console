@@ -40,6 +40,7 @@ describe('draftFromSettings', () => {
       sessions: { maxLiveViews: 4, keepAliveHours: 12 },
       terminal: { allSurfaces: true, shell: 'pwsh.exe' },
       notifications: { userId: 'user-1', orgId: 'org-2' },
+      claude: { path: 'C:\\tools\\claude.exe', autoArchiveDays: 30 },
     });
     expect(draftFromSettings(custom)).toEqual({
       tenantUrl: 'https://tenant.example.com',
@@ -53,6 +54,8 @@ describe('draftFromSettings', () => {
       sessionsKeepAliveHours: '12',
       terminalAllSurfaces: true,
       terminalShell: 'pwsh.exe',
+      claudePath: 'C:\\tools\\claude.exe',
+      claudeAutoArchiveDays: '30',
       userId: 'user-1',
       orgId: 'org-2',
       linkRules: [{ id: 'r1', kind: 'prefix', pattern: 'https://x.example/', enabled: true }],
@@ -79,6 +82,29 @@ describe('isDraftDirty', () => {
     expect(isDraftDirty(draft({ allowExternal: false }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ maxLiveTabs: '9' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ userId: 'user-9' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudePath: 'C:\\x\\claude.exe' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudeAutoArchiveDays: '7' }), defaults)).toBe(true);
+  });
+
+  it('round-trips claude fields into the patch', () => {
+    const result = validateDraft(
+      draft({ claudePath: '  C:\\tools\\claude.exe  ', claudeAutoArchiveDays: '45' }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.patch.claude).toEqual({
+      path: 'C:\\tools\\claude.exe',
+      autoArchiveDays: 45,
+    });
+    // Blank path clears the override.
+    const cleared = validateDraft(draft({ claudePath: '  ' }));
+    expect(cleared.ok && cleared.patch.claude?.path).toBe(null);
+    for (const value of ['-1', '366', '1.5', 'x']) {
+      const bad = validateDraft(draft({ claudeAutoArchiveDays: value }));
+      expect(bad.ok).toBe(false);
+      if (bad.ok) continue;
+      expect(bad.errors.claudeAutoArchiveDays).toBeTruthy();
+    }
   });
 
   it('treats whitespace-only changes in trimmed fields as clean', () => {
@@ -102,6 +128,7 @@ describe('validateDraft', () => {
       tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
       sessions: { open: true, maxLiveViews: 6, keepAliveHours: 24 },
       terminal: { allSurfaces: false, shell: 'pwsh.exe -l' },
+      claude: { path: null, autoArchiveDays: 0 },
       notifications: { userId: 'u1', orgId: 'o1' },
     });
   });

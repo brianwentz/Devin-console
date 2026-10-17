@@ -1,31 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ChevronDown,
-  ChevronRight,
-  Ellipsis,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  Plus,
-  RefreshCw,
-  SquarePen,
-} from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { Ellipsis, Plus, RefreshCw, SquarePen } from 'lucide-react';
 import type { CloudSessionState } from '../../shared/ipc';
 import {
   addFolder,
   buildSessionTree,
   moveSession,
-  removeFolder,
   renameFolder,
   reorderFolders,
   type CloudListData,
-  type SessionTreeNode,
 } from '../../core/sessionTree';
 import type { Rect } from '../../core/layout';
 import { useShellState } from '../store';
 import { relativeTime } from './relativeTime';
-import { sessionRowClass, sessionMetaClass, sessionFolderHeaderClass } from './sessionRowStyles';
+import { sessionRowClass, sessionMetaClass } from './sessionRowStyles';
+import { FolderNameInput } from './sidebar/FolderNameInput';
+import { PrBadges } from './sidebar/PrBadges';
+import { SessionRow, SessionRowButton } from './sidebar/SessionRow';
+import { SectionHeader } from './sidebar/SectionHeader';
+import { isEditableFolder } from './sidebar/dnd';
+import { useOptimisticList } from './sidebar/useOptimisticList';
+import { useRowKeyboardNav } from './sidebar/useRowKeyboardNav';
 
 // statusEnum → status dot color.
 const STATUS_COLOR: Record<string, string> = {
@@ -43,21 +37,6 @@ const STATUS_COLOR: Record<string, string> = {
 const statusColor = (statusEnum: string | null, status: string) =>
   STATUS_COLOR[statusEnum ?? status] ?? '#8b9bb0';
 
-const SECTION_LABELS: Record<string, string> = {
-  pinned: 'Pinned',
-  recent: 'Recent',
-  participated: 'Participated',
-};
-
-const SESSION_MIME = 'application/x-devin-session';
-const FOLDER_MIME = 'application/x-devin-folder';
-
-// 'pinned'/'participated' are system folders: not editable/reorderable, but
-// like the web app they ARE move targets (POST sessions/folder).
-const isEditableFolder = (name: string) => name !== 'pinned' && name !== 'participated';
-const isMoveTarget = (section: { kind: string }) =>
-  section.kind === 'folder' || section.kind === 'recent';
-
 const OP_LABELS: Record<string, string> = {
   'folder-create': 'create folder',
   'folder-rename': 'rename folder',
@@ -66,39 +45,6 @@ const OP_LABELS: Record<string, string> = {
   'session-move': 'move session',
   'session-archive': 'archive session',
 };
-
-// Inline folder-name editor shared by create and rename.
-function FolderNameInput({
-  initial = '',
-  placeholder,
-  onCommit,
-  onCancel,
-}: {
-  initial?: string;
-  placeholder: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}) {
-  return (
-    <input
-      id="sessionFolderEdit"
-      type="text"
-      autoFocus
-      defaultValue={initial}
-      placeholder={placeholder}
-      className="w-full h-6 px-1.5 rounded bg-[#141d29] border border-[#54749c] text-xs placeholder-[#5c6b80] focus:outline-none"
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          const name = e.currentTarget.value.trim();
-          if (name) onCommit(name);
-        } else if (e.key === 'Escape') {
-          onCancel();
-        }
-      }}
-      onBlur={onCancel}
-    />
-  );
-}
 
 function statusText(cloud: ReturnType<typeof useCloud>): string {
   switch (cloud.status) {
@@ -122,42 +68,6 @@ function statusText(cloud: ReturnType<typeof useCloud>): string {
 
 function useCloud() {
   return useShellState()!.cloud;
-}
-
-type PrCounts = CloudSessionState['prs'];
-
-// PR status badge group — same buckets/colours as the web sidebar. The count
-// is hidden when exactly one bucket is present with a single PR.
-const PR_BUCKETS: {
-  key: keyof PrCounts;
-  label: string;
-  color: string;
-  Icon: typeof GitPullRequest;
-}[] = [
-  { key: 'open', label: 'open', color: '#3fb950', Icon: GitPullRequest },
-  { key: 'queued', label: 'queued', color: '#d29922', Icon: GitPullRequest },
-  { key: 'draft', label: 'draft', color: '#8b9bb0', Icon: GitPullRequestDraft },
-  { key: 'merged', label: 'merged', color: '#a371f7', Icon: GitMerge },
-  { key: 'closed', label: 'closed', color: '#f85149', Icon: GitPullRequestClosed },
-];
-
-function PrBadges({ prs }: { prs: PrCounts }) {
-  const present = PR_BUCKETS.filter((b) => prs[b.key] > 0);
-  if (present.length === 0) return null;
-  const hideCount = present.length === 1 && prs[present[0]!.key] === 1;
-  const title = present.map((b) => `${prs[b.key]} ${b.label}`).join(', ');
-  return (
-    <span className="shrink-0 flex items-center gap-1" title={title}>
-      {present.map(({ key, color, Icon }) => (
-        <span key={key} className="flex items-center" style={{ color }}>
-          <Icon size={12} />
-          {!hideCount && (
-            <span className="text-[11px] leading-[14px] ml-0.5">{prs[key]}</span>
-          )}
-        </span>
-      ))}
-    </span>
-  );
 }
 
 // Hovering a row for 300 ms prefetches the session's pooled view so a click
@@ -185,119 +95,17 @@ function usePrefetch(): {
   };
 }
 
-function Row({
-  node,
-  collapsedChildren,
-  onToggleChildren,
-  registerRow,
-  liveIds,
-  prefetch,
-  onMenu,
-}: {
-  node: SessionTreeNode<CloudSessionState>;
-  collapsedChildren: Set<string>;
-  onToggleChildren: (id: string) => void;
-  registerRow: (el: HTMLButtonElement | null) => void;
-  liveIds: Set<string>;
-  prefetch: ReturnType<typeof usePrefetch>;
-  onMenu: (sessionId: string, x: number, y: number) => void;
-}) {
-  const s = node.session;
-  const hasChildren = node.children.length > 0 || s.directChildrenCount > 0;
-  const childrenVisible = !collapsedChildren.has(s.id);
-  return (
-    <>
-      <div className="flex items-center" style={{ paddingLeft: node.depth * 12 }}>
-        {hasChildren ? (
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label={childrenVisible ? 'Collapse children' : 'Expand children'}
-            className="w-4 h-4 shrink-0 flex items-center justify-center text-[#8b9bb0] hover:text-[#c9d4e3]"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleChildren(s.id);
-            }}
-          >
-            {childrenVisible ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </button>
-        ) : (
-          <span className="w-4 shrink-0" />
-        )}
-        <button
-          type="button"
-          ref={registerRow}
-          data-session-id={s.id}
-          data-depth={node.depth}
-          data-current={node.current}
-          data-unread={s.isUnread}
-          data-status-enum={s.statusEnum ?? s.status}
-          data-pr-open={s.prs.open}
-          data-pr-merged={s.prs.merged}
-          data-archived={s.isArchived}
-          data-live={liveIds.has(s.id)}
-          title={s.title || 'Untitled session'}
-          className={`session-row ${s.isArchived ? 'opacity-50' : ''} flex-1 min-w-0 flex items-center ${sessionRowClass} text-left text-[#c9d4e3] hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[current=true]:bg-[#1f2f42] data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`}
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData(SESSION_MIME, s.id);
-            e.dataTransfer.effectAllowed = 'move';
-          }}
-          onMouseEnter={() => prefetch.onEnter(s.id)}
-          onMouseLeave={prefetch.onLeave}
-          onClick={() => window.devinworkspaces.cloudOpen(s.id)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            onMenu(s.id, e.clientX, e.clientY);
-          }}
-        >
-          <span className="w-[18px] h-[18px] shrink-0 flex items-center justify-center">
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: statusColor(s.statusEnum, s.status) }}
-            />
-          </span>
-          <span
-            className={`flex-1 min-w-0 truncate ${s.isUnread ? 'font-medium text-white' : ''}`}
-          >
-            {s.title || 'Untitled session'}
-          </span>
-          <PrBadges prs={s.prs} />
-          <span className={`shrink-0 ${sessionMetaClass}`}>
-            {relativeTime(s.updatedAt, Date.now())}
-          </span>
-        </button>
-      </div>
-      {childrenVisible &&
-        node.children.map((child) => (
-          <Row
-            key={child.session.id}
-            node={child}
-            collapsedChildren={collapsedChildren}
-            onToggleChildren={onToggleChildren}
-            registerRow={registerRow}
-            liveIds={liveIds}
-            prefetch={prefetch}
-            onMenu={onMenu}
-          />
-        ))}
-    </>
-  );
-}
-
 export function SessionSidebar({ rect }: { rect: Rect }) {
   const state = useShellState();
   const prefetch = usePrefetch();
   const [query, setQuery] = useState('');
   const [collapsedChildren, setCollapsedChildren] = useState<Set<string>>(new Set());
-  const [override, setOverride] = useState<CloudListData | null>(null);
   const [editing, setEditing] = useState<
     { kind: 'create'; pendingSessionId?: string } | { kind: 'rename'; name: string } | null
   >(null);
-  const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const [dropBefore, setDropBefore] = useState<string | null>(null);
-  const rowRefs = useRef<HTMLButtonElement[]>([]);
-  rowRefs.current = [];
+  const { registerRow, onKeyDown } = useRowKeyboardNav((id) =>
+    window.devinworkspaces.cloudCopyLink(id),
+  );
 
   const cloud = state!.cloud;
   const liveIds = useMemo(() => new Set(cloud.liveSessionIds), [cloud.liveSessionIds]);
@@ -314,10 +122,10 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
   // Optimistic edits hold until the next cloud update (a successful list —
   // or the test-mode fake applying the same change — replaces them) or a
   // mutation failure lands in lastError (revert).
-  useEffect(() => {
-    setOverride(null);
-  }, [cloud.lastSyncAt, cloud.lastError]);
-  const baseData = override ?? cloudData;
+  const { data: baseData, applyOptimistic } = useOptimisticList(cloudData, [
+    cloud.lastSyncAt,
+    cloud.lastError,
+  ]);
   const data = useMemo<CloudListData>(
     () => ({
       ...baseData,
@@ -330,8 +138,6 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     [data.folders],
   );
 
-  const applyOptimistic = (fn: (d: CloudListData) => CloudListData) =>
-    setOverride(fn(baseData));
   const createFolder = (name: string, pendingSessionId?: string) => {
     applyOptimistic((d) => {
       const next = addFolder(d, name);
@@ -397,32 +203,38 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     });
   };
 
-  const registerRow = (el: HTMLButtonElement | null) => {
-    if (el) rowRefs.current.push(el);
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'c') {
-      const active = document.activeElement;
-      const id = active?.getAttribute('data-session-id');
-      if (id) {
-        window.devinworkspaces.cloudCopyLink(id);
-        event.preventDefault();
-      }
-      return;
-    }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    const rows = rowRefs.current.filter((el) => el.isConnected);
-    if (rows.length === 0) return;
-    event.preventDefault();
-    const active = document.activeElement;
-    const index = rows.findIndex((el) => el === active);
-    const delta = event.key === 'ArrowDown' ? 1 : -1;
-    const next =
-      index === -1
-        ? (delta + rows.length) % rows.length
-        : (index + delta + rows.length) % rows.length;
-    rows[next]?.focus();
+  const rowOpts = {
+    attrs: (s: CloudSessionState) => ({
+      'data-unread': s.isUnread,
+      'data-status-enum': s.statusEnum ?? s.status,
+      'data-pr-open': s.prs.open,
+      'data-pr-merged': s.prs.merged,
+      'data-archived': s.isArchived,
+      'data-live': liveIds.has(s.id),
+    }),
+    leading: (s: CloudSessionState) => (
+      <span className="w-[18px] h-[18px] shrink-0 flex items-center justify-center">
+        <span
+          className="w-2 h-2 rounded-full"
+          style={{ backgroundColor: statusColor(s.statusEnum, s.status) }}
+        />
+      </span>
+    ),
+    // Flat filtered rows show no badges (Cloud sidebar behaviour).
+    badges: (s: CloudSessionState, variant: 'tree' | 'flat') =>
+      variant === 'tree' ? <PrBadges prs={s.prs} /> : null,
+    meta: (s: CloudSessionState) => relativeTime(s.updatedAt, Date.now()),
+    title: (s: CloudSessionState) => s.title || 'Untitled session',
+    titleClass: (s: CloudSessionState) =>
+      s.isUnread ? 'font-medium text-white' : undefined,
+    rowClass: (s: CloudSessionState, variant: 'tree' | 'flat') =>
+      variant === 'tree'
+        ? `session-row ${s.isArchived ? 'opacity-50' : ''} flex-1 min-w-0 flex items-center ${sessionRowClass} text-left text-[#c9d4e3] hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[current=true]:bg-[#1f2f42] data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`
+        : `${s.isArchived ? 'opacity-50 ' : ''}w-full flex items-center ${sessionRowClass} text-left hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`,
+    onOpen: (id: string) => window.devinworkspaces.cloudOpen(id),
+    prefetch,
+    hasChildren: (node: { session: CloudSessionState; children: unknown[] }) =>
+      node.children.length > 0 || node.session.directChildrenCount > 0,
   };
 
   const q = query.trim().toLowerCase();
@@ -433,6 +245,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
   return (
     <section
       id="sessionsPanel"
+      data-sidebar="cloud"
       className="shell-chrome absolute flex flex-col bg-[#0d141d] border-r border-[#1e2a38] text-[#c9d4e3]"
       style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
       onKeyDown={onKeyDown}
@@ -520,49 +333,15 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
             <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No matches</div>
           ) : (
             filtered.map((s) => (
-              <button
+              <SessionRowButton
                 key={s.id}
-                type="button"
-                ref={registerRow}
-                data-session-id={s.id}
-                data-depth={0}
-                data-current={s.id === state!.currentSessionId}
-                data-unread={s.isUnread}
-                data-status-enum={s.statusEnum ?? s.status}
-                data-pr-open={s.prs.open}
-                data-pr-merged={s.prs.merged}
-                data-archived={s.isArchived}
-                data-live={liveIds.has(s.id)}
-                title={s.title || 'Untitled session'}
-                className={`${s.isArchived ? 'opacity-50 ' : ''}w-full flex items-center ${sessionRowClass} text-left hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData(SESSION_MIME, s.id);
-                  e.dataTransfer.effectAllowed = 'move';
-                }}
-                onMouseEnter={() => prefetch.onEnter(s.id)}
-                onMouseLeave={prefetch.onLeave}
-                onClick={() => window.devinworkspaces.cloudOpen(s.id)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  void sessionMenu(s.id, e.clientX, e.clientY);
-                }}
-              >
-                <span className="w-[18px] h-[18px] shrink-0 flex items-center justify-center">
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: statusColor(s.statusEnum, s.status) }}
-                  />
-                </span>
-                <span
-                  className={`flex-1 min-w-0 truncate ${s.isUnread ? 'font-medium text-white' : ''}`}
-                >
-                  {s.title || 'Untitled session'}
-                </span>
-                <span className={`shrink-0 ${sessionMetaClass}`}>
-                  {relativeTime(s.updatedAt, Date.now())}
-                </span>
-              </button>
+                s={s}
+                depth={0}
+                current={s.id === state!.currentSessionId}
+                registerRow={registerRow}
+                opts={rowOpts}
+                onMenu={(id, x, y) => void sessionMenu(id, x, y)}
+              />
             ))
           )
         ) : tree.sections.length === 0 && cloud.status === 'ready' ? (
@@ -570,132 +349,34 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
         ) : (
           tree.sections.map((sectionItem) => (
             <div key={`${sectionItem.kind}:${sectionItem.name}`} className="mb-px">
-              {editing?.kind === 'rename' && editing.name === sectionItem.name ? (
-                <div className="px-1 py-1">
-                  <FolderNameInput
-                    initial={sectionItem.name}
-                    placeholder="Folder name"
-                    onCommit={(name) => {
-                      renameFolderTo(sectionItem.name, name);
-                      setEditing(null);
-                    }}
-                    onCancel={() => setEditing(null)}
-                  />
-                </div>
-              ) : (
-                <span className="group flex items-center">
-                  <button
-                    type="button"
-                    data-section-kind={sectionItem.kind}
-                    data-section-name={sectionItem.name}
-                    data-drop-target={dropTarget === sectionItem.name}
-                    data-drop-before={dropBefore === sectionItem.name}
-                    draggable={sectionItem.kind === 'folder' && isEditableFolder(sectionItem.name)}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData(FOLDER_MIME, sectionItem.name);
-                      e.dataTransfer.effectAllowed = 'move';
-                    }}
-                    onDragOver={(e) => {
-                      const types = e.dataTransfer.types;
-                      const isFolderTarget = isMoveTarget(sectionItem);
-                      if (types.includes(SESSION_MIME) && isFolderTarget) {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        setDropTarget(sectionItem.name);
-                      } else if (
-                        types.includes(FOLDER_MIME) &&
-                        sectionItem.kind === 'folder' &&
-                        isEditableFolder(sectionItem.name)
-                      ) {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        setDropBefore(sectionItem.name);
-                      }
-                    }}
-                    onDragLeave={() => {
-                      if (dropTarget === sectionItem.name) setDropTarget(null);
-                      if (dropBefore === sectionItem.name) setDropBefore(null);
-                    }}
-                    onDrop={(e) => {
-                      const sessionId = e.dataTransfer.getData(SESSION_MIME);
-                      const target = isMoveTarget(sectionItem)
-                        ? sectionItem.kind === 'recent'
-                          ? null
-                          : sectionItem.name
-                        : undefined;
-                      if (sessionId && target !== undefined) {
-                        e.preventDefault();
-                        moveSessionTo(sessionId, target);
-                      }
-                      const folder = e.dataTransfer.getData(FOLDER_MIME);
-                      if (
-                        folder &&
-                        folder !== sectionItem.name &&
-                        sectionItem.kind === 'folder' &&
-                        isEditableFolder(sectionItem.name)
-                      ) {
-                        e.preventDefault();
-                        const names = userFolderNames.filter((n) => n !== folder);
-                        names.splice(names.indexOf(sectionItem.name), 0, folder);
-                        reorderTo(names);
-                      }
-                      setDropTarget(null);
-                      setDropBefore(null);
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      if (sectionItem.kind === 'folder' && isEditableFolder(sectionItem.name)) {
-                        void folderMenu(sectionItem.name, e.clientX, e.clientY);
-                      }
-                    }}
-                    className={`flex-1 min-w-0 flex items-center gap-1 px-1 py-1 ${sessionFolderHeaderClass} text-[#8b9bb0] hover:text-[#c9d4e3] data-[drop-target=true]:bg-[#1f2f42] data-[drop-before=true]:border-t-2 data-[drop-before=true]:border-t-[#54749c]`}
-                    onClick={() => toggleFolder(sectionItem.name)}
-                  >
-                    {sectionItem.collapsed ? (
-                      <ChevronRight size={12} />
-                    ) : (
-                      <ChevronDown size={12} />
-                    )}
-                    <span className="flex-1 text-left truncate">
-                      {SECTION_LABELS[sectionItem.name] ?? sectionItem.name}
-                    </span>
-                    <span className="text-[11px] leading-[14px] text-[#5c6b80]">
-                      {sectionItem.total !== null
-                        ? `${sectionItem.nodes.length} / ${sectionItem.total}`
-                        : sectionItem.nodes.length}
-                    </span>
-                  </button>
-                  {sectionItem.kind === 'folder' && isEditableFolder(sectionItem.name) && (
-                    <button
-                      type="button"
-                      data-folder-new-session={sectionItem.name}
-                      aria-label="New session in folder"
-                      title="New session in folder"
-                      className="w-5 h-5 mr-1 shrink-0 flex items-center justify-center rounded text-[#5c6b80] hover:text-[#c9d4e3] hover:bg-[#1a2735] opacity-0 group-hover:opacity-100 focus:opacity-100"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.devinworkspaces.cloudNewSession(sectionItem.name);
-                      }}
-                    >
-                      <Plus size={12} />
-                    </button>
-                  )}
-                </span>
-              )}
+              <SectionHeader
+                section={sectionItem}
+                userFolderNames={userFolderNames}
+                renaming={editing?.kind === 'rename' && editing.name === sectionItem.name}
+                onRenameCommit={(name) => {
+                  renameFolderTo(sectionItem.name, name);
+                  setEditing(null);
+                }}
+                onRenameCancel={() => setEditing(null)}
+                onToggle={toggleFolder}
+                onMenu={(name, x, y) => void folderMenu(name, x, y)}
+                onMove={moveSessionTo}
+                onReorder={reorderTo}
+                onNewInFolder={(name) => window.devinworkspaces.cloudNewSession(name)}
+              />
               {!sectionItem.collapsed && (
                 <>
                   {sectionItem.nodes.length === 0 ? (
                     <div className="pl-6 py-1 text-[11px] text-[#5c6b80]">No sessions</div>
                   ) : (
                     sectionItem.nodes.map((node) => (
-                      <Row
+                      <SessionRow
                         key={node.session.id}
                         node={node}
                         collapsedChildren={collapsedChildren}
                         onToggleChildren={toggleChildren}
                         registerRow={registerRow}
-                        liveIds={liveIds}
-                        prefetch={prefetch}
+                        opts={rowOpts}
                         onMenu={(id, x, y) => void sessionMenu(id, x, y)}
                       />
                     ))

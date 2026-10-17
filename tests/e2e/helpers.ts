@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { cpSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { expect } from '@playwright/test';
 import { _electron, type ElectronApplication, type Page } from 'playwright';
 import type { FixtureServers } from '../fixtures/http';
@@ -620,3 +623,23 @@ export async function dndMove(page: Page, sourceSel: string, targetSel: string) 
     [sourceSel, targetSel] as const,
   );
 }
+
+export const CLAUDE_FIXTURE_HOME = resolve(__dirname, '../fixtures/claude-home');
+
+// §4.5/§5.4: launch with a COPY of the committed claude-home fixture — the
+// SDK writes into CLAUDE_CONFIG_DIR, so specs never point at the source tree.
+export async function launchWithClaudeFixture(
+  fixtures: FixtureServers,
+  extraEnv: Record<string, string> = {},
+): Promise<{ app: ElectronApplication; profile: string; claudeHome: string }> {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const claudeHome = join(profile, 'claude-home');
+  cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    CLAUDE_CONFIG_DIR: claudeHome,
+    ...extraEnv,
+  });
+  return { app, profile, claudeHome };
+}
+

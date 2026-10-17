@@ -244,6 +244,45 @@ test('installed app launches, creates views, and persists across relaunch', asyn
       (await readEvents(logFile)).some((e) => e.event === 'claude-sdk-load' && (e.detail as any)?.ok === true),
     ).toBe(true);
 
+    // userData/claude-sessions.json is created on the first registry mutation
+    // only — absent on a fresh launch, written once a pin lands.
+    const registryFile = join(profile, 'claude-sessions.json');
+    expect(existsSync(registryFile)).toBe(false);
+    const claudeState = (await shell.evaluate(() =>
+      (window as any).devinworkspaces.testHook('claudeState'),
+    )) as { status: string; sessions: { id: string }[] };
+    evidence.claudeStatus = claudeState.status;
+    expect(claudeState.status === 'ready' || claudeState.status === 'error').toBe(true);
+    if (claudeState.status === 'ready' && claudeState.sessions[0]) {
+      const sessionId = claudeState.sessions[0].id;
+      // The contextMenu invoke stays open until a menuClick resolves it.
+      void shell.evaluate((id: string) =>
+        (window as any).devinworkspaces.claudeContextMenu({
+          kind: 'session',
+          sessionId: id,
+          x: 5,
+          y: 5,
+        }),
+      sessionId);
+      await expect
+        .poll(async () => {
+          const items = (await shell.evaluate(() =>
+            (window as any).devinworkspaces.testHook('claudeMenuItems'),
+          )) as { label: string }[];
+          return items.some((i) => i.label === 'Pin');
+        })
+        .toBe(true);
+      const items = (await shell.evaluate(() =>
+        (window as any).devinworkspaces.testHook('claudeMenuItems'),
+      )) as { id: string; label: string }[];
+      const pin = items.find((i) => i.label === 'Pin')!;
+      await shell.evaluate(
+        (id: string) => (window as any).devinworkspaces.testHook('claudeMenuClick', id),
+        pin.id,
+      );
+      await expect.poll(() => existsSync(registryFile)).toBe(true);
+    }
+
     // Fresh install: shell + devin views only.
     await expect.poll(async () => (await pageTargets(instance.browser)).length).toBe(2);
     const urls = await pageTargets(instance.browser);
