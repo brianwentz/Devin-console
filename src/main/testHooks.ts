@@ -26,6 +26,7 @@ import { applyLayout, layoutState, publicState, setPaneOpen, setSessionsOpen } f
 import { shutdown } from './index';
 import { localHost } from './local/ipc';
 import { loadSdk } from './claude/sdk';
+import { claudeSessions } from './claude/sessions';
 import { publicLocalState } from './local/localState';
 
 export function registerTestHooks(): void {
@@ -259,6 +260,21 @@ export function registerTestHooks(): void {
       terminalPid: (id: string) => terminalHost.pid(id),
       clipboardWrite: (text: string) => clipboard.writeText(text),
       clipboardRead: () => clipboard.readText(),
+      // Claude sidebar (Phase 1 PR 3).
+      claudeState: () => claudeSessions().snapshot(),
+      claudeRefresh: () => claudeSessions().refresh('test'),
+      claudeSelect: (id: string | null) => {
+        if (id === null) {
+          state.claudeSessionId = null;
+          applyLayout();
+          return;
+        }
+        claudeSessions().open(id);
+      },
+      claudeMenuItems: () => claudeSessions().menuItems(),
+      claudeMenuClick: (id: string) => claudeSessions().clickMenuItem(id),
+      claudeMutations: () => claudeSessions().mutationLog(),
+      claudeConfigDir: () => claudeSessions().snapshot().configDir,
       claudeSdkProbe: async () => {
         const t0 = Date.now();
         try {

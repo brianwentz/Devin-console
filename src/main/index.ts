@@ -8,6 +8,8 @@ import { closeAutofillOverlaysForInactiveTabs, disposeAutofill, setupAutofillIpc
 import { setupDownloads } from './downloads';
 import { setupIpc } from './ipc';
 import { setupLocal, localHost } from './local/ipc';
+import { setupClaude } from './claude/ipc';
+import { claudeSessions } from './claude/sessions';
 import { autoOpenLocalPr } from './local/prAutoOpen';
 import { terminalHost } from './local/terminalHost';
 import { log, logFile } from './log';
@@ -142,6 +144,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       // best effort at shutdown
     }
     localHost()?.dispose();
+    claudeSessions().dispose();
     notificationsFlush();
     prsFlush();
     savePlacementNow();
@@ -213,6 +216,7 @@ async function createWindow(): Promise<void> {
   state.secrets = new SecretStore(userData);
   await state.secrets.load();
   setupLocal();
+  setupClaude();
   const saved = state.settings.current;
   state.paneOpen = saved.pane.open;
   // Stored as-is (0..1); px guards are derived in computeBounds, not persisted.

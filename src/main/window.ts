@@ -21,6 +21,7 @@ import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
 
 import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
+import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { terminalHost } from './local/terminalHost';
 import { log } from './log';
@@ -108,7 +109,7 @@ export function layoutState(): LayoutState {
     terminalOpen: terminalVisible(),
     terminalHeight: state.terminalHeight,
     // The sessions column only occupies space on the Cloud surface.
-    sessionsOpen: state.sessionsOpen && state.surface === 'cloud',
+    sessionsOpen: state.sessionsOpen && (state.surface === 'cloud' || state.surface === 'claude'),
     sessionsWidth: state.sessionsWidth,
   };
 }
@@ -165,20 +166,7 @@ export function publicState(): ShellState {
       panelOpen: state.notificationsPanelOpen,
     },
     cloud: cloudSessions().snapshot(),
-    // Placeholder until the Phase 1 claude module wires its controller
-    // (claudeSessions().snapshot()) in here.
-    claude: {
-      status: 'loading',
-      configDir: '',
-      cliPath: null,
-      installGuidance: '',
-      error: null,
-      lastSyncAt: null,
-      folders: [],
-      sessions: [],
-      showArchived: false,
-      lastError: null,
-    },
+    claude: claudeSessions().snapshot(),
     update: updateState(),
     terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
@@ -369,7 +357,10 @@ export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
   if (!windowRef || !shellView || state.dragging) return;
   if (axis === 'x' && (!state.paneOpen || state.paneCollapsed)) return;
   if (axis === 'y' && !terminalVisible()) return;
-  if (axis === 's' && (!state.sessionsOpen || state.sessionsCollapsed || state.surface !== 'cloud'))
+  if (axis === 's' &&
+    (!state.sessionsOpen ||
+      state.sessionsCollapsed ||
+      (state.surface !== 'cloud' && state.surface !== 'claude')))
     return;
   state.dragging = true;
   state.dragAxis = axis;

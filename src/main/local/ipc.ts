@@ -1,7 +1,6 @@
 import { resolve } from 'node:path';
 import { app, dialog } from 'electron';
-import { guardedHandle, guardedOn } from '../ipcGuard';
-import type { ZodType } from 'zod';
+import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
   IpcChannels,
   LocalActiveSessionArg,
@@ -32,32 +31,6 @@ let host: DevinLocalHost | null = null;
 
 export function localHost(): DevinLocalHost | null {
   return host;
-}
-
-function ok<T>(value: T): LocalResult<T> {
-  return { ok: true, value };
-}
-
-function fail(error: unknown): LocalResult<never> {
-  return { ok: false, error: error instanceof Error ? error.message : String(error) };
-}
-
-// Wrap an invoke handler: validate the payload with zod, run, and convert
-// exceptions to a LocalResult so the renderer can render them inline.
-function handle<Arg>(
-  channel: string,
-  schema: ZodType<Arg>,
-  run: (arg: Arg) => Promise<unknown> | unknown,
-): void {
-  guardedHandle(channel, async (_event, payload: unknown) => {
-    const parsed = schema.safeParse(payload);
-    if (!parsed.success) return fail(new Error(`invalid payload for ${channel}`));
-    try {
-      return ok(await run(parsed.data));
-    } catch (error) {
-      return fail(error);
-    }
-  });
 }
 
 function requireHost(): DevinLocalHost {
@@ -96,15 +69,15 @@ export function setupLocal(): void {
         ? await dialog.showOpenDialog(state.windowRef, options)
         : await dialog.showOpenDialog(options);
       const picked = result.canceled ? null : (result.filePaths[0] ?? null);
-      if (!picked) return ok(null);
-      return ok(requireHost().addWorkspace(picked));
+      if (!picked) return { ok: true as const, value: null };
+      return { ok: true as const, value: requireHost().addWorkspace(picked) };
     } catch (error) {
-      return fail(error);
+      return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
     }
   });
 
-  handle(IpcChannels.localWorkspaceAdd, LocalWorkspaceArg, ({ path }) => requireHost().addWorkspace(path));
-  handle(IpcChannels.localWorkspaceRemove, LocalWorkspaceArg, ({ path }) => {
+  handleResult(IpcChannels.localWorkspaceAdd, LocalWorkspaceArg, ({ path }) => requireHost().addWorkspace(path));
+  handleResult(IpcChannels.localWorkspaceRemove, LocalWorkspaceArg, ({ path }) => {
     // Forget the lifted selection when its session lived in this workspace —
     // the sessions map is read before removeWorkspace drops it.
     const selectedWorkspace = state.localSessionId
@@ -118,13 +91,13 @@ export function setupLocal(): void {
     }
     return null;
   });
-  handle(IpcChannels.localSessionNew, LocalSessionNewArg, ({ workspace }) =>
+  handleResult(IpcChannels.localSessionNew, LocalSessionNewArg, ({ workspace }) =>
     requireHost().newSession(workspace),
   );
-  handle(IpcChannels.localSessionList, LocalSessionListArg, ({ workspace }) =>
+  handleResult(IpcChannels.localSessionList, LocalSessionListArg, ({ workspace }) =>
     requireHost().listSessions(workspace),
   );
-  handle(IpcChannels.localSessionLoad, LocalSessionLoadArg, async ({ workspace, sessionId }) => {
+  handleResult(IpcChannels.localSessionLoad, LocalSessionLoadArg, async ({ workspace, sessionId }) => {
     await requireHost().loadSession(workspace, sessionId);
     return null;
   });
@@ -135,12 +108,12 @@ export function setupLocal(): void {
     if (state.localSessionId === sessionId) state.localSessionId = null;
     return state.tabManager?.closeScope(localScope(sessionId));
   };
-  handle(IpcChannels.localSessionDelete, LocalSessionDeleteArg, async ({ sessionId }) => {
+  handleResult(IpcChannels.localSessionDelete, LocalSessionDeleteArg, async ({ sessionId }) => {
     await requireHost().deleteSession(sessionId);
     void forgetDeletedSession(sessionId)?.then(applyLayout);
     return null;
   });
-  handle(IpcChannels.localSessionDeleteAll, LocalSessionDeleteAllArg, async ({ workspace }) => {
+  handleResult(IpcChannels.localSessionDeleteAll, LocalSessionDeleteAllArg, async ({ workspace }) => {
     const result = await requireHost().deleteWorkspaceSessions(workspace);
     await Promise.all(result.deleted.map((id) => forgetDeletedSession(id)));
     applyLayout();
@@ -158,14 +131,14 @@ export function setupLocal(): void {
     log('local', 'active-session', { detail: { sessionId: parsed.data.sessionId } });
     applyLayout();
   });
-  handle(IpcChannels.localPrompt, LocalPromptArg, ({ sessionId, text }) =>
+  handleResult(IpcChannels.localPrompt, LocalPromptArg, ({ sessionId, text }) =>
     requireHost().prompt(sessionId, text),
   );
-  handle(IpcChannels.localCancel, LocalCancelArg, async ({ sessionId }) => {
+  handleResult(IpcChannels.localCancel, LocalCancelArg, async ({ sessionId }) => {
     await requireHost().cancel(sessionId);
     return null;
   });
-  handle(IpcChannels.localPermission, LocalPermissionArg, ({ sessionId, requestId, optionId }) => {
+  handleResult(IpcChannels.localPermission, LocalPermissionArg, ({ sessionId, requestId, optionId }) => {
     requireHost().resolvePermission(sessionId, requestId, optionId);
     return null;
   });

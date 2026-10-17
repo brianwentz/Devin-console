@@ -1,0 +1,4 @@
+{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"C:\\work\\alpha","sessionId":"11111111-0000-4000-8000-00000000000a","version":"2.1.296","gitBranch":"main","type":"user","message":{"role":"user","content":"Alpha first prompt"},"uuid":"11111111-0000-4000-8000-00000000000a-u1","timestamp":"2026-10-10T10:00:00.000Z"}
+{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"C:\\work\\alpha","sessionId":"11111111-0000-4000-8000-00000000000a","version":"2.1.296","gitBranch":"main","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Alpha reply"}]},"uuid":"11111111-0000-4000-8000-00000000000a-a1","timestamp":"2026-10-10T10:00:05.000Z"}
+{"type":"ai-title","aiTitle":"Alpha generated title","sessionId":"11111111-0000-4000-8000-00000000000a"}
+{"type":"custom-title","customTitle":"Alpha custom","sessionId":"11111111-0000-4000-8000-00000000000a"}

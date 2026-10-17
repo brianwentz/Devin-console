@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import type { ZodType } from 'zod';
 import { normalizeOrigin } from '../core/credentials';
 import { cloudViews } from './cloudViews';
 import { log } from './log';
@@ -90,3 +91,22 @@ export function hostedOn(
     listener(event, ...args);
   });
 }
+
+// Shared invoke wrapper: validate the payload with zod, run, and convert
+// exceptions to a LocalResult so the renderer can render them inline.
+export function handleResult<Arg>(
+  channel: string,
+  schema: ZodType<Arg>,
+  run: (arg: Arg) => Promise<unknown> | unknown,
+): void {
+  guardedHandle(channel, async (_event, payload: unknown) => {
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) return { ok: false, error: `invalid payload for ${channel}` };
+    try {
+      return { ok: true, value: await run(parsed.data) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+

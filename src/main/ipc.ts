@@ -48,6 +48,7 @@ import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolder
 import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
+import { claudeSessions } from './claude/sessions';
 import { cloudKeepAliveMs, cloudViews } from './cloudViews';
 import {
   applyLayout,
@@ -82,6 +83,7 @@ export function applySettingsPatch(patch: SettingsPatch): Settings {
   const previousSettings = state.settings!.current;
   const next: Settings = state.settings!.merge(patch);
   notifier.onSettingsChanged(previousSettings, next);
+  claudeSessions().onSettingsChanged(previousSettings, next);
   if (next.pane.open !== state.paneOpen) setPaneOpen(next.pane.open, 'settings');
   // Skip layout churn on the quit-flush path — it sits inside the settings
   // commit round trip and must stay cheap.
