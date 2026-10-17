@@ -23,6 +23,8 @@ export function setupTerminalIpc(): void {
   guardedHandle(IpcChannels.terminalOpen, (_event, payload: unknown) => {
     const parsed = TerminalOpenArg.safeParse(payload);
     if (!parsed.success) return { ok: false, error: 'invalid payload' };
+    // Phase 3 wires claude-kind ptys through the Claude controller.
+    if (parsed.data.kind === 'claude') return { ok: false, error: 'claude terminals are not available yet' };
     return terminalHost.open(parsed.data);
   });
   guardedOn(IpcChannels.terminalInput, (_event, payload: unknown) => {

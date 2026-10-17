@@ -128,6 +128,8 @@ export class ClaudeSessions {
       showArchived: this.showArchived,
       lastError: this.lastError,
       versions: this.versions,
+      // Filled by the Phase 3 background-agents poller.
+      agents: [],
     };
   }
 
@@ -455,9 +457,10 @@ export class ClaudeSessions {
   }
 
   async contextMenu(arg: {
-    kind: 'session' | 'folder' | 'header';
+    kind: 'session' | 'folder' | 'header' | 'agent';
     sessionId?: string | undefined;
     name?: string | undefined;
+    agentId?: string | undefined;
     x: number;
     y: number;
   }): Promise<{ action: MenuAction; items?: Record<string, unknown>[] }> {

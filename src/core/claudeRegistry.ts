@@ -120,6 +120,7 @@ export function reconcile(
       isPinned: entry?.pinned ?? false,
       isArchived: entry?.archived ?? false,
       missing: false,
+      agentStatus: null,
       prs: { ...ZERO_PRS },
     });
   }
@@ -143,6 +144,7 @@ export function reconcile(
         isPinned: entry.pinned,
         isArchived: entry.archived,
         missing: true,
+        agentStatus: null,
         prs: { ...ZERO_PRS },
       });
     } else {

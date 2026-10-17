@@ -142,6 +142,9 @@ export const IpcChannels = {
   claudeSetPermissionMode: 'claude:setPermissionMode',
   claudeSetModel: 'claude:setModel',
   claudeLoadHistory: 'claude:loadHistory',
+  // Claude background agents (Phase 3).
+  claudeAgentStop: 'claude:agentStop',
+  claudeAgentsRefresh: 'claude:agentsRefresh',
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
@@ -494,6 +497,18 @@ export const CloudStateSchema = z.object({
 export type CloudState = z.infer<typeof CloudStateSchema>;
 
 // Claude Code sessions (local ~/.claude registry + SDK store).
+// A `claude --bg` background agent as listed by `claude agents --json --all`.
+export const ClaudeAgentStatusSchema = z.enum(['running', 'completed', 'stopped', 'unknown']);
+export const ClaudeAgentSchema = z.object({
+  id: z.string(),
+  sessionId: z.string().nullable(),
+  name: z.string().nullable(),
+  status: ClaudeAgentStatusSchema,
+  cwd: z.string().nullable(),
+  startedAt: z.number().nullable(),
+});
+export type ClaudeAgent = z.infer<typeof ClaudeAgentSchema>;
+
 export const ClaudeSessionSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -507,6 +522,8 @@ export const ClaudeSessionSchema = z.object({
   isPinned: z.boolean(),
   isArchived: z.boolean(),
   missing: z.boolean(),
+  // Status of the background agent bound to this session, if any.
+  agentStatus: ClaudeAgentStatusSchema.nullable(),
   prs: z.object({
     open: z.number().int(),
     queued: z.number().int(),
@@ -535,6 +552,7 @@ export const ClaudeStateSchema = z.object({
     sdkTarget: z.string().nullable(),
     mismatch: z.boolean(),
   }),
+  agents: z.array(ClaudeAgentSchema),
 });
 export type ClaudeState = z.infer<typeof ClaudeStateSchema>;
 export const UpdateCheckSourceSchema = z.enum([
@@ -579,8 +597,8 @@ export type ReleaseNotesReply = z.infer<typeof ReleaseNotesReplySchema>;
 
 export const TerminalSummarySchema = z.object({
   id: z.string(),
-  kind: z.enum(['devin', 'shell']),
-  // The local session a devin-kind pty belongs to (null for shell-kind).
+  kind: z.enum(['devin', 'shell', 'claude']),
+  // The local/claude session a devin- or claude-kind pty belongs to (null for shell-kind).
   sessionId: z.string().nullable().default(null),
   cwd: z.string(),
   title: z.string(),
@@ -708,6 +726,14 @@ export const TerminalOpenArg = z.discriminatedUnion('kind', [
     kind: z.literal('shell'),
     cwd: z.string().min(1).max(4096).optional(),
     profile: z.string().max(128).optional(),
+    // Explicit command line instead of the profile shell (e.g. `claude attach <id>`).
+    command: z.array(z.string().min(1).max(512)).min(1).max(8).optional(),
+  }),
+  z.object({
+    kind: z.literal('claude'),
+    sessionId: z.string().uuid(),
+    mode: z.enum(['resume', 'new', 'attach']),
+    agentId: z.string().min(1).max(64).optional(),
   }),
 ]);
 export type TerminalOpenArgType = z.infer<typeof TerminalOpenArg>;
@@ -832,10 +858,12 @@ export const ClaudeSetModelArg = z.object({
   model: z.string().min(1).max(200).nullable(),
 });
 export const ClaudeLoadHistoryArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeAgentStopArg = z.object({ agentId: z.string().min(1).max(64) });
 export const ClaudeContextMenuArg = z.object({
-  kind: z.enum(['session', 'folder', 'header']),
+  kind: z.enum(['session', 'folder', 'header', 'agent']),
   sessionId: ClaudeSessionId.optional(),
   name: ClaudeFolderName.optional(),
+  agentId: z.string().min(1).max(64).optional(),
   x: z.number().finite(),
   y: z.number().finite(),
 });
