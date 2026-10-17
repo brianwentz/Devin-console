@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import { log } from '../log';
 
 // Single memoised dynamic import of the ESM-only Agent SDK — it is packaged
@@ -14,8 +16,14 @@ export function loadSdk(): Promise<typeof import('@anthropic-ai/claude-agent-sdk
       .then((sdk) => {
         let version: string | null = null;
         try {
+          // The exports map blocks './package.json' — resolve the entry point
+          // and read the sibling manifest by path instead.
           const require = createRequire(__filename);
-          version = (require('@anthropic-ai/claude-agent-sdk/package.json') as { version?: string }).version ?? null;
+          const entry = require.resolve('@anthropic-ai/claude-agent-sdk');
+          const pkg = JSON.parse(
+            readFileSync(join(entry, '..', 'package.json'), 'utf8'),
+          ) as { version?: string };
+          version = pkg.version ?? null;
         } catch {
           version = null;
         }

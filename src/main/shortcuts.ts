@@ -97,7 +97,7 @@ export function handleShortcut(
     setPaneOpen(!state.paneOpen, 'shortcut');
     focusVisibleContents(contents);
     handled = true;
-  } else if (ctrl && input.shift && key === 's' && state.surface === 'cloud') {
+  } else if (ctrl && input.shift && key === 's' && (state.surface === 'cloud' || state.surface === 'claude')) {
     setSessionsOpen(!state.sessionsOpen, 'shortcut');
     focusVisibleContents(contents);
     handled = true;
