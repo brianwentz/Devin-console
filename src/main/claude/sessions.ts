@@ -26,7 +26,7 @@ import {
   touchOpened,
 } from '../../core/claudeRegistry';
 import { claudeScope } from '../../core/tabModel';
-import type { ClaudeState, Settings } from '../../shared/ipc';
+import type { ClaudeAgent, ClaudeState, Settings } from '../../shared/ipc';
 import { log } from '../log';
 import { state, testMode } from '../state';
 import { applyLayout, notifyShell } from '../window';
@@ -36,10 +36,18 @@ import { ClaudeStore } from './store';
 import { ClaudeHost, setClaudeHost } from './host';
 import { sdkTargetCliVersion } from './sdk';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
+import { terminalHost } from '../local/terminalHost';
+import { ClaudeBackgroundAgents } from './backgroundAgents';
 
 const execFileAsync = promisify(execFile);
 
-type MenuAction = 'rename' | 'rename-session' | 'new-folder' | null;
+type MenuAction =
+  | 'rename'
+  | 'rename-session'
+  | 'new-folder'
+  | 'open-terminal'
+  | 'attach-agent'
+  | null;
 
 export class ClaudeSessions {
   private store: ClaudeStore;
@@ -62,6 +70,8 @@ export class ClaudeSessions {
   private restoredSelection = false;
   private lastSnapshotJson = '';
   private host: ClaudeHost | null = null;
+  private agents: ClaudeAgent[] = [];
+  private backgroundAgents: ClaudeBackgroundAgents | null = null;
   private mutations: { op: string; payload: Record<string, unknown> }[] = [];
 
   constructor(opts: { configDir: string; registryStore: ClaudeRegistryStore }) {
@@ -88,6 +98,18 @@ export class ClaudeSessions {
       },
     });
     setClaudeHost(this.host);
+    this.backgroundAgents = new ClaudeBackgroundAgents({
+      cliPath: () => this.cliPath,
+      onChange: (agents) => {
+        this.agents = agents;
+        this.emit();
+      },
+    });
+    terminalHost.claudeGate = {
+      onOpen: (id) => this.beginTerminal(id),
+      onExit: (id) => this.endTerminal(id),
+    };
+    this.backgroundAgents.start();
     void this.checkVersions();
     this.store.start();
     void this.refresh('start');
@@ -116,6 +138,14 @@ export class ClaudeSessions {
   }
 
   snapshot(): ClaudeState {
+    const agentStatusBySession = new Map(
+      this.agents
+        .filter((a) => a.sessionId)
+        .map((a) => [a.sessionId!, a.status] as const),
+    );
+    const sessions = this.showArchived
+      ? this.sessions
+      : this.sessions.filter((s) => !s.isArchived);
     return {
       status: this.status,
       configDir: this.configDir,
@@ -124,13 +154,32 @@ export class ClaudeSessions {
       error: this.error,
       lastSyncAt: this.lastSyncAt,
       folders: this.registry.folders,
-      sessions: this.showArchived ? this.sessions : this.sessions.filter((s) => !s.isArchived),
+      sessions: sessions.map((s) => ({
+        ...s,
+        agentStatus: agentStatusBySession.get(s.id) ?? null,
+      })),
       showArchived: this.showArchived,
       lastError: this.lastError,
       versions: this.versions,
-      // Filled by the Phase 3 background-agents poller.
-      agents: [],
+      agents: this.agents,
     };
+  }
+
+  agentsList(): ClaudeAgent[] {
+    return this.agents;
+  }
+
+  refreshAgents(): Promise<void> {
+    return this.backgroundAgents?.refresh('manual') ?? Promise.resolve();
+  }
+
+  onWindowFocus(): void {
+    this.backgroundAgents?.onWindowFocus();
+  }
+
+  agentStop(agentId: string): Promise<void> {
+    this.recordMutation('agentStop', { agentId });
+    return this.backgroundAgents?.stop(agentId) ?? Promise.resolve();
   }
 
   // --- refresh -------------------------------------------------------------
@@ -220,6 +269,38 @@ export class ClaudeSessions {
     applyLayout();
     const chat = this.host;
     if (chat && !chat.isLoaded(sessionId)) void chat.loadHistory(sessionId);
+  }
+
+  // --- Terminal tab (Phase 3 one-writer handoff) ------------------------------
+  // beginTerminal runs BEFORE the pty spawns (claudeGate.onOpen): a running
+  // chat prompt refuses; the live SDK query closes and the session is marked
+  // terminalOwned until the pty exits.
+  async beginTerminal(sessionId: string): Promise<void> {
+    const host = this.host;
+    if (!host) throw new Error('claude host not started');
+    if (host.isRunning(sessionId)) {
+      throw new Error('Cancel the running prompt first');
+    }
+    await host.closeLiveQuery(sessionId);
+    host.setTerminalOwned(sessionId, true);
+    log('claude', 'claude-terminal', { detail: { sessionId, op: 'open' } });
+  }
+
+  endTerminal(sessionId: string): void {
+    const host = this.host;
+    host?.setTerminalOwned(sessionId, false);
+    log('claude', 'claude-terminal', { detail: { sessionId, op: 'close' } });
+    void this.refresh('terminal');
+    if (host) void host.loadHistory(sessionId);
+  }
+
+  // Terminal arg resolver for terminal:open — resume only when the transcript
+  // is on disk or the host already started a query for this id.
+  terminalModeFor(sessionId: string): 'resume' | 'new' {
+    return this.storeSessions.some((s) => s.id === sessionId) ||
+      (this.host?.hasStarted(sessionId) ?? false)
+      ? 'resume'
+      : 'new';
   }
 
   // New chat session: cwd comes from the arg (the empty-state button) or a
@@ -409,6 +490,7 @@ export class ClaudeSessions {
   private forget(sessionId: string): void {
     if (state.claudeSessionId === sessionId) state.claudeSessionId = null;
     void state.tabManager?.closeScope(claudeScope(sessionId));
+    terminalHost.closeForSession(sessionId);
     this.host?.dropSession(sessionId);
     applyLayout();
   }
@@ -467,7 +549,18 @@ export class ClaudeSessions {
     this.pendingAction = null;
     const items: Electron.MenuItemConstructorOptions[] = [];
 
-    if (arg.kind === 'header') {
+    if (arg.kind === 'agent' && arg.agentId) {
+      const agentId = arg.agentId;
+      items.push(
+        {
+          label: 'Attach',
+          click: () => {
+            this.pendingAction = 'attach-agent';
+          },
+        },
+        { label: 'Stop', click: () => void this.agentStop(agentId) },
+      );
+    } else if (arg.kind === 'header') {
       items.push({
         label: 'Show archived sessions',
         type: 'checkbox',
@@ -522,6 +615,12 @@ export class ClaudeSessions {
           },
         },
         { label: 'Fork', click: () => void this.fork(session.id) },
+        {
+          label: 'Open in terminal',
+          click: () => {
+            this.pendingAction = 'open-terminal';
+          },
+        },
         { type: 'separator' },
         { label: 'Move to folder', submenu },
         {
@@ -607,6 +706,8 @@ export class ClaudeSessions {
   }
 
   dispose(): void {
+    this.backgroundAgents?.dispose();
+    if (terminalHost.claudeGate) terminalHost.claudeGate = null;
     this.store.dispose();
     this.registryStore.dispose();
   }

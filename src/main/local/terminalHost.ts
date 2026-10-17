@@ -18,14 +18,31 @@ import {
 } from '../../core/windowsTerminal';
 import { IpcChannels, type TerminalSummary } from '../../shared/ipc';
 import { LinkScanner } from '../../core/prLinks';
+import { claudeScope, localScope } from '../../core/tabModel';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { resolveDevinPath } from './acpHost';
+import {
+  resolveClaudePath,
+  INSTALL_GUIDANCE as CLAUDE_INSTALL_GUIDANCE,
+} from '../claude/claudePath';
 
-export type TerminalKind = 'devin' | 'shell';
+export type TerminalKind = 'devin' | 'shell' | 'claude';
 export type TerminalOpenOptions =
   | { kind: 'devin'; workspace: string; sessionId: string }
-  | { kind: 'shell'; cwd?: string | undefined; profile?: string | undefined };
+  | {
+      kind: 'shell';
+      cwd?: string | undefined;
+      profile?: string | undefined;
+      command?: string[] | undefined;
+    }
+  | {
+      kind: 'claude';
+      sessionId: string;
+      mode: 'resume' | 'new' | 'attach';
+      agentId?: string | undefined;
+      cwd: string | null;
+    };
 
 export interface ShellProfileInfo {
   guid: string;
@@ -98,6 +115,15 @@ export class TerminalHost {
     reclaim: (sessionId: string) => Promise<void>;
   } | null = null;
 
+  // Injected by setupClaude(): the Claude one-writer gate. onOpen throws to
+  // refuse (running prompt -> 'Cancel the running prompt first'), closes the
+  // live SDK query and marks the chat session terminalOwned; onExit (pty exit
+  // or close) re-lists and reloads history.
+  claudeGate: {
+    onOpen: (sessionId: string) => Promise<void>;
+    onExit: (sessionId: string) => void;
+  } | null = null;
+
   constructor(private readonly testMode: boolean) {}
 
   private resolveCommand(options: TerminalOpenOptions): ResolvedCommand | { error: string } {
@@ -123,6 +149,19 @@ export class TerminalHost {
       const devinPath = resolveDevinPath(state.settings?.current.local.devinPath);
       if (!devinPath) return { error: INSTALL_GUIDANCE };
       return { file: devinPath, args: [], label: null, appendCwd: false };
+    }
+    if (kind === 'claude') {
+      const claudePath = resolveClaudePath(state.settings?.current.claude.path ?? null);
+      if (!claudePath) return { error: CLAUDE_INSTALL_GUIDANCE };
+      return { file: claudePath, args: [], label: null, appendCwd: false };
+    }
+    if (options.kind === 'shell' && options.command?.length) {
+      return {
+        file: options.command[0]!,
+        args: options.command.slice(1),
+        label: options.command.join(' ').slice(0, 40),
+        appendCwd: false,
+      };
     }
     const shell = this.resolveShellCommand(
       options.kind === 'shell' ? options.profile : undefined,
@@ -272,7 +311,7 @@ export class TerminalHost {
     const added: string[] = [];
     // The devin CLI classifies its host terminal from TERM_PROGRAM/WT_SESSION;
     // a ConPTY-backed xterm looks like conhost, so pose as Windows Terminal.
-    if (kind === 'devin' && process.platform === 'win32') {
+    if (kind !== 'shell' && process.platform === 'win32') {
       if (env.WT_SESSION === undefined) {
         env.WT_SESSION = randomUUID();
         added.push('WT_SESSION');
@@ -289,9 +328,9 @@ export class TerminalHost {
   }
 
   async open(options: TerminalOpenOptions, cols = 120, rows = 30): Promise<OpenResult> {
-    if (options.kind === 'devin') {
-      // The release step awaits an agent restart (seconds) — serialize opens
-      // per session so a second caller can't slip past the bySession check.
+    if (options.kind !== 'shell') {
+      // Both session-keyed kinds serialize per session so a second caller
+      // can't slip past the bySession check mid-handoff.
       const inflight = this.inflightBySession.get(options.sessionId);
       if (inflight) return inflight;
       const pending = this.spawnTerminal(options, cols, rows).finally(() => {
@@ -314,11 +353,19 @@ export class TerminalHost {
     const normalized =
       options.kind === 'devin'
         ? resolve(options.workspace)
-        : resolve(options.cwd ?? workspaces[0] ?? homedir());
+        : options.kind === 'claude'
+          ? // A session cwd that no longer exists can't host a pty (ConPTY
+            // error 267) — fall back to home.
+            resolve(options.cwd && existsSync(options.cwd) ? options.cwd : homedir())
+          : resolve(options.cwd ?? workspaces[0] ?? homedir());
     // Ptys only run inside configured workspaces (plus the home dir for the
     // generic shell kind) — same rule as acpHost's workspace allow-list.
     const allowed =
-      options.kind === 'devin' ? workspaces : [...workspaces, resolve(homedir())];
+      options.kind === 'devin'
+        ? workspaces
+        : options.kind === 'claude'
+          ? [...workspaces, resolve(homedir()), normalized]
+          : [...workspaces, resolve(homedir())];
     if (!allowed.includes(normalized)) {
       log('local', 'terminal-open', {
         detail: {
@@ -331,7 +378,7 @@ export class TerminalHost {
       });
       return { ok: false, error: 'cwd not allowed' };
     }
-    if (options.kind === 'devin') {
+    if (options.kind !== 'shell') {
       const existingId = this.bySession.get(options.sessionId);
       if (existingId) {
         const existing = this.terminals.get(existingId);
@@ -344,6 +391,22 @@ export class TerminalHost {
     if ('error' in command) {
       log('local', 'terminal-open', { detail: { cwd: normalized, ok: false } });
       return { ok: false, error: command.error };
+    }
+    if (options.kind === 'claude') {
+      // One-writer policy: the chat query closes before the pty opens;
+      // a running prompt refuses.
+      try {
+        await this.claudeGate?.onOpen(options.sessionId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: message };
+      }
+      // The gate await opened a window for a parallel caller — re-check.
+      const existingId = this.bySession.get(options.sessionId);
+      if (existingId) {
+        const existing = this.terminals.get(existingId);
+        if (existing && existing.exitCode === null) return { ok: true, id: existingId };
+      }
     }
     if (options.kind === 'devin') {
       // `devin -r` takes the CLI's per-session lock — chat for this session is
@@ -375,6 +438,13 @@ export class TerminalHost {
       const args = [
         ...(command.appendCwd ? [...command.args, '--cd', normalized] : command.args),
         ...(options.kind === 'devin' ? ['-r', options.sessionId] : []),
+        ...(options.kind === 'claude'
+          ? options.mode === 'attach'
+            ? ['attach', options.agentId ?? '']
+            : options.mode === 'resume'
+              ? ['-r', options.sessionId]
+              : ['--session-id', options.sessionId]
+          : []),
       ];
       proc = nodePty.spawn(command.file, args, {
         cwd: normalized,
@@ -396,7 +466,7 @@ export class TerminalHost {
     const entry: TerminalEntry = {
       id: randomUUID(),
       kind: options.kind,
-      sessionId: options.kind === 'devin' ? options.sessionId : null,
+      sessionId: options.kind !== 'shell' ? options.sessionId : null,
       cwd: normalized,
       title: basename(normalized) || normalized,
       profile: command.label,
@@ -409,20 +479,19 @@ export class TerminalHost {
       lastDataLogAt: 0,
       readBuffer: '',
       linkScanner:
-        options.kind === 'devin'
+        options.kind !== 'shell'
           ? new LinkScanner({ context: { githubOrigins: fixtureOrigins } })
           : null,
     };
     this.terminals.set(entry.id, entry);
-    if (options.kind === 'devin') this.bySession.set(options.sessionId, entry.id);
+    if (options.kind !== 'shell') this.bySession.set(options.sessionId, entry.id);
     proc.onData((data) => this.pushData(entry, data));
     proc.onExit(({ exitCode }) => {
       entry.exitCode = exitCode;
       this.flush(entry);
       if (entry.linkScanner && entry.sessionId && this.onPullRequestUrl) {
-        const sessionId = entry.sessionId;
         for (const url of entry.linkScanner.flush()) {
-          this.onPullRequestUrl(url, sessionId);
+          this.onPullRequestUrl(url, this.prTarget(entry));
         }
       }
       if (entry.bytesOut > 0) {
@@ -442,6 +511,9 @@ export class TerminalHost {
       // Single reclaim site: close() kills the pty which lands here.
       if (entry.sessionId && entry.reclaimOnExit) {
         void this.sessionGate?.reclaim(entry.sessionId);
+      }
+      if (entry.kind === 'claude' && entry.sessionId) {
+        this.claudeGate?.onExit(entry.sessionId);
       }
       const view = state.shellView;
       if (view && !view.webContents.isDestroyed()) {
@@ -471,7 +543,25 @@ export class TerminalHost {
   // Wired by the main process to refresh ShellState.terminals.
   onChange: (() => void) | null = null;
   // Injected by index.ts: a never-before-seen PR URL in a devin pty's output.
-  onPullRequestUrl: ((url: string, sessionId: string) => void) | null = null;
+  onPullRequestUrl:
+    | ((
+        url: string,
+        target: {
+          scope: string;
+          source: 'local-terminal' | 'claude-terminal';
+        },
+      ) => void)
+    | null = null;
+
+  private prTarget(entry: TerminalEntry): {
+    scope: string;
+    source: 'local-terminal' | 'claude-terminal';
+  } {
+    const sessionId = entry.sessionId ?? '';
+    return entry.kind === 'claude'
+      ? { scope: claudeScope(sessionId), source: 'claude-terminal' }
+      : { scope: localScope(sessionId), source: 'local-terminal' };
+  }
 
   list(): TerminalSummary[] {
     return [...this.terminals.values()].map((entry) => ({
@@ -512,9 +602,8 @@ export class TerminalHost {
     const data = entry.pending;
     entry.pending = '';
     if (entry.linkScanner && entry.sessionId && this.onPullRequestUrl) {
-      const sessionId = entry.sessionId;
       for (const url of entry.linkScanner.scan(data)) {
-        this.onPullRequestUrl(url, sessionId);
+        this.onPullRequestUrl(url, this.prTarget(entry));
       }
     }
     const view = state.shellView;

@@ -28,7 +28,7 @@ import { localHost } from './local/ipc';
 import { loadSdk } from './claude/sdk';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
-import { publicChatState } from './claude/chatState';
+import { getChatState, publicChatState } from './claude/chatState';
 import { publicLocalState } from './local/localState';
 
 export function registerTestHooks(): void {
@@ -285,6 +285,16 @@ export function registerTestHooks(): void {
       claudePermission: (id: string, requestId: string, optionId: string) =>
         claudeHost().respondPermission(id, requestId, optionId),
       claudeLiveCount: () => claudeHost().liveCount(),
+      // Phase 3: background agents + claude terminal.
+      claudeAgents: () => claudeSessions().agentsList(),
+      claudeAgentsRefresh: () => claudeSessions().refreshAgents(),
+      claudeTerminalOpen: (id: string) =>
+        terminalHost.open({
+          kind: 'claude',
+          sessionId: id,
+          mode: claudeSessions().terminalModeFor(id),
+          cwd: getChatState().sessions[id]?.cwd ?? null,
+        }),
       claudeSdkProbe: async () => {
         const t0 = Date.now();
         try {

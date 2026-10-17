@@ -116,7 +116,8 @@ const terminalApi = {
   terminalOpen: (
     options:
       | { kind: 'devin'; workspace: string; sessionId: string }
-      | { kind: 'shell'; cwd?: string; profile?: string },
+      | { kind: 'shell'; cwd?: string; profile?: string; command?: string[] }
+      | { kind: 'claude'; sessionId: string; mode: 'resume' | 'new' | 'attach'; agentId?: string },
   ) =>
     ipcRenderer.invoke(IpcChannels.terminalOpen, options) as Promise<
       { ok: true; id: string } | { ok: false; error: string }
@@ -445,15 +446,21 @@ const api = {
   claudeShowArchived: (value: boolean) =>
     ipcRenderer.send(IpcChannels.claudeShowArchived, { value }),
   claudeContextMenu: (request: {
-    kind: 'session' | 'folder' | 'header';
+    kind: 'session' | 'folder' | 'header' | 'agent';
     sessionId?: string;
     name?: string;
+    agentId?: string;
     x: number;
     y: number;
   }) =>
     ipcRenderer.invoke(IpcChannels.claudeContextMenu, request) as Promise<{
-      action: 'rename' | 'rename-session' | 'new-folder' | null;
+      action: 'rename' | 'rename-session' | 'new-folder' | 'open-terminal' | 'attach-agent' | null;
+      sessionId?: string;
+      agentId?: string;
     }>,
+  claudeAgentStop: (agentId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeAgentStop, { agentId }) as Promise<LocalResult<null>>,
+  claudeAgentsRefresh: () => ipcRenderer.send(IpcChannels.claudeAgentsRefresh),
   // Taskbar badge: main asks the shell to render, replies get {count,size}.
   onBadgeRender: (callback: (request: BadgeRender) => void) => {
     const listener = (_event: unknown, request: BadgeRender) => callback(request);

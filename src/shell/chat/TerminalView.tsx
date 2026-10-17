@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { resolveTerminalKey } from '../../core/terminalKeys';
+import { useShellState } from '../store';
 import { buttonClass } from './Cards';
 
 interface TerminalViewProps {
@@ -21,6 +22,8 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
   const termRef = useRef<Terminal | null>(null);
   const idRef = useRef<string>(id);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const kind =
+    (useShellState()?.terminals ?? []).find((t) => t.id === id)?.kind ?? 'devin';
 
   useEffect(() => {
     idRef.current = id;
@@ -141,7 +144,7 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
           id="terminalExitBar"
           className="flex items-center gap-3 border-b border-[#39475a] bg-[#1a2330] px-3 py-1.5 text-xs text-[#e0a03c]"
         >
-          devin exited (code {exitCode})
+          {kind} exited (code {exitCode})
           <button type="button" className={buttonClass} onClick={onRestart}>
             Restart
           </button>

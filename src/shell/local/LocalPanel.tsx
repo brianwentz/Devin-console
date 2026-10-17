@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Trash2 } from 'lucide-react';
 import type { LocalStatePublic } from '../../shared/ipc';
 import { AgentBadge, buttonClass } from './Cards';
-import { TerminalView } from './TerminalView';
+import { TerminalView } from '../chat/TerminalView';
 import { ChatView } from '../chat/ChatView';
 import { UsagePill } from '../chat/UsagePill';
 import { useShellState } from '../store';

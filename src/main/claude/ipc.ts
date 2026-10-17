@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { app } from 'electron';
 import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
+  ClaudeAgentStopArg,
   ClaudeCancelArg,
   ClaudeContextMenuArg,
   ClaudeFolderCreateArg,
@@ -121,6 +122,13 @@ export function setupClaude(): ClaudeSessions {
   handleResult(IpcChannels.claudeLoadHistory, ClaudeLoadHistoryArg, ({ sessionId }) =>
     claudeHost().loadHistory(sessionId),
   );
+  // Phase 3 background agents.
+  handleResult(IpcChannels.claudeAgentStop, ClaudeAgentStopArg, ({ agentId }) =>
+    sessions.agentStop(agentId),
+  );
+  guardedOn(IpcChannels.claudeAgentsRefresh, () => {
+    void sessions.refreshAgents();
+  });
 
   return sessions;
 }
