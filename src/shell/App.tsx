@@ -13,6 +13,8 @@ import { Splitter } from './components/Splitter';
 import { TerminalDock } from './components/TerminalDock';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SessionSidebar } from './components/SessionSidebar';
+import { ClaudeSidebar } from './components/ClaudeSidebar';
+import { ClaudeView } from './claude/ClaudeView';
 import { LocalPanel } from './local/LocalPanel';
 
 function useWindowSize(): { width: number; height: number } {
@@ -78,7 +80,8 @@ export function App() {
     paneFraction: state.paneFraction,
     terminalOpen: terminalVisible,
     terminalHeight: state.terminalHeight,
-    sessionsOpen: state.sessionsOpen && state.surface === 'cloud',
+    sessionsOpen:
+      state.sessionsOpen && (state.surface === 'cloud' || state.surface === 'claude'),
     sessionsWidth: state.sessionsWidth,
   });
   const paneVisible = state.paneOpen && !bounds.paneCollapsed;
@@ -94,6 +97,7 @@ export function App() {
         terminalAllSurfaces={state.settings.terminal.allSurfaces}
       />
       {state.surface === 'cloud' && bounds.sessions && <SessionSidebar rect={bounds.sessions} />}
+      {state.surface === 'claude' && bounds.sessions && <ClaudeSidebar rect={bounds.sessions} />}
       {bounds.sessionsSplitter && (
         <Splitter axis="s" rect={bounds.sessionsSplitter} enabled={state.sessionsOpen} />
       )}
@@ -125,6 +129,17 @@ export function App() {
         <SettingsPanel
           settings={state.settings}
           credentials={state.credentials}
+          style={{
+            position: 'absolute',
+            left: Math.max(RAIL_WIDTH, mainRect.x),
+            top: mainRect.y,
+            width: mainRect.width,
+            height: mainRect.height,
+          }}
+        />
+      )}
+      {state.surface === 'claude' && (
+        <ClaudeView
           style={{
             position: 'absolute',
             left: Math.max(RAIL_WIDTH, mainRect.x),

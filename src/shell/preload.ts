@@ -3,6 +3,7 @@ import type { AppNotification } from '../core/notificationModel';
 import type { CredentialEntry } from '../core/credentials';
 import {
   IpcChannels,
+  SurfaceSchema,
   type BadgeRender,
   type IdentityInfo,
   type SessionPr,
@@ -199,12 +200,7 @@ const api = {
     }
   },
   setSurface: (surface: Surface) => {
-    if (
-      surface === 'cloud' ||
-      surface === 'local' ||
-      surface === 'settings' ||
-      surface === 'analytics'
-    ) {
+    if (SurfaceSchema.safeParse(surface).success) {
       ipcRenderer.send(IpcChannels.surfaceSet, surface);
     }
   },

@@ -12,6 +12,7 @@ The Cloud surface is the real Devin web app (your tenant) hosted in a Chromium v
 - **Analytics** — your tenant's analytics page as its own surface in the rail.
 - **Terminal dock** — a tabbed shell (your Windows Terminal default profile or PowerShell on Windows, your login shell on macOS) under the Devin view, with per-workspace working directories.
 - **Devin Local** — run the `devin` CLI against local workspace folders from the same window (requires the Devin CLI).
+- **Claude sessions** — a sidebar for your local Claude Code sessions (`~/.claude`) with folders, pinning, archive and transcript management (requires the Claude Code CLI).
 - **Saved passwords** — logins for SSO/IdP origins, encrypted with the OS credential store (DPAPI on Windows, Keychain on macOS), filled automatically on the sign-in page.
 - **Layout memory** — the pane split, terminal height, and window size/position (per display configuration) are remembered without any settings to manage.
 
@@ -78,6 +79,18 @@ The poller only lists sessions created by the token's user (`GET /v3/self` → `
 3. Start a session; prompts, tool calls, plans and permission requests appear in the chat panel, with a thinking indicator and elapsed time while a turn runs and the turn's token usage once it finishes. Each session has its own **Terminal** tab, which resumes that session in the interactive CLI (`devin -r <session>`), and its own set of GitHub tabs in the pane. While a session is open in its terminal it belongs to the CLI — it shows a `>_` marker in the list and chat for it is disabled until you close the terminal, after which the chat panel reloads with the turns you made there. Opening a terminal restarts the workspace's agent, so it is refused while any session in that workspace is still running — finish or cancel it first. PR links the CLI prints open as background tabs just like Cloud sessions (same *Open a tab when a session creates a PR* toggle). Type `/handoff` in a local session to move it to Devin Cloud.
 4. Hover a session in the list to delete it (running sessions must be cancelled first); the trash icon next to **Sessions** deletes every session in the workspace after a confirmation.
 
+## Claude sessions
+
+The **Claude** surface (sparkle icon in the rail) lists the Claude Code sessions on this machine, read from `~/.claude` through the Claude Agent SDK — the same list `claude -r` shows, including titles, working directories and branches. It needs the Claude Code CLI installed (`claude` on `PATH`); if it isn't found an informational banner shows and you can set **Claude Code path** in Settings → General.
+
+- **Folders, pin, archive** — sessions can be pinned, moved into named folders (created via the `+` header button, a folder's menu, or a session's *Move to folder* submenu) and archived. The order of folders, collapsed state and the *Show archived sessions* toggle are kept between launches.
+- **Remove from list vs Delete transcript** — *Remove from list* hides a session until the transcript changes again (if a session is resumed elsewhere it reappears). *Delete transcript…* removes the `.jsonl` file from disk permanently after a confirmation.
+- **Auto-archive** — *Auto-archive Claude sessions idle for N days (0 = off)* in Settings → General archives sessions whose transcript hasn't changed in that many days. Unarchiving manually marks a session so it isn't auto-archived again.
+- **Rename / Fork** — a session's menu renames its title (writes a custom title into the transcript) or forks it into a new resumable session that inherits folder/pin.
+- **Where it lives** — folder, pin, archive and removed state is stored per-app in `claude-sessions.json` inside the app's data folder (see [Where things live](#where-things-live)); transcripts stay in `~/.claude` untouched unless you delete one. Setting `CLAUDE_CONFIG_DIR` before launch points the app at a different Claude home (used by the test suite).
+
+Selecting a session shows its details in the main column; the chat/terminal view for Claude sessions arrives in a later update.
+
 ## Settings reference
 
 Settings is split into five tabs: **General**, **Link Handling**, **Passwords**, **Notifications** and **Updates**. Fields save automatically when you switch tabs, leave Settings or quit; invalid values are flagged inline and block the save. The API token Save/Clear and password Add/Edit buttons are explicit actions.
@@ -89,6 +102,8 @@ Settings is split into five tabs: **General**, **Link Handling**, **Passwords**,
 | Open non-GitHub links in system browser | General | GitHub, tenant and rule-matched links always stay in the pane |
 | Keep hidden tabs live for (hours) / Max live tabs | General | Memory controls for GitHub tabs of sessions you're not viewing — the session you're viewing keeps its tabs loaded; hidden sessions' tabs are discarded after the keep-alive window and the live cap only ever applies to them |
 | Show terminal dock on Local and Settings too | General | Dock is Cloud-only by default |
+| Claude Code path | General | Blank = find `claude` on PATH; a non-empty path that doesn't resolve is flagged inline |
+| Auto-archive Claude sessions idle for (days) | General | 0 = off; unarchiving manually suppresses it per session |
 | Shell command | General | Blank = Windows Terminal default profile (else PowerShell) on Windows, `$SHELL` on macOS; e.g. `wsl.exe -d Ubuntu` or `/bin/zsh -l` |
 | Link rules | Link Handling | Up to 100 prefix or regular-expression rules; matching http(s) links open as pane tabs instead of the system browser (GitHub and your tenant are matched first). *Test a URL* shows where a link would go |
 | Passwords | Passwords | Origin + username + password, encrypted with DPAPI (Windows) / Keychain (macOS); autofill fills a single match on load, offers an account picker when several match, and asks to save/update after a sign-in; rows support show/copy/edit/delete |
@@ -118,7 +133,7 @@ In the terminal: `Ctrl+C` copies when text is selected (otherwise it is sent to 
 
 ## Where things live
 
-`%APPDATA%\devin-workspaces\` on Windows, `~/Library/Application Support/devin-workspaces/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (API token, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `events.jsonl` (the event log), and the two browser profiles (`persist:devin`, `persist:github`). Uninstalling removes the app; delete this folder to remove all data.
+`%APPDATA%\devin-workspaces\` on Windows, `~/Library/Application Support/devin-workspaces/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (API token, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar folder/pin/archive state — created on the first mutation), `events.jsonl` (the event log), and the two browser profiles (`persist:devin`, `persist:github`). Uninstalling removes the app; delete this folder to remove all data.
 
 The event log records URLs, ids and sizes only — never page content, terminal output, or secrets. It is the first place to look if notifications or PR tabs don't appear (`poll`, `poll-error`, `notification-added`, `notification-open`, `pr-auto-open` events).
 

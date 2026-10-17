@@ -14,6 +14,8 @@ export interface SettingsDraft {
   sessionsKeepAliveHours: string;
   terminalAllSurfaces: boolean;
   terminalShell: string;
+  claudePath: string;
+  claudeAutoArchiveDays: string;
   userId: string;
   orgId: string;
   linkRules: LinkRule[];
@@ -35,6 +37,8 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   sessionsKeepAliveHours: 'general',
   terminalAllSurfaces: 'general',
   terminalShell: 'general',
+  claudePath: 'general',
+  claudeAutoArchiveDays: 'general',
   userId: 'notifications',
   orgId: 'notifications',
   linkRules: 'links',
@@ -57,6 +61,8 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     sessionsKeepAliveHours: String(settings.sessions.keepAliveHours),
     terminalAllSurfaces: settings.terminal.allSurfaces,
     terminalShell: settings.terminal.shell,
+    claudePath: settings.claude.path ?? '',
+    claudeAutoArchiveDays: String(settings.claude.autoArchiveDays),
     userId: settings.notifications.userId,
     orgId: settings.notifications.orgId,
     linkRules: settings.routing.rules.map((rule) => ({ ...rule })),
@@ -87,6 +93,8 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     Number(draft.sessionsKeepAliveHours) !== Number(base.sessionsKeepAliveHours) ||
     draft.terminalAllSurfaces !== base.terminalAllSurfaces ||
     draft.terminalShell.trim() !== base.terminalShell ||
+    draft.claudePath.trim() !== base.claudePath ||
+    Number(draft.claudeAutoArchiveDays) !== Number(base.claudeAutoArchiveDays) ||
     draft.userId.trim() !== base.userId ||
     draft.orgId.trim() !== base.orgId ||
     draft.linkRules.length !== base.linkRules.length ||
@@ -128,6 +136,15 @@ export function validateDraft(
     errors.sessionsKeepAliveHours =
       'Keep hidden Cloud sessions live for must be between 0 and 168 hours';
   }
+  const claudeAutoArchive = Number(draft.claudeAutoArchiveDays);
+  if (
+    !Number.isInteger(claudeAutoArchive) ||
+    claudeAutoArchive < 0 ||
+    claudeAutoArchive > 365
+  ) {
+    errors.claudeAutoArchiveDays =
+      'Auto-archive Claude sessions must be a whole number between 0 and 365 days';
+  }
   for (const [index, rule] of draft.linkRules.entries()) {
     const pattern = rule.pattern.trim();
     if (!pattern) {
@@ -158,6 +175,10 @@ export function validateDraft(
         keepAliveHours: sessionsKeepAlive,
       },
       terminal: { allSurfaces: draft.terminalAllSurfaces, shell: draft.terminalShell.trim() },
+      claude: {
+        path: draft.claudePath.trim() || null,
+        autoArchiveDays: claudeAutoArchive,
+      },
       notifications: { userId: draft.userId.trim(), orgId: draft.orgId.trim() },
     },
   };

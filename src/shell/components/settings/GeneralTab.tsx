@@ -1,7 +1,20 @@
 import { useState } from 'react';
 import type { DraftField } from '../../../core/settingsDraft';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
+import { useShellState } from '../../store';
 import { errorTextClass, inputClass, inputErrorClass, saveClass } from './styles';
+
+// Non-empty claude.path that didn't resolve — surfaced inline under the
+// field from the live claude state rather than as a commit-blocking error.
+function CliPathHint() {
+  const state = useShellState();
+  if (!state || state.claude.cliPath !== null) return null;
+  return (
+    <span id="claudePathInputError" className={errorTextClass}>
+      Claude CLI not found at this path
+    </span>
+  );
+}
 
 function fieldInputClass(errors: Partial<Record<DraftField, string>>, field: DraftField): string {
   return errors[field] ? `${inputClass} ${inputErrorClass}` : inputClass;
@@ -178,7 +191,44 @@ export function GeneralTab() {
           checked={draft.sessionsOpen}
           onChange={(event) => updateDraft({ sessionsOpen: event.target.checked })}
         />
-        <span>Show the Cloud sessions column</span>
+        <span>Show the sessions column (Cloud and Claude)</span>
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Claude Code path</span>
+        <input
+          id="claudePathInput"
+          className={fieldInputClass(errors, 'claudePath')}
+          value={draft.claudePath}
+          aria-invalid={errors.claudePath ? 'true' : undefined}
+          onChange={(event) => updateDraft({ claudePath: event.target.value })}
+          placeholder="e.g. C:\Users\me\.local\bin\claude.exe"
+        />
+        <FieldError inputId="claudePathInput" message={errors.claudePath} />
+        {draft.claudePath.trim() !== '' && (
+          <CliPathHint />
+        )}
+        <span className="text-xs text-[#7f8ca0]">
+          Blank = find claude on PATH.
+        </span>
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">
+          Auto-archive Claude sessions idle for (days, 0 = off)
+        </span>
+        <input
+          id="claudeAutoArchiveInput"
+          className={fieldInputClass(errors, 'claudeAutoArchiveDays')}
+          type="number"
+          min={0}
+          max={365}
+          step={1}
+          value={draft.claudeAutoArchiveDays}
+          aria-invalid={errors.claudeAutoArchiveDays ? 'true' : undefined}
+          onChange={(event) =>
+            updateDraft({ claudeAutoArchiveDays: event.target.value })
+          }
+        />
+        <FieldError inputId="claudeAutoArchiveInput" message={errors.claudeAutoArchiveDays} />
       </label>
       <label className="flex items-center gap-2 text-sm">
         <input

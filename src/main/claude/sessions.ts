@@ -346,6 +346,9 @@ export class ClaudeSessions {
   private pendingMenu = new Map<string, Electron.MenuItemConstructorOptions>();
   private lastMenuDesc: Record<string, unknown>[] = [];
   private pendingAction: MenuAction = null;
+  // Test mode only: the contextMenu invoke stays open until a click resolves
+  // it — same shape as the production popup resolving with pendingAction.
+  private pendingMenuResolve: ((result: { action: MenuAction }) => void) | null = null;
 
   menuItems(): Record<string, unknown>[] {
     return this.lastMenuDesc;
@@ -363,6 +366,8 @@ export class ClaudeSessions {
     );
     const action = this.pendingAction;
     this.pendingAction = null;
+    this.pendingMenuResolve?.({ action });
+    this.pendingMenuResolve = null;
     return { action };
   }
 
@@ -483,7 +488,19 @@ export class ClaudeSessions {
             : {}),
         }));
       this.lastMenuDesc = describe(items);
-      return { action: null, items: this.lastMenuDesc };
+      // Production resolves the invoke when the popup closes with
+      // pendingAction; the click hook resolves it here the same way.
+      return await new Promise<{ action: MenuAction }>((resolve) => {
+        const timer = setTimeout(() => {
+          this.pendingMenuResolve = null;
+          resolve({ action: null });
+        }, 30_000);
+        this.pendingMenuResolve = (result) => {
+          clearTimeout(timer);
+          this.pendingMenuResolve = null;
+          resolve(result);
+        };
+      });
     }
     const menu = Menu.buildFromTemplate(items);
     log('claude', 'claude-menu', { detail: { kind: arg.kind } });

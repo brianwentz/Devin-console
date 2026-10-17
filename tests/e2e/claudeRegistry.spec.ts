@@ -1,18 +1,9 @@
-import {
-  appendFileSync,
-  cpSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { appendFileSync, cpSync, existsSync, readFileSync, rmSync, utimesSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { launchApp, shellPage } from './helpers';
+import { CLAUDE_FIXTURE_HOME, launchApp, launchWithClaudeFixture, shellPage } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §4.5: hook-driven claude sidebar e2e (the shell UI lands in PR 4). The app
@@ -33,7 +24,7 @@ const UA = '11111111-0000-4000-8000-00000000000a';
 const UB = '11111111-0000-4000-8000-00000000000b';
 const UC = '11111111-0000-4000-8000-00000000000c';
 
-const FIXTURE_HOME = resolve(__dirname, '../fixtures/claude-home');
+const FIXTURE_HOME = CLAUDE_FIXTURE_HOME;
 
 type MenuItem = {
   id: string;
@@ -100,32 +91,20 @@ async function openClaudeMenu(
   arg: { kind: 'session' | 'folder' | 'header'; sessionId?: string; name?: string },
 ): Promise<MenuItem[]> {
   const shell = await shellPage(app);
-  await shell.evaluate(
+  // The invoke stays open until a claudeMenuClick resolves it — don't await.
+  void shell.evaluate(
     (a) =>
       (window as any).devinworkspaces.claudeContextMenu({ ...a, x: 10, y: 10 }),
     arg,
   );
-  return hooks(app).claudeMenuItems();
+  const h = hooks(app);
+  await expect.poll(async () => (await h.claudeMenuItems()).length).toBeGreaterThan(0);
+  return h.claudeMenuItems();
 }
 
-async function launchWithFixture(extraEnv: Record<string, string> = {}): Promise<{
-  app: ElectronApplication;
-  profile: string;
-  claudeHome: string;
-}> {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
-  const claudeHome = join(profile, 'claude-home');
-  cpSync(FIXTURE_HOME, claudeHome, { recursive: true });
-  const logFile = join(profile, 'events.jsonl');
-  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    CLAUDE_CONFIG_DIR: claudeHome,
-    ...extraEnv,
-  });
-  return { app, profile, claudeHome };
-}
 
 test('claudeState reaches ready with the fixture sessions and title precedence', async () => {
-  const { app, profile } = await launchWithFixture();
+  const { app, profile } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
@@ -145,7 +124,7 @@ test('claudeState reaches ready with the fixture sessions and title precedence',
 });
 
 test('a new transcript file in the config dir is listed within a second', async () => {
-  const { app, profile, claudeHome } = await launchWithFixture();
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
@@ -166,7 +145,7 @@ test('a new transcript file in the config dir is listed within a second', async 
 });
 
 test('pin + move persist in claude-sessions.json across a relaunch', async () => {
-  const { app, profile, claudeHome } = await launchWithFixture();
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
@@ -235,7 +214,7 @@ test('pin + move persist in claude-sessions.json across a relaunch', async () =>
 });
 
 test('remove from list hides the row; a newer transcript mtime brings it back', async () => {
-  const { app, profile, claudeHome } = await launchWithFixture();
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
@@ -268,7 +247,7 @@ test('remove from list hides the row; a newer transcript mtime brings it back', 
 });
 
 test('delete transcript removes the file and drops the row (test-mode auto-confirm)', async () => {
-  const { app, profile, claudeHome } = await launchWithFixture();
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
@@ -287,7 +266,7 @@ test('delete transcript removes the file and drops the row (test-mode auto-confi
 });
 
 test('autoArchiveDays archives an idle session; showArchived reveals it', async () => {
-  const { app, profile, claudeHome } = await launchWithFixture();
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     // Age the beta fixture past the auto-archive threshold.
@@ -326,7 +305,7 @@ test('autoArchiveDays archives an idle session; showArchived reveals it', async 
 });
 
 test('selecting a session drives currentScope to claude:<id>', async () => {
-  const { app, profile, claudeHome } = await launchWithFixture();
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');

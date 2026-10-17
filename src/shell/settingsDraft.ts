@@ -88,6 +88,8 @@ const FIELD_INPUT: Record<DraftField, string> = {
   sessionsKeepAliveHours: 'sessionsKeepAliveHours',
   terminalAllSurfaces: 'terminalAllSurfacesInput',
   terminalShell: 'terminalShellInput',
+  claudePath: 'claudePathInput',
+  claudeAutoArchiveDays: 'claudeAutoArchiveInput',
   userId: 'userIdInput',
   orgId: 'orgIdInput',
   linkRules: 'linkRuleAdd',
