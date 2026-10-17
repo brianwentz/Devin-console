@@ -78,7 +78,7 @@ const hostSamples: Record<HostClass, string[]> = {
   data: ['data:text/html,denied'],
 };
 
-const sources: RouteSource[] = ['devin', 'github', 'local', 'shell'];
+const sources: RouteSource[] = ['devin', 'github', 'local', 'claude', 'shell'];
 const dispositions: RouteDisposition[] = ['new-window', 'navigate', 'background'];
 
 function expected(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   GLOBAL,
+  claudeScope,
   effectiveScope,
   localScope,
   activateTab,
@@ -367,11 +368,20 @@ describe('pickDiscardCandidates', () => {
   });
 
   it('effectiveScope picks the local session on the local surface, cloud otherwise', () => {
-    expect(effectiveScope('local', 'cloud-1', 'local-1')).toBe('local:local-1');
-    expect(effectiveScope('local', 'cloud-1', null)).toBe('cloud-1');
-    expect(effectiveScope('local', null, null)).toBe(GLOBAL);
-    expect(effectiveScope('cloud', 'cloud-1', 'local-1')).toBe('cloud-1');
-    expect(effectiveScope('settings', 'cloud-1', 'local-1')).toBe('cloud-1');
-    expect(effectiveScope('cloud', null, 'local-1')).toBe(GLOBAL);
+    expect(effectiveScope('local', 'cloud-1', 'local-1', null)).toBe('local:local-1');
+    expect(effectiveScope('local', 'cloud-1', null, null)).toBe('cloud-1');
+    expect(effectiveScope('local', null, null, null)).toBe(GLOBAL);
+    expect(effectiveScope('cloud', 'cloud-1', 'local-1', null)).toBe('cloud-1');
+    expect(effectiveScope('settings', 'cloud-1', 'local-1', null)).toBe('cloud-1');
+    expect(effectiveScope('cloud', null, 'local-1', null)).toBe(GLOBAL);
+  });
+
+  it('effectiveScope picks the claude session on the claude surface, cloud otherwise', () => {
+    expect(claudeScope('abc')).toBe('claude:abc');
+    expect(effectiveScope('claude', 'cloud-1', 'local-1', 'claude-1')).toBe('claude:claude-1');
+    expect(effectiveScope('claude', 'cloud-1', 'local-1', null)).toBe('cloud-1');
+    expect(effectiveScope('claude', null, null, null)).toBe(GLOBAL);
+    expect(effectiveScope('settings', null, null, 'claude-1')).toBe(GLOBAL);
+    expect(effectiveScope('local', null, null, 'claude-1')).toBe(GLOBAL);
   });
 });

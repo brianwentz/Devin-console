@@ -5,7 +5,7 @@ import { isAnalyticsUrl } from './sessions';
 
 export type RouteKind = 'devin' | 'github' | 'rule' | 'external' | 'mailto' | 'deny';
 
-export type RouteSource = 'devin' | 'github' | 'local' | 'shell' | 'analytics';
+export type RouteSource = 'devin' | 'github' | 'local' | 'claude' | 'shell' | 'analytics';
 export type RouteDisposition = 'new-window' | 'navigate' | 'background';
 
 export type RouteDecision =

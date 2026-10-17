@@ -394,3 +394,44 @@ describe('sessions settings', () => {
     ).toBe(true);
   });
 });
+
+describe('claude settings', () => {
+  it('defaults to null path, no collapsed folders, archive hidden, auto-archive off', () => {
+    const settings = SettingsSchema.parse({});
+    expect(settings.claude).toEqual({
+      path: null,
+      collapsedFolders: [],
+      showArchived: false,
+      autoArchiveDays: 0,
+    });
+  });
+
+  it('parses explicit values and clamps autoArchiveDays', () => {
+    const { settings, dropped } = parseSettingsFile({
+      claude: { path: 'C:\tools\claude.exe', showArchived: true, autoArchiveDays: 30 },
+    });
+    expect(settings.claude.path).toBe('C:\tools\claude.exe');
+    expect(settings.claude.showArchived).toBe(true);
+    expect(settings.claude.autoArchiveDays).toBe(30);
+    expect(
+      parseSettingsFile({ claude: { autoArchiveDays: 999 } }).settings.claude.autoArchiveDays,
+    ).toBe(0);
+  });
+
+  it('patches one claude field without resetting the rest', () => {
+    const base: Settings = {
+      ...SettingsSchema.parse({}),
+      claude: { path: '/usr/bin/claude', collapsedFolders: [], showArchived: false, autoArchiveDays: 0 },
+    };
+    const next = mergeSettings(base, { claude: { showArchived: true } });
+    expect(next.claude).toEqual({
+      path: '/usr/bin/claude',
+      collapsedFolders: [],
+      showArchived: true,
+      autoArchiveDays: 0,
+    });
+    expect(
+      SettingsPatchSchema.safeParse({ claude: { autoArchiveDays: 366 } }).success,
+    ).toBe(false);
+  });
+});

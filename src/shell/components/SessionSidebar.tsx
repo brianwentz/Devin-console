@@ -194,7 +194,7 @@ function Row({
   prefetch,
   onMenu,
 }: {
-  node: SessionTreeNode;
+  node: SessionTreeNode<CloudSessionState>;
   collapsedChildren: Set<string>;
   onToggleChildren: (id: string) => void;
   registerRow: (el: HTMLButtonElement | null) => void;

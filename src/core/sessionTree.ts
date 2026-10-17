@@ -1,44 +1,67 @@
-// Lays CloudListResult sessions out as the sidebar tree: pinned section,
-// folder sections in the server-provided order, then an unfoldered 'recent'
-// section. Pure — the renderer and tests consume this directly.
+// Lays sidebar sessions out as a tree: pinned section, folder sections in the
+// stored order, then an unfoldered 'recent' section. Pure — the renderer and
+// tests consume this directly. Generic over SidebarSession: CloudSession and
+// ClaudeSessionState both satisfy it; callers keep their full session type.
 
-import type { CloudListResult, CloudSession } from './cloudAcp';
+import type { SessionPrCounts } from './cloudAcp';
+import type { CloudSessionState } from '../shared/ipc';
 
-export interface SessionTreeNode {
-  session: CloudSession;
-  children: SessionTreeNode[];
+// One row of the session sidebar. A source-specific session type is mapped
+// onto this before building the tree.
+export interface SidebarSession {
+  id: string;
+  title: string;
+  folder: string | null;
+  parentId: string | null;
+  isPinned: boolean;
+  isArchived: boolean;
+  /** ms epoch. */
+  updatedAt: number;
+  prs: SessionPrCounts;
+}
+
+// The list payload the sidebar renders.
+export interface SidebarListData<S extends SidebarSession = SidebarSession> {
+  sessions: S[];
+  folders: string[];
+  folderTotals: Record<string, number>;
+}
+
+export interface SessionTreeNode<S extends SidebarSession = SidebarSession> {
+  session: S;
+  children: SessionTreeNode<S>[];
   depth: number;
   current: boolean;
 }
 
-export interface SessionTreeSection {
+export interface SessionTreeSection<S extends SidebarSession = SidebarSession> {
   kind: 'pinned' | 'folder' | 'recent';
   name: string;
   collapsed: boolean;
   /** folderTotals total for this section, null when unknown. */
   total: number | null;
-  nodes: SessionTreeNode[];
+  nodes: SessionTreeNode<S>[];
   hasMore: boolean;
 }
 
-export interface SessionTree {
-  sections: SessionTreeSection[];
+export interface SessionTree<S extends SidebarSession = SidebarSession> {
+  sections: SessionTreeSection<S>[];
 }
 
 const PINNED = 'pinned';
 
-export function buildSessionTree(
-  result: Pick<CloudListResult, 'sessions' | 'folders' | 'folderTotals'>,
+export function buildSessionTree<S extends SidebarSession>(
+  result: SidebarListData<S>,
   opts: { collapsedFolders: string[]; currentSessionId: string | null },
-): SessionTree {
+): SessionTree<S> {
   const collapsed = new Set(opts.collapsedFolders);
   const byId = new Map(result.sessions.map((s) => [s.id, s]));
 
   // Children attach to their parent anywhere in the list; a child whose
   // parent is absent (or pinned — pinned sessions lift to the pinned section,
   // which is the only place a pinned session appears) becomes a root.
-  const childrenOf = new Map<string, CloudSession[]>();
-  const roots: CloudSession[] = [];
+  const childrenOf = new Map<string, S[]>();
+  const roots: S[] = [];
   for (const session of result.sessions) {
     const parent =
       session.parentId && !session.isPinned ? byId.get(session.parentId) : undefined;
@@ -51,9 +74,9 @@ export function buildSessionTree(
     }
   }
 
-  const byUpdatedDesc = (a: CloudSession, b: CloudSession) => b.updatedAt - a.updatedAt;
+  const byUpdatedDesc = (a: S, b: S) => b.updatedAt - a.updatedAt;
 
-  const toNode = (session: CloudSession, depth: number): SessionTreeNode => ({
+  const toNode = (session: S, depth: number): SessionTreeNode<S> => ({
     session,
     children: (childrenOf.get(session.id) ?? [])
       .sort(byUpdatedDesc)
@@ -63,11 +86,11 @@ export function buildSessionTree(
   });
 
   const makeSection = (
-    kind: SessionTreeSection['kind'],
+    kind: SessionTreeSection<S>['kind'],
     name: string,
-    sectionRoots: CloudSession[],
+    sectionRoots: S[],
     keepEmpty: boolean,
-  ): SessionTreeSection | null => {
+  ): SessionTreeSection<S> | null => {
     if (!keepEmpty && sectionRoots.length === 0) return null;
     const total = result.folderTotals[name] ?? null;
     return {
@@ -83,7 +106,7 @@ export function buildSessionTree(
   const pinnedRoots = roots.filter((s) => s.isPinned);
   const unpinned = roots.filter((s) => !s.isPinned);
 
-  const sections: SessionTreeSection[] = [];
+  const sections: SessionTreeSection<S>[] = [];
   const pinnedSection = makeSection('pinned', PINNED, pinnedRoots, false);
   if (pinnedSection) sections.push(pinnedSection);
 
@@ -120,34 +143,48 @@ export function buildSessionTree(
 // Applied to a local copy while the REST call is in flight; the next
 // cloud.list (success or recorded error) replaces them.
 
-export type CloudListData = Pick<
-  CloudListResult,
-  'sessions' | 'folders' | 'folderTotals'
->;
+export type CloudListData = SidebarListData<CloudSessionState>;
 
-const withoutSessions = (data: CloudListData, patch: (s: CloudSession) => CloudSession): CloudListData => ({
+const withoutSessions = <S extends SidebarSession>(
+  data: SidebarListData<S>,
+  patch: (s: S) => S,
+): SidebarListData<S> => ({
   ...data,
   sessions: data.sessions.map(patch),
 });
 
-export function moveSession(data: CloudListData, id: string, folder: string | null): CloudListData {
+export function moveSession<S extends SidebarSession>(
+  data: SidebarListData<S>,
+  id: string,
+  folder: string | null,
+): SidebarListData<S> {
   return withoutSessions(data, (s) =>
     s.id === id ? { ...s, folder, isPinned: folder === PINNED } : s,
   );
 }
 
-export function reorderFolders(data: CloudListData, names: string[]): CloudListData {
+export function reorderFolders<S extends SidebarSession>(
+  data: SidebarListData<S>,
+  names: string[],
+): SidebarListData<S> {
   const next = names.filter((name) => name !== PINNED);
   const missing = data.folders.filter((name) => name !== PINNED && !next.includes(name));
   return { ...data, folders: [...next, ...missing] };
 }
 
-export function addFolder(data: CloudListData, name: string): CloudListData {
+export function addFolder<S extends SidebarSession>(
+  data: SidebarListData<S>,
+  name: string,
+): SidebarListData<S> {
   if (data.folders.includes(name)) return data;
   return { ...data, folders: [...data.folders, name] };
 }
 
-export function renameFolder(data: CloudListData, oldName: string, newName: string): CloudListData {
+export function renameFolder<S extends SidebarSession>(
+  data: SidebarListData<S>,
+  oldName: string,
+  newName: string,
+): SidebarListData<S> {
   if (oldName === newName) return data;
   const totals = { ...data.folderTotals };
   if (oldName in totals) {
@@ -162,7 +199,10 @@ export function renameFolder(data: CloudListData, oldName: string, newName: stri
   };
 }
 
-export function removeFolder(data: CloudListData, name: string): CloudListData {
+export function removeFolder<S extends SidebarSession>(
+  data: SidebarListData<S>,
+  name: string,
+): SidebarListData<S> {
   const totals = { ...data.folderTotals };
   delete totals[name];
   return {
@@ -173,6 +213,10 @@ export function removeFolder(data: CloudListData, name: string): CloudListData {
   };
 }
 
-export function setArchived(data: CloudListData, id: string, archived: boolean): CloudListData {
+export function setArchived<S extends SidebarSession>(
+  data: SidebarListData<S>,
+  id: string,
+  archived: boolean,
+): SidebarListData<S> {
   return withoutSessions(data, (s) => (s.id === id ? { ...s, isArchived: archived } : s));
 }
