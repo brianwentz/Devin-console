@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Trash2 } from 'lucide-react';
-import { formatElapsed, formatTokens } from '../../core/format';
 import type { LocalStatePublic } from '../../shared/ipc';
-import { AgentBadge, MessageView, PermissionCard, PlanList, buttonClass } from './Cards';
+import { AgentBadge, buttonClass } from './Cards';
 import { TerminalView } from './TerminalView';
-import { ThinkingIndicator } from './ThinkingIndicator';
+import { ChatView } from '../chat/ChatView';
+import { UsagePill } from '../chat/UsagePill';
 import { useShellState } from '../store';
 import { useLocalState } from './store';
 import { sessionTitleClass } from '../components/sessionRowStyles';
-import { clearDraft, getDraft, setDraft as setStoredDraft } from './drafts';
+import { clearDraft } from '../chat/drafts';
 
 type Session = LocalStatePublic['sessions'][string];
 
@@ -21,20 +21,6 @@ function formatDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-function usageTooltip(usage: NonNullable<Session['usage']>): string {
-  const lines: string[] = [];
-  const num = (value: number | null) => (value === null ? null : value.toLocaleString());
-  if (usage.used !== null && usage.size !== null)
-    lines.push(`Context: ${usage.used.toLocaleString()} / ${usage.size.toLocaleString()}`);
-  if (usage.inputTokens !== null) lines.push(`Input: ${num(usage.inputTokens)}`);
-  if (usage.outputTokens !== null) lines.push(`Output: ${num(usage.outputTokens)}`);
-  if (usage.thoughtTokens !== null) lines.push(`Thought: ${num(usage.thoughtTokens)}`);
-  if (usage.cachedReadTokens !== null) lines.push(`Cache read: ${num(usage.cachedReadTokens)}`);
-  if (usage.cachedWriteTokens !== null) lines.push(`Cache write: ${num(usage.cachedWriteTokens)}`);
-  if (usage.totalTokens !== null) lines.push(`Total: ${num(usage.totalTokens)}`);
-  return lines.join('\n');
 }
 
 function sessionsOf(state: LocalStatePublic, workspace: string | null): Session[] {
@@ -54,11 +40,6 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
     () => shell?.localSessionId ?? null,
   );
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraftState] = useState(() => getDraft(shell?.localSessionId ?? null));
-  const setDraft = (text: string) => {
-    setDraftState(text);
-    if (sessionId) setStoredDraft(sessionId, text);
-  };
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<'chat' | 'terminal'>('chat');
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
@@ -68,7 +49,6 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
   const [terminalActive, setTerminalActive] = useState(false);
   const [terminalIds, setTerminalIds] = useState<Record<string, string>>({});
   const [terminalError, setTerminalError] = useState<string | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
   const listedFor = useRef<Set<string>>(new Set());
 
   const workspaces = useMemo(() => Object.keys(local?.agents ?? {}).sort(), [local]);
@@ -88,11 +68,6 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
   // survives surface switches (this panel unmounts when leaving Local).
   useEffect(() => {
     window.devinworkspaces.localActiveSession(sessionId);
-  }, [sessionId]);
-
-  // Swap in the newly selected session's stored draft.
-  useEffect(() => {
-    setDraftState(getDraft(sessionId));
   }, [sessionId]);
 
   useEffect(() => {
@@ -147,11 +122,6 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
   useEffect(() => {
     setTerminalError(null);
   }, [session?.id]);
-
-  useEffect(() => {
-    const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [session?.messages.length, session?.plan, session?.pendingPermission?.requestId]);
 
   const run = async <T,>(
     action: Promise<{ ok: true; value: T } | { ok: false; error: string }>,
@@ -237,22 +207,12 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
     }
   };
 
-  const send = () => {
-    const text = draft.trim();
-    if (!text || !session || session.running) return;
-    setDraftState('');
-    clearDraft(session.id);
+  const send = (text: string) => {
+    if (!session) return;
     setError(null);
     void window.devinworkspaces.localPrompt(session.id, text).then((result) => {
       if (!result.ok) setError(result.error);
     });
-  };
-
-  const onComposerKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      send();
-    }
   };
 
   const cancel = () => {
@@ -398,25 +358,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
             <div className="truncate text-sm">{session?.title || (workspace ? baseName(workspace) : 'Devin Local')}</div>
             <div className="truncate font-mono text-[10px] text-[#7f8ca0]">{workspace ?? ''}</div>
           </div>
-          {session?.usage && Object.values(session.usage).some((value) => value !== null) && (
-            <div
-              id="tokenUsage"
-              className="flex items-center gap-2 rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-0.5 font-mono text-[10px] text-[#aeb9c8]"
-              title={usageTooltip(session.usage)}
-            >
-              {session.usage.used !== null && session.usage.size !== null && (
-                <span>
-                  {formatTokens(session.usage.used)} / {formatTokens(session.usage.size)} ctx
-                </span>
-              )}
-              {session.usage.inputTokens !== null && (
-                <span>↑{formatTokens(session.usage.inputTokens)}</span>
-              )}
-              {session.usage.outputTokens !== null && (
-                <span>↓{formatTokens(session.usage.outputTokens)}</span>
-              )}
-            </div>
-          )}
+          <UsagePill usage={session?.usage} />
           <div id="localViewTabs" className="flex overflow-hidden rounded-md border border-[#39475a]">
             {(['chat', 'terminal'] as const).map((tab) => (
               <button
@@ -481,106 +423,52 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
           className="flex min-h-0 flex-1 flex-col"
           style={{ display: view === 'chat' ? 'flex' : 'none' }}
         >
-        <div ref={scroller} id="messageList" className="flex flex-1 flex-col gap-2 overflow-auto px-4 py-3">
-          {!session && (
-            <p className="text-sm text-[#7f8ca0]">
-              {workspace
+          <ChatView
+            session={session}
+            draftKey={sessionId}
+            emptyText={
+              workspace
                 ? 'Select a session or start a new one.'
-                : 'Add a workspace folder, then start a session with the Devin CLI.'}
-            </p>
-          )}
-          {session?.messages.map((message, index) => (
-            <MessageView key={index} message={message} session={session} />
-          ))}
-          {session?.plan && session.plan.length > 0 && <PlanList plan={session.plan} />}
-          {session?.pendingPermission && (
-            <PermissionCard sessionId={session.id} permission={session.pendingPermission} />
-          )}
-          {session?.running && <ThinkingIndicator startedAt={session.promptStartedAt} />}
-          {!session?.running && session?.lastTurnMs !== undefined && (
-            <div
-              id="turnSummary"
-              className={`text-xs ${
-                session.lastStopReason && session.lastStopReason !== 'end_turn'
-                  ? 'text-[#e0a03c]'
-                  : 'text-[#7f8ca0]'
-              }`}
-            >
-              <span id="stopReason" data-stop-reason={session.lastStopReason ?? ''}>
-                Took {formatElapsed(session.lastTurnMs)}
-                {session.lastStopReason && session.lastStopReason !== 'end_turn'
-                  ? ` · ${session.lastStopReason}`
-                  : ''}
-                {session.error ? ` — ${session.error}` : ''}
-              </span>
-            </div>
-          )}
-        </div>
-        {error && (
-          <div id="localError" className="border-t border-[#39475a] px-4 py-1.5 text-xs text-[#ff8a8a]">
-            {error}
-          </div>
-        )}
-        <footer className="border-t border-[#39475a] px-4 py-3">
-          {session?.terminalOwned && (
-            <div
-              id="terminalOwnedBanner"
-              className="mb-2 flex items-center justify-between gap-2 rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-1.5 text-xs text-[#aeb9c8]"
-            >
-              <span>
-                This session is open in the Terminal tab — close the terminal to chat here.
-              </span>
-              <button
-                id="terminalOwnedClose"
-                type="button"
-                className={buttonClass}
-                onClick={() => {
-                  const id = terminalIds[session.id];
-                  if (id) void window.devinworkspaces.terminalClose(id);
-                  else setView('terminal');
-                }}
-              >
-                Close terminal
-              </button>
-            </div>
-          )}
-          <div className="flex items-end gap-2">
-            <textarea
-              id="composer"
-              className="min-h-[44px] max-h-40 flex-1 resize-y rounded-md border border-[#39475a] bg-[#0d141d] px-2 py-1.5 text-sm text-[#e8edf5]"
-              placeholder={
-                session?.terminalOwned
-                  ? 'Close the terminal to chat here'
-                  : session
-                    ? 'Message Devin…'
-                    : 'Start a session to chat'
-              }
-              value={draft}
-              disabled={!session || session.terminalOwned === true}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onComposerKey}
-              rows={2}
-            />
-            {session?.running ? (
-              <button id="cancelButton" type="button" className={buttonClass} onClick={cancel}>
-                Cancel
-              </button>
-            ) : (
-              <button
-                id="sendButton"
-                type="button"
-                className={buttonClass}
-                disabled={!session || session.terminalOwned === true || !draft.trim()}
-                onClick={send}
-              >
-                Send
-              </button>
-            )}
-          </div>
-          <p className="mt-1.5 text-[11px] text-[#7f8ca0]">
-            Enter sends · Shift+Enter newline · type <code>/handoff</code> to move this session to Devin Cloud
-          </p>
-        </footer>
+                : 'Add a workspace folder, then start a session with the Devin CLI.'
+            }
+            composerPlaceholder="Message Devin…"
+            disabledReason={session?.terminalOwned ? 'Close the terminal to chat here' : null}
+            error={error}
+            onSend={send}
+            onCancel={cancel}
+            onPermission={(requestId, optionId) => {
+              if (session) void window.devinworkspaces.localPermission(session.id, requestId, optionId);
+            }}
+            footerHint={
+              <>
+                Enter sends · Shift+Enter newline · type <code>/handoff</code> to move this session to Devin Cloud
+              </>
+            }
+            banner={
+              session?.terminalOwned ? (
+                <div
+                  id="terminalOwnedBanner"
+                  className="mb-2 flex items-center justify-between gap-2 rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-1.5 text-xs text-[#aeb9c8]"
+                >
+                  <span>
+                    This session is open in the Terminal tab — close the terminal to chat here.
+                  </span>
+                  <button
+                    id="terminalOwnedClose"
+                    type="button"
+                    className={buttonClass}
+                    onClick={() => {
+                      const id = terminalIds[session.id];
+                      if (id) void window.devinworkspaces.terminalClose(id);
+                      else setView('terminal');
+                    }}
+                  >
+                    Close terminal
+                  </button>
+                </div>
+              ) : undefined
+            }
+          />
         </div>
       </section>
       {confirmDeleteAll && (

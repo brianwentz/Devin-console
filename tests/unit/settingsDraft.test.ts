@@ -40,7 +40,12 @@ describe('draftFromSettings', () => {
       sessions: { maxLiveViews: 4, keepAliveHours: 12 },
       terminal: { allSurfaces: true, shell: 'pwsh.exe' },
       notifications: { userId: 'user-1', orgId: 'org-2' },
-      claude: { path: 'C:\\tools\\claude.exe', autoArchiveDays: 30 },
+      claude: {
+        path: 'C:\\tools\\claude.exe',
+        autoArchiveDays: 30,
+        defaultPermissionMode: 'plan',
+        model: 'claude-opus-4-1',
+      },
     });
     expect(draftFromSettings(custom)).toEqual({
       tenantUrl: 'https://tenant.example.com',
@@ -56,6 +61,8 @@ describe('draftFromSettings', () => {
       terminalShell: 'pwsh.exe',
       claudePath: 'C:\\tools\\claude.exe',
       claudeAutoArchiveDays: '30',
+      claudePermissionMode: 'plan',
+      claudeModel: 'claude-opus-4-1',
       userId: 'user-1',
       orgId: 'org-2',
       linkRules: [{ id: 'r1', kind: 'prefix', pattern: 'https://x.example/', enabled: true }],
@@ -84,6 +91,10 @@ describe('isDraftDirty', () => {
     expect(isDraftDirty(draft({ userId: 'user-9' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ claudePath: 'C:\\x\\claude.exe' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ claudeAutoArchiveDays: '7' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudePermissionMode: 'acceptEdits' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudeModel: 'claude-sonnet-4-5' }), defaults)).toBe(true);
+    // Blank model equals the null default; whitespace-only is clean too.
+    expect(isDraftDirty(draft({ claudeModel: '   ' }), defaults)).toBe(false);
   });
 
   it('round-trips claude fields into the patch', () => {
@@ -95,10 +106,31 @@ describe('isDraftDirty', () => {
     expect(result.patch.claude).toEqual({
       path: 'C:\\tools\\claude.exe',
       autoArchiveDays: 45,
+      defaultPermissionMode: 'default',
+      model: null,
     });
     // Blank path clears the override.
     const cleared = validateDraft(draft({ claudePath: '  ' }));
     expect(cleared.ok && cleared.patch.claude?.path).toBe(null);
+    // Permission mode + model round-trip; blank / whitespace model → null.
+    const modeAndModel = validateDraft(
+      draft({ claudePermissionMode: 'bypassPermissions', claudeModel: '  claude-opus-4-1  ' }),
+    );
+    expect(modeAndModel.ok && modeAndModel.patch.claude).toEqual({
+      path: null,
+      autoArchiveDays: 0,
+      defaultPermissionMode: 'bypassPermissions',
+      model: 'claude-opus-4-1',
+    });
+    const blankModel = validateDraft(draft({ claudeModel: '   ' }));
+    expect(blankModel.ok && blankModel.patch.claude?.model).toBe(null);
+    const withModel = mergeSettings(defaults, {
+      claude: { model: 'claude-opus-4-1', defaultPermissionMode: 'plan' },
+    });
+    expect(draftFromSettings(withModel).claudeModel).toBe('claude-opus-4-1');
+    expect(draftFromSettings(withModel).claudePermissionMode).toBe('plan');
+    const roundTrip = validateDraft(draftFromSettings(withModel));
+    expect(roundTrip.ok && mergeSettings(defaults, roundTrip.patch)).toEqual(withModel);
     for (const value of ['-1', '366', '1.5', 'x']) {
       const bad = validateDraft(draft({ claudeAutoArchiveDays: value }));
       expect(bad.ok).toBe(false);
@@ -128,7 +160,7 @@ describe('validateDraft', () => {
       tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
       sessions: { open: true, maxLiveViews: 6, keepAliveHours: 24 },
       terminal: { allSurfaces: false, shell: 'pwsh.exe -l' },
-      claude: { path: null, autoArchiveDays: 0 },
+      claude: { path: null, autoArchiveDays: 0, defaultPermissionMode: 'default', model: null },
       notifications: { userId: 'u1', orgId: 'o1' },
     });
   });
@@ -187,12 +219,16 @@ describe('fieldErrorsFromIssues', () => {
       { path: ['tabs', 'keepAliveHours'], message: 'bad keepalive' },
       { path: ['notifications', 'userId'], message: 'bad user' },
       { path: ['terminal', 'shell'], message: 'bad shell' },
+      { path: ['claude', 'model'], message: 'bad model' },
+      { path: ['claude', 'defaultPermissionMode'], message: 'bad mode' },
     ]);
     expect(errors).toEqual({
       tenantUrl: 'bad tenant',
       keepAliveHours: 'bad keepalive',
       userId: 'bad user',
       terminalShell: 'bad shell',
+      claudeModel: 'bad model',
+      claudePermissionMode: 'bad mode',
     });
     expect(other).toEqual([]);
   });

@@ -5,6 +5,8 @@ import {
   IpcChannels,
   SurfaceSchema,
   type BadgeRender,
+  type ClaudeChatStatePublic,
+  type ClaudePermissionMode,
   type IdentityInfo,
   type SessionPr,
   type LocalResult,
@@ -75,6 +77,40 @@ const localApi = {
   },
 };
 
+// Claude chat (Agent SDK host in main). Same shapes as the local* methods.
+const claudeChatApi = {
+  getClaudeChatState: () =>
+    ipcRenderer.invoke(IpcChannels.claudeChatState) as Promise<ClaudeChatStatePublic>,
+  onClaudeChatState: (callback: (state: ClaudeChatStatePublic) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      callback(value as ClaudeChatStatePublic);
+    };
+    ipcRenderer.on(IpcChannels.claudeChatUpdate, listener);
+    return () => ipcRenderer.removeListener(IpcChannels.claudeChatUpdate, listener);
+  },
+  claudeNewSession: (cwd: string | null) =>
+    ipcRenderer.invoke(IpcChannels.claudeNewSession, { cwd }) as Promise<LocalResult<string>>,
+  claudePrompt: (sessionId: string, text: string) =>
+    ipcRenderer.invoke(IpcChannels.claudePrompt, { sessionId, text }) as Promise<LocalResult<null>>,
+  claudeCancel: (sessionId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeCancel, { sessionId }) as Promise<LocalResult<null>>,
+  claudePermission: (sessionId: string, requestId: string, optionId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudePermission, { sessionId, requestId, optionId }) as Promise<
+      LocalResult<null>
+    >,
+  claudeSetPermissionMode: (sessionId: string, mode: ClaudePermissionMode) =>
+    ipcRenderer.invoke(IpcChannels.claudeSetPermissionMode, { sessionId, mode }) as Promise<
+      LocalResult<null>
+    >,
+  claudeSetModel: (sessionId: string, model: string | null) =>
+    ipcRenderer.invoke(IpcChannels.claudeSetModel, { sessionId, model }) as Promise<
+      LocalResult<null>
+    >,
+  claudeLoadHistory: (sessionId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeLoadHistory, { sessionId }) as Promise<LocalResult<null>>,
+};
+
 // P4b embedded terminal + F5 dock.
 const terminalApi = {
   terminalOpen: (
@@ -140,6 +176,7 @@ const terminalApi = {
 const api = {
   platform: process.platform,
   ...localApi,
+  ...claudeChatApi,
   ...terminalApi,
   getState: () => ipcRenderer.invoke(IpcChannels.stateGet) as Promise<ShellState>,
   onState: (callback: (state: ShellState) => void) => {

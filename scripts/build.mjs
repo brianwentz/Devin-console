@@ -118,6 +118,17 @@ await Promise.all([
       outfile: 'out/scripts/' + name + '.cjs',
     }),
   ),
+  // Phase 2 fake SDK (DEVIN_WORKSPACES_TEST_CLAUDE_SDK): loaded by
+  // dynamic import() → must be ESM with the real SDK external.
+  build({
+    entryPoints: ['tests/fixtures/fakeClaudeSdk.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    external: ['@anthropic-ai/claude-agent-sdk'],
+    outfile: 'out/fixtures/fakeClaudeSdk.mjs',
+  }),
 ]);
 
 await viteBuild({ configFile: 'vite.config.mts' });

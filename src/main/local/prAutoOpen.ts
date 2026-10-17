@@ -1,16 +1,16 @@
 import { route } from '../../core/linkRouter';
-import { localScope } from '../../core/tabModel';
 import { log } from '../log';
 import { routeContext } from '../routing';
 import { state } from '../state';
 import { applyLayout } from '../window';
 
 // Local counterpart of the notifier's `pr-auto-open`: a GitHub PR URL that
-// shows up in agent output opens a lazy background tab in `local:<sessionId>`.
+// shows up in agent output opens a lazy background tab in the session's GitHub
+// scope (`local:<sessionId>` or `claude:<sessionId>` — callers pass the scope).
 export function autoOpenLocalPr(
   url: string,
-  sessionId: string,
-  source: 'local-chat' | 'local-terminal',
+  scope: string,
+  source: 'local-chat' | 'local-terminal' | 'claude-chat',
 ): boolean {
   if (!(state.settings?.current.prs.autoOpenTabs ?? true)) return false;
   if (route(url, 'local', 'new-window', routeContext()).kind !== 'gh-tab') return false;
@@ -19,9 +19,9 @@ export function autoOpenLocalPr(
   tabManager.open(url, {
     lazy: true,
     background: true,
-    originSessionId: localScope(sessionId),
+    originSessionId: scope,
   });
   applyLayout();
-  log('local', 'pr-auto-open', { url, detail: { sessionId, source } });
+  log('local', 'pr-auto-open', { url, detail: { scope, source } });
   return true;
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Ellipsis, Plus, RefreshCw } from 'lucide-react';
+import { Ellipsis, FolderPlus, Plus, RefreshCw } from 'lucide-react';
 import type { ClaudeSessionState } from '../../shared/ipc';
 import {
   addFolder,
@@ -225,6 +225,16 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <span className="text-[13px] font-semibold flex-1">Claude</span>
         <button
+          id="claudeNewSession"
+          type="button"
+          aria-label="New session"
+          title="New session"
+          className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
+          onClick={() => void window.devinworkspaces.claudeNewSession(null)}
+        >
+          <Plus size={13} />
+        </button>
+        <button
           id="sessionFolderNew"
           type="button"
           aria-label="New folder"
@@ -232,7 +242,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
           onClick={() => setEditing({ kind: 'create' })}
         >
-          <Plus size={13} />
+          <FolderPlus size={13} />
         </button>
         <button
           id="claudeRefresh"

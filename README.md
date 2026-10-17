@@ -89,7 +89,12 @@ The **Claude** surface (sparkle icon in the rail) lists the Claude Code sessions
 - **Rename / Fork** — a session's menu renames its title (writes a custom title into the transcript) or forks it into a new resumable session that inherits folder/pin.
 - **Where it lives** — folder, pin, archive and removed state is stored per-app in `claude-sessions.json` inside the app's data folder (see [Where things live](#where-things-live)); transcripts stay in `~/.claude` untouched unless you delete one. Setting `CLAUDE_CONFIG_DIR` before launch points the app at a different Claude home (used by the test suite).
 
-Selecting a session shows its details in the main column; the chat/terminal view for Claude sessions arrives in a later update.
+**Chat.** Selecting a session loads its transcript history into the chat view; type in the composer (Enter sends, Shift+Enter newline) and the session answers through the bundled Claude Agent SDK — text, thinking and tool calls stream in live, with a turn summary and token usage after each turn. Start a new session with the sidebar `+`, the *New session* button on the empty view, or Ctrl+N on the Claude surface — a folder picker asks for the session's working directory.
+
+- **Permissions** — when Claude asks to run a tool, a card in the chat offers *Allow* / *Always allow* (when the CLI suggests a rule) / *Reject*. The header's permission-mode select (`default`, `acceptEdits`, `bypassPermissions`, `plan`, `dontAsk`, `auto`) and model field apply live to the running session; *Default permission mode* and *Model* in Settings → General are the starting values. Under `auto` the card may never appear — the header always shows the active mode.
+- **Live limits** — a session keeps its agent process open for *keep-alive* minutes after the last turn (default 15); at most *max live agents* (default 3) run at once, oldest idle first. Both live in Settings → General.
+- **Version warning** — a badge in the header appears when `claude --version` differs from the CLI version the bundled SDK targets.
+- PR URLs printed in a Claude session open as lazy background tabs in its GitHub scope, like Cloud and Local sessions (same *Open a tab when a session creates a PR* toggle).
 
 ## Settings reference
 
@@ -104,6 +109,9 @@ Settings is split into five tabs: **General**, **Link Handling**, **Passwords**,
 | Show terminal dock on Local and Settings too | General | Dock is Cloud-only by default |
 | Claude Code path | General | Blank = find `claude` on PATH; a non-empty path that doesn't resolve is flagged inline |
 | Auto-archive Claude sessions idle for (days) | General | 0 = off; unarchiving manually suppresses it per session |
+| Default permission mode | General | Starting mode for new Claude chat sessions (switchable per session in the header) |
+| Model | General | Claude chat model override; blank = the CLI's default |
+| Claude keep-alive / max live agents | General | How long an idle Claude agent stays warm (1–240 min, default 15) and how many run at once (1–10, default 3) |
 | Shell command | General | Blank = Windows Terminal default profile (else PowerShell) on Windows, `$SHELL` on macOS; e.g. `wsl.exe -d Ubuntu` or `/bin/zsh -l` |
 | Link rules | Link Handling | Up to 100 prefix or regular-expression rules; matching http(s) links open as pane tabs instead of the system browser (GitHub and your tenant are matched first). *Test a URL* shows where a link would go |
 | Passwords | Passwords | Origin + username + password, encrypted with DPAPI (Windows) / Keychain (macOS); autofill fills a single match on load, offers an account picker when several match, and asks to save/update after a sign-in; rows support show/copy/edit/delete |
