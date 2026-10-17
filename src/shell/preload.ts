@@ -354,6 +354,73 @@ const api = {
       ipcRenderer.send(IpcChannels.cloudNewSession, { folder: trimmed });
     }
   },
+  // Claude session sidebar. Handlers land in PR 3; invoke/send of an
+  // unregistered channel is harmless until then.
+  claudeOpen: (sessionId: string) => {
+    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeOpen, { sessionId });
+  },
+  claudeRefresh: () => ipcRenderer.send(IpcChannels.claudeRefresh),
+  claudeRename: (sessionId: string, title: string) => {
+    const trimmed = title.trim();
+    if (isString(sessionId) && trimmed.length >= 1 && trimmed.length <= 200) {
+      ipcRenderer.send(IpcChannels.claudeRename, { sessionId, title: trimmed });
+    }
+  },
+  claudeFork: (sessionId: string) => {
+    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeFork, { sessionId });
+  },
+  claudeSessionMove: (sessionId: string, folder: string | null) => {
+    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeSessionMove, { sessionId, folder });
+  },
+  claudeSessionPin: (sessionId: string, pinned: boolean) => {
+    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeSessionPin, { sessionId, pinned });
+  },
+  claudeSessionArchive: (sessionId: string, archive: boolean) => {
+    if (isString(sessionId)) {
+      ipcRenderer.send(IpcChannels.claudeSessionArchive, { sessionId, archive });
+    }
+  },
+  claudeSessionRemove: (sessionId: string) => {
+    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeSessionRemove, { sessionId });
+  },
+  claudeSessionDeleteTranscript: (sessionId: string) => {
+    if (isString(sessionId)) {
+      ipcRenderer.send(IpcChannels.claudeSessionDeleteTranscript, { sessionId });
+    }
+  },
+  claudeRevealTranscript: (sessionId: string) => {
+    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeRevealTranscript, { sessionId });
+  },
+  claudeFolderCreate: (name: string) => {
+    const trimmed = name.trim();
+    if (trimmed.length >= 1 && trimmed.length <= 100) {
+      ipcRenderer.send(IpcChannels.claudeFolderCreate, { name: trimmed });
+    }
+  },
+  claudeFolderRename: (oldName: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (isString(oldName) && trimmed.length >= 1 && trimmed.length <= 100) {
+      ipcRenderer.send(IpcChannels.claudeFolderRename, { oldName, newName: trimmed });
+    }
+  },
+  claudeFolderDelete: (name: string) => {
+    if (isString(name)) ipcRenderer.send(IpcChannels.claudeFolderDelete, { name });
+  },
+  claudeFolderReorder: (names: string[]) => {
+    if (Array.isArray(names)) ipcRenderer.send(IpcChannels.claudeFolderReorder, { names });
+  },
+  claudeShowArchived: (value: boolean) =>
+    ipcRenderer.send(IpcChannels.claudeShowArchived, { value }),
+  claudeContextMenu: (request: {
+    kind: 'session' | 'folder' | 'header';
+    sessionId?: string;
+    name?: string;
+    x: number;
+    y: number;
+  }) =>
+    ipcRenderer.invoke(IpcChannels.claudeContextMenu, request) as Promise<{
+      action: 'rename' | 'rename-session' | 'new-folder' | null;
+    }>,
   // Taskbar badge: main asks the shell to render, replies get {count,size}.
   onBadgeRender: (callback: (request: BadgeRender) => void) => {
     const listener = (_event: unknown, request: BadgeRender) => callback(request);

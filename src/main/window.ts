@@ -133,6 +133,7 @@ export function publicState(): ShellState {
     surface: state.surface,
     currentSessionId: state.currentSessionId,
     localSessionId: state.localSessionId,
+    claudeSessionId: state.claudeSessionId,
     settings: state.settings?.current ?? SettingsSchema.parse({}),
     tabs: state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 },
     credentials: state.credentials?.list() ?? [],
@@ -164,6 +165,20 @@ export function publicState(): ShellState {
       panelOpen: state.notificationsPanelOpen,
     },
     cloud: cloudSessions().snapshot(),
+    // Placeholder until the Phase 1 claude module wires its controller
+    // (claudeSessions().snapshot()) in here.
+    claude: {
+      status: 'loading',
+      configDir: '',
+      cliPath: null,
+      installGuidance: '',
+      error: null,
+      lastSyncAt: null,
+      folders: [],
+      sessions: [],
+      showArchived: false,
+      lastError: null,
+    },
     update: updateState(),
     terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
@@ -272,7 +287,7 @@ export function lowerShell(): void {
 // each caller having to know about scopes.
 export function syncScope(): void {
   state.tabManager?.setScope(
-    effectiveScope(state.surface, state.currentSessionId, state.localSessionId),
+    effectiveScope(state.surface, state.currentSessionId, state.localSessionId, state.claudeSessionId),
   );
 }
 

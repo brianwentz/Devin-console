@@ -25,14 +25,25 @@ export function localScope(sessionId: string): string {
   return `${LOCAL_SCOPE_PREFIX}${sessionId}`;
 }
 
-// The scope the tab strip currently serves: the selected local session while
-// the Local surface is up, else the Cloud session (GLOBAL outside any session).
+// Claude Code sessions get their own GitHub tab scope, namespaced like the
+// local one so ids can never collide across sources.
+export const CLAUDE_SCOPE_PREFIX = 'claude:';
+
+export function claudeScope(sessionId: string): string {
+  return `${CLAUDE_SCOPE_PREFIX}${sessionId}`;
+}
+
+// The scope the tab strip currently serves: the selected local session on the
+// Local surface, the selected Claude session on the Claude surface, else the
+// Cloud session (GLOBAL outside any session).
 export function effectiveScope(
   surface: Surface,
   cloudSessionId: string | null,
   localSessionId: string | null,
+  claudeSessionId: string | null,
 ): string {
   if (surface === 'local' && localSessionId) return localScope(localSessionId);
+  if (surface === 'claude' && claudeSessionId) return claudeScope(claudeSessionId);
   return cloudSessionId ?? GLOBAL;
 }
 

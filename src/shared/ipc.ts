@@ -115,6 +115,23 @@ export const IpcChannels = {
   cloudContextMenu: 'cloud:contextMenu',
   cloudShowArchived: 'cloud:showArchived',
   cloudNewSession: 'cloud:newSession',
+  // Claude session sidebar (Phase 1: list + local mutations, no newSession).
+  claudeOpen: 'claude:open',
+  claudeRefresh: 'claude:refresh',
+  claudeRename: 'claude:rename',
+  claudeFork: 'claude:fork',
+  claudeSessionMove: 'claude:sessionMove',
+  claudeSessionPin: 'claude:sessionPin',
+  claudeSessionArchive: 'claude:sessionArchive',
+  claudeSessionRemove: 'claude:sessionRemove',
+  claudeSessionDeleteTranscript: 'claude:sessionDeleteTranscript',
+  claudeRevealTranscript: 'claude:revealTranscript',
+  claudeFolderCreate: 'claude:folderCreate',
+  claudeFolderRename: 'claude:folderRename',
+  claudeFolderDelete: 'claude:folderDelete',
+  claudeFolderReorder: 'claude:folderReorder',
+  claudeShowArchived: 'claude:showArchived',
+  claudeContextMenu: 'claude:contextMenu',
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
@@ -129,7 +146,7 @@ export const BadgeRenderedSchema = z.object({
   dataUrl: z.string().regex(/^data:image\/png;base64,/).max(200_000).nullable(),
 });
 
-export const SurfaceSchema = z.enum(['cloud', 'local', 'settings', 'analytics']);
+export const SurfaceSchema = z.enum(['cloud', 'local', 'claude', 'settings', 'analytics']);
 export type Surface = z.infer<typeof SurfaceSchema>;
 
 // User-configurable URL rules: matching links open as GitHub-pane tabs.
@@ -211,6 +228,13 @@ const SessionsFields = {
   // Pooled Cloud views: how many session views stay loaded, and for how long.
   maxLiveViews: z.number().int().min(1).max(20),
   keepAliveHours: z.number().min(0).max(168),
+};
+// Claude session sidebar: local Claude Code registry settings.
+const ClaudeFields = {
+  path: z.string().nullable(),
+  collapsedFolders: z.array(z.string().max(256)).max(200),
+  showArchived: z.boolean(),
+  autoArchiveDays: z.number().int().min(0).max(365),
 };
 const TerminalFields = {
   allSurfaces: z.boolean(),
@@ -303,6 +327,14 @@ export const SettingsObject = z.object({
       shell: TerminalFields.shell.default(''),
     })
     .default({ allSurfaces: false, shell: '' }),
+  claude: z
+    .object({
+      path: ClaudeFields.path.default(null),
+      collapsedFolders: ClaudeFields.collapsedFolders.default([]),
+      showArchived: ClaudeFields.showArchived.default(false),
+      autoArchiveDays: ClaudeFields.autoArchiveDays.default(0),
+    })
+    .default({ path: null, collapsedFolders: [], showArchived: false, autoArchiveDays: 0 }),
 });
 
 // Every field has a default or is optional, so parse({}) yields valid Settings.
@@ -324,6 +356,7 @@ export const SettingsPatchSchema = z.object({
   layout: z.object(LayoutFields).partial().optional(),
   terminal: z.object(TerminalFields).partial().optional(),
   sessions: z.object(SessionsFields).partial().optional(),
+  claude: z.object(ClaudeFields).partial().optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
 
@@ -429,6 +462,45 @@ export const CloudStateSchema = z.object({
   cached: z.boolean(),
 });
 export type CloudState = z.infer<typeof CloudStateSchema>;
+
+// Claude Code sessions (local ~/.claude registry + SDK store).
+export const ClaudeSessionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  cwd: z.string().nullable(),
+  gitBranch: z.string().nullable(),
+  tag: z.string().nullable(),
+  createdAt: z.number().finite().nullable(),
+  updatedAt: z.number().finite(),
+  folder: z.string().nullable(),
+  parentId: z.string().nullable(),
+  isPinned: z.boolean(),
+  isArchived: z.boolean(),
+  missing: z.boolean(),
+  prs: z.object({
+    open: z.number().int(),
+    queued: z.number().int(),
+    draft: z.number().int(),
+    merged: z.number().int(),
+    closed: z.number().int(),
+  }),
+});
+export type ClaudeSessionState = z.infer<typeof ClaudeSessionSchema>;
+
+export const ClaudeStateSchema = z.object({
+  status: z.enum(['loading', 'ready', 'error']),
+  configDir: z.string(),
+  cliPath: z.string().nullable(),
+  installGuidance: z.string(),
+  error: z.string().nullable(),
+  lastSyncAt: z.string().nullable(),
+  folders: z.array(z.string()),
+  sessions: z.array(ClaudeSessionSchema),
+  showArchived: z.boolean(),
+  // Transient mutation failure; cleared by the next successful refresh.
+  lastError: z.object({ op: z.string(), message: z.string() }).nullable(),
+});
+export type ClaudeState = z.infer<typeof ClaudeStateSchema>;
 export const UpdateCheckSourceSchema = z.enum([
   'startup',
   'timer',
@@ -555,6 +627,8 @@ export const ShellStateSchema = z.object({
   }),
   notifications: NotificationsStateSchema,
   cloud: CloudStateSchema,
+  claude: ClaudeStateSchema,
+  claudeSessionId: z.string().nullable(),
   update: UpdateStateSchema,
   // F5 terminal dock
   terminalOpen: z.boolean(),
@@ -659,6 +733,47 @@ export const CloudContextMenuArg = z.object({
 });
 export const CloudShowArchivedArg = z.object({ value: z.boolean() });
 export const CloudNewSessionArg = z.object({ folder: CloudFolderName.nullable() });
+
+const ClaudeFolderName = z.string().trim().min(1).max(100);
+const ClaudeSessionId = z.string().uuid();
+export const ClaudeOpenArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeRenameArg = z.object({
+  sessionId: ClaudeSessionId,
+  title: z.string().trim().min(1).max(200),
+});
+export const ClaudeForkArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeSessionMoveArg = z.object({
+  sessionId: ClaudeSessionId,
+  folder: ClaudeFolderName.nullable(),
+});
+export const ClaudeSessionPinArg = z.object({
+  sessionId: ClaudeSessionId,
+  pinned: z.boolean(),
+});
+export const ClaudeSessionArchiveArg = z.object({
+  sessionId: ClaudeSessionId,
+  archive: z.boolean(),
+});
+export const ClaudeSessionRemoveArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeSessionDeleteTranscriptArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeRevealTranscriptArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeFolderCreateArg = z.object({ name: ClaudeFolderName });
+export const ClaudeFolderRenameArg = z.object({
+  oldName: ClaudeFolderName,
+  newName: ClaudeFolderName,
+});
+export const ClaudeFolderDeleteArg = z.object({ name: ClaudeFolderName });
+export const ClaudeFolderReorderArg = z.object({
+  names: z.array(ClaudeFolderName).max(200),
+});
+export const ClaudeShowArchivedArg = z.object({ value: z.boolean() });
+export const ClaudeContextMenuArg = z.object({
+  kind: z.enum(['session', 'folder', 'header']),
+  sessionId: ClaudeSessionId.optional(),
+  name: ClaudeFolderName.optional(),
+  x: z.number().finite(),
+  y: z.number().finite(),
+});
 
 // Arg schemas for ipcMain.on channels (safeParse; invalid payloads ignored).
 export const TabIdArg = z.string();
