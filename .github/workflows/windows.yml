@@ -42,7 +42,7 @@ jobs:
       - run: npm run dist:win
 
       # Silent per-user install -> smoke -> upgrade-in-place -> smoke -> silent uninstall.
-      - run: npm run smoke:install
+      - run: npm run smoke:install:real
         shell: pwsh
 
       - uses: actions/upload-artifact@v7

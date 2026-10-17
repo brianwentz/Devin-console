@@ -17,10 +17,15 @@
     "icon": "node scripts/make-icon.mjs",
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:mac": "npm run build && electron-builder --mac --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false",
-    "smoke:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1",
+    "smoke:install": "npm run dist:win:smoke && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1 -Isolated",
     "test:smoke": "playwright test --config playwright.smoke.config.ts",
     "measure:tabs": "npm run build && node out/scripts/measure-tabs.cjs",
-    "rebuild:native": "electron-builder install-app-deps"
+    "rebuild:native": "electron-builder install-app-deps",
+    "claude:sdk-probe": "npm run build && node out/scripts/claude-sdk-probe.cjs",
+    "claude:hooks-probe": "npm run build && node out/scripts/claude-hooks-probe.cjs",
+    "claude:store-probe": "npm run build && node out/scripts/claude-store-probe.cjs",
+    "dist:win:smoke": "npm run build && electron-builder --win nsis --x64 --publish never -c.appId=ai.devin.workspaces.smoke -c.productName=\"Devin Workspaces Smoke\" -c.nsis.shortcutName=\"Devin Workspaces Smoke\" -c.nsis.artifactName=\"DevinWorkspaces-Smoke-Setup-${version}.${ext}\" -c.directories.output=dist/smoke",
+    "smoke:install:real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
@@ -40,6 +45,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.7.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "@dnd-kit/core": "6.3.1",
     "@dnd-kit/sortable": "10.0.0",
     "@dnd-kit/utilities": "3.2.2",
@@ -47,13 +53,19 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "electron-updater": "6.8.9",
+    "fast-deep-equal": "3.1.3",
+    "fast-uri": "3.1.8",
+    "json-schema-traverse": "1.0.0",
     "lucide-react": "1.52.0",
     "node-pty": "1.1.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
+    "require-from-string": "2.0.2",
     "zod": "4.6.5"
   },
   "build": {
@@ -65,7 +77,18 @@
     "files": [
       "out/**/*",
       "package.json",
-      "node_modules/node-pty/**"
+      "node_modules/node-pty/**",
+      "node_modules/@anthropic-ai/claude-agent-sdk/**",
+      "node_modules/ajv/**",
+      "node_modules/ajv-formats/**",
+      "node_modules/fast-deep-equal/**",
+      "node_modules/fast-uri/**",
+      "node_modules/json-schema-traverse/**",
+      "node_modules/require-from-string/**",
+      "node_modules/zod/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+      "!node_modules/@anthropic-ai/sdk/**",
+      "!node_modules/@modelcontextprotocol/**"
     ],
     "win": {
       "target": [
@@ -130,7 +153,15 @@
       "grantFileProtocolExtraPrivileges": true
     },
     "asarUnpack": [
-      "node_modules/node-pty/**"
+      "node_modules/node-pty/**",
+      "node_modules/@anthropic-ai/claude-agent-sdk/**",
+      "node_modules/ajv/**",
+      "node_modules/ajv-formats/**",
+      "node_modules/fast-deep-equal/**",
+      "node_modules/fast-uri/**",
+      "node_modules/json-schema-traverse/**",
+      "node_modules/require-from-string/**",
+      "node_modules/zod/**"
     ],
     "npmRebuild": false
   }

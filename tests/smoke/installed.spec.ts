@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { FuseV1Options, getCurrentFuseWire, FuseState } from '@electron/fuses';
 import { expect, test } from '@playwright/test';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -26,7 +26,14 @@ const phase = process.env.DEVIN_WORKSPACES_SMOKE_PHASE ?? 'fresh'; // 'fresh' | 
 test.skip(!executablePath, 'DEVIN_WORKSPACES_INSTALLED_EXE not set — run via scripts/smoke-install.ps1');
 
 let fixtures: FixtureServers;
-const evidence: Record<string, unknown> = { phase, executablePath, startedAt: new Date().toISOString() };
+const evidence: Record<string, unknown> = {
+  phase,
+  executablePath,
+  installerSizeBytes: process.env.DEVIN_WORKSPACES_SMOKE_INSTALLER_SIZE
+    ? Number(process.env.DEVIN_WORKSPACES_SMOKE_INSTALLER_SIZE)
+    : undefined,
+  startedAt: new Date().toISOString(),
+};
 
 test.beforeAll(async () => {
   fixtures = await startFixtureServers();
@@ -164,6 +171,16 @@ test('installed exe has the expected fuse wire', async () => {
   expect(fuses.onlyLoadAppFromAsar).toBe(FuseState.ENABLE);
 });
 
+test('installed resources carry the Agent SDK unpacked, without the platform binary', () => {
+  const resources = join(dirname(executablePath), 'resources', 'app.asar.unpacked', 'node_modules');
+  evidence.unpackedSdk = existsSync(join(resources, '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs'));
+  evidence.unpackedPlatformPackage = existsSync(
+    join(resources, '@anthropic-ai', 'claude-agent-sdk-win32-x64'),
+  );
+  expect(evidence.unpackedSdk).toBe(true);
+  expect(evidence.unpackedPlatformPackage).toBe(false);
+});
+
 test('installed app launches, creates views, and persists across relaunch', async () => {
   const profile =
     process.env.DEVIN_WORKSPACES_SMOKE_PROFILE ?? join(tmpdir(), `devin-workspaces-smoke-${Date.now()}`);
@@ -213,6 +230,19 @@ test('installed app launches, creates views, and persists across relaunch', asyn
       open = false;
       return;
     }
+
+    // Fresh install: the packaged app can load the external (unpacked) Agent
+    // SDK. CDP cannot evaluate in the Electron main process, so the test-only
+    // 'test:hook' bridge dispatches into the main-side __devinworkspaces hooks.
+    const probe = (await shell.evaluate(() =>
+      (window as any).devinworkspaces.testHook('claudeSdkProbe'),
+    )) as { ok: boolean; ms: number; hasListSessions: boolean };
+    evidence.claudeSdkProbe = probe;
+    expect(probe.ok).toBe(true);
+    expect(probe.hasListSessions).toBe(true);
+    await expect.poll(async () =>
+      (await readEvents(logFile)).some((e) => e.event === 'claude-sdk-load' && (e.detail as any)?.ok === true),
+    ).toBe(true);
 
     // Fresh install: shell + devin views only.
     await expect.poll(async () => (await pageTargets(instance.browser)).length).toBe(2);

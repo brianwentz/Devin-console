@@ -37,7 +37,7 @@ await Promise.all([
     target: 'node20',
     format: 'cjs',
     // node-pty is a native addon loaded from node_modules (asarUnpacked).
-    external: ['electron', 'node-pty'],
+    external: ['electron', 'node-pty', '@anthropic-ai/claude-agent-sdk'],
     outfile: 'out/main.cjs',
     sourcemap: true,
   }),
@@ -104,6 +104,20 @@ await Promise.all([
     external: ['electron', 'playwright'],
     outfile: 'out/scripts/measure-tabs.cjs',
   }),
+  // Claude SDK probes (plans/claude-sessions-phase-1.md). The Agent SDK is
+  // ESM-only (createRequire(import.meta.url) fails when bundled to cjs), so
+  // it stays external and the probes load it with a dynamic import().
+  ...['claude-sdk-probe', 'claude-hooks-probe', 'claude-store-probe'].map((name) =>
+    build({
+      entryPoints: ['scripts/' + name + '.ts'],
+      bundle: true,
+      platform: 'node',
+      target: 'node20',
+      format: 'cjs',
+      external: ['electron', 'node-pty', '@anthropic-ai/claude-agent-sdk'],
+      outfile: 'out/scripts/' + name + '.cjs',
+    }),
+  ),
 ]);
 
 await viteBuild({ configFile: 'vite.config.mts' });
