@@ -50,7 +50,7 @@ export function setupLocal(): void {
       state.settings?.merge({ workspaces });
     },
     onPullRequestUrl: (url, sessionId) => {
-      autoOpenLocalPr(url, sessionId, 'local-chat');
+      autoOpenLocalPr(url, localScope(sessionId), 'local-chat');
     },
     prLinkContext: { githubOrigins: fixtureOrigins },
   });

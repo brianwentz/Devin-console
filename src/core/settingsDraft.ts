@@ -1,6 +1,21 @@
 import { isAllowedAppUrl } from './sessions';
 import { validateLinkRule } from './linkRules';
-import type { LinkRule, Settings, SettingsPatch } from '../shared/ipc';
+import type { ClaudePermissionMode, LinkRule, Settings, SettingsPatch } from '../shared/ipc';
+
+// Mirrors ClaudePermissionModeSchema (kept here so the shell bundle needs no
+// zod/ipc value import); the type annotation fails to compile if they diverge.
+export const CLAUDE_PERMISSION_MODES = [
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'plan',
+  'dontAsk',
+  'auto',
+] as const satisfies readonly ClaudePermissionMode[];
+
+export function isClaudePermissionMode(value: unknown): value is ClaudePermissionMode {
+  return (CLAUDE_PERMISSION_MODES as readonly unknown[]).includes(value);
+}
 
 export interface SettingsDraft {
   tenantUrl: string;
@@ -16,6 +31,8 @@ export interface SettingsDraft {
   terminalShell: string;
   claudePath: string;
   claudeAutoArchiveDays: string;
+  claudePermissionMode: ClaudePermissionMode;
+  claudeModel: string;
   userId: string;
   orgId: string;
   linkRules: LinkRule[];
@@ -39,6 +56,8 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   terminalShell: 'general',
   claudePath: 'general',
   claudeAutoArchiveDays: 'general',
+  claudePermissionMode: 'general',
+  claudeModel: 'general',
   userId: 'notifications',
   orgId: 'notifications',
   linkRules: 'links',
@@ -63,6 +82,8 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     terminalShell: settings.terminal.shell,
     claudePath: settings.claude.path ?? '',
     claudeAutoArchiveDays: String(settings.claude.autoArchiveDays),
+    claudePermissionMode: settings.claude.defaultPermissionMode,
+    claudeModel: settings.claude.model ?? '',
     userId: settings.notifications.userId,
     orgId: settings.notifications.orgId,
     linkRules: settings.routing.rules.map((rule) => ({ ...rule })),
@@ -95,6 +116,8 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     draft.terminalShell.trim() !== base.terminalShell ||
     draft.claudePath.trim() !== base.claudePath ||
     Number(draft.claudeAutoArchiveDays) !== Number(base.claudeAutoArchiveDays) ||
+    draft.claudePermissionMode !== base.claudePermissionMode ||
+    draft.claudeModel.trim() !== base.claudeModel ||
     draft.userId.trim() !== base.userId ||
     draft.orgId.trim() !== base.orgId ||
     draft.linkRules.length !== base.linkRules.length ||
@@ -178,6 +201,8 @@ export function validateDraft(
       claude: {
         path: draft.claudePath.trim() || null,
         autoArchiveDays: claudeAutoArchive,
+        defaultPermissionMode: draft.claudePermissionMode,
+        model: draft.claudeModel.trim() || null,
       },
       notifications: { userId: draft.userId.trim(), orgId: draft.orgId.trim() },
     },
@@ -197,6 +222,10 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'sessions.keepAliveHours': 'sessionsKeepAliveHours',
   'terminal.allSurfaces': 'terminalAllSurfaces',
   'terminal.shell': 'terminalShell',
+  'claude.path': 'claudePath',
+  'claude.autoArchiveDays': 'claudeAutoArchiveDays',
+  'claude.defaultPermissionMode': 'claudePermissionMode',
+  'claude.model': 'claudeModel',
   'notifications.userId': 'userId',
   'notifications.orgId': 'orgId',
 };

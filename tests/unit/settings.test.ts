@@ -403,6 +403,11 @@ describe('claude settings', () => {
       collapsedFolders: [],
       showArchived: false,
       autoArchiveDays: 0,
+      defaultPermissionMode: 'default',
+      model: null,
+      keepAliveMinutes: 15,
+      maxLiveAgents: 3,
+      lastSessionId: null,
     });
   });
 
@@ -421,12 +426,15 @@ describe('claude settings', () => {
   it('patches one claude field without resetting the rest', () => {
     const base: Settings = {
       ...SettingsSchema.parse({}),
-      claude: { path: '/usr/bin/claude', collapsedFolders: [], showArchived: false, autoArchiveDays: 0 },
+      claude: {
+        ...SettingsSchema.parse({}).claude,
+        path: '/usr/bin/claude',
+      },
     };
     const next = mergeSettings(base, { claude: { showArchived: true } });
     expect(next.claude).toEqual({
+      ...SettingsSchema.parse({}).claude,
       path: '/usr/bin/claude',
-      collapsedFolders: [],
       showArchived: true,
       autoArchiveDays: 0,
     });

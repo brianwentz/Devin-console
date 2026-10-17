@@ -6,15 +6,20 @@ import type { ZodType } from 'zod';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { app } from 'electron';
-import { guardedHandle, guardedOn } from '../ipcGuard';
+import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
+  ClaudeCancelArg,
   ClaudeContextMenuArg,
   ClaudeFolderCreateArg,
   ClaudeFolderDeleteArg,
   ClaudeFolderRenameArg,
   ClaudeFolderReorderArg,
   ClaudeForkArg,
+  ClaudeLoadHistoryArg,
+  ClaudeNewSessionArg,
   ClaudeOpenArg,
+  ClaudePermissionArg,
+  ClaudePromptArg,
   ClaudeRenameArg,
   ClaudeRevealTranscriptArg,
   ClaudeSessionArchiveArg,
@@ -22,10 +27,14 @@ import {
   ClaudeSessionMoveArg,
   ClaudeSessionPinArg,
   ClaudeSessionRemoveArg,
+  ClaudeSetModelArg,
+  ClaudeSetPermissionModeArg,
   ClaudeShowArchivedArg,
   IpcChannels,
 } from '../../shared/ipc';
 import { setupClaudeSessions, type ClaudeSessions } from './sessions';
+import { claudeHost } from './host';
+import { publicChatState } from './chatState';
 
 export function setupClaude(): ClaudeSessions {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
@@ -88,6 +97,30 @@ export function setupClaude(): ClaudeSessions {
     if (!parsed.success) return { action: null };
     return sessions.contextMenu(parsed.data);
   });
+
+  // Phase 2 chat channels — invoke → LocalResult via handleResult.
+  guardedHandle(IpcChannels.claudeChatState, () => publicChatState());
+  handleResult(IpcChannels.claudeNewSession, ClaudeNewSessionArg, ({ cwd }) =>
+    sessions.newSession(cwd),
+  );
+  handleResult(IpcChannels.claudePrompt, ClaudePromptArg, ({ sessionId, text }) =>
+    claudeHost().prompt(sessionId, text),
+  );
+  handleResult(IpcChannels.claudeCancel, ClaudeCancelArg, ({ sessionId }) =>
+    claudeHost().cancel(sessionId),
+  );
+  handleResult(IpcChannels.claudePermission, ClaudePermissionArg, (arg) => {
+    claudeHost().respondPermission(arg.sessionId, arg.requestId, arg.optionId);
+  });
+  handleResult(IpcChannels.claudeSetPermissionMode, ClaudeSetPermissionModeArg, (arg) =>
+    claudeHost().setPermissionMode(arg.sessionId, arg.mode),
+  );
+  handleResult(IpcChannels.claudeSetModel, ClaudeSetModelArg, (arg) =>
+    claudeHost().setModel(arg.sessionId, arg.model),
+  );
+  handleResult(IpcChannels.claudeLoadHistory, ClaudeLoadHistoryArg, ({ sessionId }) =>
+    claudeHost().loadHistory(sessionId),
+  );
 
   return sessions;
 }

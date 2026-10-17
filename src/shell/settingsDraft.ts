@@ -90,6 +90,8 @@ const FIELD_INPUT: Record<DraftField, string> = {
   terminalShell: 'terminalShellInput',
   claudePath: 'claudePathInput',
   claudeAutoArchiveDays: 'claudeAutoArchiveInput',
+  claudePermissionMode: 'claudePermissionModeDefault',
+  claudeModel: 'claudeModelInput',
   userId: 'userIdInput',
   orgId: 'orgIdInput',
   linkRules: 'linkRuleAdd',

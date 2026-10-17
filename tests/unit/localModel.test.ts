@@ -4,6 +4,7 @@ import {
   clearPermission,
   emptyLocalState,
   finishPrompt,
+  newChatSession,
   newSession,
   removeSession,
   removeWorkspace,
@@ -15,6 +16,7 @@ import {
   titleFromPrompt,
   upsertAgent,
   upsertSession,
+  type ChatSession,
   type LocalState,
 } from '../../src/core/localModel';
 
@@ -438,5 +440,46 @@ describe('terminalOwned handoff', () => {
     state = setTerminalOwned(state, SID, false);
     expect(state.sessions[SID]!.terminalOwned).toBeUndefined();
     expect(setTerminalOwned(withSession(), 'nope', true)).toEqual(withSession());
+  });
+});
+
+describe('generic reducers over extended session types', () => {
+  type CwdSession = ChatSession & { cwd: string; live: 'idle' | 'live' };
+  type CwdState = { sessions: Record<string, CwdSession>; extra: number };
+
+  function cwdState(): CwdState {
+    const base = newChatSession({ id: SID, createdAt: '2026-10-01T00:00:00Z' });
+    return { sessions: { [SID]: { ...base, cwd: 'D:\\proj', live: 'idle' } }, extra: 7 };
+  }
+
+  it('newChatSession has no workspace and newSession builds on it', () => {
+    expect('workspace' in newChatSession({ id: 'x' })).toBe(false);
+    const created = newSession({ id: 'x', workspace: WS, createdAt: '2026-10-01T00:00:00Z' });
+    expect(created).toEqual({ ...newChatSession({ id: 'x', createdAt: '2026-10-01T00:00:00Z' }), workspace: WS });
+  });
+
+  it('applyUpdate/startPrompt/finishPrompt keep extra session fields and the state type', () => {
+    let state: CwdState = startPrompt(cwdState(), SID, 'hi', '2026-10-01T00:00:01Z');
+    state = applyUpdate(state, SID, { sessionUpdate: 'agent_message_chunk', content: text('pong') });
+    state = applyUpdate(state, SID, { sessionUpdate: 'tool_call', toolCallId: 't', title: 'T' });
+    state = finishPrompt(state, SID, 'end_turn', { now: '2026-10-01T00:00:02Z', usage: { inputTokens: 1, outputTokens: 2 } });
+    state = setPermission(state, SID, { requestId: 'r', toolCallId: 't', title: 'x', options: [] });
+    state = clearPermission(state, SID);
+    state = setTerminalOwned(setTerminalOwned(state, SID, true), SID, false);
+    const session: CwdSession = state.sessions[SID]!;
+    expect(session.cwd).toBe('D:\\proj');
+    expect(session.live).toBe('idle');
+    expect(session.running).toBe(false);
+    expect(session.messages.map((m) => m.role)).toEqual(['user', 'agent']);
+    expect(session.toolCalls.t!.title).toBe('T');
+    expect(session.usage).toMatchObject({ inputTokens: 1, outputTokens: 2 });
+    expect(session.lastTurnMs).toBe(1000);
+    expect(state.extra).toBe(7);
+    const reset = resetHistory(state, SID);
+    expect(reset.sessions[SID]!.cwd).toBe('D:\\proj');
+    expect(reset.sessions[SID]!.messages).toEqual([]);
+    const upserted = upsertSession(reset, { ...newChatSession({ id: 'n', title: 'New' }), cwd: 'E:\\other', live: 'live' });
+    expect(upserted.sessions.n!.cwd).toBe('E:\\other');
+    expect(Object.keys(removeSession(upserted, SID).sessions)).toEqual(['n']);
   });
 });

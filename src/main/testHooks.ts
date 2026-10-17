@@ -26,7 +26,9 @@ import { applyLayout, layoutState, publicState, setPaneOpen, setSessionsOpen } f
 import { shutdown } from './index';
 import { localHost } from './local/ipc';
 import { loadSdk } from './claude/sdk';
+import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
+import { publicChatState } from './claude/chatState';
 import { publicLocalState } from './local/localState';
 
 export function registerTestHooks(): void {
@@ -275,6 +277,14 @@ export function registerTestHooks(): void {
       claudeMenuClick: (id: string) => claudeSessions().clickMenuItem(id),
       claudeMutations: () => claudeSessions().mutationLog(),
       claudeConfigDir: () => claudeSessions().snapshot().configDir,
+      // Phase 2 chat.
+      claudeChatState: () => publicChatState(),
+      claudeNewSession: (cwd: string | null) => claudeSessions().newSession(cwd),
+      claudePrompt: (id: string, text: string) => claudeHost().prompt(id, text),
+      claudeCancel: (id: string) => claudeHost().cancel(id),
+      claudePermission: (id: string, requestId: string, optionId: string) =>
+        claudeHost().respondPermission(id, requestId, optionId),
+      claudeLiveCount: () => claudeHost().liveCount(),
       claudeSdkProbe: async () => {
         const t0 = Date.now();
         try {

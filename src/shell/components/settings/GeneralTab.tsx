@@ -1,5 +1,9 @@
 import { useState } from 'react';
-import type { DraftField } from '../../../core/settingsDraft';
+import {
+  CLAUDE_PERMISSION_MODES,
+  isClaudePermissionMode,
+  type DraftField,
+} from '../../../core/settingsDraft';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
 import { errorTextClass, inputClass, inputErrorClass, saveClass } from './styles';
@@ -229,6 +233,40 @@ export function GeneralTab() {
           }
         />
         <FieldError inputId="claudeAutoArchiveInput" message={errors.claudeAutoArchiveDays} />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Default permission mode for new Claude sessions</span>
+        <select
+          id="claudePermissionModeDefault"
+          className={fieldInputClass(errors, 'claudePermissionMode')}
+          value={draft.claudePermissionMode}
+          onChange={(event) => {
+            const mode = event.target.value;
+            if (isClaudePermissionMode(mode)) updateDraft({ claudePermissionMode: mode });
+          }}
+        >
+          {CLAUDE_PERMISSION_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              {mode}
+            </option>
+          ))}
+        </select>
+        <FieldError inputId="claudePermissionModeDefault" message={errors.claudePermissionMode} />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Claude model</span>
+        <input
+          id="claudeModelInput"
+          className={fieldInputClass(errors, 'claudeModel')}
+          value={draft.claudeModel}
+          aria-invalid={errors.claudeModel ? 'true' : undefined}
+          onChange={(event) => updateDraft({ claudeModel: event.target.value })}
+          placeholder="e.g. claude-sonnet-4-5"
+        />
+        <FieldError inputId="claudeModelInput" message={errors.claudeModel} />
+        <span className="text-xs text-[#7f8ca0]">
+          Blank = the Claude CLI's default model. Applies to new sessions.
+        </span>
       </label>
       <label className="flex items-center gap-2 text-sm">
         <input

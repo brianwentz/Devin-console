@@ -84,9 +84,10 @@ export function emptyUsage(): SessionUsage {
   };
 }
 
-export type LocalSession = {
+// Agent-neutral chat session: everything the chat view renders. `LocalSession`
+// and the Claude chat session extend it with their own metadata.
+export type ChatSession = {
   id: string;
-  workspace: string;
   title: string;
   createdAt: string;
   messages: Message[];
@@ -106,6 +107,14 @@ export type LocalSession = {
   historySource: HistorySource;
   loaded: boolean;
 };
+
+export type LocalSession = ChatSession & { workspace: string };
+
+// Minimal state shape the generic reducers operate on; the concrete session
+// type (`S['sessions'][string]`) is preserved by spreading.
+export type ChatStateLike = { sessions: Record<string, ChatSession> };
+
+type SessionOf<S extends ChatStateLike> = S['sessions'][string];
 
 export type AgentStatus = 'missing-cli' | 'starting' | 'ready' | 'crashed' | 'stopped';
 
@@ -185,13 +194,12 @@ export function titleFromPrompt(text: string): string {
   return flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX - 1)}…` : flat;
 }
 
-export function newSession(
-  input: Pick<LocalSession, 'id' | 'workspace'> &
-    Partial<Pick<LocalSession, 'title' | 'createdAt' | 'historySource' | 'loaded'>>,
-): LocalSession {
+export function newChatSession(
+  input: Pick<ChatSession, 'id'> &
+    Partial<Pick<ChatSession, 'title' | 'createdAt' | 'historySource' | 'loaded'>>,
+): ChatSession {
   return {
     id: input.id,
-    workspace: input.workspace,
     title: input.title ?? '',
     createdAt: input.createdAt ?? new Date().toISOString(),
     messages: [],
@@ -200,6 +208,13 @@ export function newSession(
     historySource: input.historySource ?? 'agent',
     loaded: input.loaded ?? true,
   };
+}
+
+export function newSession(
+  input: Pick<LocalSession, 'id' | 'workspace'> &
+    Partial<Pick<LocalSession, 'title' | 'createdAt' | 'historySource' | 'loaded'>>,
+): LocalSession {
+  return { ...newChatSession(input), workspace: input.workspace };
 }
 
 function contentText(block: ContentBlock): string {
@@ -219,18 +234,18 @@ function contentText(block: ContentBlock): string {
   }
 }
 
-function replaceSession(state: LocalState, session: LocalSession): LocalState {
+function replaceSession<S extends ChatStateLike>(state: S, session: SessionOf<S>): S {
   return { ...state, sessions: { ...state.sessions, [session.id]: session } };
 }
 
 // Append a text-ish block to the message stream: continue the last message when
 // the role (and messageId, if provided) match, otherwise start a new message.
-function appendChunk(
-  session: LocalSession,
+function appendChunk<T extends ChatSession>(
+  session: T,
   role: Message['role'],
   block: Block,
   messageId?: string | null,
-): LocalSession {
+): T {
   const messages = [...session.messages];
   const last = messages[messages.length - 1];
   // Agent chunks continue the open agent message unless the messageId changes.
@@ -279,8 +294,12 @@ function mergeToolCall(existing: ToolCall | undefined, update: ToolCallUpdateFie
   };
 }
 
-export function applyUpdate(state: LocalState, sessionId: string, update: SessionUpdate): LocalState {
-  const session = state.sessions[sessionId];
+export function applyUpdate<S extends ChatStateLike>(
+  state: S,
+  sessionId: string,
+  update: SessionUpdate,
+): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session) return state;
   switch (update.sessionUpdate) {
     case 'user_message_chunk': {
@@ -366,15 +385,15 @@ export function applyUpdate(state: LocalState, sessionId: string, update: Sessio
   }
 }
 
-export function startPrompt(
-  state: LocalState,
+export function startPrompt<S extends ChatStateLike>(
+  state: S,
   sessionId: string,
   text: string,
   now: string,
-): LocalState {
-  const session = state.sessions[sessionId];
+): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session) return state;
-  const next: LocalSession = {
+  const next: SessionOf<S> = {
     ...session,
     messages: [...session.messages, { role: 'user', blocks: [{ type: 'text', text }] }],
     running: true,
@@ -387,15 +406,15 @@ export function startPrompt(
   return replaceSession(state, next);
 }
 
-export function finishPrompt(
-  state: LocalState,
+export function finishPrompt<S extends ChatStateLike>(
+  state: S,
   sessionId: string,
   stopReason: StopReason,
   options: { error?: string; now?: string; usage?: PromptUsage | undefined } = {},
-): LocalState {
-  const session = state.sessions[sessionId];
+): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session) return state;
-  const next: LocalSession = { ...session, running: false, lastStopReason: stopReason };
+  const next: SessionOf<S> = { ...session, running: false, lastStopReason: stopReason };
   delete next.pendingPermission;
   if (options.now && session.promptStartedAt) {
     next.lastTurnMs = Math.max(
@@ -425,30 +444,30 @@ export function finishPrompt(
   return replaceSession(state, next);
 }
 
-export function setPermission(
-  state: LocalState,
+export function setPermission<S extends ChatStateLike>(
+  state: S,
   sessionId: string,
   permission: PendingPermission,
-): LocalState {
-  const session = state.sessions[sessionId];
+): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session) return state;
   return replaceSession(state, { ...session, pendingPermission: permission });
 }
 
-export function clearPermission(state: LocalState, sessionId: string): LocalState {
-  const session = state.sessions[sessionId];
+export function clearPermission<S extends ChatStateLike>(state: S, sessionId: string): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session || !session.pendingPermission) return state;
   const next = { ...session };
   delete next.pendingPermission;
   return replaceSession(state, next);
 }
 
-export function setTerminalOwned(
-  state: LocalState,
+export function setTerminalOwned<S extends ChatStateLike>(
+  state: S,
   sessionId: string,
   owned: boolean,
-): LocalState {
-  const session = state.sessions[sessionId];
+): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session) return state;
   const next = { ...session };
   if (owned) {
@@ -463,16 +482,16 @@ export function setTerminalOwned(
   return replaceSession(state, next);
 }
 
-export function resetHistory(state: LocalState, sessionId: string): LocalState {
-  const session = state.sessions[sessionId];
+export function resetHistory<S extends ChatStateLike>(state: S, sessionId: string): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
   if (!session) return state;
-  const next: LocalSession = { ...session, messages: [], toolCalls: {}, loaded: true };
+  const next: SessionOf<S> = { ...session, messages: [], toolCalls: {}, loaded: true };
   delete next.plan;
   return replaceSession(state, next);
 }
 
-export function upsertSession(state: LocalState, session: LocalSession): LocalState {
-  const existing = state.sessions[session.id];
+export function upsertSession<S extends ChatStateLike>(state: S, session: SessionOf<S>): S {
+  const existing = state.sessions[session.id] as SessionOf<S> | undefined;
   if (!existing) return replaceSession(state, session);
   // Listing never clobbers already-streamed content; it only refreshes metadata.
   return replaceSession(state, {
@@ -505,7 +524,7 @@ export function upsertAgent(
   return { ...state, agents: { ...state.agents, [workspace]: next } };
 }
 
-export function removeSession(state: LocalState, sessionId: string): LocalState {
+export function removeSession<S extends ChatStateLike>(state: S, sessionId: string): S {
   if (!state.sessions[sessionId]) return state;
   const sessions = { ...state.sessions };
   delete sessions[sessionId];

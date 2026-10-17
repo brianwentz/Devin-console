@@ -9,6 +9,7 @@ import { setupDownloads } from './downloads';
 import { setupIpc } from './ipc';
 import { setupLocal, localHost } from './local/ipc';
 import { setupClaude } from './claude/ipc';
+import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
 import { autoOpenLocalPr } from './local/prAutoOpen';
 import { terminalHost } from './local/terminalHost';
@@ -18,6 +19,7 @@ import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
 import { cloudKeepAliveMs, cloudViews } from './cloudViews';
 import { SettingsStore } from './settings';
+import { localScope } from '../core/tabModel';
 import { fixtureOrigins, state, testMode } from './state';
 import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';
@@ -144,6 +146,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       // best effort at shutdown
     }
     localHost()?.dispose();
+    await claudeHost().dispose();
     claudeSessions().dispose();
     notificationsFlush();
     prsFlush();
@@ -230,7 +233,7 @@ async function createWindow(): Promise<void> {
   }
   terminalHost.onChange = notifyShell;
   terminalHost.onPullRequestUrl = (url, sessionId) => {
-    autoOpenLocalPr(url, sessionId, 'local-terminal');
+    autoOpenLocalPr(url, localScope(sessionId), 'local-terminal');
   };
   // Exclusive handoff: `devin -r` ptys take the CLI's per-session lock; the acp
   // agent releases it (restart) on open and reclaims the session on close.

@@ -2,6 +2,7 @@ import { app } from 'electron';
 import { clampPaneWidth, fractionFromPx, paneWidthPx } from '../core/layout';
 import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
+import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
@@ -129,7 +130,12 @@ export function handleShortcut(
     historyAction('reload', contents);
     handled = true;
   } else if (ctrl && !input.shift && !input.alt && key === 'n') {
-    openNewSession();
+    if (state.surface === 'claude') {
+      // Phase 2: a new Claude chat session (cwd picker / test env var).
+      void claudeSessions().newSession(null);
+    } else {
+      openNewSession();
+    }
     handled = true;
   } else if (ctrl && !input.alt && key === '`') {
     state.terminalOpen = !state.terminalOpen;

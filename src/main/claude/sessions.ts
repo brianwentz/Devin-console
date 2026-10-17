@@ -3,6 +3,8 @@
 // against the SDK store list, change-driven via fs.watch. Logs carry op
 // names, ids, counts and durations only — never titles or transcript text.
 
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { app, clipboard, dialog, Menu, shell } from 'electron';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -31,6 +33,11 @@ import { applyLayout, notifyShell } from '../window';
 import { resolveClaudePath, INSTALL_GUIDANCE } from './claudePath';
 import { ClaudeRegistryStore } from './registry';
 import { ClaudeStore } from './store';
+import { ClaudeHost, setClaudeHost } from './host';
+import { sdkTargetCliVersion } from './sdk';
+import { autoOpenLocalPr } from '../local/prAutoOpen';
+
+const execFileAsync = promisify(execFile);
 
 type MenuAction = 'rename' | 'rename-session' | 'new-folder' | null;
 
@@ -47,10 +54,14 @@ export class ClaudeSessions {
   private lastSyncAt: string | null = null;
   private lastError: { op: string; message: string } | null = null;
   private showArchived = false;
+  // Filled by the Phase 2 version check (`claude --version` vs the SDK manifest).
+  versions: ClaudeState['versions'] = { cli: null, sdkTarget: null, mismatch: false };
   private refreshInFlight = false;
   private refreshDirty: string | null = null;
   private started = false;
+  private restoredSelection = false;
   private lastSnapshotJson = '';
+  private host: ClaudeHost | null = null;
   private mutations: { op: string; payload: Record<string, unknown> }[] = [];
 
   constructor(opts: { configDir: string; registryStore: ClaudeRegistryStore }) {
@@ -68,8 +79,40 @@ export class ClaudeSessions {
     this.registry = this.registryStore.load();
     this.showArchived = state.settings?.current.claude.showArchived ?? false;
     this.cliPath = resolveClaudePath(state.settings?.current.claude.path ?? null);
+    this.host = new ClaudeHost({
+      cliPath: () => this.cliPath,
+      configDir: this.configDir,
+      isOnDisk: (id) => this.storeSessions.some((s) => s.id === id),
+      onPullRequestUrl: (id, url) => {
+        autoOpenLocalPr(url, claudeScope(id), 'claude-chat');
+      },
+    });
+    setClaudeHost(this.host);
+    void this.checkVersions();
     this.store.start();
     void this.refresh('start');
+  }
+
+  // `claude --version` once at start (and when claude.path changes) vs the
+  // CLI version the bundled SDK targets — powers the header warning badge.
+  private async checkVersions(): Promise<void> {
+    const sdkTarget = sdkTargetCliVersion();
+    let cli: string | null = null;
+    const bin = this.cliPath;
+    if (bin) {
+      try {
+        const { stdout } = await execFileAsync(bin, ['--version'], { timeout: 3_000 });
+        cli = stdout.trim().split(/\s+/)[0] ?? null;
+      } catch {
+        cli = null;
+      }
+    }
+    this.versions = {
+      cli,
+      sdkTarget,
+      mismatch: Boolean(cli && sdkTarget && cli !== sdkTarget),
+    };
+    this.emit();
   }
 
   snapshot(): ClaudeState {
@@ -84,6 +127,7 @@ export class ClaudeSessions {
       sessions: this.showArchived ? this.sessions : this.sessions.filter((s) => !s.isArchived),
       showArchived: this.showArchived,
       lastError: this.lastError,
+      versions: this.versions,
     };
   }
 
@@ -113,6 +157,15 @@ export class ClaudeSessions {
       this.error = null;
       this.lastError = null;
       this.lastSyncAt = new Date().toISOString();
+      // Every listed transcript gets an in-memory chat session (history lazy).
+      for (const s of sessions) this.host?.ensureSession(s.id, { cwd: s.cwd });
+      if (!this.restoredSelection) {
+        this.restoredSelection = true;
+        const last = state.settings?.current.claude.lastSessionId;
+        if (!state.claudeSessionId && last && sessions.some((s) => s.id === last)) {
+          this.open(last);
+        }
+      }
       log('claude', 'claude-list', {
         detail: { count: list.length, ms: Date.now() - t0, source },
       });
@@ -158,10 +211,38 @@ export class ClaudeSessions {
 
   open(sessionId: string): void {
     state.claudeSessionId = sessionId;
+    state.settings?.merge({ claude: { lastSessionId: sessionId } });
     this.registry = touchOpened(this.registry, sessionId, Date.now());
     this.registryStore.save(this.registry);
     log('claude', 'claude-select', { detail: { sessionId } });
     applyLayout();
+    const chat = this.host;
+    if (chat && !chat.isLoaded(sessionId)) void chat.loadHistory(sessionId);
+  }
+
+  // New chat session: cwd comes from the arg (the empty-state button) or a
+  // directory picker (sidebar header / Ctrl+N). null cwd → dialog; in test
+  // mode DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD stands in for the picker.
+  async newSession(cwd: string | null): Promise<string | null> {
+    let dir = cwd;
+    if (!dir) {
+      const envCwd = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD?.trim() : '';
+      if (envCwd) dir = envCwd;
+      else {
+        const win = state.windowRef;
+        if (!win) return null;
+        const result = await dialog.showOpenDialog(win, {
+          title: 'Choose the working directory for the new Claude session',
+          properties: ['openDirectory', 'createDirectory'],
+        });
+        if (result.canceled || result.filePaths.length === 0) return null;
+        dir = result.filePaths[0]!;
+      }
+    }
+    this.recordMutation('newSession', {});
+    const id = this.host?.newSession(dir) ?? null;
+    if (id) this.open(id);
+    return id;
   }
 
   rename(sessionId: string, title: string): Promise<void> {
@@ -326,6 +407,7 @@ export class ClaudeSessions {
   private forget(sessionId: string): void {
     if (state.claudeSessionId === sessionId) state.claudeSessionId = null;
     void state.tabManager?.closeScope(claudeScope(sessionId));
+    this.host?.dropSession(sessionId);
     applyLayout();
   }
 
@@ -336,6 +418,7 @@ export class ClaudeSessions {
     }
     if (previous.claude.path !== next.claude.path) {
       this.cliPath = resolveClaudePath(next.claude.path);
+      void this.checkVersions();
       this.emit();
     }
   }
