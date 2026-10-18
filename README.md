@@ -102,6 +102,17 @@ The **Claude** surface (sparkle icon in the rail) lists the Claude Code sessions
 
 **Activity, hooks and notifications.** A dot on each session row shows live activity — blue while a prompt runs, amber while Claude waits for permission — fed by the chat itself and, for sessions running in terminals, by Claude Code's hook system: the app runs a loopback listener (`127.0.0.1`, bearer-token auth, random per-profile port) that our embedded terminals and a global settings block POST to. Chat sessions report the same states to the notification center too (*waiting for permission*, *finished a turn*, errors — the same Settings → Notifications toggles apply), and `gh pr create` output from any Claude session raises a *pr-opened* entry and auto-opens the PR tab like everywhere else. The *Report Claude Code sessions started from other terminals* toggle in Settings → Notifications writes the hook block into `~/.claude/settings.json` (backup kept once as `settings.json.devin-workspaces.bak`, foreign hooks and keys preserved, block removed on off) so external terminals report activity too; its status line shows whether the block is installed and which port the listener is on.
 
+**Pull requests.** PR links that show up in a Claude session — in its chat output, in its terminal, or in a `gh pr` command reported by hooks — are recorded per session (in `claude-sessions.json`) and listed in the PR panel (rail button) alongside Devin PRs; a sparkle glyph marks the Claude rows. Opening one selects the session on the Claude surface and opens the PR in that session's tab scope. Each PR's state (open, draft, merged, closed) is read from its GitHub page using the app's GitHub sign-in and refreshed about every 10 minutes while the app is focused; a PR that merges or closes leaves the panel and raises a *pr-completed* notification once. Session rows in the sidebar show the same PR badges as Cloud sessions.
+
+**Known limitations.**
+
+- Subagent transcripts are not shown yet.
+- *Fork* is available from the sidebar menu only.
+- Consecutive assistant messages within one turn render as one message.
+- Under permission mode `auto` Claude rarely prompts, so permission notifications for terminal/external sessions are best-effort.
+- PR state is only available for PRs the signed-in GitHub session can load.
+- One writer at a time — the chat composer is disabled while that session's Terminal tab is open.
+
 ## Settings reference
 
 Settings is split into five tabs: **General**, **Link Handling**, **Passwords**, **Notifications** and **Updates**. Fields save automatically when you switch tabs, leave Settings or quit; invalid values are flagged inline and block the save. The API token Save/Clear and password Add/Edit buttons are explicit actions.

@@ -39,3 +39,28 @@ export function parsePrTitle(html: string): string | null {
   }
   return title || null;
 }
+
+export type PrState = 'open' | 'draft' | 'merged' | 'closed';
+
+// GitHub's PR header renders the state as
+//   <span ... data-view-component="true" class="State State--merged ...">
+// (the class attribute may carry other classes in any order) or, in older
+// markup, title="Status: Merged". One alternation so the first marker in
+// document order wins; other State-- modifiers (e.g. State--small) are not
+// in the alternation and therefore ignored.
+const STATE_SCAN_LIMIT = 256 * 1024;
+const STATE_RE =
+  /class\s*=\s*["'][^"']*\bState--(open|draft|merged|closed)\b[^"']*["']|title\s*=\s*["']Status:\s*(open|draft|merged|closed)["']/i;
+
+export function parsePrState(html: string): PrState | null {
+  try {
+    const match = STATE_RE.exec(html.slice(0, STATE_SCAN_LIMIT));
+    if (!match) return null;
+    const state = (match[1] ?? match[2] ?? '').toLowerCase();
+    return state === 'open' || state === 'draft' || state === 'merged' || state === 'closed'
+      ? state
+      : null;
+  } catch {
+    return null;
+  }
+}

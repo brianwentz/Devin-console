@@ -14,7 +14,6 @@ import {
   type Rect,
   type WindowBounds,
 } from '../core/layout';
-import { openPullRequests } from '../core/notifyModel';
 import { unreadPrCount, visiblePrs } from '../core/prPanelModel';
 import { effectiveScope } from '../core/tabModel';
 import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
@@ -26,7 +25,7 @@ import { cloudViews } from './cloudViews';
 import { terminalHost } from './local/terminalHost';
 import { log } from './log';
 import { notificationsUnread } from './notifications';
-import { prStore } from './prs';
+import { allOpenPullRequests, prStore } from './prs';
 import { state } from './state';
 import { updateState } from './updater';
 
@@ -159,8 +158,8 @@ export function publicState(): ShellState {
       collect: state.settings?.current.notifications.collect ?? true,
       banner: state.settings?.current.notifications.banner ?? true,
       hasToken: state.secrets?.hasPat() ?? false,
-      openPrCount: visiblePrs(prStore().records(), openPullRequests(state.apiSessions)).length,
-      unreadPrCount: unreadPrCount(prStore().records(), openPullRequests(state.apiSessions)),
+      openPrCount: visiblePrs(prStore().records(), allOpenPullRequests()).length,
+      unreadPrCount: unreadPrCount(prStore().records(), allOpenPullRequests()),
       prsPanelOpen: state.prsPanelOpen,
       unreadCount: notificationsUnread(),
       panelOpen: state.notificationsPanelOpen,
@@ -436,6 +435,9 @@ export function setPrsPanel(open: boolean): void {
   if (open) state.notificationsPanelOpen = false;
   state.prsPanelOpen = open;
   if (open) raiseShell();
+  // Refresh recorded Claude PR states while the panel is open (10 min cadence
+  // also runs on its own timer while focused).
+  if (open) claudeSessions().refreshPrStates('panel');
   else if (!overlayOpen()) lowerShell();
   applyLayout();
   log('shell', 'prs-panel', { detail: { open } });

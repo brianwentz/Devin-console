@@ -6,6 +6,7 @@
 // the watcher/list/history all see real files.
 //   FAKE_CLAUDE_TOOL=1         → the first turn asks for a Bash permission
 //   FAKE_CLAUDE_DELAY_MS       → ms between the three text deltas (default 20)
+//   FAKE_CLAUDE_PR_URL         → the echo text includes this URL
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -144,7 +145,10 @@ export function query({ prompt, options }: { prompt: unknown; options: Rec }) {
         };
       }
 
-      const full = `Echo: ${text}`;
+      // FAKE_CLAUDE_PR_URL appends a PR link to the echo text (LinkScanner →
+      // recordPr → auto-open) — Phase 5 PR tracking e2e.
+      const prUrl = process.env.FAKE_CLAUDE_PR_URL;
+      const full = `Echo: ${text}${prUrl ? `\nOpened ${prUrl}` : ''}`;
       const parts = [
         full.slice(0, Math.ceil(full.length / 3)),
         full.slice(Math.ceil(full.length / 3), Math.ceil((full.length * 2) / 3)),

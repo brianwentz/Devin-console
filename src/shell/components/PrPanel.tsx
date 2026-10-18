@@ -3,6 +3,7 @@ import { CheckCheck, Trash2 } from 'lucide-react';
 import { RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
 import type { SessionPr } from '../../shared/ipc';
 import { useShellState } from '../store';
+import { ClaudeGlyph } from './NotificationPanel';
 
 // Same modal popover as NotificationPanel — while open, main raises the shell
 // view so the panel sits over the hosted views (backdrop click closes).
@@ -90,6 +91,7 @@ export function PrPanel() {
               key={pr.url}
               data-pr-url={pr.url}
               data-unread={pr.readAt === null || undefined}
+              data-source={pr.source}
               className="relative flex items-start gap-2 border-b border-[#1a2330] px-3 py-2 last:border-0"
             >
               <button
@@ -104,6 +106,7 @@ export function PrPanel() {
                       : 'text-[#aeb9c8]'
                   }`}
                 >
+                  {pr.source === 'claude' && <ClaudeGlyph />}
                   {pr.title ?? pr.ref}
                 </div>
                 {pr.title !== null && (

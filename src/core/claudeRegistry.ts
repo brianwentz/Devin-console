@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import type { ClaudeSessionState } from '../shared/ipc';
+import type { SessionPrCounts } from './cloudAcp';
 
 export interface ClaudeStoreSession {
   id: string;
@@ -16,6 +17,22 @@ export interface ClaudeStoreSession {
   lastModified: number;
   fileSize: number | null;
 }
+
+export type ClaudePrState = 'open' | 'draft' | 'merged' | 'closed';
+
+export interface ClaudeRegistryPr {
+  url: string;
+  /** Last state read from the GitHub PR page; null until known (counts as open). */
+  state: ClaudePrState | null;
+  /** Last time the URL was observed (recordPr touches it on re-detection). */
+  seenAt: number;
+  /** Set once when the state first flips to merged|closed (notified once). */
+  completedAt: number | null;
+  source: 'chat' | 'terminal' | 'hook';
+}
+
+/** Per-session cap on recorded PRs; recordPr drops completed-oldest first. */
+export const MAX_PRS_PER_SESSION = 20;
 
 export interface ClaudeRegistryEntry {
   id: string;
@@ -30,8 +47,8 @@ export interface ClaudeRegistryEntry {
   removed: boolean;
   removedAt: number | null;
   lastOpenedAt: number | null;
-  /** PR urls associated with the session (filled by later phases). */
-  prUrls: string[];
+  /** PRs detected for the session (chat links, terminal output, hooks). */
+  prs: ClaudeRegistryPr[];
 }
 
 export interface ClaudeRegistry {
@@ -46,27 +63,51 @@ export const emptyRegistry = (): ClaudeRegistry => ({
   entries: {},
 });
 
-export const ClaudeRegistrySchema: z.ZodType<ClaudeRegistry> = z.object({
-  version: z.literal(1),
-  folders: z.array(z.string()),
-  entries: z.record(
-    z.string(),
-    z.object({
-      id: z.string(),
-      folder: z.string().nullable(),
-      pinned: z.boolean(),
-      archived: z.boolean(),
-      archivedAt: z.number().nullable(),
-      unarchivedAt: z.number().nullable(),
-      removed: z.boolean(),
-      removedAt: z.number().nullable(),
-      lastOpenedAt: z.number().nullable(),
-      prUrls: z.array(z.string()),
-    }),
-  ),
+const PrStateSchema = z.enum(['open', 'draft', 'merged', 'closed']);
+
+const RegistryPrSchema = z.object({
+  url: z.string(),
+  state: PrStateSchema.nullable(),
+  seenAt: z.number(),
+  completedAt: z.number().nullable(),
+  source: z.enum(['chat', 'terminal', 'hook']),
 });
 
-const ZERO_PRS = { open: 0, queued: 0, draft: 0, merged: 0, closed: 0 };
+const legacyPr = (url: string): ClaudeRegistryPr => ({
+  url,
+  state: null,
+  seenAt: 0,
+  completedAt: null,
+  source: 'chat',
+});
+
+// Entries written before Phase 5 carry `prUrls: string[]`; they are migrated
+// to `prs` on load (version stays 1). Both keys are optional in the raw shape
+// so either generation parses; the output always has `prs`.
+const RegistryEntrySchema = z
+  .object({
+    id: z.string(),
+    folder: z.string().nullable(),
+    pinned: z.boolean(),
+    archived: z.boolean(),
+    archivedAt: z.number().nullable(),
+    unarchivedAt: z.number().nullable(),
+    removed: z.boolean(),
+    removedAt: z.number().nullable(),
+    lastOpenedAt: z.number().nullable(),
+    prUrls: z.array(z.string()).optional(),
+    prs: z.array(RegistryPrSchema).optional(),
+  })
+  .transform(({ prUrls, prs, ...rest }): ClaudeRegistryEntry => ({
+    ...rest,
+    prs: prs ?? (prUrls ?? []).map(legacyPr),
+  }));
+
+export const ClaudeRegistrySchema: z.ZodType<ClaudeRegistry, unknown> = z.object({
+  version: z.literal(1),
+  folders: z.array(z.string()),
+  entries: z.record(z.string(), RegistryEntrySchema),
+});
 
 const newEntry = (id: string): ClaudeRegistryEntry => ({
   id,
@@ -78,8 +119,34 @@ const newEntry = (id: string): ClaudeRegistryEntry => ({
   removed: false,
   removedAt: null,
   lastOpenedAt: null,
-  prUrls: [],
+  prs: [],
 });
+
+const isFinal = (state: ClaudePrState | null): boolean =>
+  state === 'merged' || state === 'closed';
+
+/** Sidebar badge counts for an entry: unknown state counts as open, queued is
+ * always 0 (Claude PRs have no merge queue signal). */
+export function prCountsFor(entry: ClaudeRegistryEntry | undefined): SessionPrCounts {
+  const counts: SessionPrCounts = { open: 0, queued: 0, draft: 0, merged: 0, closed: 0 };
+  for (const pr of entry?.prs ?? []) counts[pr.state ?? 'open'] += 1;
+  return counts;
+}
+
+/** PRs still in flight across non-removed entries, newest seenAt first
+ * (ties broken by url so the order is stable). */
+export function openPrsOf(
+  reg: ClaudeRegistry,
+): Array<{ sessionId: string; pr: ClaudeRegistryPr }> {
+  const out: Array<{ sessionId: string; pr: ClaudeRegistryPr }> = [];
+  for (const [sessionId, entry] of Object.entries(reg.entries)) {
+    if (entry.removed) continue;
+    for (const pr of entry.prs) if (!isFinal(pr.state)) out.push({ sessionId, pr });
+  }
+  return out.sort(
+    (a, b) => b.pr.seenAt - a.pr.seenAt || (a.pr.url < b.pr.url ? -1 : a.pr.url > b.pr.url ? 1 : 0),
+  );
+}
 
 const DAY_MS = 86_400_000;
 
@@ -122,7 +189,7 @@ export function reconcile(
       missing: false,
       agentStatus: null,
       activity: null,
-      prs: { ...ZERO_PRS },
+      prs: prCountsFor(entry),
     });
   }
 
@@ -147,7 +214,7 @@ export function reconcile(
         missing: true,
         agentStatus: null,
         activity: null,
-        prs: { ...ZERO_PRS },
+        prs: prCountsFor(entry),
       });
     } else {
       delete entries[id];
@@ -252,6 +319,55 @@ export function touchOpened(
   now: number,
 ): ClaudeRegistry {
   return withEntry(reg, id, { lastOpenedAt: now });
+}
+
+/** Record a detected PR URL on a session (entry created lazily). A URL
+ * already present only gets its seenAt touched (`added: false`). Over
+ * MAX_PRS_PER_SESSION the oldest completed PR is dropped first, then the
+ * oldest overall. */
+export function recordPr(
+  reg: ClaudeRegistry,
+  id: string,
+  url: string,
+  source: ClaudeRegistryPr['source'],
+  now: number,
+): { registry: ClaudeRegistry; added: boolean } {
+  const entry = reg.entries[id] ?? newEntry(id);
+  const idx = entry.prs.findIndex((p) => p.url === url);
+  if (idx !== -1) {
+    const prs = entry.prs.map((p, i) => (i === idx ? { ...p, seenAt: now } : p));
+    return { registry: withEntry(reg, id, { prs }), added: false };
+  }
+  const prs = [...entry.prs, { url, state: null, seenAt: now, completedAt: null, source }];
+  while (prs.length > MAX_PRS_PER_SESSION) {
+    const pool = prs.some((p) => p.completedAt !== null)
+      ? prs.filter((p) => p.completedAt !== null)
+      : prs;
+    const oldest = pool.reduce((a, b) => (b.seenAt < a.seenAt ? b : a));
+    prs.splice(prs.indexOf(oldest), 1);
+  }
+  return { registry: withEntry(reg, id, { prs }), added: true };
+}
+
+/** Update a recorded PR's state. `completed` is true exactly once: when the
+ * state becomes merged|closed and completedAt was still null. Returns the
+ * same registry object when nothing changes. */
+export function setPrState(
+  reg: ClaudeRegistry,
+  id: string,
+  url: string,
+  state: ClaudePrState | null,
+  now: number,
+): { registry: ClaudeRegistry; completed: boolean } {
+  const entry = reg.entries[id];
+  const idx = entry?.prs.findIndex((p) => p.url === url) ?? -1;
+  if (!entry || idx === -1) return { registry: reg, completed: false };
+  const pr = entry.prs[idx]!;
+  if (pr.state === state) return { registry: reg, completed: false };
+  const completed = isFinal(state) && pr.completedAt === null;
+  const next: ClaudeRegistryPr = { ...pr, state, completedAt: completed ? now : pr.completedAt };
+  const prs = entry.prs.map((p, i) => (i === idx ? next : p));
+  return { registry: withEntry(reg, id, { prs }), completed };
 }
 
 // Folder ops mirror sessionTree's rules: create appends unseen names, rename

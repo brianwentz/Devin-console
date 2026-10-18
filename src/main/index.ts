@@ -19,7 +19,7 @@ import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
 import { cloudKeepAliveMs, cloudViews } from './cloudViews';
 import { SettingsStore } from './settings';
-import { localScope } from '../core/tabModel';
+import { CLAUDE_SCOPE_PREFIX, localScope } from '../core/tabModel';
 import { fixtureOrigins, state, testMode } from './state';
 import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';
@@ -267,6 +267,12 @@ async function createWindow(): Promise<void> {
   }
   terminalHost.onChange = notifyShell;
   terminalHost.onPullRequestUrl = (url, target) => {
+    if (target.source === 'claude-terminal') {
+      const sessionId = target.scope.startsWith(CLAUDE_SCOPE_PREFIX)
+        ? target.scope.slice(CLAUDE_SCOPE_PREFIX.length)
+        : target.scope;
+      claudeSessions().recordPr(sessionId, url, 'terminal');
+    }
     autoOpenLocalPr(url, target.scope, target.source);
   };
   // Exclusive handoff: `devin -r` ptys take the CLI's per-session lock; the acp
