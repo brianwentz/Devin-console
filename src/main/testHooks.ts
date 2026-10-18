@@ -30,6 +30,7 @@ import { loadSdk } from './claude/sdk';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
 import { getChatState, publicChatState } from './claude/chatState';
+import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 
 export function registerTestHooks(): void {
@@ -289,6 +290,14 @@ export function registerTestHooks(): void {
       // Phase 3: background agents + claude terminal.
       claudeAgents: () => claudeSessions().agentsList(),
       claudeAgentsRefresh: () => claudeSessions().refreshAgents(),
+      // Phase 5 — Claude PR tracking: record a PR on the registry, list a
+      // session's recorded PRs, seed the title/state cache, force a refresh.
+      claudeRecordPr: (sessionId: string, url: string) =>
+        claudeSessions().recordPr(sessionId, url, 'hook'),
+      claudePrs: (sessionId: string) => claudeSessions().prsOf(sessionId),
+      claudeRefreshPrStates: () => claudeSessions().refreshPrStates('test'),
+      prTitlesSeed: (url: string, info: { title: string | null; state: string | null }) =>
+        prTitles.seed(url, { title: info.title, state: info.state as 'open' | 'draft' | 'merged' | 'closed' | null }),
       // Phase 4 — hook listener info (port + token for test POSTs), the
       // hook-derived activity map, a test POST against the listener, and the
       // path of <configDir>/settings.json (global install target).

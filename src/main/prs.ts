@@ -9,8 +9,10 @@ import {
   reconcilePrRecords,
   type PrRecord,
 } from '../core/prPanelModel';
-import type { SessionPrLink } from '../core/notifyModel';
+import { openPullRequests, type SessionPrLink } from '../core/notifyModel';
+import { claudeSessions } from './claude/sessions';
 import { log } from './log';
+import { state } from './state';
 import { notifyShell } from './window';
 
 const PrRecordSchema = z.object({
@@ -124,6 +126,15 @@ export function prStore(userData?: string): PrStore {
     store = new PrStore(userData);
   }
   return store;
+}
+
+// The merged open-PR list: Devin session PRs from the poller plus Claude
+// session PRs recorded in the Claude registry (works with no Devin token).
+export function allOpenPullRequests(): SessionPrLink[] {
+  return [
+    ...openPullRequests(state.apiSessions),
+    ...claudeSessions().claudeOpenPullRequests(),
+  ];
 }
 
 export function prsFlush(): void {

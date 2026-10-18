@@ -770,6 +770,7 @@ export const SessionPrSchema = z.object({
   url: z.string(),
   state: z.string().nullable(),
   readAt: z.number().nullable(),
+  source: z.enum(['devin', 'claude']).default('devin'),
 });
 export type SessionPr = z.infer<typeof SessionPrSchema>;
 

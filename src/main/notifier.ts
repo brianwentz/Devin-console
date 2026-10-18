@@ -1,4 +1,5 @@
 import { notificationStore } from './notifications';
+import { allOpenPullRequests } from './prs';
 import { deriveNotifications } from '../core/notificationModel';
 import { DevinApiClient, DevinApiError, sanitizeMessage } from '../core/devinApi';
 import {
@@ -355,7 +356,7 @@ class Notifier {
       // (single-page) list — a partial page can't prove absence.
       const previousSessions = state.apiSessions;
       state.apiSessions = sessions;
-      prStore().reconcile(openPullRequests(sessions), Date.now());
+      prStore().reconcile(allOpenPullRequests(), Date.now());
       for (const scope of archivedScopes(previousSessions, sessions, !page.hasNextPage)) {
         void state.tabManager?.closeScope(scope).then(() => {
           log('shell', 'tabs-scope-archived', { detail: { scope } });
@@ -495,22 +496,45 @@ class Notifier {
 
 export const notifier = new Notifier();
 
-// Visible (open, not dismissed) PRs across the token user's sessions, with
-// GitHub titles when the prTitles cache has resolved them and per-URL read
-// state from the PR store.
+// Visible (open, not dismissed) PRs across the token user's sessions and
+// recorded Claude sessions, with GitHub titles when the prTitles cache has
+// resolved them and per-URL read state from the PR store.
 export function openPrs(): SessionPr[] {
-  return visiblePrs(prStore().records(), openPullRequests(state.apiSessions)).map((pr) => ({
+  return visiblePrs(prStore().records(), allOpenPullRequests()).map((pr) => ({
     ...pr,
+    source: pr.source ?? 'devin',
     title: prTitles.get(pr.url),
   }));
 }
 
-// PR panel "open" action: mark the row read, close the panel, then switch the
-// devin view to that session and open the PR in its pane.
+// PR panel "open" action: mark the row read, close the panel, then route by
+// source — Claude rows go to the Claude surface, Devin rows to the cloud view.
 export function openPr(sessionId: string, url: string): void {
   prStore().markRead(url);
   setPrsPanel(false);
+  const entry = allOpenPullRequests().find((pr) => pr.url === url);
+  if (entry?.source === 'claude') {
+    openClaudeSessionPr(sessionId, url);
+    return;
+  }
   openSessionPr(sessionId, url);
+}
+
+// Claude PR / notification routing: select the session on the claude surface,
+// then open the PR in its `claude:<id>` tab scope (openSessionPr's analogue).
+function openClaudeSessionPr(sessionId: string, prUrl?: string): void {
+  state.surface = 'claude';
+  claudeSessions().open(sessionId);
+  applyLayout();
+  if (prUrl) {
+    state.tabManager?.open(prUrl, { originSessionId: claudeScope(sessionId) });
+  }
+  const windowRef = state.windowRef;
+  if (windowRef && !windowRef.isDestroyed()) {
+    if (windowRef.isMinimized()) windowRef.restore();
+    windowRef.show();
+    windowRef.focus();
+  }
 }
 
 // Open a PR for a specific session: navigate the devin view to that session
@@ -557,18 +581,7 @@ export function openNotification(id: string): void {
   // Claude entries select the session on the Claude surface; a PR opens in
   // the session's `claude:<id>` tab scope like openSessionPr does for Devin.
   if (entry.source === 'claude' && entry.sessionId) {
-    state.surface = 'claude';
-    claudeSessions().open(entry.sessionId);
-    applyLayout();
-    if (entry.prUrl) {
-      state.tabManager?.open(entry.prUrl, { originSessionId: claudeScope(entry.sessionId) });
-    }
-    const windowRef = state.windowRef;
-    if (windowRef && !windowRef.isDestroyed()) {
-      if (windowRef.isMinimized()) windowRef.restore();
-      windowRef.show();
-      windowRef.focus();
-    }
+    openClaudeSessionPr(entry.sessionId, entry.prUrl);
     return;
   }
   if (entry.sessionId && entry.prUrl) {

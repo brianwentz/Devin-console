@@ -85,12 +85,28 @@ export class ClaudeHookServer {
       const config = this.loadOrCreateConfig();
       this.server = createServer((request, response) => this.handle(request, response));
       return new Promise((resolve) => {
-        let port = config.port;
+        const basePort = config.port;
+        // Windows (Hyper-V/WSL) reserves whole port blocks in our range and
+        // refuses with EACCES, not EADDRINUSE — same probe either way, with a
+        // stride wide enough to jump out of a typical ~100-port block.
         const tryBind = (probed: number) => {
+          const port = PORT_MIN + (((basePort - PORT_MIN) + probed * 101) % PORT_SPAN);
           this.server!.once('error', (error: NodeJS.ErrnoException) => {
-            if (error.code === 'EADDRINUSE' && probed < PORT_PROBES) {
-              port += 1;
+            if ((error.code === 'EADDRINUSE' || error.code === 'EACCES') && probed < PORT_PROBES) {
               tryBind(probed + 1);
+            } else if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+              // Every candidate refused — let the OS pick an ephemeral port;
+              // the global install re-applies the new port on the next start.
+              this.server!.once('listening', () => {
+                const assigned = (this.server!.address() as { port: number }).port;
+                this.config = { ...config, port: assigned };
+                this.persist(this.config);
+                log('claude', 'claude-hooks-listen', {
+                  detail: { port: assigned, probed, ephemeral: true },
+                });
+                resolve({ port: assigned });
+              });
+              this.server!.listen(0, '127.0.0.1');
             } else {
               log('claude', 'claude-hooks-error', {
                 detail: { message: error.message, code: error.code },

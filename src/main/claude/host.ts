@@ -436,6 +436,12 @@ export class ClaudeHost {
         for (const u of result.updates) this.applySessionUpdate(id, u);
         if (result.init) this.applyInit(id, result.init);
         if (result.finish) {
+          // The turn's last chunk may leave a PR URL sitting in the
+          // scanner's carry (a match ending at text end is deferred).
+          const scanner = this.scanners.get(id);
+          if (scanner) {
+            for (const url of scanner.flush()) this.onPullRequestUrl(id, url);
+          }
           const opts: { error?: string; usage?: PromptUsage; now: string } = {
             now: new Date().toISOString(),
           };

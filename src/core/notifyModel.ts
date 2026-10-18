@@ -69,6 +69,8 @@ export interface SessionPrLink {
   ref: string;
   url: string;
   state: string | null;
+  // Which agent the PR belongs to; absent = Devin (API poller).
+  source?: 'devin' | 'claude' | undefined;
 }
 
 // "owner/repo#123" for GitHub PR URLs, otherwise the URL host+path.

@@ -26,6 +26,7 @@ const AppNotificationSchema = z.object({
   kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth']),
   sessionId: z.string().nullable(),
   ownerUserId: z.string().nullable().optional(),
+  source: z.enum(['devin', 'claude']).optional(),
   sessionTitle: z.string(),
   prUrl: z.string().optional(),
   prState: z.string().optional(),
