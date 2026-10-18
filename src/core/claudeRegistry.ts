@@ -121,6 +121,7 @@ export function reconcile(
       isArchived: entry?.archived ?? false,
       missing: false,
       agentStatus: null,
+      activity: null,
       prs: { ...ZERO_PRS },
     });
   }
@@ -145,6 +146,7 @@ export function reconcile(
         isArchived: entry.archived,
         missing: true,
         agentStatus: null,
+        activity: null,
         prs: { ...ZERO_PRS },
       });
     } else {

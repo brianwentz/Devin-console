@@ -22,6 +22,10 @@ export interface AppNotification {
   // The token user the entry was derived for. `undefined` = legacy entry
   // (pre-owner build); `null` = not session-scoped ('update', 'identity').
   ownerUserId?: string | null | undefined;
+  // Which agent the entry is about: absent = Devin (Cloud poller), 'claude' = a
+  // Claude Code session (hooks / SDK host). Claude entries are never pruned by
+  // the Devin identity reconcile.
+  source?: 'devin' | 'claude' | undefined;
   sessionTitle: string;
   prUrl?: string | undefined;
   prState?: string | undefined;

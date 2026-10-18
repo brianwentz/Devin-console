@@ -408,6 +408,7 @@ describe('claude settings', () => {
       keepAliveMinutes: 15,
       maxLiveAgents: 3,
       lastSessionId: null,
+      hooksEnabled: false,
     });
   });
 

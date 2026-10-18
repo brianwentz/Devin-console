@@ -171,6 +171,8 @@ export class ClaudeSessions {
       lastError: this.lastError,
       versions: this.versions,
       agents: this.agents,
+      // Filled by the Phase 4 hook listener / global opt-in.
+      hooks: { port: null, enabled: false, installed: false, error: null },
     };
   }
 

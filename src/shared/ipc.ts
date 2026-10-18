@@ -253,6 +253,9 @@ const ClaudeFields = {
   keepAliveMinutes: z.number().int().min(1).max(240),
   maxLiveAgents: z.number().int().min(1).max(10),
   lastSessionId: z.string().nullable(),
+  // Global opt-in: write our http hooks into <configDir>/settings.json so
+  // sessions started from other terminals report activity too.
+  hooksEnabled: z.boolean(),
 };
 const TerminalFields = {
   allSurfaces: z.boolean(),
@@ -356,6 +359,7 @@ export const SettingsObject = z.object({
       keepAliveMinutes: ClaudeFields.keepAliveMinutes.default(15),
       maxLiveAgents: ClaudeFields.maxLiveAgents.default(3),
       lastSessionId: ClaudeFields.lastSessionId.default(null),
+      hooksEnabled: ClaudeFields.hooksEnabled.default(false),
     })
     .default({
       path: null,
@@ -367,6 +371,7 @@ export const SettingsObject = z.object({
       keepAliveMinutes: 15,
       maxLiveAgents: 3,
       lastSessionId: null,
+      hooksEnabled: false,
     }),
 });
 
@@ -524,6 +529,8 @@ export const ClaudeSessionSchema = z.object({
   missing: z.boolean(),
   // Status of the background agent bound to this session, if any.
   agentStatus: ClaudeAgentStatusSchema.nullable(),
+  // Live activity from hooks (terminal/external) or the chat host.
+  activity: z.enum(['running', 'waiting']).nullable(),
   prs: z.object({
     open: z.number().int(),
     queued: z.number().int(),
@@ -553,6 +560,13 @@ export const ClaudeStateSchema = z.object({
     mismatch: z.boolean(),
   }),
   agents: z.array(ClaudeAgentSchema),
+  // Loopback hook listener + global ~/.claude/settings.json opt-in state.
+  hooks: z.object({
+    port: z.number().int().nullable(),
+    enabled: z.boolean(),
+    installed: z.boolean(),
+    error: z.string().nullable(),
+  }),
 });
 export type ClaudeState = z.infer<typeof ClaudeStateSchema>;
 export const UpdateCheckSourceSchema = z.enum([
