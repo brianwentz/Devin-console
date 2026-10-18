@@ -1,11 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
-  currentDevinUrl,
   launchApp,
   readEvents,
   shellPage,
@@ -99,7 +98,7 @@ test('cloud view pool: cache, eviction, rekey, prefetch, guards, shutdown', asyn
     await expect.poll(async () => (await state(app)).currentSessionId).toBe(A);
     await expect.poll(async () => (await h.views()).length).toBe(2);
     let views = await h.views();
-    let viewA = views.find((v) => v.key === A)!;
+    const viewA = views.find((v) => v.key === A)!;
     expect(viewA.active).toBe(true);
     await expect
       .poll(async () => (await h.views()).find((v) => v.key === A)!.url)

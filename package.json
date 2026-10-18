@@ -11,6 +11,7 @@
     "test:unit": "vitest run tests/unit",
     "test:e2e": "npm run build && playwright test",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "acp:probe": "npm run build:acp && node out/scripts/acp-probe.cjs",
     "build:acp": "node scripts/build-acp.mjs",
     "os:input": "npm run build && node out/scripts/os-input.cjs",
@@ -27,7 +28,11 @@
     "dist:win:smoke": "npm run build && electron-builder --win nsis --x64 --publish never -c.appId=ai.devin.workspaces.smoke -c.productName=\"Devin Workspaces Smoke\" -c.nsis.shortcutName=\"Devin Workspaces Smoke\" -c.nsis.artifactName=\"DevinWorkspaces-Smoke-Setup-${version}.${ext}\" -c.directories.output=dist/smoke",
     "smoke:install:real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1"
   },
+  "workspaces": [
+    "tools/lint"
+  ],
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@playwright/test": "1.64.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.19.2",
@@ -37,11 +42,19 @@
     "electron": "44.5.1",
     "electron-builder": "26.17.0",
     "esbuild": "0.28.2",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
     "playwright": "1.64.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "vitest": "5.0.3"
+  },
+  "overrides": {
+    "ts-api-utils": {
+      "typescript": "5.9.3"
+    }
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.8.0",

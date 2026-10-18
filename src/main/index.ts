@@ -19,7 +19,7 @@ import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
 import { cloudKeepAliveMs, cloudViews } from './cloudViews';
 import { SettingsStore } from './settings';
-import { CLAUDE_SCOPE_PREFIX, localScope } from '../core/tabModel';
+import { CLAUDE_SCOPE_PREFIX } from '../core/tabModel';
 import { fixtureOrigins, state, testMode } from './state';
 import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';

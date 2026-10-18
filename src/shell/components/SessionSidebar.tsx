@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { Ellipsis, Plus, RefreshCw, SquarePen } from 'lucide-react';
-import type { CloudSessionState } from '../../shared/ipc';
+import type { CloudSessionState, CloudState } from '../../shared/ipc';
 import {
   addFolder,
   buildSessionTree,
@@ -12,7 +12,7 @@ import {
 import type { Rect } from '../../core/layout';
 import { useShellState } from '../store';
 import { relativeTime } from './relativeTime';
-import { sessionRowClass, sessionMetaClass } from './sessionRowStyles';
+import { sessionRowClass } from './sessionRowStyles';
 import { FolderNameInput } from './sidebar/FolderNameInput';
 import { PrBadges } from './sidebar/PrBadges';
 import { SessionRow, SessionRowButton } from './sidebar/SessionRow';
@@ -46,7 +46,7 @@ const OP_LABELS: Record<string, string> = {
   'session-archive': 'archive session',
 };
 
-function statusText(cloud: ReturnType<typeof useCloud>): string {
+function statusText(cloud: CloudState): string {
   switch (cloud.status) {
     case 'ready':
       return cloud.lastSyncAt
@@ -64,10 +64,6 @@ function statusText(cloud: ReturnType<typeof useCloud>): string {
     default:
       return 'Unavailable';
   }
-}
-
-function useCloud() {
-  return useShellState()!.cloud;
 }
 
 // Hovering a row for 300 ms prefetches the session's pooled view so a click
@@ -178,13 +174,14 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     if (action === 'rename') setEditing({ kind: 'rename', name });
   };
 
+  const currentSessionId = state!.currentSessionId;
   const tree = useMemo(
     () =>
       buildSessionTree(data, {
         collapsedFolders,
-        currentSessionId: state!.currentSessionId,
+        currentSessionId,
       }),
-    [data, collapsedFolders, state!.currentSessionId],
+    [data, collapsedFolders, currentSessionId],
   );
 
   const toggleFolder = (name: string) => {

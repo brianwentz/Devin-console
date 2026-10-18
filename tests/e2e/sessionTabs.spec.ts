@@ -16,7 +16,6 @@ import {
   waitForEvent,
   waitForTabCount,
   waitForTabTitle,
-  webContentsCount,
 } from './helpers';
 
 let fixtures: FixtureServers;

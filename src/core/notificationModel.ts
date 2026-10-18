@@ -101,7 +101,7 @@ export function removeNotification(list: readonly AppNotification[], id: string)
   return list.filter((item) => item.id !== id);
 }
 
-export function clearNotifications(list: readonly AppNotification[]): AppNotification[] {
+export function clearNotifications(_list: readonly AppNotification[]): AppNotification[] {
   return [];
 }
 

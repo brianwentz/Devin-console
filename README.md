@@ -126,19 +126,22 @@ Settings is split into five tabs: **General**, **Link Handling**, **Passwords**,
 |---|---|---|
 | Tenant URL / API base | General | Must be `https` |
 | Workspaces | General | Folders for Devin Local and terminal working directories |
-| Open non-GitHub links in system browser | General | GitHub, tenant and rule-matched links always stay in the pane |
 | Keep hidden tabs live for (hours) / Max live tabs | General | Memory controls for GitHub tabs of sessions you're not viewing — the session you're viewing keeps its tabs loaded; hidden sessions' tabs are discarded after the keep-alive window and the live cap only ever applies to them |
+| Cloud sessions kept loaded / Keep hidden Cloud sessions live for (hours) | General | The same two controls for the Cloud session views opened from the sessions column (1–20 live views, default 6; 0–168 h, default 24, 0 = discard on switch) |
+| Show the sessions column (Cloud and Claude) | General | Same as `Ctrl+Shift+S` on the Cloud surface |
 | Show terminal dock on Local and Settings too | General | Dock is Cloud-only by default |
 | Claude Code path | General | Blank = find `claude` on PATH; a non-empty path that doesn't resolve is flagged inline |
 | Auto-archive Claude sessions idle for (days) | General | 0 = off; unarchiving manually suppresses it per session |
 | Default permission mode | General | Starting mode for new Claude chat sessions (switchable per session in the header) |
 | Model | General | Claude chat model override; blank = the CLI's default |
-| Claude keep-alive / max live agents | General | How long an idle Claude agent stays warm (1–240 min, default 15) and how many run at once (1–10, default 3) |
-| Report Claude Code sessions started from other terminals | Notifications | Writes an http hook block into `~/.claude/settings.json` (one-time `.devin-workspaces.bak` backup; block removed on off) so external Claude sessions also report activity; off = only app-spawned terminals/chat report |
+| Claude keep-alive / max live agents | *(settings.json only)* | `claude.keepAliveMinutes` (1–240, default 15) — how long an idle Claude agent stays warm — and `claude.maxLiveAgents` (1–10, default 3) — how many run at once. No control in Settings yet; edit the file while the app is closed |
 | Shell command | General | Blank = Windows Terminal default profile (else PowerShell) on Windows, `$SHELL` on macOS; e.g. `wsl.exe -d Ubuntu` or `/bin/zsh -l` |
+| Open non-GitHub links in system browser | Link Handling | GitHub, tenant and rule-matched links always stay in the pane |
 | Link rules | Link Handling | Up to 100 prefix or regular-expression rules; matching http(s) links open as pane tabs instead of the system browser (GitHub and your tenant are matched first). *Test a URL* shows where a link would go |
 | Passwords | Passwords | Origin + username + password, encrypted with DPAPI (Windows) / Keychain (macOS); autofill fills a single match on load, offers an account picker when several match, and asks to save/update after a sign-in; rows support show/copy/edit/delete |
-| Notifications / PR auto-open / token / org id / user id | Notifications | See above |
+| Collect notifications / Show banner / Notify me for / Open a tab when a session creates a PR | Notifications | See above |
+| Devin API token / Organization ID / User ID override | Notifications | Token Save/Clear are explicit; both overrides are optional — see above for when they are needed |
+| Report Claude Code sessions started from other terminals | Notifications | Writes an http hook block into `~/.claude/settings.json` (one-time `.devin-workspaces.bak` backup; block removed on off) so external Claude sessions also report activity; off = only app-spawned terminals/chat report |
 | Version, update status, release notes | Updates | Shows the installed version, whether an update is downloading or ready (**Update now** installs it), and the release notes for the current and the available version |
 
 Pane width, terminal height, window placement and the open tab list are saved automatically.
@@ -166,6 +169,8 @@ In the terminal: `Ctrl+C` copies when text is selected (otherwise it is sent to 
 
 `%APPDATA%\devin-workspaces\` on Windows, `~/Library/Application Support/devin-workspaces/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (API token, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar folder/pin/archive state — created on the first mutation), `claude-hooks.json` (hook listener port + bearer token, mode 0600), `events.jsonl` (the event log), and the two browser profiles (`persist:devin`, `persist:github`). Uninstalling removes the app; delete this folder to remove all data.
 
+Claude session transcripts stay where Claude Code keeps them (`~/.claude/projects/`); the app only renames or deletes one when you ask it to from the sidebar. The one Claude config file it edits is `~/.claude/settings.json`, and only when *Report Claude Code sessions started from other terminals* is on: the original is copied once to `~/.claude/settings.json.devin-workspaces.bak` before the hook block is added, and the block is removed again when the toggle is turned off.
+
 The event log records URLs, ids and sizes only — never page content, terminal output, or secrets. It is the first place to look if notifications or PR tabs don't appear (`poll`, `poll-error`, `notification-added`, `notification-open`, `pr-auto-open` events).
 
 ## Development
@@ -173,6 +178,7 @@ The event log records URLs, ids and sizes only — never page content, terminal 
 ```
 npm ci
 npm run typecheck      # tsc
+npm run lint           # eslint (typescript-eslint + react-hooks, recommended sets)
 npm run test:unit      # vitest (pure core logic)
 npm run test:e2e       # build + Playwright against local fixture servers
 npm start              # build + run

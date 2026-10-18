@@ -10,7 +10,7 @@ import {
   type SettingsDraft,
 } from '../../src/core/settingsDraft';
 import { mergeSettings } from '../../src/core/settings';
-import { SettingsSchema, type Settings } from '../../src/shared/ipc';
+import { SettingsSchema } from '../../src/shared/ipc';
 
 const defaults = SettingsSchema.parse({});
 

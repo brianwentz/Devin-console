@@ -98,8 +98,6 @@ async function stopAgent(processRef: ChildProcessWithoutNullStreams): Promise<vo
   if (processRef.exitCode !== null || processRef.signalCode !== null) return;
   await new Promise<void>((resolveExit) => {
     let settled = false;
-    let terminateTimer: NodeJS.Timeout;
-    let forceTimer: NodeJS.Timeout;
     let fallbackTimer: NodeJS.Timeout | undefined;
     const finish = () => {
       if (settled) return;
@@ -109,8 +107,8 @@ async function stopAgent(processRef: ChildProcessWithoutNullStreams): Promise<vo
       if (fallbackTimer) clearTimeout(fallbackTimer);
       resolveExit();
     };
-    terminateTimer = setTimeout(() => processRef.kill('SIGTERM'), 700);
-    forceTimer = setTimeout(() => {
+    const terminateTimer = setTimeout(() => processRef.kill('SIGTERM'), 700);
+    const forceTimer = setTimeout(() => {
       processRef.kill('SIGKILL');
       fallbackTimer = setTimeout(finish, 1000);
     }, 2200);

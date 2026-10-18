@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ChatSessionPublic } from '../../shared/ipc';
-import { Markdown } from '../local/Markdown';
+import { Markdown } from '../components/Markdown';
 
 type ToolCall = ChatSessionPublic['toolCalls'][string];
 

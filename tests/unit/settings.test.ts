@@ -413,10 +413,10 @@ describe('claude settings', () => {
   });
 
   it('parses explicit values and clamps autoArchiveDays', () => {
-    const { settings, dropped } = parseSettingsFile({
-      claude: { path: 'C:\tools\claude.exe', showArchived: true, autoArchiveDays: 30 },
+    const { settings } = parseSettingsFile({
+      claude: { path: 'C:\\tools\\claude.exe', showArchived: true, autoArchiveDays: 30 },
     });
-    expect(settings.claude.path).toBe('C:\tools\claude.exe');
+    expect(settings.claude.path).toBe('C:\\tools\\claude.exe');
     expect(settings.claude.showArchived).toBe(true);
     expect(settings.claude.autoArchiveDays).toBe(30);
     expect(

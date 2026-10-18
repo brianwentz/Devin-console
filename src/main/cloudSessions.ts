@@ -52,7 +52,6 @@ const BACKOFF_MAX_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 20_000;
 const WATCHDOG_MS = 30_000;
 const ORG_SYNC_DEBOUNCE_MS = 2_000;
-const FOLDER_PAGE_SIZE = 20;
 // Window in which a home→session rekey is filed under a pending new-session
 // folder — beyond that the navigation is treated as unrelated.
 const NEW_SESSION_FILE_WINDOW_MS = 15 * 60_000;

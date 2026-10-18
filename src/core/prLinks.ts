@@ -14,10 +14,13 @@ export function stripAnsi(text: string): string {
   return (
     text
       // OSC sequences (incl. OSC 8 hyperlinks): ESC ] ... BEL or ST (ESC \)
+      // eslint-disable-next-line no-control-regex -- terminal escape stripping; the control bytes are the point
       .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
       // CSI sequences: ESC [ ... final byte
+      // eslint-disable-next-line no-control-regex
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
       // remaining two-byte escapes / charset designators
+      // eslint-disable-next-line no-control-regex
       .replace(/\x1b[@-Z\\-_]/g, '')
   );
 }

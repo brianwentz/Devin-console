@@ -1,5 +1,7 @@
 # Phase 3 — Terminal tab + background agents
 
+Status: Done — merged as PR #61.
+
 Technical plan for Phase 3 of `plans/claude-sessions.md`. Stacked on Phase 2 (`claude/phase2`). Two concurrent streams (main / shell) against the §1 contracts, then one integration pass.
 
 ## 0. Decisions

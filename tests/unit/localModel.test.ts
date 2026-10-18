@@ -253,7 +253,7 @@ describe('localModel reducers', () => {
         { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
       ],
     };
-    let state = setPermission(withSession(), SID, permission);
+    const state = setPermission(withSession(), SID, permission);
     expect(state.sessions[SID]!.pendingPermission).toEqual(permission);
     const cleared = clearPermission(state, SID);
     expect(cleared.sessions[SID]!.pendingPermission).toBeUndefined();

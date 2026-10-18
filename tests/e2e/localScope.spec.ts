@@ -185,9 +185,6 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
           (await state(app)).terminals.find((t) => t.kind === 'devin' && t.sessionId === sessionA)?.id,
       )
       .toBeTruthy();
-    const ptyA = (await state(app)).terminals.find(
-      (t) => t.sessionId === sessionA,
-    )!.id;
 
     // Select B (still on the Terminal view) → a second pty for B; A's stays.
     expect(await shellClick(app, `.session-item[data-session-id="${sessionB}"]`)).toBe(true);

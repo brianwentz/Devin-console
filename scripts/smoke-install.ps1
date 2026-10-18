@@ -117,9 +117,11 @@ if (-not $Installer) {
 $Installer = (Resolve-Path $Installer).Path
 $size = (Get-Item $Installer).Length
 Log "Installer: $Installer ($([math]::Round($size / 1MB, 2)) MB, $size bytes)"
-# Size budget (plans/claude-sessions-phase-1.md): 209 MB base + ~45 MB of
-# unpacked Agent-SDK dependencies. The 249 MB platform package must never ship.
-if ($size -gt 260MB) { Fail "Installer exceeds the 260 MB budget: $size bytes" }
+# Size budget: real installers measure ~127 MB (Phase 7 re-measure). The gate
+# exists to catch the 249 MB @anthropic-ai/claude-agent-sdk-<platform> binary
+# leaking into the package, so 180 MB leaves headroom for growth while any
+# leak still fails loudly.
+if ($size -gt 180MB) { Fail "Installer exceeds the 180 MB budget: $size bytes" }
 $env:DEVIN_WORKSPACES_SMOKE_INSTALLER_SIZE = "$size"
 Log "Mode: $(if ($Isolated) { 'isolated' } else { 'real' }) ProductName: '$ProductName'"
 Log "InstallDir: $InstallDir"

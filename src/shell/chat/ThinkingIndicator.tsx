@@ -7,6 +7,7 @@ export function ThinkingIndicator({ startedAt }: { startedAt: string | undefined
     const timer = setInterval(() => setTick((tick) => tick + 1), 1000);
     return () => clearInterval(timer);
   }, []);
+  // eslint-disable-next-line react-hooks/purity -- the 1 s tick above exists precisely to re-render this clock
   const elapsed = startedAt ? formatElapsed(Date.now() - Date.parse(startedAt)) : null;
   return (
     <div id="thinking" className="flex items-center gap-2 text-xs text-[#7f8ca0]">

@@ -305,7 +305,7 @@ test('autoArchiveDays archives an idle session; showArchived reveals it', async 
 });
 
 test('selecting a session drives currentScope to claude:<id>', async () => {
-  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
+  const { app, profile } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');

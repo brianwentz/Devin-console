@@ -6,7 +6,7 @@ import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
-import { applyLayout, cancelDrag, notifyShell, setPaneOpen, setSessionsOpen } from './window';
+import { applyLayout, cancelDrag, setPaneOpen, setSessionsOpen } from './window';
 
 export function historyAction(
   action: 'back' | 'forward' | 'reload',
@@ -32,23 +32,6 @@ export function navigationTarget(): Electron.WebContents | null {
       : state.devinView?.webContents) ??
     null
   );
-}
-
-function focusedContents(): Electron.WebContents | null {
-  const nativeFocused = webContentsForFocusedView();
-  return nativeFocused ?? state.lastFocused ?? state.devinView?.webContents ?? null;
-}
-
-function webContentsForFocusedView(): Electron.WebContents | null {
-  const all = [
-    state.shellView?.webContents,
-    ...cloudViews().views().map((view) => view.webContents),
-    state.analyticsView?.webContents,
-    ...(state.tabManager?.getViews().map((view) => view.webContents) ?? []),
-  ].filter((contents): contents is Electron.WebContents =>
-    Boolean(contents && !contents.isDestroyed()),
-  );
-  return all.find((contents) => contents.isFocused()) ?? null;
 }
 
 export function focusVisibleContents(contents: Electron.WebContents | null): void {
