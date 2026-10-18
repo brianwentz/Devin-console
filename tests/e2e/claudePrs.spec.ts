@@ -208,12 +208,15 @@ test('merged state persists across relaunch with no second notification', async 
           ).length,
       )
       .toBe(1);
-    const persisted = JSON.parse(
-      readFileSync(join(profile, 'claude-sessions.json'), 'utf8'),
-    ) as any;
-    expect(
-      persisted.entries[UA].prs.find((p: any) => p.url === url)?.state,
-    ).toBe('merged');
+    // Registry save is debounced (200 ms) — poll the file, not a fixed read.
+    await expect
+      .poll(() => {
+        const persisted = JSON.parse(
+          readFileSync(join(profile, 'claude-sessions.json'), 'utf8'),
+        ) as any;
+        return persisted.entries[UA].prs.find((p: any) => p.url === url)?.state;
+      })
+      .toBe('merged');
   } finally {
     await app.close().catch(() => undefined);
   }
@@ -315,6 +318,40 @@ test('legacy prUrls registry migrates to prs entries on load', async () => {
     await expect
       .poll(async () => (await h.listPrs()).filter((p) => p.url === url).length)
       .toBe(1);
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+// Phase 6 #5: when the page fetch yields no state and `gh` is on PATH (the
+// test override stands in), `gh pr view` fills title + state.
+test('gh fallback fills state when the page fetch cannot', async () => {
+  const FAKE_GH = resolve(__dirname, '../../out/fixtures/fakeGh.cjs');
+  const url = `${fixtures.githubUrl}/cloudbeds/testrepo/pull/48`;
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    ...LAUNCH_ENV,
+    DEVIN_WORKSPACES_TEST_GH_CMD: `node ${FAKE_GH}`,
+    FAKE_GH_JSON: JSON.stringify({ state: 'MERGED', isDraft: false, title: 'Via gh' }),
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await h.claudeRecordPr(UA, url);
+    await h.claudeRefreshPrStates();
+    await expect
+      .poll(async () => (await h.claudePrs(UA)).find((p) => p.url === url)?.state)
+      .toBe('merged');
+    await expect
+      .poll(
+        async () =>
+          (await h.notifications()).filter(
+            (n) => n.kind === 'pr-completed' && n.source === 'claude',
+          ).length,
+      )
+      .toBe(1);
+    const events = readFileSync(join(profile, 'events.jsonl'), 'utf8');
+    expect(events).toContain('"via":"gh"');
   } finally {
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });

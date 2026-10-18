@@ -1,7 +1,10 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { session } from 'electron';
 import { routeUrl } from '../core/linkRouter';
 import { parsePrState, parsePrTitle, type PrState } from '../core/prTitle';
 import { log } from './log';
+import { testMode } from './state';
 import { routeContext } from './routing';
 import { notifyShell } from './window';
 
@@ -14,6 +17,37 @@ const NULL_RETRY_MS = 10 * 60_000;
 const OK_REFRESH_MS = 6 * 60 * 60_000;
 const MAX_CONCURRENT = 3;
 const FETCH_TIMEOUT_MS = 15_000;
+const GH_TIMEOUT_MS = 3_000;
+const GH_CACHE_MS = 10 * 60_000;
+
+const execFileAsync = promisify(execFile);
+
+// `gh` on PATH — resolved once via where/which and cached for 10 min
+// (test mode honours DEVIN_WORKSPACES_TEST_GH_CMD — a full command line,
+// split like DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD).
+let ghResolvedAt = 0;
+let ghCmd: { cmd: string; args: string[] } | null = null;
+
+export async function resolveGhCmd(): Promise<{ cmd: string; args: string[] } | null> {
+  const override = testMode ? process.env.DEVIN_WORKSPACES_TEST_GH_CMD?.trim() : '';
+  if (override) {
+    const argv = override.split(/\s+/).filter(Boolean);
+    return argv.length > 0 ? { cmd: argv[0]!, args: argv.slice(1) } : null;
+  }
+  if (Date.now() - ghResolvedAt < GH_CACHE_MS) return ghCmd;
+  const finder = process.platform === 'win32' ? 'where' : 'which';
+  let found: string | null = null;
+  try {
+    const { stdout } = await execFileAsync(finder, ['gh'], { timeout: 3_000 });
+    found = stdout.split(/\r?\n/).find((line) => line.trim().length > 0) ?? null;
+  } catch {
+    found = null;
+  }
+  ghCmd = found ? { cmd: found, args: [] } : null;
+  ghResolvedAt = Date.now();
+  return ghCmd;
+}
+
 
 export interface PrInfo {
   title: string | null;
@@ -118,6 +152,45 @@ class PrTitleCache {
     } finally {
       clearTimeout(timer);
     }
+    // gh fallback (#5): when the page fetch produced no state and `gh` is on
+    // PATH, `gh pr view` fills title + state (auth is the user's `gh auth`).
+    let via: 'page' | 'gh' = 'page';
+    if (state === null) {
+      const gh = await resolveGhCmd();
+      if (gh) {
+        try {
+          const { stdout } = await execFileAsync(
+            gh.cmd,
+            [...gh.args, 'pr', 'view', url, '--json', 'state,isDraft,title'],
+            { timeout: GH_TIMEOUT_MS, windowsHide: true },
+          );
+          const parsed = JSON.parse(stdout) as {
+            state?: string;
+            isDraft?: boolean;
+            title?: string;
+          };
+          const ghState = parsed.state?.toUpperCase();
+          state =
+            ghState === 'MERGED'
+              ? 'merged'
+              : ghState === 'CLOSED'
+                ? 'closed'
+                : parsed.isDraft === true
+                  ? 'draft'
+                  : ghState === 'OPEN'
+                    ? 'open'
+                    : null;
+          if (state !== null) {
+            via = 'gh';
+            if (!title && typeof parsed.title === 'string' && parsed.title.trim()) {
+              title = parsed.title;
+            }
+          }
+        } catch {
+          // gh missing/misauthenticated — state stays null.
+        }
+      }
+    }
     // A fetch that fails or can't determine the state must not regress a
     // known one — keep the previous (title same rule).
     const previous = this.cache.get(url);
@@ -129,7 +202,13 @@ class PrTitleCache {
     this.changed();
     log('shell', 'pr-title', {
       url,
-      detail: { ok: status !== null && status >= 200 && status < 300, status, length: title?.length ?? 0, state },
+      detail: {
+        ok: status !== null && status >= 200 && status < 300,
+        status,
+        length: title?.length ?? 0,
+        state,
+        via,
+      },
     });
   }
 }

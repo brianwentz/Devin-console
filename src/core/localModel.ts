@@ -436,9 +436,10 @@ export function finishPrompt<S extends ChatStateLike>(
       'thoughtTokens',
       'cachedReadTokens',
       'cachedWriteTokens',
+      'costUsd',
     ] as const) {
       const value = usage[key];
-      if (typeof value === 'number') merged[key] = value;
+      if (typeof value === 'number' && Number.isFinite(value)) merged[key] = value;
     }
     next.usage = merged;
   }

@@ -44,7 +44,7 @@ import { settingsFlagJson } from '../../core/claudeHooks';
 import { notificationsForHookEvent } from '../../core/claudeNotify';
 import { prTitle, type SessionPrLink } from '../../core/notifyModel';
 import type { NotificationKind } from '../../core/notificationModel';
-import type { ClaudeAgent, ClaudeState, Settings } from '../../shared/ipc';
+import type { ClaudeAgent, ClaudeState, ClaudeSubagent, Settings } from '../../shared/ipc';
 import { log } from '../log';
 import { fixtureOrigins, state, testMode } from '../state';
 import { applyLayout, notifyShell } from '../window';
@@ -62,6 +62,7 @@ import { getChatState } from './chatState';
 import { notificationStore } from '../notifications';
 import { allOpenPullRequests, prStore } from '../prs';
 import { prTitles } from '../prTitles';
+import { titleFromPrompt } from '../../core/localModel';
 
 const execFileAsync = promisify(execFile);
 
@@ -110,6 +111,15 @@ export class ClaudeSessions {
     error: null,
   };
   private activity: ActivityState = {};
+  // Subagent transcript lists per session (#1): loaded lazily on expand;
+  // invalidated at turn end and on store change for that session.
+  private subagentLists = new Map<string, ClaudeSubagent[]>();
+  // The subagent view currently open in the chat column (agentId, or null).
+  private selectedSubagentId: string | null = null;
+  // #6 terminal-owned live history: debounced loadHistory per session when
+  // the store watcher reports the transcript file changed.
+  private historyTimers = new Map<string, NodeJS.Timeout>();
+  private historyInFlight = new Set<string>();
   private recentPermission = new Map<string, number>();
   private activityTimer: NodeJS.Timeout | null = null;
   private prRefreshTimer: NodeJS.Timeout | null = null;
@@ -147,7 +157,10 @@ export class ClaudeSessions {
     this.userData = opts.userData;
     this.store = new ClaudeStore({
       configDir: this.configDir,
-      onChange: () => void this.refresh('watch'),
+      onChange: (files) => {
+        void this.refresh('watch');
+        this.onTranscriptFiles(files);
+      },
     });
   }
 
@@ -359,6 +372,9 @@ export class ClaudeSessions {
     kind: 'waiting' | 'finished' | 'blocked',
     detail?: { tool?: string; error?: string },
   ): void {
+    // A finished turn may have written subagent transcripts — drop the
+    // cached list so the next expand re-lists (#1 live chip).
+    if (kind !== 'waiting') this.subagentLists.delete(sessionId);
     if (!(state.settings?.current.notifications.collect ?? true)) return;
     const kinds = state.settings?.current.notifications.kinds;
     const enabled: Record<'waiting' | 'finished' | 'blocked', boolean> = {
@@ -402,7 +418,12 @@ export class ClaudeSessions {
     if (!info) return null;
     const envVar = 'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN';
     return {
-      extraArgs: ['--settings', settingsFlagJson(info.port, envVar)],
+      extraArgs: [
+        '--settings',
+        settingsFlagJson(info.port, envVar),
+        '--permission-mode',
+        state.settings?.current.claude.defaultPermissionMode ?? 'default',
+      ],
       extraEnv: { [envVar]: info.token },
     };
   }
@@ -454,6 +475,8 @@ export class ClaudeSessions {
           // PR badge counts always read live from the registry entry —
           // recordPr/setPrState don't wait for the next reconcile.
           prs: prCountsFor(this.registry.entries[s.id]),
+          // Subagent children load lazily — null until the row is expanded.
+          subagents: this.subagentLists.get(s.id) ?? null,
           activity: activityFor(
             this.activity,
             chat
@@ -472,7 +495,7 @@ export class ClaudeSessions {
       agents: this.agents,
       hooks: this.hooks,
       // Set by the subagent view (claude:openSubagent); cleared on claude:open.
-      selectedSubagentId: null,
+      selectedSubagentId: this.selectedSubagentId,
     };
   }
 
@@ -584,6 +607,7 @@ export class ClaudeSessions {
   }
 
   open(sessionId: string): void {
+    this.selectedSubagentId = null;
     state.claudeSessionId = sessionId;
     state.settings?.merge({ claude: { lastSessionId: sessionId } });
     this.registry = touchOpened(this.registry, sessionId, Date.now());
@@ -615,6 +639,113 @@ export class ClaudeSessions {
     log('claude', 'claude-terminal', { detail: { sessionId, op: 'close' } });
     void this.refresh('terminal');
     if (host) void host.loadHistory(sessionId);
+  }
+
+  // --- Subagents (#1) ----------------------------------------------------------
+  // Expand loads the row's `subagents` list (cached; null = not loaded).
+  async loadSubagents(sessionId: string): Promise<ClaudeSubagent[]> {
+    const cached = this.subagentLists.get(sessionId);
+    if (cached) return cached;
+    const subs: ClaudeSubagent[] = [];
+    try {
+      const agentIds = await this.store.listSubagents(sessionId);
+      for (const agentId of agentIds) {
+        let title = `agent-${agentId}`;
+        let messageCount: number | null = null;
+        try {
+          const messages = (await this.store.subagentMessages(
+            sessionId,
+            agentId,
+          )) as { type?: string; message?: { content?: unknown } }[];
+          messageCount = messages.length;
+          const firstUser = messages.find((m) => m.type === 'user');
+          const content = firstUser?.message?.content;
+          const text = Array.isArray(content)
+            ? content
+                .map((c) =>
+                  typeof c === 'object' && c !== null
+                    ? (c as { type?: string; text?: string }).type === 'text'
+                      ? (c as { text?: string }).text
+                      : null
+                    : typeof c === 'string'
+                      ? c
+                      : null,
+                )
+                .filter(Boolean)
+                .join(' ')
+            : typeof content === 'string'
+              ? content
+              : '';
+          if (text.trim()) title = titleFromPrompt(text);
+        } catch {
+          // An unreadable transcript keeps the agent-<id> fallback title.
+        }
+        subs.push({ agentId, parentSessionId: sessionId, title, messageCount });
+      }
+      this.subagentLists.set(sessionId, subs);
+      this.emit();
+    } catch {
+      // listSubagents failure stays an empty (non-loaded) row.
+    }
+    return subs;
+  }
+
+  // Open a subagent transcript read-only in the chat column: a synthetic
+  // `<sessionId>/<agentId>` chat session in the parent's scope (#1).
+  async openSubagent(sessionId: string, agentId: string): Promise<null> {
+    const host = this.host;
+    if (!host) throw new Error('claude host not started');
+    const key = `${sessionId}/${agentId}`;
+    host.ensureSubagentSession(key, {
+      cwd:
+        getChatState().sessions[sessionId]?.cwd ??
+        this.sessions.find((s) => s.id === sessionId)?.cwd ??
+        null,
+    });
+    await host.loadSubagentHistory(key, sessionId, agentId);
+    this.selectedSubagentId = agentId;
+    this.emit();
+    return null;
+  }
+
+  // #6: transcript/subagent file changes from the store watcher. A terminal-
+  // owned session's own file → debounced loadHistory (terminal turns appear
+  // live in the chat column); any change → invalidate the subagent list.
+  private onTranscriptFiles(files: string[]): void {
+    for (const file of files) {
+      // fs.watch filenames are relative to <configDir>/projects:
+      //   <encoded-cwd>\<id>.jsonl            — the session transcript
+      //   <encoded-cwd>\<id>\subagents\…      — a subagent transcript
+      const parts = file.split(/[\\/]+/);
+      const name = parts[parts.length - 1] ?? '';
+      const parentDir = parts[parts.length - 2] ?? '';
+      const sessionId =
+        parentDir === 'subagents'
+          ? (parts[parts.length - 3] ?? null)
+          : name.endsWith('.jsonl')
+            ? name.slice(0, -'.jsonl'.length)
+            : null;
+      if (!sessionId) continue;
+      if (this.subagentLists.delete(sessionId)) this.emit();
+      if (getChatState().sessions[sessionId]?.terminalOwned !== true) continue;
+      if (this.historyInFlight.has(sessionId)) continue;
+      if (this.historyTimers.has(sessionId)) continue;
+      this.historyTimers.set(
+        sessionId,
+        setTimeout(() => {
+          this.historyTimers.delete(sessionId);
+          this.historyInFlight.add(sessionId);
+          const host = this.host;
+          if (!host) {
+            this.historyInFlight.delete(sessionId);
+            return;
+          }
+          void host.loadHistory(sessionId).finally(() => {
+            this.historyInFlight.delete(sessionId);
+          });
+        }, 1_000),
+      );
+    }
   }
 
   // Terminal arg resolver for terminal:open — resume only when the transcript
@@ -1040,6 +1171,8 @@ export class ClaudeSessions {
     this.activityTimer = null;
     if (this.prRefreshTimer) clearInterval(this.prRefreshTimer);
     this.prRefreshTimer = null;
+    for (const timer of this.historyTimers.values()) clearTimeout(timer);
+    this.historyTimers.clear();
     if (prTitles.onChange === this.onPrCacheChange) prTitles.onChange = null;
     this.store.dispose();
     this.registryStore.dispose();

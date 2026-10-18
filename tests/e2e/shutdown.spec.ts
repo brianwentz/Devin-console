@@ -76,3 +76,46 @@ test('window close with an unsaved tab vetoes quit once, then exits on confirm',
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   }
 });
+
+// Phase 6 #7: quitting mid-Claude-turn exits via the normal lifecycle
+// (destroy window → app.quit) — the Phase 3 app.exit(0) hang scenario.
+test('quit while a Claude turn is mid-stream exits within 10 s', async () => {
+  const { launchWithClaudeFixture } = await import('./helpers.js');
+  const { resolve } = await import('node:path');
+  const FAKE_SDK = resolve(__dirname, '../../out/fixtures/fakeClaudeSdk.mjs');
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    FAKE_CLAUDE_DELAY_MS: '20000',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await app.evaluate(
+            () => (globalThis as any).__devinworkspaces.claudeState(),
+          )).status,
+      )
+      .toBe('ready');
+    const id = (await app.evaluate(() =>
+      (globalThis as any).__devinworkspaces.claudeNewSession(),
+    )) as string;
+    await app.evaluate(
+      (_e, v: string) => (globalThis as any).__devinworkspaces.claudePrompt(v, 'hi'),
+      id,
+    );
+    // Turn is mid-stream (20 s delta delay) — close must still exit.
+    await new Promise((r) => setTimeout(r, 500));
+    const exitStatus = new Promise<'exited' | 'timeout'>((resolve) => {
+      app.process().once('exit', () => resolve('exited'));
+      setTimeout(() => resolve('timeout'), 10_000);
+    });
+    await app.evaluate(() => (globalThis as any).__devinworkspaces.closeWindow());
+    expect(await exitStatus).toBe('exited');
+    await waitForEvent(logFile, 'window-close-complete');
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+});

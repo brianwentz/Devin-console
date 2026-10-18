@@ -415,6 +415,18 @@ describe('thinking indicator + token usage', () => {
       applyUpdate(withSession(), 'nope', { sessionUpdate: 'usage_update', used: 1, size: 1 }),
     ).toEqual(withSession());
   });
+
+  it('finishPrompt stores usage.costUsd when finite and leaves it alone otherwise', () => {
+    let state = finishPrompt(withSession(), SID, 'end_turn', { usage: { inputTokens: 1, costUsd: 0.12 } });
+    expect(state.sessions[SID]!.usage).toMatchObject({ inputTokens: 1, costUsd: 0.12 });
+    state = finishPrompt(state, SID, 'end_turn', { usage: { outputTokens: 2 } });
+    expect(state.sessions[SID]!.usage).toMatchObject({ outputTokens: 2, costUsd: 0.12 });
+    state = finishPrompt(state, SID, 'end_turn', { usage: { costUsd: 0.34 } });
+    expect(state.sessions[SID]!.usage!.costUsd).toBe(0.34);
+    state = finishPrompt(state, SID, 'end_turn', { usage: { costUsd: Number.NaN } });
+    expect(state.sessions[SID]!.usage!.costUsd).toBe(0.34);
+    expect(finishPrompt(withSession(), SID, 'end_turn', { usage: {} }).sessions[SID]!.usage!.costUsd).toBeNull();
+  });
 });
 
 

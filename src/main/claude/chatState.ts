@@ -6,9 +6,13 @@ import { state } from '../state';
 // In-memory claude chat state; mutated only through `update()` with the pure
 // generic reducers from core/localModel. Pushes are coalesced per tick so a
 // burst of stream updates becomes one `claude:chatUpdate` message.
-export type ClaudeChatState = { sessions: Record<string, ClaudeChatSession> };
+export type ClaudeChatState = {
+  sessions: Record<string, ClaudeChatSession>;
+  // Read-only subagent transcripts keyed '<sessionId>/<agentId>'.
+  subagentSessions: Record<string, ClaudeChatSession>;
+};
 
-let current: ClaudeChatState = { sessions: {} };
+let current: ClaudeChatState = { sessions: {}, subagentSessions: {} };
 let scheduled = false;
 
 export function getChatState(): ClaudeChatState {
@@ -39,12 +43,18 @@ function schedulePublish(): void {
 }
 
 export function publicChatState(): ClaudeChatState {
-  const parsed = ClaudeChatStateSchema.safeParse(current);
-  if (parsed.success) return parsed.data as ClaudeChatState;
-  log('claude', 'claude-chat-state-invalid', {
-    detail: { issues: parsed.error.issues.slice(0, 5) },
-  });
-  return { sessions: {} };
+  try {
+    const parsed = ClaudeChatStateSchema.safeParse(current);
+    if (parsed.success) return parsed.data as ClaudeChatState;
+    log('claude', 'claude-chat-state-invalid', {
+      detail: { issues: parsed.error.issues.slice(0, 5) },
+    });
+  } catch (error) {
+    log('claude', 'claude-chat-state-invalid', {
+      detail: { thrown: String(error) },
+    });
+  }
+  return { sessions: {}, subagentSessions: {} };
 }
 
 export function publishChatState(): void {

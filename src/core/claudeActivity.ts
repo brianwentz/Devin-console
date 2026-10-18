@@ -26,6 +26,7 @@ type Transition = 'running' | 'waiting' | 'clear' | 'touch';
 
 function transitionFor(e: ClaudeHookEvent): Transition {
   switch (e.event) {
+    case 'SessionStart':
     case 'UserPromptSubmit':
       return 'running';
     case 'PermissionRequest':
@@ -43,7 +44,7 @@ function transitionFor(e: ClaudeHookEvent): Transition {
 }
 
 /**
- * Apply one hook event. UserPromptSubmit → running; PermissionRequest /
+ * Apply one hook event. SessionStart / UserPromptSubmit → running; PermissionRequest /
  * Notification{permission_prompt} → waiting; Stop / SessionEnd /
  * Notification{idle_prompt} → entry removed; anything else only refreshes
  * `lastEvent` of an existing entry. Returns `state` itself when nothing changed.

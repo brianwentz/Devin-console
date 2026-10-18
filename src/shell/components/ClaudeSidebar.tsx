@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Ellipsis, FolderPlus, Plus, RefreshCw } from 'lucide-react';
-import type { ClaudeAgent, ClaudeSessionState } from '../../shared/ipc';
+import type { ClaudeAgent, ClaudeSessionState, ClaudeSubagent } from '../../shared/ipc';
 import {
   addFolder,
   buildSessionTree,
   moveSession,
   renameFolder,
   reorderFolders,
+  type SessionTreeNode,
   type SidebarListData,
 } from '../../core/sessionTree';
 import type { Rect } from '../../core/layout';
@@ -15,7 +16,7 @@ import { requestTerminal } from '../claude/viewRequests';
 import { relativeTime } from './relativeTime';
 import { sessionFolderHeaderClass, sessionMetaClass, sessionRowClass } from './sessionRowStyles';
 import { FolderNameInput } from './sidebar/FolderNameInput';
-import { SessionRow, SessionRowButton } from './sidebar/SessionRow';
+import { SessionRowButton, type RowRenderOpts } from './sidebar/SessionRow';
 import { SectionHeader } from './sidebar/SectionHeader';
 import { isEditableFolder } from './sidebar/dnd';
 import { useOptimisticList } from './sidebar/useOptimisticList';
@@ -32,7 +33,125 @@ const OP_LABELS: Record<string, string> = {
 
 const basename = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
+// Reserved `claude.collapsedFolders` entry for the Background-agents section
+// (never a real folder: it is not in `claude.folders`, so the tree never sees it).
+const AGENTS_FOLDER = '__agents__';
+
 type ClaudeListData = SidebarListData<ClaudeSessionState>;
+
+// Subagent transcripts nested under a session row (read-only in the chat column).
+function SubagentRows({
+  session,
+  depth,
+  selectedId,
+  onOpen,
+}: {
+  session: ClaudeSessionState;
+  depth: number;
+  selectedId: string | null;
+  onOpen: (agentId: string) => void;
+}) {
+  const list: ClaudeSubagent[] | null = session.subagents;
+  if (list === null) {
+    return (
+      <div className="py-1 text-[11px] text-[#5c6b80]" style={{ paddingLeft: (depth + 1) * 12 + 16 }}>
+        Loading subagents…
+      </div>
+    );
+  }
+  return (
+    <>
+      {list.map((sub) => {
+        const selected = selectedId === sub.agentId;
+        return (
+          <div
+            key={sub.agentId}
+            role="button"
+            tabIndex={-1}
+            data-subagent-id={sub.agentId}
+            data-parent-session-id={session.id}
+            data-current={selected}
+            title={sub.title}
+            className={`flex items-center ${sessionRowClass} text-left text-[#aeb9c8] hover:bg-[#1a2735] cursor-pointer ${
+              selected ? 'bg-[#1f2f42] text-[#e8edf5]' : ''
+            }`}
+            style={{ marginLeft: (depth + 1) * 12 + 16 }}
+            onClick={() => onOpen(sub.agentId)}
+          >
+            <span className="flex-1 min-w-0 truncate">{sub.title || sub.agentId}</span>
+            {sub.messageCount !== null && (
+              <span className={`shrink-0 ${sessionMetaClass}`}>{sub.messageCount}</span>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+// Same layout as the shared SessionRow (chevron slot + tree-variant button),
+// but the chevron expands the session's subagents instead of tree children:
+// shown while the list is unknown (null) or non-empty, default collapsed.
+function ClaudeSessionRow(props: {
+  node: SessionTreeNode<ClaudeSessionState>;
+  expandedSubagents: Set<string>;
+  onToggleSubagents: (id: string) => void;
+  selectedSubagentId: string | null;
+  onOpenSubagent: (sessionId: string, agentId: string) => void;
+  registerRow: (el: HTMLButtonElement | null) => void;
+  opts: RowRenderOpts<ClaudeSessionState>;
+  onMenu: (sessionId: string, x: number, y: number) => void;
+}) {
+  const { node, expandedSubagents, onToggleSubagents, selectedSubagentId, onOpenSubagent } = props;
+  const { registerRow, opts, onMenu } = props;
+  const s = node.session;
+  const expanded = expandedSubagents.has(s.id);
+  const hasSubagents = s.subagents === null || s.subagents.length > 0;
+  return (
+    <>
+      <div className="flex items-center" style={{ paddingLeft: node.depth * 12 }}>
+        {hasSubagents ? (
+          <button
+            type="button"
+            tabIndex={-1}
+            data-subagents-toggle
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse subagents' : 'Expand subagents'}
+            className="w-4 h-4 shrink-0 flex items-center justify-center text-[#8b9bb0] hover:text-[#c9d4e3]"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSubagents(s.id);
+            }}
+          >
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+        ) : (
+          <span className="w-4 shrink-0" />
+        )}
+        <SessionRowButton
+          s={s}
+          depth={node.depth}
+          current={node.current}
+          registerRow={registerRow}
+          opts={opts}
+          onMenu={onMenu}
+          variant="tree"
+        />
+      </div>
+      {expanded && hasSubagents && (
+        <SubagentRows
+          session={s}
+          depth={node.depth}
+          selectedId={node.current ? selectedSubagentId : null}
+          onOpen={(agentId) => onOpenSubagent(s.id, agentId)}
+        />
+      )}
+      {node.children.map((child) => (
+        <ClaudeSessionRow key={child.session.id} {...props} node={child} />
+      ))}
+    </>
+  );
+}
 
 // Inline session-title editor (#sessionRenameEdit) opened by the session
 // context menu's "Rename…" (action 'rename-session').
@@ -189,7 +308,21 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
     void window.devinworkspaces.setSettings({ claude: { collapsedFolders: next } });
   };
 
-  const collapsedChildren = useMemo(() => new Set<string>(), []);
+  // Subagent lists are fetched on first expand (main fills `subagents` on the row).
+  const [expandedSubagents, setExpandedSubagents] = useState<Set<string>>(() => new Set());
+  const toggleSubagents = (sessionId: string) => {
+    const session = data.sessions.find((s) => s.id === sessionId);
+    const opening = !expandedSubagents.has(sessionId);
+    setExpandedSubagents((prev) => {
+      const next = new Set(prev);
+      if (opening) next.add(sessionId);
+      else next.delete(sessionId);
+      return next;
+    });
+    if (opening && session?.subagents === null) void window.devinworkspaces.claudeSubagents(sessionId);
+  };
+  const openSubagent = (sessionId: string, agentId: string) =>
+    void window.devinworkspaces.claudeOpenSubagent(sessionId, agentId);
 
   const rowOpts = {
     attrs: (s: ClaudeSessionState) => ({
@@ -270,7 +403,9 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
     const visible = new Set(data.sessions.map((s) => s.id));
     return claude.agents.filter((a) => !a.sessionId || !visible.has(a.sessionId));
   }, [claude.agents, data.sessions]);
-  const [agentsCollapsed, setAgentsCollapsed] = useState(false);
+  // Persisted with the folder collapse state under the reserved `__agents__` name.
+  const agentsCollapsed = collapsedFolders.includes(AGENTS_FOLDER);
+  const toggleAgents = () => toggleFolder(AGENTS_FOLDER);
 
   const q = query.trim().toLowerCase();
   const filtered: ClaudeSessionState[] = q
@@ -377,7 +512,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
               data-section-name="agents"
               aria-expanded={!agentsCollapsed}
               className={`w-full flex items-center gap-1 px-1 py-1 ${sessionFolderHeaderClass} text-[#8b9bb0] hover:text-[#c9d4e3]`}
-              onClick={() => setAgentsCollapsed((v) => !v)}
+              onClick={toggleAgents}
             >
               {agentsCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
               <span className="flex-1 text-left truncate">Background agents</span>
@@ -479,11 +614,13 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
                           />
                         </div>
                       ) : (
-                        <SessionRow
+                        <ClaudeSessionRow
                           key={node.session.id}
                           node={node}
-                          collapsedChildren={collapsedChildren}
-                          onToggleChildren={() => undefined}
+                          expandedSubagents={expandedSubagents}
+                          onToggleSubagents={toggleSubagents}
+                          selectedSubagentId={claude.selectedSubagentId}
+                          onOpenSubagent={openSubagent}
                           registerRow={registerRow}
                           opts={rowOpts}
                           onMenu={(id, x, y) => void sessionMenu(id, x, y)}

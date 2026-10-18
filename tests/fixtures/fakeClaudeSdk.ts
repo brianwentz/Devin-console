@@ -154,18 +154,37 @@ export function query({ prompt, options }: { prompt: unknown; options: Rec }) {
         full.slice(Math.ceil(full.length / 3), Math.ceil((full.length * 2) / 3)),
         full.slice(Math.ceil((full.length * 2) / 3)),
       ];
-      for (const part of parts) {
-        await delay(delayMs);
-        if (interrupted) throw new Error(INTERRUPTED);
+      // FAKE_CLAUDE_TWO_MESSAGES=1 → two API messages in one turn (each with
+      // its own message_start id) so consecutive assistant messages render as
+      // separate bubbles (Phase 6 #3). Otherwise a single message_start.
+      const groups = process.env.FAKE_CLAUDE_TWO_MESSAGES === '1'
+        ? [
+            { id: 'msg_fake_1', parts: parts.slice(0, 2) },
+            { id: 'msg_fake_2', parts: parts.slice(2) },
+          ]
+        : [{ id: 'msg_fake_1', parts }];
+      for (const group of groups) {
         yield {
           type: 'stream_event',
           event: {
-            type: 'content_block_delta',
-            index: 0,
-            delta: { type: 'text_delta', text: part },
+            type: 'message_start',
+            message: { id: group.id, role: 'assistant', content: [] },
           },
           session_id: sessionId,
         };
+        for (const part of group.parts) {
+          await delay(delayMs);
+          if (interrupted) throw new Error(INTERRUPTED);
+          yield {
+            type: 'stream_event',
+            event: {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: part },
+            },
+            session_id: sessionId,
+          };
+        }
       }
       const assistantUuid = randomUUID();
       yield {
@@ -205,6 +224,8 @@ export function query({ prompt, options }: { prompt: unknown; options: Rec }) {
           cache_creation_input_tokens: 0,
         },
         modelUsage: { 'fake-model': { contextWindow: 200_000 } },
+        // FAKE_CLAUDE_COST_USD → cumulative cost on the result (usage pill).
+        total_cost_usd: parseFloat(process.env.FAKE_CLAUDE_COST_USD ?? '0'),
       };
     }
   }

@@ -215,6 +215,10 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
           .map((w) => ({ url: w.getURL(), type: w.getType() })),
       },
     });
+    // Cleanup done — flip the flag so the second close (app.quit() → close
+    // the window again) passes through instead of vetoing into another
+    // shutdown.
+    state.shutdownComplete = true;
     try {
       state.windowRef?.destroy();
     } catch (error) {
@@ -224,21 +228,19 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       });
     }
     state.windowRef = null;
-    // app.quit() can be dropped while a quit is already in flight (the window
-    // close was vetoed to run this cleanup); exit is unconditional. When an
-    // update is downloaded, quitAndInstall is the exit — app.exit() would skip
-    // the quit lifecycle and autoInstallOnAppQuit would never run.
+    // Normal Electron lifecycle: destroy the window, then quit (the earlier
+    // close was vetoed for cleanup; shutdownComplete lets it through now).
+    // When an update is downloaded, quitAndInstall is the exit instead —
+    // autoInstallOnAppQuit runs inside it.
     if (options.installUpdate || hasDownloadedUpdate()) quitAndInstall();
     else {
-      // Observed on Windows/Electron 44: when the first quit was already in
-      // flight (the close that started this cleanup was vetoed), app.exit()
-      // can block or return without exiting. Best-effort fallback only; the
-      // normal path exits inside app.exit().
+      // Last-resort watchdog: if the quit lifecycle itself stalls (the Phase 3
+      // mid-quit app.exit() hang), force-exit rather than leak the process.
       setTimeout(() => {
         log('shell', 'shutdown-exit-watchdog');
         process.exit(0);
       }, 5_000).unref();
-      app.exit(0);
+      app.quit();
     }
   })();
   return state.shutdownPromise;
@@ -391,6 +393,8 @@ async function createWindow(): Promise<void> {
     updateOnWindowFocus();
   });
   state.windowRef.on('close', (event) => {
+    // Post-shutdown lifecycle: app.quit() closes the window again — let it.
+    if (state.shutdownComplete) return;
     // A second close while shutdown is in flight (e.g. a repeat app.quit())
     // must not destroy the window — that would cut in-flight cleanup (settings
     // flush, teardown) short via 'window-all-closed'. It's remembered instead

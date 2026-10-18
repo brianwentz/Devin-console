@@ -68,6 +68,9 @@ export const state = {
   dragStartHeight: DEFAULT_TERMINAL_HEIGHT,
   dragStartSessionsWidth: DEFAULT_SESSIONS_WIDTH,
   shuttingDown: false,
+  // True after cleanup finished and the normal quit lifecycle was invoked —
+  // the second window 'close' (app.quit() → close-all) must pass through.
+  shutdownComplete: false,
   shutdownPromise: null as Promise<void> | null,
   lastFocused: null as Electron.WebContents | null,
   // P5: secrets + poller state. The PAT itself lives only inside SecretStore.

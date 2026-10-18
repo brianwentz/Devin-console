@@ -20,6 +20,18 @@ describe('applyHookEvent', () => {
     const s = applyHookEvent({}, ev('UserPromptSubmit'));
     expect(s).toEqual({ A: { activity: 'running', since: 1000, lastEvent: 1000 } });
   });
+  it('SessionStart → running like UserPromptSubmit; a following UserPromptSubmit keeps since', () => {
+    let s = applyHookEvent({}, ev('SessionStart', { cwd: '/w' }));
+    expect(s).toEqual({ A: { activity: 'running', since: 1000, lastEvent: 1000 } });
+    s = applyHookEvent(s, ev('UserPromptSubmit', { receivedAt: 2500 }));
+    expect(s.A).toEqual({ activity: 'running', since: 1000, lastEvent: 2500 });
+    const waiting = applyHookEvent(s, ev('PermissionRequest', { receivedAt: 3000 }));
+    expect(applyHookEvent(waiting, ev('SessionStart', { receivedAt: 4000 })).A).toEqual({
+      activity: 'running',
+      since: 4000,
+      lastEvent: 4000,
+    });
+  });
   it('a second UserPromptSubmit keeps the original since and bumps lastEvent', () => {
     let s = applyHookEvent({}, ev('UserPromptSubmit'));
     s = applyHookEvent(s, ev('UserPromptSubmit', { receivedAt: 2000 }));

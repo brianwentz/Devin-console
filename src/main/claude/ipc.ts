@@ -19,6 +19,8 @@ import {
   ClaudeLoadHistoryArg,
   ClaudeNewSessionArg,
   ClaudeOpenArg,
+  ClaudeOpenSubagentArg,
+  ClaudeSubagentsArg,
   ClaudePermissionArg,
   ClaudePromptArg,
   ClaudeRenameArg,
@@ -121,6 +123,13 @@ export function setupClaude(): ClaudeSessions {
   );
   handleResult(IpcChannels.claudeLoadHistory, ClaudeLoadHistoryArg, ({ sessionId }) =>
     claudeHost().loadHistory(sessionId),
+  );
+  // Phase 6 subagent transcripts (#1).
+  handleResult(IpcChannels.claudeSubagents, ClaudeSubagentsArg, ({ sessionId }) =>
+    sessions.loadSubagents(sessionId),
+  );
+  handleResult(IpcChannels.claudeOpenSubagent, ClaudeOpenSubagentArg, (arg) =>
+    sessions.openSubagent(arg.sessionId, arg.agentId),
   );
   // Phase 3 background agents.
   handleResult(IpcChannels.claudeAgentStop, ClaudeAgentStopArg, ({ agentId }) =>

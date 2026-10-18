@@ -5,7 +5,8 @@
 
 import type { PromptUsage, SessionUpdate, StopReason } from './localModel';
 
-export type TranslateOptions = { streaming: boolean };
+/** `messageId` (host-tracked current API message id) is stamped on stream deltas so each API message opens its own agent message. */
+export type TranslateOptions = { streaming: boolean; messageId?: string | null };
 
 export type TranslateResult = {
   updates: SessionUpdate[];
@@ -165,15 +166,30 @@ function translateStreamEvent(msg: Rec, opts: TranslateOptions): TranslateResult
   if (!event || event.type !== 'content_block_delta') return { updates: [] };
   const delta = rec(event.delta);
   if (!delta) return { updates: [] };
+  const messageId = opts.messageId || undefined;
   if (delta.type === 'text_delta') {
     const text = str(delta.text);
-    return { updates: text ? [textChunk('agent_message_chunk', text, undefined)] : [] };
+    return { updates: text ? [textChunk('agent_message_chunk', text, messageId)] : [] };
   }
   if (delta.type === 'thinking_delta') {
     const thinking = str(delta.thinking);
-    return { updates: thinking ? [textChunk('agent_thought_chunk', thinking, undefined)] : [] };
+    return { updates: thinking ? [textChunk('agent_thought_chunk', thinking, messageId)] : [] };
   }
   return { updates: [] };
+}
+
+/**
+ * The API message id announced by a `stream_event` `message_start`
+ * (`event.message.id`), else null. The host tracks it per session and passes
+ * it as `TranslateOptions.messageId` for the following deltas. Never throws.
+ */
+export function messageIdFromStreamEvent(msg: unknown): string | null {
+  const m = rec(msg);
+  if (!m || m.type !== 'stream_event') return null;
+  const event = rec(m.event);
+  if (!event || event.type !== 'message_start') return null;
+  const id = str(rec(event.message)?.id);
+  return id || null;
 }
 
 function translateAssistant(msg: Rec, opts: TranslateOptions): TranslateResult {
@@ -259,6 +275,8 @@ function translateResult(msg: Rec): TranslateResult {
     cachedWriteTokens: cachedWrite,
     totalTokens: input !== null && output !== null ? input + output : null,
   };
+  const cost = num(msg.total_cost_usd);
+  if (cost !== null) usage.costUsd = cost;
   const updates: SessionUpdate[] = [];
   const size = Object.values(rec(msg.modelUsage) ?? {}).reduce<number>(
     (max, entry) => Math.max(max, num(rec(entry)?.contextWindow) ?? 0),
@@ -296,8 +314,10 @@ function translateResult(msg: Rec): TranslateResult {
  *   `↳ <title>` content item. The reducer replaces `content`, so the host must
  *   accumulate these per parent and send the full array. Subagent `user`
  *   messages and text/thinking are dropped.
- * - Stateless: stream deltas carry no `messageId`, so they continue the open
- *   agent message; separation between API messages is up to the host.
+ * - Stateless: stream deltas carry `opts.messageId` when the host supplies one
+ *   (tracked via `messageIdFromStreamEvent`), otherwise none — they then
+ *   continue the open agent message.
+ * - `result.total_cost_usd` (cumulative per session) → `finish.usage.costUsd`.
  */
 export function translateSdkMessage(msg: unknown, opts: TranslateOptions): TranslateResult {
   const m = rec(msg);

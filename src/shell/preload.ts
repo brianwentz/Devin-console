@@ -7,6 +7,7 @@ import {
   type BadgeRender,
   type ClaudeChatStatePublic,
   type ClaudePermissionMode,
+  type ClaudeSubagent,
   type IdentityInfo,
   type SessionPr,
   type LocalResult,
@@ -109,6 +110,15 @@ const claudeChatApi = {
     >,
   claudeLoadHistory: (sessionId: string) =>
     ipcRenderer.invoke(IpcChannels.claudeLoadHistory, { sessionId }) as Promise<LocalResult<null>>,
+  // Subagent transcripts (read-only): list under a session / open one in the chat column.
+  claudeSubagents: (sessionId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeSubagents, { sessionId }) as Promise<
+      LocalResult<ClaudeSubagent[]>
+    >,
+  claudeOpenSubagent: (sessionId: string, agentId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeOpenSubagent, { sessionId, agentId }) as Promise<
+      LocalResult<null>
+    >,
 };
 
 // P4b embedded terminal + F5 dock.

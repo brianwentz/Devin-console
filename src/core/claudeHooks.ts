@@ -7,8 +7,13 @@
 /** Path prefix of every hook URL we register; the event name follows it. */
 export const HOOK_PATH_PREFIX = '/devin-workspaces/hook/';
 
-/** Events we inject. `SessionStart` is deliberately absent (never fires via `--settings`). */
+/**
+ * Events we inject. `SessionStart` is first: older CLIs never fired it via
+ * `--settings` (Spike B) — registering it is free when it doesn't fire and
+ * marks the session running at start when it does.
+ */
 export const HOOK_EVENTS = [
+  'SessionStart',
   'UserPromptSubmit',
   'PermissionRequest',
   'Notification',
