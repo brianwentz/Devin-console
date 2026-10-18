@@ -6,9 +6,9 @@
 import type { PromptUsage, SessionUpdate, StopReason } from './localModel';
 
 /** `messageId` (host-tracked current API message id) is stamped on stream deltas so each API message opens its own agent message. */
-export type TranslateOptions = { streaming: boolean; messageId?: string | null };
+type TranslateOptions = { streaming: boolean; messageId?: string | null };
 
-export type TranslateResult = {
+type TranslateResult = {
   updates: SessionUpdate[];
   finish?: { stopReason: StopReason; error?: string; usage?: PromptUsage };
   init?: { model: string | null; permissionMode: string | null; cwd: string | null };
@@ -206,6 +206,7 @@ function translateAssistant(msg: Rec, opts: TranslateOptions): TranslateResult {
       updates.push({
         sessionUpdate: 'tool_call_update',
         toolCallId: parent,
+        appendContent: true,
         content: [
           {
             type: 'content',
@@ -249,6 +250,7 @@ function translateUser(msg: Rec, opts: TranslateOptions): TranslateResult {
       updates.push({
         sessionUpdate: 'tool_call_update',
         toolCallId,
+        appendContent: true,
         status: block.is_error === true ? 'failed' : 'completed',
         rawOutput: block.content,
         ...(text ? { content: [{ type: 'content', content: { type: 'text', text } }] } : {}),

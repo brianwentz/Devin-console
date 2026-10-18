@@ -115,7 +115,7 @@ export const IpcChannels = {
   cloudContextMenu: 'cloud:contextMenu',
   cloudShowArchived: 'cloud:showArchived',
   cloudNewSession: 'cloud:newSession',
-  // Claude session sidebar (Phase 1: list + local mutations, no newSession).
+  // Claude session sidebar (list + local mutations, no newSession).
   claudeOpen: 'claude:open',
   claudeRefresh: 'claude:refresh',
   claudeRename: 'claude:rename',
@@ -132,7 +132,7 @@ export const IpcChannels = {
   claudeFolderReorder: 'claude:folderReorder',
   claudeShowArchived: 'claude:showArchived',
   claudeContextMenu: 'claude:contextMenu',
-  // Claude chat (Phase 2): SDK-backed chat per session.
+  // Claude chat: SDK-backed chat per session.
   claudeChatState: 'claude:chatState',
   claudeChatUpdate: 'claude:chatUpdate',
   claudeNewSession: 'claude:newSession',
@@ -142,7 +142,7 @@ export const IpcChannels = {
   claudeSetPermissionMode: 'claude:setPermissionMode',
   claudeSetModel: 'claude:setModel',
   claudeLoadHistory: 'claude:loadHistory',
-  // Claude background agents (Phase 3).
+  // Claude background agents.
   claudeAgentStop: 'claude:agentStop',
   claudeAgentsRefresh: 'claude:agentsRefresh',
   // Claude subagent transcripts (read-only).

@@ -183,6 +183,51 @@ describe('localModel reducers', () => {
     expect(state.sessions[SID]!.messages[1]!.blocks).toHaveLength(1);
   });
 
+  it('tool_call_update content appends with appendContent, replaces otherwise', () => {
+    const block = (t: string) => ({ type: 'content', content: text(t) });
+    let state = startPrompt(withSession(), SID, 'hi', '2026-10-01T00:00:01Z');
+    state = applyUpdate(state, SID, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc1',
+      title: 'Task',
+      content: [block('first')],
+    });
+    state = applyUpdate(state, SID, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      appendContent: true,
+      content: [block('second')],
+    });
+    state = applyUpdate(state, SID, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      appendContent: true,
+      content: [block('third')],
+    });
+    expect(state.sessions[SID]!.toolCalls.tc1?.content).toEqual([
+      block('first'),
+      block('second'),
+      block('third'),
+    ]);
+    // Explicit appendContent: false replaces like the default.
+    state = applyUpdate(state, SID, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      appendContent: false,
+      content: [block('replaced')],
+    });
+    expect(state.sessions[SID]!.toolCalls.tc1?.content).toEqual([block('replaced')]);
+    // No flag at all is also replace.
+    state = applyUpdate(state, SID, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      content: [block('replaced-again')],
+    });
+    expect(state.sessions[SID]!.toolCalls.tc1?.content).toEqual([
+      block('replaced-again'),
+    ]);
+  });
+
   it('tool_call_update for an unknown id creates the card and block', () => {
     let state = withSession();
     state = applyUpdate(state, SID, {

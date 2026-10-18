@@ -1,4 +1,4 @@
-// Phase 4 — notifications derived from Claude Code hook events (terminal /
+// Notifications derived from Claude Code hook events (terminal /
 // external sessions). Chat sessions produce theirs from in-app transitions.
 import type { ClaudeHookEvent } from './claudeActivity';
 import type { NewNotification } from './notificationModel';

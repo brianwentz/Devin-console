@@ -5,7 +5,7 @@ import type { AppNotification } from '../../core/notificationModel';
 import { useShellState } from '../store';
 import { relativeTime } from './relativeTime';
 
-// Phase 4: source glyph for Claude Code entries (panel rows + banner). Inline
+// Source glyph for Claude Code entries (panel rows + banner). Inline
 // so it sits before the title without changing the row layout.
 export function ClaudeGlyph() {
   return (

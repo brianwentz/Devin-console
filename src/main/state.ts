@@ -54,7 +54,7 @@ export const state = {
   currentSessionId: null as string | null,
   // Selected Devin Local session — lifted here so it survives surface switches.
   localSessionId: null as string | null,
-  // Selected Claude Code session (the Phase 1 sidebar sets it via claude:open).
+  // Selected Claude Code session (the sidebar sets it via claude:open).
   claudeSessionId: null as string | null,
   dragStartFraction: DEFAULT_PANE_FRACTION,
   dragLastX: 0,

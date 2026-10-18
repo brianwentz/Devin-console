@@ -101,7 +101,7 @@ export function setupClaude(): ClaudeSessions {
     return sessions.contextMenu(parsed.data);
   });
 
-  // Phase 2 chat channels — invoke → LocalResult via handleResult.
+  // Chat channels — invoke → LocalResult via handleResult.
   guardedHandle(IpcChannels.claudeChatState, () => publicChatState());
   handleResult(IpcChannels.claudeNewSession, ClaudeNewSessionArg, ({ cwd }) =>
     sessions.newSession(cwd),
@@ -124,14 +124,14 @@ export function setupClaude(): ClaudeSessions {
   handleResult(IpcChannels.claudeLoadHistory, ClaudeLoadHistoryArg, ({ sessionId }) =>
     claudeHost().loadHistory(sessionId),
   );
-  // Phase 6 subagent transcripts (#1).
+  // Subagent transcripts.
   handleResult(IpcChannels.claudeSubagents, ClaudeSubagentsArg, ({ sessionId }) =>
     sessions.loadSubagents(sessionId),
   );
   handleResult(IpcChannels.claudeOpenSubagent, ClaudeOpenSubagentArg, (arg) =>
     sessions.openSubagent(arg.sessionId, arg.agentId),
   );
-  // Phase 3 background agents.
+  // Background agents.
   handleResult(IpcChannels.claudeAgentStop, ClaudeAgentStopArg, ({ agentId }) =>
     sessions.agentStop(agentId),
   );

@@ -1,4 +1,4 @@
-// Pure parser for `claude agents --json --all` — probed in Phase 3 §0
+// Pure parser for `claude agents --json --all`.
 // (docs/evidence/claude-agents-probe.json). The real shape (CLI 2.1.302):
 //   { pid?, id, cwd, kind:'background', startedAt(ms), sessionId,
 //     name, status:'busy'|'idle', state:'working'|'done' }
@@ -8,7 +8,7 @@
 
 import type { ClaudeAgent } from '../shared/ipc';
 
-export type ParseAgentsResult = {
+type ParseAgentsResult = {
   agents: ClaudeAgent[];
   unknownKeys: string[];
 };

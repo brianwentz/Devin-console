@@ -1,4 +1,4 @@
-// Phase 4 — loopback HTTP listener that receives Claude Code hook events.
+// Loopback HTTP listener that receives Claude Code hook events.
 // One server per profile; a stable per-profile port (hash of userData into
 // 49152–65535, probed +1 on EADDRINUSE) and a random bearer token are persisted
 // in userData/claude-hooks.json. Replies `{}` immediately and forwards the

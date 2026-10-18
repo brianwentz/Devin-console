@@ -169,6 +169,9 @@ type ToolCallUpdateFields = {
   kind?: string | null;
   status?: ToolCallStatus | null;
   content?: unknown[] | null;
+  // When true, `content` appends to the existing array instead of replacing
+  // it (subagent folds send each new block as it arrives).
+  appendContent?: boolean;
   locations?: Array<{ path: string; line?: number | null }> | null;
   rawInput?: unknown;
   rawOutput?: unknown;
@@ -290,7 +293,13 @@ function mergeToolCall(existing: ToolCall | undefined, update: ToolCallUpdateFie
     ...(update.title != null ? { title: update.title } : {}),
     ...(update.kind != null ? { kind: update.kind } : {}),
     ...(update.status != null ? { status: update.status } : {}),
-    ...(update.content != null ? { content: update.content } : {}),
+    ...(update.content != null
+      ? {
+          content: update.appendContent
+            ? [...(base.content ?? []), ...update.content]
+            : update.content,
+        }
+      : {}),
     ...(update.locations != null ? { locations: update.locations } : {}),
     ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
     ...(update.rawOutput !== undefined ? { rawOutput: update.rawOutput } : {}),

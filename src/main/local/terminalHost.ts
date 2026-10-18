@@ -41,7 +41,7 @@ export type TerminalOpenOptions =
       mode: 'resume' | 'new' | 'attach';
       agentId?: string | undefined;
       cwd: string | null;
-      // Phase 4: `--settings` hook block + hook token env (resume/new only).
+      // claude-kind: `--settings` hook block + hook token env (resume/new only).
       extraArgs?: string[] | undefined;
       extraEnv?: Record<string, string> | undefined;
     };

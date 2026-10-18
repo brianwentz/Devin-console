@@ -234,7 +234,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     // autoInstallOnAppQuit runs inside it.
     if (options.installUpdate || hasDownloadedUpdate()) quitAndInstall();
     else {
-      // Last-resort watchdog: if the quit lifecycle itself stalls (the Phase 3
+      // Last-resort watchdog: if the quit lifecycle itself stalls (the
       // mid-quit app.exit() hang), force-exit rather than leak the process.
       setTimeout(() => {
         log('shell', 'shutdown-exit-watchdog');

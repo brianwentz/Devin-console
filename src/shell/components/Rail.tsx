@@ -58,7 +58,7 @@ function NotificationsButton({ buttonClass }: { buttonClass: string }) {
   );
 }
 
-// Phase 4: amber dot while any Claude session (hooks or chat) waits for a
+// Amber dot while any Claude session (hooks or chat) waits for a
 // permission decision — same style as #pollerWarning.
 function ClaudeButton({ surface, buttonClass }: { surface: Surface; buttonClass: string }) {
   const state = useShellState();

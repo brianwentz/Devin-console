@@ -1,4 +1,4 @@
-// Phase 4 — per-session activity derived from Claude Code hook events
+// Per-session activity derived from Claude Code hook events
 // (terminal / external sessions). Chat sessions report their own state and
 // win in `activityFor`.
 
@@ -15,7 +15,7 @@ export type ClaudeHookEvent = {
   receivedAt: number;
 };
 
-export type ClaudeActivity = 'running' | 'waiting';
+type ClaudeActivity = 'running' | 'waiting';
 
 export type ActivityState = Record<string, { activity: ClaudeActivity; since: number; lastEvent: number }>;
 

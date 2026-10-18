@@ -152,7 +152,7 @@ class PrTitleCache {
     } finally {
       clearTimeout(timer);
     }
-    // gh fallback (#5): when the page fetch produced no state and `gh` is on
+    // gh fallback: when the page fetch produced no state and `gh` is on
     // PATH, `gh pr view` fills title + state (auth is the user's `gh auth`).
     let via: 'page' | 'gh' = 'page';
     if (state === null) {

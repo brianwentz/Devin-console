@@ -1,4 +1,4 @@
-// Phase 4 — global opt-in: merge our loopback hook block into
+// Global opt-in: merge our loopback hook block into
 // <configDir>/settings.json (literal token — external terminals have no env
 // var) or remove it on disable. One-time backup `settings.json.devin-workspaces.bak`
 // before the first write; atomic tmp+rename; never throws.

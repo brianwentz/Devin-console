@@ -81,7 +81,7 @@ const legacyPr = (url: string): ClaudeRegistryPr => ({
   source: 'chat',
 });
 
-// Entries written before Phase 5 carry `prUrls: string[]`; they are migrated
+// Legacy entries carry `prUrls: string[]`; they are migrated
 // to `prs` on load (version stays 1). Both keys are optional in the raw shape
 // so either generation parses; the output always has `prs`.
 const RegistryEntrySchema = z
