@@ -501,6 +501,7 @@ export const notifier = new Notifier();
 export function openPrs(): SessionPr[] {
   return visiblePrs(prStore().records(), openPullRequests(state.apiSessions)).map((pr) => ({
     ...pr,
+    source: pr.source ?? 'devin',
     title: prTitles.get(pr.url),
   }));
 }
