@@ -87,6 +87,12 @@ Done when: a permission prompt in a terminal-launched session raises badge + ent
 - Claude PRs in the PR panel (registry seen-PRs → `openPullRequests` input), `openPr` routing to the Claude surface, PR titles via the existing cache.
 - README (intro bullet, First run, a "Claude sessions" section, Settings reference rows, shortcuts, Where things live: `claude-sessions.json`, `claude-hooks.json`), AGENTS.md (env vars, test hooks, log events, conventions), smoke spec update.
 
+### Phase 6 — Limitations and deferrals (`plans/claude-sessions-phase-6.md`)
+Closes every item deferred in Phases 1–5 and the README "Known limitations": subagent transcripts (nested rows + read-only view), Fork from the chat header, per-API-message ids for stream deltas, `--permission-mode` on app-launched ptys, `gh pr view` fallback for PR state, live history while terminal-owned, the `app.exit` quit hazard (normal `app.quit()` lifecycle), cost display, per-session view memory, persisted agents-section collapse, `SessionStart` re-probe.
+
+### Phase 7 — Cleanup (`plans/claude-sessions-phase-7-cleanup.md`)
+Code hygiene (phase breadcrumbs, `sessions.ts` split, reducer `appendContent`, pushed-store dedupe, lint), docs consolidation (AGENTS.md restructure, README, `plans/README.md` index), SDK bump policy + installer budget, and repository hygiene (merged branches, the reference `claude-workspace` repo — user-confirmed).
+
 ## 5. Phase 0 (already done) — what carries over from `claude-workspace`
 - `plans/claude-sessions-findings.md` (this repo) — the verdicts.
 - `scripts/sdk-probe.ts`, `scripts/hooks-probe.ts`, `scripts/store-probe.ts` — port verbatim with env/name changes (`CLAUDE_WORKSPACES_HOOK_TOKEN` → `DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN`), wired like `acp:contract`.
