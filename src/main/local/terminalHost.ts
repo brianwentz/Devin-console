@@ -13,7 +13,6 @@ import {
   settingsCandidates,
   splitCommandline,
   expandEnvVars,
-  type ResolvedShell,
   type WtProfile,
 } from '../../core/windowsTerminal';
 import { IpcChannels, type TerminalSummary } from '../../shared/ipc';
@@ -220,7 +219,7 @@ export class TerminalHost {
       env: process.env as Record<string, string | undefined>,
       distros: this.wslDistros(),
       pwshPath: this.pwshPath(),
-      windowsAppsDir: process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Microsoft\WindowsApps') : null,
+      windowsAppsDir: process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps') : null,
       existsSync,
     };
   }
@@ -437,6 +436,7 @@ export class TerminalHost {
     let proc: pty.IPty;
     try {
       // Lazy: a missing/broken native addon must not break app startup.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- deliberate lazy require inside try
       const nodePty = require('node-pty') as typeof pty;
       const args = [
         ...(command.appendCwd ? [...command.args, '--cd', normalized] : command.args),

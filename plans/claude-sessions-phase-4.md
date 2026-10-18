@@ -1,5 +1,7 @@
 # Phase 4 — Notifications via Claude Code hooks
 
+Status: Done — merged as PR #65.
+
 Technical plan for Phase 4 of `plans/claude-sessions.md`. Based on `main` after Phase 3. Three concurrent streams (core / main / shell) against the §1 contracts, then one integration pass. Spike B findings (`plans/claude-sessions-findings.md` §2) are the ground truth for hook behaviour.
 
 ## 0. Decisions

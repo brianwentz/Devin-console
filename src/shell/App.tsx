@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { computeBounds, DEFAULT_TERMINAL_HEIGHT, RAIL_WIDTH } from '../core/layout';
+import { computeBounds, RAIL_WIDTH } from '../core/layout';
 import { renderBadgeDataUrl } from './badge';
 import { handleSettingsFlush } from './settingsDraft';
 import { useShellState } from './store';

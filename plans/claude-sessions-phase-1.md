@@ -1,5 +1,7 @@
 # Phase 1 — Claude surface skeleton, SDK packaging, registry + sidebar
 
+Status: Done — merged as PRs #56–#59.
+
 Technical plan for Phase 1 of `plans/claude-sessions.md`. Four PRs, each ending green on `typecheck`, `test:unit`, `build`, `test:e2e`; PR 1 additionally gates on `dist:win` + `smoke:install`. Findings referenced below are in `plans/claude-sessions-findings.md`.
 
 ## 0. Decisions made in this planning round

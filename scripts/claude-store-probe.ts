@@ -64,10 +64,9 @@ async function main(): Promise<void> {
 
   const projectsDir = join(homedir(), '.claude', 'projects');
   const walk = walkProjects(projectsDir);
-  const walkIds = new Set(walk.map((w) => w.sessionId));
 
   // 1. listSessions() all projects, with and without includeProgrammatic
-  const s1 = await step('1-listSessions', async () => {
+  await step('1-listSessions', async () => {
     const t1 = Date.now();
     const all = await sdk.listSessions();
     const msAll = Date.now() - t1;

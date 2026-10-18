@@ -24,6 +24,10 @@ updates:
       # electron-builder is tracked on the v26 dist-tag; 27 is alpha.
       - dependency-name: electron-builder
         update-types: ["version-update:semver-major"]
+      # tools/lint pins typescript@5 for typescript-eslint (the root's typescript@7
+      # has no JS compiler API); a major bump there would break `npm run lint`.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -1,5 +1,7 @@
 # Phase 2 — Chat view via the Agent SDK
 
+Status: Done — merged as PR #60.
+
 Technical plan for Phase 2 of `plans/claude-sessions.md`. Built as three concurrent streams over disjoint files (core / main / shell) against the contracts in §1, then one integration pass. Findings referenced are in `plans/claude-sessions-findings.md` (Spike A).
 
 ## 0. Decisions

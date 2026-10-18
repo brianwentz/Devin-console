@@ -1,5 +1,7 @@
 # Phase 5 — Claude PRs in the PR panel, sidebar PR badges, final docs
 
+Status: Done — merged as PR #66.
+
 Technical plan for Phase 5 of `plans/claude-sessions.md`. Based on `main` after Phase 4. Three concurrent streams (core / main / shell+README) against the §1 contracts, then one integration pass (full e2e + isolated smoke).
 
 ## 0. Decisions

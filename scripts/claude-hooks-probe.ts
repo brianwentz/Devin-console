@@ -71,6 +71,7 @@ function waitForEvent(predicate: (e: Record<string, unknown>) => boolean, timeou
   });
 }
 
+// eslint-disable-next-line no-control-regex -- strips ANSI escapes (ESC / BEL are the point)
 const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07/g;
 
 // Spawn `claude` interactively in `cwd`, answer the folder-trust picker

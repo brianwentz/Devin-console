@@ -4,6 +4,7 @@ import { useCallback, useRef } from 'react';
 // Ctrl+C hook for the focused row's session id.
 export function useRowKeyboardNav(onCopy: (sessionId: string) => void) {
   const rowRefs = useRef<HTMLButtonElement[]>([]);
+  // eslint-disable-next-line react-hooks/refs -- reset per render on purpose; the callback refs below re-register rows in DOM order
   rowRefs.current = [];
 
   const registerRow = useCallback((el: HTMLButtonElement | null) => {

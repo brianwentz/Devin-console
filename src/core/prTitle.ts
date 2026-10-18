@@ -6,7 +6,7 @@
 
 const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
 const GH_SUFFIX = /\s*·\s*Pull Request #\d+\s*·\s*\S+\s*$/;
-const BY_SUFFIX = /\s+by\s+[\w.\-\[\]]+$/;
+const BY_SUFFIX = /\s+by\s+[\w.\-[\]]+$/;
 const SCAN_LIMIT = 64 * 1024;
 
 const NAMED: Record<string, string> = {
