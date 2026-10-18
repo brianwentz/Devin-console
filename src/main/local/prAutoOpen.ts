@@ -10,7 +10,7 @@ import { applyLayout } from '../window';
 export function autoOpenLocalPr(
   url: string,
   scope: string,
-  source: 'local-chat' | 'local-terminal' | 'claude-chat' | 'claude-terminal',
+  source: 'local-chat' | 'local-terminal' | 'claude-chat' | 'claude-terminal' | 'claude-hook',
 ): boolean {
   if (!(state.settings?.current.prs.autoOpenTabs ?? true)) return false;
   if (route(url, 'local', 'new-window', routeContext()).kind !== 'gh-tab') return false;

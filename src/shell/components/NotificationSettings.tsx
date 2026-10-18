@@ -25,6 +25,10 @@ export function NotificationSettings() {
   const userId = draft?.userId ?? '';
   const autoOpenTabs = shell?.settings.prs.autoOpenTabs ?? true;
   const identityState = notifications?.identity;
+  const claudeHooksEnabled = shell?.settings.claude.hooksEnabled ?? false;
+  const claudeHooks = shell?.claude.hooks;
+  const claudeConfigDir = shell?.claude.configDir ?? '~/.claude';
+  const claudeSettingsPath = `${claudeConfigDir}${claudeConfigDir.includes('\\') ? '\\' : '/'}settings.json`;
 
   useEffect(() => {
     setHasToken(notificationsHasToken);
@@ -98,6 +102,9 @@ export function NotificationSettings() {
 
   const toggleAutoOpenTabs = (enabled: boolean) => {
     void window.devinworkspaces.setSettings({ prs: { autoOpenTabs: enabled } });
+  };
+  const toggleClaudeHooks = (enabled: boolean) => {
+    void window.devinworkspaces.setSettings({ claude: { hooksEnabled: enabled } });
   };
 
   const identityLabel = (info: IdentityInfo | null): string => {
@@ -256,6 +263,39 @@ export function NotificationSettings() {
         />
         <span>Open a tab when a session creates a PR</span>
       </label>
+      <div className="flex flex-col gap-1 text-sm">
+        <label className="flex items-center gap-2">
+          <input
+            id="claudeHooksToggle"
+            type="checkbox"
+            checked={claudeHooksEnabled}
+            onChange={(event) => toggleClaudeHooks(event.target.checked)}
+          />
+          <span>Report Claude Code sessions started from other terminals</span>
+        </label>
+        <p className="text-xs text-[#7f8ca0]">
+          Writes an http hook block into {claudeSettingsPath} (removed when turned off).
+        </p>
+        {claudeHooks && (
+          <p
+            id="claudeHooksStatus"
+            data-hooks-installed={claudeHooks.installed ? 'true' : 'false'}
+            data-hooks-port={claudeHooks.port ?? undefined}
+            className="text-xs text-[#7f8ca0]"
+          >
+            {claudeHooks.port === null
+              ? 'Listener unavailable'
+              : claudeHooks.installed
+                ? `Hook installed · port ${claudeHooks.port}`
+                : `Listening on port ${claudeHooks.port}`}
+          </p>
+        )}
+        {claudeHooks?.error && (
+          <p id="claudeHooksError" className={errorTextClass}>
+            {claudeHooks.error}
+          </p>
+        )}
+      </div>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">User ID override (optional)</span>
         <input

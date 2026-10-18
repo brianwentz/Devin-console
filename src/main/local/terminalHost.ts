@@ -42,6 +42,9 @@ export type TerminalOpenOptions =
       mode: 'resume' | 'new' | 'attach';
       agentId?: string | undefined;
       cwd: string | null;
+      // Phase 4: `--settings` hook block + hook token env (resume/new only).
+      extraArgs?: string[] | undefined;
+      extraEnv?: Record<string, string> | undefined;
     };
 
 export interface ShellProfileInfo {
@@ -439,18 +442,24 @@ export class TerminalHost {
         ...(command.appendCwd ? [...command.args, '--cd', normalized] : command.args),
         ...(options.kind === 'devin' ? ['-r', options.sessionId] : []),
         ...(options.kind === 'claude'
-          ? options.mode === 'attach'
-            ? ['attach', options.agentId ?? '']
-            : options.mode === 'resume'
-              ? ['-r', options.sessionId]
-              : ['--session-id', options.sessionId]
+          ? [
+              ...(options.mode === 'attach'
+                ? ['attach', options.agentId ?? '']
+                : options.mode === 'resume'
+                  ? ['-r', options.sessionId]
+                  : ['--session-id', options.sessionId]),
+              ...(options.extraArgs ?? []),
+            ]
           : []),
       ];
       proc = nodePty.spawn(command.file, args, {
         cwd: normalized,
         cols,
         rows,
-        env: this.ptyEnv(options.kind),
+        env: {
+          ...this.ptyEnv(options.kind),
+          ...(options.kind === 'claude' ? options.extraEnv : {}),
+        },
         name: 'xterm-256color',
         useConpty: true,
       });

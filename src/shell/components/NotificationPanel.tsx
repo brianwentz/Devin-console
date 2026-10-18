@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCheck, Trash2 } from 'lucide-react';
+import { CheckCheck, Sparkles, Trash2 } from 'lucide-react';
 import { RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
 import type { AppNotification } from '../../core/notificationModel';
 import { useShellState } from '../store';
 import { relativeTime } from './relativeTime';
+
+// Phase 4: source glyph for Claude Code entries (panel rows + banner). Inline
+// so it sits before the title without changing the row layout.
+export function ClaudeGlyph() {
+  return (
+    <span
+      className="claude-glyph inline-flex align-[-2px] mr-1 text-[#c9a7ff]"
+      title="Claude Code"
+      aria-label="Claude Code"
+    >
+      <Sparkles size={12} />
+    </span>
+  );
+}
 
 // P6: modal popover — while open, main raises the shell view so the panel sits
 // over the hosted views (backdrop click closes). Rendered only when
@@ -93,6 +107,7 @@ export function NotificationPanel() {
               key={entry.id}
               data-notification-id={entry.id}
               data-unread={entry.readAt === null || undefined}
+              data-source={entry.source ?? 'devin'}
               className="relative flex items-start gap-2 border-b border-[#1a2330] px-3 py-2 last:border-0"
             >
               <button
@@ -107,6 +122,7 @@ export function NotificationPanel() {
                       : 'text-[#aeb9c8]'
                   }`}
                 >
+                  {entry.source === 'claude' && <ClaudeGlyph />}
                   {entry.title}
                 </div>
                 <div className="text-[11px] text-[#7d8a99] leading-snug">{entry.body}</div>

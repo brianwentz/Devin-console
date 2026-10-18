@@ -1,0 +1,150 @@
+// Phase 4 — Claude Code hook block builder and the pure settings.json merge /
+// remove used for both the `--settings` flag (env-var auth, our ptys) and the
+// global opt-in (`~/.claude/settings.json`, literal token). Our entries are
+// identified purely by URL (loopback + HOOK_PATH_PREFIX) so a port or token
+// change still finds the old ones.
+
+/** Path prefix of every hook URL we register; the event name follows it. */
+export const HOOK_PATH_PREFIX = '/devin-workspaces/hook/';
+
+/** Events we inject. `SessionStart` is deliberately absent (never fires via `--settings`). */
+export const HOOK_EVENTS = [
+  'UserPromptSubmit',
+  'PermissionRequest',
+  'Notification',
+  'Stop',
+  'SessionEnd',
+  'PostToolUse',
+] as const;
+
+export type HookEvent = (typeof HOOK_EVENTS)[number];
+
+export type HookAuth = { kind: 'env'; envVar: string } | { kind: 'token'; token: string };
+
+type JsonObject = Record<string, unknown>;
+
+const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** `http://127.0.0.1:<port>/devin-workspaces/hook/<event>` */
+export function hookUrl(port: number, event: string): string {
+  return `http://127.0.0.1:${port}${HOOK_PATH_PREFIX}${event}`;
+}
+
+/** True for an inner hook entry (`{type:'http', url}`) pointing at our listener on any port. */
+export function isOurHook(entry: unknown): boolean {
+  if (!isObject(entry) || entry.type !== 'http' || typeof entry.url !== 'string') return false;
+  return entry.url.startsWith('http://127.0.0.1:') && entry.url.includes(HOOK_PATH_PREFIX);
+}
+
+/**
+ * The `{ hooks: { <Event>: [group] } }` block Claude Code expects. One group
+ * per event with a single http hook; `PostToolUse` carries `matcher: 'Bash'`.
+ */
+export function buildHooksBlock(opts: { port: number; auth: HookAuth }): Record<string, unknown> {
+  const hooks: JsonObject = {};
+  for (const event of HOOK_EVENTS) {
+    const hook: JsonObject = {
+      type: 'http',
+      url: hookUrl(opts.port, event),
+      headers: {
+        Authorization: opts.auth.kind === 'env' ? `Bearer $${opts.auth.envVar}` : `Bearer ${opts.auth.token}`,
+      },
+    };
+    if (opts.auth.kind === 'env') hook.allowedEnvVars = [opts.auth.envVar];
+    hook.timeout = 2;
+    const group: JsonObject = event === 'PostToolUse' ? { matcher: 'Bash', hooks: [hook] } : { hooks: [hook] };
+    hooks[event] = [group];
+  }
+  return { hooks };
+}
+
+/** Compact JSON for `claude --settings <json>` with env-var auth. */
+export function settingsFlagJson(port: number, envVar: string): string {
+  return JSON.stringify(buildHooksBlock({ port, auth: { kind: 'env', envVar } }));
+}
+
+const serialise = (obj: unknown): string => `${JSON.stringify(obj, null, 2)}\n`;
+
+function parseSettings(settingsJson: string | null): { settings: JsonObject } | { error: string } {
+  if (settingsJson === null || settingsJson.trim() === '') return { settings: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(settingsJson);
+  } catch (err) {
+    return { error: `settings.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!isObject(parsed)) return { error: 'settings.json must contain a JSON object' };
+  return { settings: parsed };
+}
+
+// Remove our inner hooks from every group under `hooks[event]`; drop groups
+// that end up empty. Returns the surviving groups (possibly []).
+function withoutOurs(groups: unknown): unknown[] {
+  if (!Array.isArray(groups)) return [];
+  const out: unknown[] = [];
+  for (const group of groups) {
+    if (!isObject(group) || !Array.isArray(group.hooks)) {
+      out.push(group);
+      continue;
+    }
+    const kept = group.hooks.filter((h) => !isOurHook(h));
+    if (kept.length === group.hooks.length) out.push(group);
+    else if (kept.length > 0) out.push({ ...group, hooks: kept });
+  }
+  return out;
+}
+
+// Strip our entries from every event under `hooks`, deleting empty arrays and
+// the `hooks` key itself when nothing remains. Mutates a shallow copy.
+function stripOurs(settings: JsonObject): JsonObject {
+  if (!isObject(settings.hooks)) return settings;
+  const hooks: JsonObject = { ...settings.hooks };
+  for (const event of Object.keys(hooks)) {
+    const kept = withoutOurs(hooks[event]);
+    if (kept.length === 0 && Array.isArray(hooks[event])) delete hooks[event];
+    else if (Array.isArray(hooks[event])) hooks[event] = kept;
+  }
+  const next = { ...settings };
+  if (Object.keys(hooks).length === 0) delete next.hooks;
+  else next.hooks = hooks;
+  return next;
+}
+
+/**
+ * Merge `block` (from buildHooksBlock) into a settings file: our previous
+ * entries are replaced, foreign hooks and every other key are preserved.
+ * `changed` is false when the result equals the normalised input. Never throws.
+ */
+export function mergeHooksIntoSettings(
+  settingsJson: string | null,
+  block: Record<string, unknown>,
+): { json: string; changed: boolean } | { error: string } {
+  const parsed = parseSettings(settingsJson);
+  if ('error' in parsed) return parsed;
+  const before = serialise(parsed.settings);
+  const stripped = stripOurs(parsed.settings);
+  const existing: JsonObject = isObject(stripped.hooks) ? { ...stripped.hooks } : {};
+  const ours = isObject(block.hooks) ? block.hooks : {};
+  for (const event of Object.keys(ours)) {
+    const groups = ours[event];
+    if (!Array.isArray(groups)) continue;
+    const current = Array.isArray(existing[event]) ? (existing[event] as unknown[]) : [];
+    existing[event] = [...current, ...groups];
+  }
+  const json = serialise({ ...stripped, hooks: existing });
+  return { json, changed: json !== before };
+}
+
+/**
+ * Remove exactly our hook entries; foreign hooks stay. Empty event arrays and
+ * an empty `hooks` object are deleted. Never throws.
+ */
+export function removeHooksFromSettings(
+  settingsJson: string | null,
+): { json: string; changed: boolean } | { error: string } {
+  const parsed = parseSettings(settingsJson);
+  if ('error' in parsed) return parsed;
+  const before = serialise(parsed.settings);
+  const json = serialise(stripOurs(parsed.settings));
+  return { json, changed: json !== before };
+}

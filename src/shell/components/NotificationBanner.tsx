@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { AppNotification } from '../../core/notificationModel';
 import { useShellState } from '../store';
+import { ClaudeGlyph } from './NotificationPanel';
 
 const BANNER_MS = 8_000;
 
@@ -51,11 +52,13 @@ export function NotificationBanner() {
       id="notificationBanner"
       className="app-no-drag flex items-center gap-2 self-center rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-0.5 text-[11px] text-[#e8edf3] shadow-md max-w-[420px] cursor-pointer hover:bg-[#2a394d]"
       role="status"
+      data-source={current.source ?? 'devin'}
       onClick={() => {
         window.devinworkspaces.notificationsOpen(current.id);
         dismiss();
       }}
     >
+      {current.source === 'claude' && <ClaudeGlyph />}
       <span className="truncate">
         {current.title} — {current.body}
       </span>

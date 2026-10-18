@@ -38,6 +38,7 @@ export function setupTerminalIpc(): void {
         mode,
         agentId: arg.agentId,
         cwd: chat?.cwd ?? null,
+        ...(claudeSessions().hookInjection(arg.sessionId, mode) ?? {}),
       });
     }
     return terminalHost.open(parsed.data);
