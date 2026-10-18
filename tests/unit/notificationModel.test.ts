@@ -70,11 +70,13 @@ describe('itemKey', () => {
     expect(itemKey({ ...pr, kind: 'pr-completed' })).toBe('pr:https://x/pr/1');
     expect(itemKey({ kind: 'pr-opened', sessionId: 's1', prUrl: undefined })).toBe('pr:');
   });
-  it('maps status kinds to the sessionId', () => {
+  it('maps status kinds to source + sessionId (absent source = devin)', () => {
     for (const kind of ['waiting', 'approval', 'blocked', 'finished'] as const) {
-      expect(itemKey({ kind, sessionId: 's1' })).toBe('session:s1');
+      expect(itemKey({ kind, sessionId: 's1' })).toBe('session:devin:s1');
+      expect(itemKey({ kind, sessionId: 's1', source: 'devin' })).toBe('session:devin:s1');
+      expect(itemKey({ kind, sessionId: 's1', source: 'claude' })).toBe('session:claude:s1');
     }
-    expect(itemKey({ kind: 'waiting', sessionId: null })).toBe('session:');
+    expect(itemKey({ kind: 'waiting', sessionId: null })).toBe('session:devin:');
   });
   it('maps update to a singleton and identity/auth to their kind', () => {
     expect(itemKey({ kind: 'update', sessionId: null, version: '1.0.0' })).toBe('update');
@@ -293,6 +295,25 @@ describe('pruneForeign', () => {
     const legacy = note('l', 'waiting', 'sess-legacy');
     const update = { ...note('u', 'update', 'x'), sessionId: null, ownerUserId: null };
     expect(pruneForeign([own, legacy, update], null)).toEqual([update]);
+  });
+  it('keeps Claude entries for a user owner and a null owner', () => {
+    const claude: AppNotification = { ...note('c', 'waiting', 'uuid-1'), source: 'claude', ownerUserId: null };
+    const foreign = { ...note('f', 'waiting', 'sess-other'), ownerUserId: 'user-other' };
+    expect(pruneForeign([claude, foreign], 'u1')).toEqual([claude]);
+    expect(pruneForeign([claude, foreign], null)).toEqual([claude]);
+  });
+});
+
+describe('source isolation', () => {
+  it('a Claude finished does not supersede a Devin finished for the same id', () => {
+    let list = addNotification([], { ...note('x', 'finished', 'same-id'), ownerUserId: 'u1' }, 'id-devin');
+    list = addNotification(list, { ...note('x', 'finished', 'same-id'), source: 'claude', ownerUserId: null }, 'id-claude');
+    expect(list.map((n) => n.id)).toEqual(['id-claude', 'id-devin']);
+    // And the persisted-history cleanup agrees.
+    expect(collapseSuperseded(list).map((n) => n.id)).toEqual(['id-claude', 'id-devin']);
+    // A second Claude entry still supersedes the first Claude one only.
+    list = addNotification(list, { ...note('x', 'waiting', 'same-id'), source: 'claude', ownerUserId: null }, 'id-claude-2');
+    expect(list.map((n) => n.id)).toEqual(['id-claude-2', 'id-devin']);
   });
 });
 

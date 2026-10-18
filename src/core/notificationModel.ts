@@ -41,9 +41,10 @@ export const MAX_NOTIFICATIONS = 50;
 export type NewNotification = Omit<AppNotification, 'id' | 'readAt'>;
 
 // What a notification is "about" — a later entry for the same item supersedes
-// earlier ones.
+// earlier ones. Session kinds are keyed by source too, so a Claude uuid can
+// never supersede a Devin entry (or vice versa).
 export function itemKey(
-  n: Pick<AppNotification, 'kind' | 'sessionId' | 'prUrl' | 'version'>,
+  n: Pick<AppNotification, 'kind' | 'sessionId' | 'prUrl' | 'version' | 'source'>,
 ): string {
   switch (n.kind) {
     case 'pr-opened':
@@ -53,7 +54,7 @@ export function itemKey(
     case 'approval':
     case 'blocked':
     case 'finished':
-      return `session:${n.sessionId ?? ''}`;
+      return `session:${n.source ?? 'devin'}:${n.sessionId ?? ''}`;
     case 'update':
       return 'update';
     default:
@@ -110,9 +111,15 @@ export function unreadCount(list: readonly AppNotification[]): number {
 
 // Drop session-scoped entries that were derived for a different token user
 // (or by a build that recorded no owner). `ownerUserId === null` means the
-// token has no user identity, so every session-scoped entry goes.
+// token has no user identity, so every session-scoped entry goes. Claude
+// entries are not tied to the Devin identity and always survive.
 export function pruneForeign(list: readonly AppNotification[], ownerUserId: string | null): AppNotification[] {
-  return list.filter((item) => item.sessionId === null || (ownerUserId !== null && item.ownerUserId === ownerUserId));
+  return list.filter(
+    (item) =>
+      item.source === 'claude' ||
+      item.sessionId === null ||
+      (ownerUserId !== null && item.ownerUserId === ownerUserId),
+  );
 }
 
 export interface DeriveContext {

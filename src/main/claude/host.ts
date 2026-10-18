@@ -106,6 +106,11 @@ export class ClaudeHost {
   private readonly cliPath: () => string | null;
   private readonly isOnDisk: (id: string) => boolean;
   private readonly onPullRequestUrl: (sessionId: string, url: string) => void;
+  private readonly onEvent: (
+    sessionId: string,
+    kind: 'waiting' | 'finished' | 'blocked',
+    detail?: { tool?: string; error?: string },
+  ) => void;
   private readonly live = new Map<string, LiveQuery>();
   // Ids that have ever had a query created — the first uses `sessionId`, but
   // once the SDK wrote its transcript a died-and-restarted query must resume
@@ -126,11 +131,24 @@ export class ClaudeHost {
     configDir: string;
     isOnDisk: (id: string) => boolean;
     onPullRequestUrl: (sessionId: string, url: string) => void;
+    onEvent?: (
+      sessionId: string,
+      kind: 'waiting' | 'finished' | 'blocked',
+      detail?: { tool?: string; error?: string },
+    ) => void;
   }) {
     this.cliPath = opts.cliPath;
     this.configDir = opts.configDir;
     this.isOnDisk = opts.isOnDisk;
     this.onPullRequestUrl = opts.onPullRequestUrl;
+    this.onEvent = opts.onEvent ?? (() => undefined);
+  }
+
+  // Chat-derived notification events (Phase 4): finished on end_turn, blocked
+  // on any other terminal stop reason except cancelled (never emitted).
+  private emitFinish(id: string, stopReason: string, error?: string): void {
+    if (stopReason === 'end_turn') this.onEvent(id, 'finished');
+    else if (stopReason !== 'cancelled') this.onEvent(id, 'blocked', { error: error ?? '' });
   }
 
   isLive(id: string): boolean {
@@ -424,6 +442,7 @@ export class ClaudeHost {
           if (result.finish.error !== undefined) opts.error = result.finish.error;
           if (result.finish.usage !== undefined) opts.usage = result.finish.usage;
           update((s) => finishPrompt(s, id, result.finish!.stopReason, opts));
+          this.emitFinish(id, result.finish.stopReason, result.finish.error);
           log('claude', 'claude-turn', {
             detail: {
               sessionId: id,
@@ -447,6 +466,7 @@ export class ClaudeHost {
             now: new Date().toISOString(),
           }),
         );
+        this.emitFinish(id, 'error', 'Claude Code exited');
       }
       this.live.delete(id);
       this.patch(id, { live: 'stopped' });
@@ -474,6 +494,7 @@ export class ClaudeHost {
               now: new Date().toISOString(),
             }),
           );
+          this.emitFinish(id, 'error', message.slice(0, 200));
         }
         log('claude', 'claude-query-error', {
           detail: { sessionId: id, message: message.slice(0, 200) },
@@ -561,6 +582,7 @@ export class ClaudeHost {
         options,
       }),
     );
+    this.onEvent(sessionId, 'waiting', { tool: toolName });
     return new Promise((resolve) => {
       const wrapped = (result: unknown) => {
         opts.signal.removeEventListener('abort', onAbort);

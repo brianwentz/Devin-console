@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, Menu, shell } from 'electron';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type {
   ClaudeRegistry,
   ClaudeStoreSession,
@@ -26,9 +26,19 @@ import {
   touchOpened,
 } from '../../core/claudeRegistry';
 import { claudeScope } from '../../core/tabModel';
+import {
+  activityFor,
+  applyHookEvent,
+  expireActivity,
+  type ActivityState,
+  type ClaudeHookEvent,
+} from '../../core/claudeActivity';
+import { settingsFlagJson } from '../../core/claudeHooks';
+import { notificationsForHookEvent } from '../../core/claudeNotify';
+import type { NotificationKind } from '../../core/notificationModel';
 import type { ClaudeAgent, ClaudeState, Settings } from '../../shared/ipc';
 import { log } from '../log';
-import { state, testMode } from '../state';
+import { fixtureOrigins, state, testMode } from '../state';
 import { applyLayout, notifyShell } from '../window';
 import { resolveClaudePath, INSTALL_GUIDANCE } from './claudePath';
 import { ClaudeRegistryStore } from './registry';
@@ -38,6 +48,10 @@ import { sdkTargetCliVersion } from './sdk';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
 import { terminalHost } from '../local/terminalHost';
 import { ClaudeBackgroundAgents } from './backgroundAgents';
+import { ClaudeHookServer } from './hookServer';
+import { applyGlobalHooks } from './hooksInstall';
+import { getChatState } from './chatState';
+import { notificationStore } from '../notifications';
 
 const execFileAsync = promisify(execFile);
 
@@ -73,10 +87,28 @@ export class ClaudeSessions {
   private agents: ClaudeAgent[] = [];
   private backgroundAgents: ClaudeBackgroundAgents | null = null;
   private mutations: { op: string; payload: Record<string, unknown> }[] = [];
+  // Phase 4 — hook listener + activity + global-install state.
+  private hookServer: ClaudeHookServer | null = null;
+  private hooks: ClaudeState['hooks'] = {
+    port: null,
+    enabled: false,
+    installed: false,
+    error: null,
+  };
+  private activity: ActivityState = {};
+  private recentPermission = new Map<string, number>();
+  private activityTimer: NodeJS.Timeout | null = null;
 
-  constructor(opts: { configDir: string; registryStore: ClaudeRegistryStore }) {
+  private userData: string;
+
+  constructor(opts: {
+    configDir: string;
+    registryStore: ClaudeRegistryStore;
+    userData: string;
+  }) {
     this.configDir = opts.configDir;
     this.registryStore = opts.registryStore;
+    this.userData = opts.userData;
     this.store = new ClaudeStore({
       configDir: this.configDir,
       onChange: () => void this.refresh('watch'),
@@ -105,6 +137,7 @@ export class ClaudeSessions {
       onPullRequestUrl: (id, url) => {
         autoOpenLocalPr(url, claudeScope(id), 'claude-chat');
       },
+      onEvent: (id, kind, detail) => this.onChatEvent(id, kind, detail),
     });
     setClaudeHost(this.host);
     this.backgroundAgents = new ClaudeBackgroundAgents({
@@ -119,9 +152,136 @@ export class ClaudeSessions {
       onExit: (id) => this.endTerminal(id),
     };
     this.backgroundAgents.start();
+    this.hookServer = new ClaudeHookServer({
+      userData: this.userData,
+      onEvent: (e) => this.onHookEvent(e),
+    });
+    void this.hookServer.start().then((result) => {
+      if ('error' in result) {
+        this.hooks = { ...this.hooks, error: result.error };
+      } else {
+        this.hooks = { ...this.hooks, port: result.port, error: null };
+        this.applyHooks();
+      }
+      this.emit();
+    });
+    this.activityTimer = setInterval(() => this.expireActivity(), 10 * 60_000);
+    this.activityTimer.unref?.();
     void this.checkVersions();
     this.store.start();
     void this.refresh('start');
+  }
+
+  private expireActivity(): void {
+    const next = expireActivity(this.activity, Date.now());
+    if (next !== this.activity) {
+      this.activity = next;
+      this.emit();
+    }
+  }
+
+  // Global opt-in: (re)write our hook block into <configDir>/settings.json so
+  // external terminals report activity too; off removes exactly our entries.
+  private applyHooks(): void {
+    const info = this.hookServer?.info();
+    const enabled = state.settings?.current.claude.hooksEnabled ?? false;
+    this.hooks = { ...this.hooks, enabled };
+    if (!info) {
+      if (enabled) {
+        this.hooks = { ...this.hooks, installed: false, error: 'hook listener unavailable' };
+      }
+      return;
+    }
+    const result = applyGlobalHooks(this.configDir, enabled, info.port, info.token);
+    this.hooks = { ...this.hooks, enabled, installed: result.installed, error: result.error };
+  }
+
+  private titleFor(sessionId: string, cwd: string | undefined): string {
+    return (
+      this.sessions.find((s) => s.id === sessionId)?.title ??
+      (cwd ? basename(cwd) : null) ??
+      'Claude session'
+    );
+  }
+
+  private onHookEvent(e: ClaudeHookEvent): void {
+    const next = applyHookEvent(this.activity, e);
+    if (next !== this.activity) {
+      this.activity = next;
+      this.emit();
+    }
+    if (!(state.settings?.current.notifications.collect ?? true)) return;
+    const kinds = state.settings?.current.notifications.kinds;
+    const { notifications, prUrls } = notificationsForHookEvent(e, {
+      titleFor: (id, cwd) => this.titleFor(id, cwd),
+      enabled: {
+        waiting: kinds?.waiting ?? true,
+        finished: kinds?.finished ?? false,
+        prOpened: kinds?.prOpened ?? true,
+      },
+      now: Date.now(),
+      recentPermission: this.recentPermission,
+      githubOrigins: fixtureOrigins,
+    });
+    for (const n of notifications) notificationStore().add(n);
+    for (const url of prUrls) {
+      autoOpenLocalPr(url, claudeScope(e.session_id), 'claude-hook');
+    }
+  }
+
+  // Chat-derived notifications — the SDK host reports its own state changes;
+  // hook events never overlap (chat sessions get no hooks injected).
+  private onChatEvent(
+    sessionId: string,
+    kind: 'waiting' | 'finished' | 'blocked',
+    detail?: { tool?: string; error?: string },
+  ): void {
+    if (!(state.settings?.current.notifications.collect ?? true)) return;
+    const kinds = state.settings?.current.notifications.kinds;
+    const enabled: Record<'waiting' | 'finished' | 'blocked', boolean> = {
+      waiting: kinds?.waiting ?? true,
+      finished: kinds?.finished ?? false,
+      blocked: kinds?.blocked ?? true,
+    };
+    if (!enabled[kind]) return;
+    const sessionTitle = this.titleFor(sessionId, undefined);
+    notificationStore().add({
+      kind: kind as NotificationKind,
+      sessionId,
+      source: 'claude',
+      ownerUserId: null,
+      sessionTitle,
+      title:
+        kind === 'waiting'
+          ? 'Waiting for permission'
+          : kind === 'finished'
+            ? 'Finished a turn'
+            : 'Session error',
+      body:
+        kind === 'waiting'
+          ? `${detail?.tool ?? 'A tool'} in ${sessionTitle}`
+          : kind === 'finished'
+            ? sessionTitle
+            : (detail?.error ?? 'error').slice(0, 200),
+      createdAt: Date.now(),
+    });
+  }
+
+  // Pty spawn injection for claude-kind terminals: `--settings` hook block +
+  // the bearer token env var. Mode `attach` gets none (the background agent
+  // already runs) and a failed listener means no injection at all.
+  hookInjection(
+    sessionId: string,
+    mode: 'resume' | 'new' | 'attach',
+  ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
+    if (mode === 'attach') return null;
+    const info = this.hookServer?.info();
+    if (!info) return null;
+    const envVar = 'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN';
+    return {
+      extraArgs: ['--settings', settingsFlagJson(info.port, envVar)],
+      extraEnv: { [envVar]: info.token },
+    };
   }
 
   // `claude --version` once at start (and when claude.path changes) vs the
@@ -163,17 +323,41 @@ export class ClaudeSessions {
       error: this.error,
       lastSyncAt: this.lastSyncAt,
       folders: this.registry.folders,
-      sessions: sessions.map((s) => ({
-        ...s,
-        agentStatus: agentStatusBySession.get(s.id) ?? null,
-      })),
+      sessions: sessions.map((s) => {
+        const chat = getChatState().sessions[s.id];
+        return {
+          ...s,
+          agentStatus: agentStatusBySession.get(s.id) ?? null,
+          activity: activityFor(
+            this.activity,
+            chat
+              ? {
+                  running: chat.running === true,
+                  pendingPermission: chat.pendingPermission !== undefined,
+                }
+              : null,
+            s.id,
+          ),
+        };
+      }),
       showArchived: this.showArchived,
       lastError: this.lastError,
       versions: this.versions,
       agents: this.agents,
-      // Filled by the Phase 4 hook listener / global opt-in.
-      hooks: { port: null, enabled: false, installed: false, error: null },
+      hooks: this.hooks,
     };
+  }
+
+  activityMap(): ActivityState {
+    return this.activity;
+  }
+
+  hookInfo(): { port: number; token: string } | null {
+    return this.hookServer?.info() ?? null;
+  }
+
+  hooksSettingsPath(): string {
+    return join(this.configDir, 'settings.json');
   }
 
   agentsList(): ClaudeAgent[] {
@@ -516,6 +700,10 @@ export class ClaudeSessions {
       void this.checkVersions();
       this.emit();
     }
+    if (previous.claude.hooksEnabled !== next.claude.hooksEnabled) {
+      this.applyHooks();
+      this.emit();
+    }
   }
 
   // --- context menus ------------------------------------------------------
@@ -719,6 +907,9 @@ export class ClaudeSessions {
   dispose(): void {
     this.backgroundAgents?.dispose();
     if (terminalHost.claudeGate) terminalHost.claudeGate = null;
+    this.hookServer?.dispose();
+    if (this.activityTimer) clearInterval(this.activityTimer);
+    this.activityTimer = null;
     this.store.dispose();
     this.registryStore.dispose();
   }
@@ -748,5 +939,6 @@ function create(opts?: { configDir: string; userData: string }): ClaudeSessions 
   return new ClaudeSessions({
     configDir,
     registryStore: new ClaudeRegistryStore(userData),
+    userData,
   });
 }

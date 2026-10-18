@@ -1,4 +1,5 @@
 import { clipboard, webContents, WebContentsView } from 'electron';
+import { request as httpRequest } from 'node:http';
 import { cloudSessions } from './cloudSessions';
 import { computeBounds } from '../core/layout';
 import { clampFraction01, clampTerminalHeight } from '../core/layout';
@@ -288,13 +289,70 @@ export function registerTestHooks(): void {
       // Phase 3: background agents + claude terminal.
       claudeAgents: () => claudeSessions().agentsList(),
       claudeAgentsRefresh: () => claudeSessions().refreshAgents(),
-      claudeTerminalOpen: (id: string) =>
-        terminalHost.open({
+      // Phase 4 — hook listener info (port + token for test POSTs), the
+      // hook-derived activity map, a test POST against the listener, and the
+      // path of <configDir>/settings.json (global install target).
+      claudeHookInfo: () => claudeSessions().hookInfo(),
+      claudeActivity: () => claudeSessions().activityMap(),
+      claudeHooksSettingsPath: () => claudeSessions().hooksSettingsPath(),
+      claudePostHook: async (event: string, body: unknown) => {
+        const info = claudeSessions().hookInfo();
+        if (!info) return { ok: false, status: 0 };
+        return new Promise((resolve) => {
+          const req = httpRequest(
+            {
+              host: '127.0.0.1',
+              port: info.port,
+              path: `/devin-workspaces/hook/${event}`,
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${info.token}`,
+              },
+            },
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve({ ok: true, status: res.statusCode }));
+            },
+          );
+          req.on('error', () => resolve({ ok: false, status: 0 }));
+          req.end(JSON.stringify(body ?? {}));
+        });
+      },
+      claudePostHookRaw: async (event: string, body: unknown, auth?: string) => {
+        const info = claudeSessions().hookInfo();
+        if (!info) return { ok: false, status: 0 };
+        return new Promise((resolve) => {
+          const req = httpRequest(
+            {
+              host: '127.0.0.1',
+              port: info.port,
+              path: `/devin-workspaces/hook/${event}`,
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                ...(auth !== undefined ? { authorization: auth } : {}),
+              },
+            },
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve({ ok: true, status: res.statusCode }));
+            },
+          );
+          req.on('error', () => resolve({ ok: false, status: 0 }));
+          req.end(JSON.stringify(body ?? {}));
+        });
+      },
+      claudeTerminalOpen: (id: string) => {
+        const mode = claudeSessions().terminalModeFor(id);
+        return terminalHost.open({
           kind: 'claude',
           sessionId: id,
-          mode: claudeSessions().terminalModeFor(id),
+          mode,
           cwd: getChatState().sessions[id]?.cwd ?? null,
-        }),
+          ...(claudeSessions().hookInjection(id, mode) ?? {}),
+        });
+      },
       claudeSdkProbe: async () => {
         const t0 = Date.now();
         try {

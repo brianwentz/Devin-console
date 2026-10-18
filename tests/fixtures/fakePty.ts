@@ -7,6 +7,10 @@ const escape = (s: string) =>
   s.replace(/[\x00-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
 process.stdout.write('ready\n\x1b[?2004h');
 process.stdout.write(`args:${process.argv.slice(2).join(' ')}\n`);
+// Presence (not value) of injected env vars — the claude-hook token is a secret.
+process.stdout.write(
+  `env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=${process.env.DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN ? 'set' : 'unset'}\n`,
+);
 process.stdin.on('data', (data: Buffer) => {
   process.stdout.write(`echo:${escape(data.toString())}`);
 });

@@ -22,6 +22,8 @@ import { route } from '../core/linkRouter';
 import { prStore } from './prs';
 import { prTitles } from './prTitles';
 import { handleLink, loadInDevinView, routeContext } from './routing';
+import { claudeSessions } from './claude/sessions';
+import { claudeScope } from '../core/tabModel';
 import { state, testMode } from './state';
 import { installUpdate } from './updater';
 import { applyLayout, notifyShell, setNotificationsPanel, setPrsPanel } from './window';
@@ -550,6 +552,23 @@ export function openNotification(id: string): void {
   if (entry.kind === 'identity' || entry.kind === 'auth') {
     state.surface = 'settings';
     applyLayout();
+    return;
+  }
+  // Claude entries select the session on the Claude surface; a PR opens in
+  // the session's `claude:<id>` tab scope like openSessionPr does for Devin.
+  if (entry.source === 'claude' && entry.sessionId) {
+    state.surface = 'claude';
+    claudeSessions().open(entry.sessionId);
+    applyLayout();
+    if (entry.prUrl) {
+      state.tabManager?.open(entry.prUrl, { originSessionId: claudeScope(entry.sessionId) });
+    }
+    const windowRef = state.windowRef;
+    if (windowRef && !windowRef.isDestroyed()) {
+      if (windowRef.isMinimized()) windowRef.restore();
+      windowRef.show();
+      windowRef.focus();
+    }
     return;
   }
   if (entry.sessionId && entry.prUrl) {

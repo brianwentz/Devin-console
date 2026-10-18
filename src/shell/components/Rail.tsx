@@ -58,6 +58,33 @@ function NotificationsButton({ buttonClass }: { buttonClass: string }) {
   );
 }
 
+// Phase 4: amber dot while any Claude session (hooks or chat) waits for a
+// permission decision — same style as #pollerWarning.
+function ClaudeButton({ surface, buttonClass }: { surface: Surface; buttonClass: string }) {
+  const state = useShellState();
+  const waiting = state?.claude.sessions.some((s) => s.activity === 'waiting') ?? false;
+  return (
+    <button
+      id="claudeButton"
+      type="button"
+      aria-label="Claude"
+      aria-pressed={surface === 'claude'}
+      title="Claude"
+      className={`${buttonClass} relative flex items-center justify-center`}
+      onClick={() => void requestSurface('claude')}
+    >
+      <Sparkles size={18} strokeWidth={1.8} />
+      {waiting && (
+        <span
+          id="claudeWaitingBadge"
+          className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#e0a03c]"
+          title="A Claude session is waiting for permission"
+        />
+      )}
+    </button>
+  );
+}
+
 export function Rail({
   surface,
   paneOpen,
@@ -94,17 +121,7 @@ export function Rail({
       >
         ⌘
       </button>
-      <button
-        id="claudeButton"
-        type="button"
-        aria-label="Claude"
-        aria-pressed={surface === 'claude'}
-        title="Claude"
-        className={`${buttonClass} flex items-center justify-center`}
-        onClick={() => void requestSurface('claude')}
-      >
-        <Sparkles size={18} strokeWidth={1.8} />
-      </button>
+      <ClaudeButton surface={surface} buttonClass={buttonClass} />
       <button
         id="analyticsButton"
         type="button"

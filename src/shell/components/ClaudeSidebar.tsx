@@ -198,7 +198,21 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       'data-cwd': s.cwd ?? '',
       'data-archived': s.isArchived,
       'data-agent-status': s.agentStatus ?? undefined,
+      'data-activity': s.activity ?? undefined,
     }),
+    // Hook/chat activity dot (blue running / amber waiting), mirroring the
+    // Cloud sidebar's status dot in the leading slot. Hidden when idle.
+    leading: (s: ClaudeSessionState) =>
+      s.activity ? (
+        <span className="w-[18px] h-[18px] shrink-0 flex items-center justify-center">
+          <span
+            className={`activity-dot w-2 h-2 rounded-full ${
+              s.activity === 'running' ? 'bg-[#83b6ff]' : 'bg-[#e0a03c]'
+            }`}
+            title={s.activity === 'running' ? 'Running' : 'Waiting for permission'}
+          />
+        </span>
+      ) : null,
     badges: (s: ClaudeSessionState) => (
       <>
         {s.agentStatus === 'running' && (
