@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { launchWithClaudeFixture, shellPage, waitForEvent } from './helpers';
+import { closeApp, launchWithClaudeFixture, shellPage, waitForEvent } from './helpers';
 import type { ClaudeAgent, ClaudeState } from '../../src/shared/ipc';
 
 // §2.5: the Claude terminal tab + background agents end-to-end — fake pty
@@ -163,7 +163,7 @@ test('terminal tab: spawn, banner, reuse, close restores chat + history', async 
     await expect(shell.locator('#composer')).toBeEnabled();
     await waitForEvent(logFile, 'claude-history');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -204,7 +204,7 @@ test('opening the terminal during a running prompt is refused', async () => {
       .poll(async () => (await h.claudeChatState()).sessions[id]?.running)
       .toBeFalsy();
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -227,7 +227,7 @@ test('sidebar "Open in terminal" selects the session and shows the terminal tab'
       timeout: 10_000,
     });
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -309,7 +309,7 @@ test('background agents: badges, orphan section, stop via menu', async () => {
       shell.locator(`[data-session-id="${UA}"]`),
     ).not.toHaveAttribute('data-agent-status', 'running');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }

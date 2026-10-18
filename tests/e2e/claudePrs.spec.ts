@@ -10,6 +10,7 @@ import {
   launchApp,
   launchWithClaudeFixture,
   shellPage,
+  closeApp,
 } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 import type { SessionPr } from '../../src/shared/ipc';
@@ -123,7 +124,7 @@ test('recordPr lands in the PR panel + sidebar badge', async () => {
       shell.locator(`[data-pr-url="${url}"][data-source="claude"]`),
     ).toContainText('Alpha custom');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -139,17 +140,28 @@ test('opening a Claude PR row selects the session on the claude surface + hidden
       .poll(async () => (await h.listPrs()).filter((p) => p.source === 'claude').length)
       .toBe(1);
     await h.prsOpen(UA, url);
-    await expect.poll(async () => (await h.state()).surface).toBe('claude');
-    await expect.poll(async () => (await h.state()).claudeSessionId).toBe(UA);
-    // The PR opens as the active tab of the session's claude:<id> scope.
+    // One poll for the full outcome: surface + selection + the PR as the
+    // active tab of the session's claude:<id> scope (each state() round-trip
+    // serializes the whole ShellState — sequential polls stretch badly under
+    // suite load).
     await expect
-      .poll(async () =>
-        ((await h.state()).tabs.tabs as { url: string }[]).some((t) => t.url === url),
-      )
+      .poll(async () => {
+        const s = await h.state();
+        return (
+          s.surface === 'claude' &&
+          s.claudeSessionId === UA &&
+          (s.tabs.tabs as { url: string }[]).some((t) => t.url === url)
+        );
+      })
       .toBe(true);
   } finally {
-    await app.close().catch(() => undefined);
-    rmSync(profile, { recursive: true, force: true });
+    await closeApp(app);
+    // A killed app's profile handles linger for a beat on Windows.
+    try {
+      rmSync(profile, { recursive: true, force: true });
+    } catch {
+      /* leave the temp profile */
+    }
   }
 });
 
@@ -184,7 +196,7 @@ test('merged state drops the row, badges merged, one pr-completed notification',
       )
       .toBe(1);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -218,7 +230,7 @@ test('merged state persists across relaunch with no second notification', async 
       })
       .toBe('merged');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
   }
 
   const app2 = await launchApp(
@@ -244,7 +256,7 @@ test('merged state persists across relaunch with no second notification', async 
     // A merged PR stays out of the open list.
     expect((await h2.listPrs()).filter((p) => p.url === url).length).toBe(0);
   } finally {
-    await app2.close().catch(() => undefined);
+    await closeApp(app2);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -270,7 +282,7 @@ test('chat echo with a PR link records + auto-opens the tab', async () => {
     const events = readFileSync(join(profile, 'events.jsonl'), 'utf8');
     expect(events).toContain('"event":"pr-auto-open"');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -319,7 +331,7 @@ test('legacy prUrls registry migrates to prs entries on load', async () => {
       .poll(async () => (await h.listPrs()).filter((p) => p.url === url).length)
       .toBe(1);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -353,7 +365,7 @@ test('gh fallback fills state when the page fetch cannot', async () => {
     const events = readFileSync(join(profile, 'events.jsonl'), 'utf8');
     expect(events).toContain('"via":"gh"');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { launchApp, launchWithClaudeFixture, shellPage, setInputValue } from './helpers';
+import { closeApp, launchApp, launchWithClaudeFixture, shellPage, setInputValue } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §5.4: the Claude sidebar end-to-end — same fixture tree as
@@ -178,7 +178,7 @@ test('claude sidebar: rows, filter, menus, view, surface round-trip', async () =
       })
       .toMatchObject({ path: 'C:\\tools\\claude.exe', autoArchiveDays: 30 });
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -193,7 +193,7 @@ test('rail button switches to the claude surface and persists it', async () => {
     await expect.poll(async () => (await h.state()).surface).toBe('claude');
     await expect(shell.locator('#claudeButton')).toHaveAttribute('aria-pressed', 'true');
     await expect(shell.locator('[data-claude-view]')).toBeVisible();
-    await app.close().catch(() => undefined);
+    await closeApp(app);
 
     // Surface persists across relaunch on the same profile.
     const app2 = await launchApp(
@@ -212,7 +212,7 @@ test('rail button switches to the claude surface and persists it', async () => {
       await app2.close().catch(() => undefined);
     }
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
