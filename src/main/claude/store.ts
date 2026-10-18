@@ -14,7 +14,7 @@ const POLL_MS = 30_000;
 
 export class ClaudeStore {
   private configDir: string;
-  private onChange: () => void;
+  private onChange: (files: string[]) => void;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -22,7 +22,7 @@ export class ClaudeStore {
   private watchRestarts = 0;
   private watchFailed = false;
 
-  constructor(opts: { configDir: string; onChange: () => void }) {
+  constructor(opts: { configDir: string; onChange: (files: string[]) => void }) {
     this.configDir = opts.configDir;
     this.onChange = opts.onChange;
   }
@@ -69,6 +69,11 @@ export class ClaudeStore {
     return sdk.listSubagents(id);
   }
 
+  async subagentMessages(id: string, agentId: string): Promise<unknown[]> {
+    const sdk = await loadSdk();
+    return (await sdk.getSubagentMessages(id, agentId)) as unknown[];
+  }
+
   // The SDK exposes no transcript-path API: <configDir>/projects/<encoded cwd>/
   // <id>.jsonl — find it by scanning project dirs for the id-named file.
   async transcriptPath(id: string): Promise<string | null> {
@@ -98,11 +103,15 @@ export class ClaudeStore {
     }
     this.stopPoll();
     try {
-      this.watcher = watch(this.projectsDir, { recursive: true }, () => {
+      const changed = new Set<string>();
+      this.watcher = watch(this.projectsDir, { recursive: true }, (_event, filename) => {
+        if (filename) changed.add(filename);
         if (this.watchTimer) return;
         this.watchTimer = setTimeout(() => {
           this.watchTimer = null;
-          this.onChange();
+          const files = [...changed];
+          changed.clear();
+          this.onChange(files);
         }, WATCH_DEBOUNCE_MS);
       });
       this.watcher.on('error', () => {
@@ -136,7 +145,7 @@ export class ClaudeStore {
         this.startWatch();
         return;
       }
-      if (dirExists) this.onChange();
+      if (dirExists) this.onChange([]);
     }, POLL_MS);
     this.pollTimer.unref?.();
   }

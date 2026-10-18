@@ -22,6 +22,8 @@ export interface ChatViewProps {
   onPermission: (requestId: string, optionId: string) => void;
   // Rendered above the composer (Local's terminal-owned banner).
   banner?: ReactNode;
+  // Hides the footer (composer, banner, hint) entirely — read-only transcripts.
+  readOnly?: boolean;
 }
 
 export function ChatView({
@@ -37,6 +39,7 @@ export function ChatView({
   onCancel,
   onPermission,
   banner,
+  readOnly = false,
 }: ChatViewProps) {
   const [draft, setDraftState] = useState(() => getDraft(draftKey));
   const scroller = useRef<HTMLDivElement>(null);
@@ -108,39 +111,41 @@ export function ChatView({
           {error}
         </div>
       )}
-      <footer className="border-t border-[#39475a] px-4 py-3">
-        {banner}
-        <div className="flex items-end gap-2">
-          <textarea
-            id="composer"
-            className="min-h-[44px] max-h-40 flex-1 resize-y rounded-md border border-[#39475a] bg-[#0d141d] px-2 py-1.5 text-sm text-[#e8edf5]"
-            placeholder={
-              disabledReason ?? (session ? composerPlaceholder : 'Start a session to chat')
-            }
-            value={draft}
-            disabled={disabled}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onComposerKey}
-            rows={2}
-          />
-          {session?.running ? (
-            <button id="cancelButton" type="button" className={buttonClass} onClick={onCancel}>
-              Cancel
-            </button>
-          ) : (
-            <button
-              id="sendButton"
-              type="button"
-              className={buttonClass}
-              disabled={disabled || !draft.trim()}
-              onClick={send}
-            >
-              Send
-            </button>
-          )}
-        </div>
-        <p className="mt-1.5 text-[11px] text-[#7f8ca0]">{footerHint}</p>
-      </footer>
+      {!readOnly && (
+        <footer className="border-t border-[#39475a] px-4 py-3">
+          {banner}
+          <div className="flex items-end gap-2">
+            <textarea
+              id="composer"
+              className="min-h-[44px] max-h-40 flex-1 resize-y rounded-md border border-[#39475a] bg-[#0d141d] px-2 py-1.5 text-sm text-[#e8edf5]"
+              placeholder={
+                disabledReason ?? (session ? composerPlaceholder : 'Start a session to chat')
+              }
+              value={draft}
+              disabled={disabled}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={onComposerKey}
+              rows={2}
+            />
+            {session?.running ? (
+              <button id="cancelButton" type="button" className={buttonClass} onClick={onCancel}>
+                Cancel
+              </button>
+            ) : (
+              <button
+                id="sendButton"
+                type="button"
+                className={buttonClass}
+                disabled={disabled || !draft.trim()}
+                onClick={send}
+              >
+                Send
+              </button>
+            )}
+          </div>
+          <p className="mt-1.5 text-[11px] text-[#7f8ca0]">{footerHint}</p>
+        </footer>
+      )}
     </>
   );
 }

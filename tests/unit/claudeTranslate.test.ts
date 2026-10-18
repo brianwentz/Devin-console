@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ERROR_TEXT_MAX,
   TOOL_RESULT_TEXT_MAX,
+  messageIdFromStreamEvent,
   toolCallKind,
   toolCallLocations,
   toolCallTitle,
@@ -120,6 +121,47 @@ describe('translateSdkMessage', () => {
     expect(translateSdkMessage(delta({ type: 'thinking_delta', thinking: 'hmm' }), LIVE).updates).toEqual([
       { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } },
     ]);
+  });
+
+  it('stream deltas carry opts.messageId when the host supplies one; empty/null → none', () => {
+    const withId = { streaming: true, messageId: 'msg_a' };
+    expect(translateSdkMessage(delta({ type: 'text_delta', text: 'Hel' }), withId).updates).toEqual([
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hel' }, messageId: 'msg_a' },
+    ]);
+    expect(translateSdkMessage(delta({ type: 'thinking_delta', thinking: 'hmm' }), withId).updates).toEqual([
+      { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' }, messageId: 'msg_a' },
+    ]);
+    for (const opts of [{ streaming: true, messageId: null }, { streaming: true, messageId: '' }, LIVE]) {
+      expect(translateSdkMessage(delta({ type: 'text_delta', text: 'x' }), opts).updates).toEqual([
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x' } },
+      ]);
+    }
+    expect(translateSdkMessage(delta({ type: 'text_delta', text: 'x' }), { streaming: false, messageId: 'msg_a' }).updates).toEqual([]);
+  });
+
+  it('messageIdFromStreamEvent reads message_start ids and nothing else', () => {
+    const start = (message: unknown) => ({ type: 'stream_event', session_id: SID, event: { type: 'message_start', message } });
+    expect(messageIdFromStreamEvent(start({ id: 'msg_01', role: 'assistant' }))).toBe('msg_01');
+    const nulls: unknown[] = [
+      start({ id: '' }),
+      start({ id: 7 }),
+      start({}),
+      start(null),
+      start('msg_01'),
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } } },
+      { type: 'stream_event', event: { type: 'message_start' } },
+      { type: 'stream_event', event: null },
+      { type: 'stream_event' },
+      { type: 'assistant', event: { type: 'message_start', message: { id: 'msg_01' } } },
+      null,
+      undefined,
+      42,
+      'str',
+      [],
+      {},
+    ];
+    for (const input of nulls) expect(messageIdFromStreamEvent(input)).toBeNull();
   });
 
   it('stream deltas are ignored when not streaming, from subagents, or of other kinds', () => {
@@ -285,6 +327,38 @@ describe('translateSdkMessage', () => {
     expect(translateSdkMessage({ type: 'result', subtype: 'success' }, LIVE).finish?.stopReason).toBe('end_turn');
   });
 
+  it('result total_cost_usd → finish.usage.costUsd, with or without a usage object; non-finite ignored', () => {
+    const withUsage = translateSdkMessage(
+      { type: 'result', subtype: 'success', usage: USAGE, total_cost_usd: 0.1234 },
+      LIVE,
+    );
+    expect(withUsage.finish?.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedReadTokens: 100,
+      cachedWriteTokens: 20,
+      totalTokens: 15,
+      costUsd: 0.1234,
+    });
+    const noUsage = translateSdkMessage({ type: 'result', subtype: 'error_max_turns', total_cost_usd: 0.5 }, LIVE);
+    expect(noUsage.finish).toEqual({
+      stopReason: 'max_turn_requests',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cachedReadTokens: null,
+        cachedWriteTokens: null,
+        totalTokens: null,
+        costUsd: 0.5,
+      },
+    });
+    expect(translateSdkMessage({ type: 'result', subtype: 'success', total_cost_usd: 0 }, LIVE).finish?.usage?.costUsd).toBe(0);
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, '0.1', null, undefined]) {
+      const out = translateSdkMessage({ type: 'result', subtype: 'success', usage: USAGE, total_cost_usd: bad }, LIVE);
+      expect(out.finish?.usage).not.toHaveProperty('costUsd');
+    }
+  });
+
   it('result error subtypes', () => {
     expect(translateSdkMessage({ type: 'result', subtype: 'error_max_turns', usage: USAGE }, LIVE).finish).toMatchObject({
       stopReason: 'max_turn_requests',
@@ -351,8 +425,16 @@ describe('round trip through the reducers', () => {
     type S = ChatStateLike & { sessions: Record<string, ReturnType<typeof newChatSession> & { cwd: string }> };
     let state: S = { sessions: { [SID]: { ...newChatSession({ id: SID }), cwd: '/w' } } };
     state = startPrompt(state, SID, 'list files', '2026-10-01T00:00:00Z');
+    const start = (id: string) => ({
+      type: 'stream_event',
+      uuid: 'ev-0',
+      session_id: SID,
+      parent_tool_use_id: null,
+      event: { type: 'message_start', message: { id, role: 'assistant', content: [] } },
+    });
     const script: unknown[] = [
       { type: 'system', subtype: 'init', model: 'claude-x', permissionMode: 'default', cwd: '/w' },
+      start('msg_1'),
       delta({ type: 'thinking_delta', thinking: 'Let me ' }),
       delta({ type: 'thinking_delta', thinking: 'look.' }),
       delta({ type: 'text_delta', text: 'Listing' }),
@@ -364,17 +446,21 @@ describe('round trip through the reducers', () => {
       ]),
       user([{ type: 'tool_result', tool_use_id: 'tu1', content: 'a.ts\nb.ts', is_error: false }]),
       assistant([{ type: 'tool_use', id: 'sub1', name: 'Read', input: { file_path: 'a.ts' } }], 'tu1'),
+      start('msg_2'),
       delta({ type: 'text_delta', text: 'Done.' }),
       {
         type: 'result',
         subtype: 'success',
         usage: USAGE,
+        total_cost_usd: 0.0421,
         modelUsage: { 'claude-x': { contextWindow: 200000 } },
       },
     ];
     let init: unknown;
+    let messageId: string | null = null;
     for (const msg of script) {
-      const out = translateSdkMessage(msg, LIVE);
+      messageId = messageIdFromStreamEvent(msg) ?? messageId;
+      const out = translateSdkMessage(msg, { streaming: true, messageId });
       if (out.init) init = out.init;
       for (const update of out.updates) state = applyUpdate(state, SID, update);
       if (out.finish) {
@@ -396,13 +482,14 @@ describe('round trip through the reducers', () => {
       { role: 'user', blocks: [{ type: 'text', text: 'list files' }] },
       {
         role: 'agent',
+        messageId: 'msg_1',
         blocks: [
           { type: 'thought', text: 'Let me look.' },
           { type: 'text', text: 'Listing now.' },
           { type: 'tool_call', id: 'tu1' },
-          { type: 'text', text: 'Done.' },
         ],
       },
+      { role: 'agent', messageId: 'msg_2', blocks: [{ type: 'text', text: 'Done.' }] },
     ]);
     expect(session.toolCalls.tu1).toEqual({
       id: 'tu1',
@@ -421,6 +508,7 @@ describe('round trip through the reducers', () => {
       cachedReadTokens: 100,
       cachedWriteTokens: 20,
       totalTokens: 15,
+      costUsd: 0.0421,
     });
   });
 

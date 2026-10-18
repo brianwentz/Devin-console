@@ -42,7 +42,10 @@ describe('buildHooksBlock', () => {
   it('has one group per event with a single http hook; matcher only on PostToolUse', () => {
     const hooks = (ENV_BLOCK as Settings).hooks!;
     expect(Object.keys(hooks).sort()).toEqual([...HOOK_EVENTS].sort());
-    expect(HOOK_EVENTS).not.toContain('SessionStart');
+    expect(HOOK_EVENTS).toHaveLength(7);
+    expect(HOOK_EVENTS[0]).toBe('SessionStart');
+    expect(Object.keys(hooks)[0]).toBe('SessionStart');
+    expect(hooks.SessionStart).toEqual([{ hooks: [expect.objectContaining({ type: 'http', url: hookUrl(51234, 'SessionStart') })] }]);
     for (const event of HOOK_EVENTS) {
       const groups = hooks[event]!;
       expect(groups).toHaveLength(1);
@@ -121,6 +124,21 @@ describe('mergeHooksIntoSettings', () => {
       expect(out.hooks![event]![0]!.hooks[0]!.url).toBe(hookUrl(51234, event));
       expect(res.json).not.toContain('Bearer old');
     }
+  });
+  it('SessionStart: a foreign hook survives, a stale entry of ours is replaced, remove leaves the foreign one', () => {
+    const input = JSON.stringify({
+      hooks: { SessionStart: [{ matcher: 'startup', hooks: [FOREIGN] }, { hooks: [{ type: 'http', url: hookUrl(1, 'SessionStart') }] }] },
+    });
+    const res = mergeHooksIntoSettings(input, TOKEN_BLOCK);
+    if ('error' in res) throw new Error(res.error);
+    const start = parse(res.json).hooks!.SessionStart!;
+    expect(start).toHaveLength(2);
+    expect(start[0]).toEqual({ matcher: 'startup', hooks: [FOREIGN] });
+    expect(start[1]).toEqual({ hooks: [expect.objectContaining({ url: hookUrl(51234, 'SessionStart') })] });
+    const removed = removeHooksFromSettings(res.json);
+    if ('error' in removed) throw new Error(removed.error);
+    expect(removed.changed).toBe(true);
+    expect(parse(removed.json)).toEqual({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [FOREIGN] }] } });
   });
   it('removes only our inner hook from a mixed group, keeping the foreign sibling', () => {
     const mixed = { hooks: { Stop: [{ hooks: [FOREIGN, { type: 'http', url: hookUrl(1, 'Stop') }] }] } };

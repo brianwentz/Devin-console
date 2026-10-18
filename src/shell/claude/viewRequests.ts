@@ -36,3 +36,16 @@ export function consumeTerminalRequest(requestSeq: number): void {
 export function useTerminalRequest(): TerminalRequest | null {
   return useSyncExternalStore(subscribe, () => current);
 }
+
+// Last Chat/Terminal tab per session (shell memory only, not persisted):
+// switching sessions returns to the tab you were on. Default 'chat'.
+export type ClaudeViewTab = 'chat' | 'terminal';
+const lastView = new Map<string, ClaudeViewTab>();
+
+export function getLastView(sessionId: string): ClaudeViewTab {
+  return lastView.get(sessionId) ?? 'chat';
+}
+
+export function rememberView(sessionId: string, view: ClaudeViewTab): void {
+  lastView.set(sessionId, view);
+}

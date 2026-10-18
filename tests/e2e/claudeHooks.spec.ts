@@ -115,7 +115,7 @@ test('hook events drive sidebar activity + notification entries (dedup + kinds)'
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\work\alpha',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -207,7 +207,7 @@ test('PostToolUse gh pr create → pr-opened entry + auto-opened tab in claude s
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\work\alpha',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -256,7 +256,7 @@ test('a bad token is rejected (401 + claude-hook-rejected)', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\work\alpha',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -289,7 +289,7 @@ test('opening a waiting notification selects the session on the claude surface',
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\work\alpha',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -321,7 +321,7 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\work\alpha',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -396,6 +396,9 @@ test('claude pty gets --settings hook block + token env (resume mode)', async ()
     const text = await h.terminalRead(t.id);
     expect(text).toContain('--settings');
     expect(text).toContain(`-r ${UA}`);
+    // Phase 6 #4: the app default permission mode is passed through.
+    expect(text).toContain('--permission-mode');
+    expect(text).toContain('default');
     expect(text).toContain('env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=set');
   } finally {
     await app.close().catch(() => undefined);
@@ -407,7 +410,7 @@ test('chat: permission card → waiting entry; Allow → finished', async () => 
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\work\alpha',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     FAKE_CLAUDE_TOOL: '1',
   });
   const h = hooks(app);

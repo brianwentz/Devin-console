@@ -298,6 +298,13 @@ export function registerTestHooks(): void {
       claudeRefreshPrStates: () => claudeSessions().refreshPrStates('test'),
       prTitlesSeed: (url: string, info: { title: string | null; state: string | null }) =>
         prTitles.seed(url, { title: info.title, state: info.state as 'open' | 'draft' | 'merged' | 'closed' | null }),
+      // Phase 6 — subagents + message ids + shutdown state.
+      claudeSubagents: (sessionId: string) => claudeSessions().loadSubagents(sessionId),
+      claudeOpenSubagent: (sessionId: string, agentId: string) =>
+        claudeSessions().openSubagent(sessionId, agentId),
+      claudeChatMessageIds: (sessionId: string) =>
+        getChatState().sessions[sessionId]?.messages.map((m) => m.messageId ?? null) ?? [],
+      shutdownState: () => ({ complete: state.shutdownComplete, inFlight: state.shuttingDown }),
       // Phase 4 — hook listener info (port + token for test POSTs), the
       // hook-derived activity map, a test POST against the listener, and the
       // path of <configDir>/settings.json (global install target).

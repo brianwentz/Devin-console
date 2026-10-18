@@ -30,7 +30,11 @@ import {
   upsertSession,
 } from '../../core/localModel';
 import { LinkScanner } from '../../core/prLinks';
-import { translateSdkMessage, toolCallTitle } from '../../core/claudeTranslate';
+import {
+  messageIdFromStreamEvent,
+  toolCallTitle,
+  translateSdkMessage,
+} from '../../core/claudeTranslate';
 import { fixtureOrigins, state, testMode } from '../state';
 import { log } from '../log';
 import { getChatState, update, type ClaudeChatState } from './chatState';
@@ -119,6 +123,10 @@ export class ClaudeHost {
   // Subagent tool_use titles per parent call; tool_call_update content is
   // replace-semantics, so the host accumulates and re-sends the full array.
   private readonly subagentNotes = new Map<string, Map<string, unknown[]>>();
+  // Current API message id per session (message_start → event.message.id) —
+  // stamped on stream deltas so consecutive API messages render as separate
+  // agent bubbles (#3).
+  private readonly currentMessageIds = new Map<string, string | null>();
   private readonly scanners = new Map<string, LinkScanner>();
   private readonly pendingPermissions = new Map<
     string,
@@ -214,7 +222,72 @@ export class ClaudeHost {
     void this.closeLive(id);
     this.scanners.delete(id);
     this.subagentNotes.delete(id);
-    update((s) => removeSession(s, id));
+    this.currentMessageIds.delete(id);
+    update((s) => ({
+      ...removeSession(s, id),
+      subagentSessions: Object.fromEntries(
+        Object.entries(s.subagentSessions).filter(([key]) => !key.startsWith(`${id}/`)),
+      ),
+    }));
+  }
+
+  // Read-only subagent transcript chat state keyed '<sessionId>/<agentId>'
+  // (#1): never a live query, never prompts.
+  ensureSubagentSession(key: string, info: { cwd: string | null }): void {
+    if (getChatState().subagentSessions[key]) return;
+    const session: ClaudeChatSession = {
+      ...(newChatSession({ id: key, loaded: false }) as ChatSession),
+      cwd: info.cwd ?? '',
+      permissionMode: state.settings?.current.claude.defaultPermissionMode ?? 'default',
+      model: null,
+      live: 'idle',
+    };
+    update((s) => ({
+      ...s,
+      subagentSessions: { ...s.subagentSessions, [key]: session },
+    }));
+  }
+
+  async loadSubagentHistory(
+    key: string,
+    parentSessionId: string,
+    agentId: string,
+  ): Promise<void> {
+    const t0 = Date.now();
+    const sdk = await loadSdk();
+    const messages = (await sdk.getSubagentMessages(
+      parentSessionId,
+      agentId,
+    )) as unknown[];
+    let count = 0;
+    // The generic reducers address `sessions[id]` — run them against a
+    // sub-state keyed by the composite id, then merge back.
+    let next = { sessions: getChatState().subagentSessions };
+    next = resetHistory(next, key);
+    for (const msg of messages) {
+      const result = translateSdkMessage(msg, { streaming: false });
+      for (const u of result.updates) next = applyUpdate(next, key, u) as typeof next;
+      if (result.updates.length > 0) count += 1;
+      // init data (model/cwd) is redundant here — the synthetic session
+      // already carries the parent's cwd; `patch()` only targets `sessions`.
+      if (result.finish) {
+        next = finishPrompt(next, key, result.finish.stopReason, {
+          ...(result.finish.error !== undefined ? { error: result.finish.error } : {}),
+          ...(result.finish.usage !== undefined ? { usage: result.finish.usage } : {}),
+        }) as typeof next;
+      }
+    }
+    const existing = next.sessions[key];
+    const merged = existing ? { ...existing, loaded: true } : existing;
+    update((s) => ({
+      ...s,
+      subagentSessions: merged
+        ? { ...s.subagentSessions, [key]: merged }
+        : s.subagentSessions,
+    }));
+    log('claude', 'claude-subagent-history', {
+      detail: { sessionId: parentSessionId, count, ms: Date.now() - t0 },
+    });
   }
 
   private patch(id: string, patch: Partial<ClaudeChatSession>): void {
@@ -432,10 +505,16 @@ export class ClaudeHost {
     const t0 = Date.now();
     try {
       for await (const msg of q) {
-        const result = translateSdkMessage(msg, { streaming: true });
+        const messageId = messageIdFromStreamEvent(msg);
+        if (messageId) this.currentMessageIds.set(id, messageId);
+        const result = translateSdkMessage(msg, {
+          streaming: true,
+          messageId: this.currentMessageIds.get(id) ?? null,
+        });
         for (const u of result.updates) this.applySessionUpdate(id, u);
         if (result.init) this.applyInit(id, result.init);
         if (result.finish) {
+          this.currentMessageIds.delete(id);
           // The turn's last chunk may leave a PR URL sitting in the
           // scanner's carry (a match ending at text end is deferred).
           const scanner = this.scanners.get(id);

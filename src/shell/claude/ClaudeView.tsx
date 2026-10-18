@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { ArrowLeft, GitFork } from 'lucide-react';
 import type { ClaudeChatSessionPublic, LocalResult } from '../../shared/ipc';
 import { CLAUDE_PERMISSION_MODES, isClaudePermissionMode } from '../../core/settingsDraft';
 import { ChatView } from '../chat/ChatView';
@@ -7,7 +8,13 @@ import { UsagePill } from '../chat/UsagePill';
 import { buttonClass } from '../chat/Cards';
 import { useShellState } from '../store';
 import { useClaudeChatState } from './store';
-import { consumeTerminalRequest, useTerminalRequest } from './viewRequests';
+import {
+  consumeTerminalRequest,
+  getLastView,
+  rememberView,
+  useTerminalRequest,
+  type ClaudeViewTab,
+} from './viewRequests';
 
 const liveColor: Record<ClaudeChatSessionPublic['live'], string> = {
   idle: 'bg-[#39475a]',
@@ -58,9 +65,21 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
   const id = state!.claudeSessionId;
   const meta = id ? (claude.sessions.find((s) => s.id === id) ?? null) : null;
   const session = id ? (chat?.sessions[id] ?? null) : null;
+  // Read-only subagent transcript selected from the sidebar (parent = `id`).
+  const subagentId = claude.selectedSubagentId;
+  const subagentSession =
+    id && subagentId ? (chat?.subagentSessions[`${id}/${subagentId}`] ?? null) : null;
   const [error, setError] = useState<string | null>(null);
   const loadRequested = useRef<Set<string>>(new Set());
-  const [view, setView] = useState<'chat' | 'terminal'>('chat');
+  // Chat/Terminal tab, remembered per session in shell memory (viewRequests).
+  const [view, setViewState] = useState<ClaudeViewTab>(() => (id ? getLastView(id) : 'chat'));
+  const setView = (next: ClaudeViewTab) => {
+    setViewState(next);
+    if (id) rememberView(id, next);
+  };
+  useEffect(() => {
+    if (id) setViewState(getLastView(id));
+  }, [id]);
   // Lazily open one claude pty per session once the Terminal tab is shown;
   // every opened session's view stays mounted (display:none) so scrollback
   // survives session switches. Same pattern as LocalPanel.
@@ -166,105 +185,150 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
   const cwd = meta?.cwd ?? session?.cwd ?? '';
   const branch = meta?.gitBranch ?? null;
 
+  // Read-only subagent transcript: swaps the header and chat pane while the
+  // terminal pane stays mounted (hidden) so scrollback survives Back.
+  const subagentTitle = subagentId
+    ? meta?.subagents?.find((s) => s.agentId === subagentId)?.title ||
+      subagentSession?.title ||
+      subagentId
+    : null;
+
   return (
     <div
       data-claude-view
+      data-subagent-id={subagentId ?? undefined}
       className="shell-chrome absolute flex flex-col bg-[#111925] text-[#e8edf5]"
       style={style}
     >
-      <header className="flex items-center gap-3 border-b border-[#39475a] px-4 py-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 truncate text-sm">
-            <span
-              data-live={session?.live ?? 'idle'}
-              title={`agent: ${session?.live ?? 'idle'}`}
-              className={`inline-block h-2 w-2 flex-none rounded-full ${liveColor[session?.live ?? 'idle']}`}
-            />
-            <span className="truncate" title={title}>
-              {title}
-            </span>
-            {branch && (
-              <span data-field="branch" className="flex-none font-mono text-[10px] text-[#7f8ca0]">
-                {branch}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 truncate font-mono text-[10px] text-[#7f8ca0]">
-            <span data-field="cwd" className="truncate" title={cwd}>
-              {cwd}
-            </span>
-            <button
-              type="button"
-              id="claudeCopyId"
-              className="flex-none rounded px-1 hover:bg-[#1a2735] hover:text-[#c9d4e3]"
-              title={`Copy session id ${id}`}
-              onClick={() => window.devinworkspaces.clipboardWriteText(id)}
-            >
-              copy id
-            </button>
-          </div>
-        </div>
-        <UsagePill usage={session?.usage} />
-        <div id="claudeViewTabs" className="flex overflow-hidden rounded-md border border-[#39475a]">
-          {(['chat', 'terminal'] as const).map((tab) => (
-            <button
-              key={tab}
-              id={`view-${tab}`}
-              type="button"
-              className={`px-3 py-1 text-xs ${
-                view === tab ? 'bg-[#27364a] text-[#e8edf5]' : 'text-[#7f8ca0] hover:bg-[#18212e]'
-              }`}
-              onClick={() => {
-                setView(tab);
-                if (tab === 'terminal') {
-                  setError(null);
-                  setTerminalActive(true);
-                }
-              }}
-            >
-              {tab === 'chat' ? 'Chat' : 'Terminal'}
-            </button>
-          ))}
-        </div>
-        {claude.versions.mismatch && (
-          <span
-            id="claudeVersionWarning"
-            className="rounded-full border border-[#8a6a2b] px-2 py-0.5 font-mono text-[10px] text-[#e0a03c]"
-            title={`Claude CLI ${claude.versions.cli ?? '?'} · SDK targets ${claude.versions.sdkTarget ?? '?'}`}
+      {subagentId ? (
+        <header className="flex items-center gap-3 border-b border-[#39475a] px-4 py-2">
+          <button
+            id="claudeSubagentBack"
+            type="button"
+            className={`${buttonClass} flex items-center gap-1`}
+            title={`Back to ${title}`}
+            onClick={() => window.devinworkspaces.claudeOpen(id)}
           >
-            CLI version mismatch
-          </span>
-        )}
-        <select
-          id="claudePermissionMode"
-          className={selectClass}
-          title="Permission mode"
-          value={session?.permissionMode ?? state!.settings.claude.defaultPermissionMode}
-          disabled={!session}
-          onChange={(event) => {
-            const mode = event.target.value;
-            if (isClaudePermissionMode(mode)) run(window.devinworkspaces.claudeSetPermissionMode(id, mode));
-          }}
-        >
-          {CLAUDE_PERMISSION_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-        {session ? (
-          <ModelInput
-            value={session.model}
-            onCommit={(model) => run(window.devinworkspaces.claudeSetModel(id, model))}
-          />
-        ) : (
-          <input id="claudeModel" type="text" className={`${selectClass} w-36`} placeholder="default model" disabled />
-        )}
-      </header>
+            <ArrowLeft size={12} />
+            Back
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm" title={subagentTitle ?? undefined}>
+              {subagentTitle}
+            </div>
+            <div className="truncate font-mono text-[10px] text-[#7f8ca0]" title={title}>
+              Subagent of {title}
+            </div>
+          </div>
+          <UsagePill usage={subagentSession?.usage} />
+        </header>
+      ) : (
+        <header className="flex items-center gap-3 border-b border-[#39475a] px-4 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 truncate text-sm">
+              <span
+                data-live={session?.live ?? 'idle'}
+                title={`agent: ${session?.live ?? 'idle'}`}
+                className={`inline-block h-2 w-2 flex-none rounded-full ${liveColor[session?.live ?? 'idle']}`}
+              />
+              <span className="truncate" title={title}>
+                {title}
+              </span>
+              {branch && (
+                <span data-field="branch" className="flex-none font-mono text-[10px] text-[#7f8ca0]">
+                  {branch}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 truncate font-mono text-[10px] text-[#7f8ca0]">
+              <span data-field="cwd" className="truncate" title={cwd}>
+                {cwd}
+              </span>
+              <button
+                type="button"
+                id="claudeCopyId"
+                className="flex-none rounded px-1 hover:bg-[#1a2735] hover:text-[#c9d4e3]"
+                title={`Copy session id ${id}`}
+                onClick={() => window.devinworkspaces.clipboardWriteText(id)}
+              >
+                copy id
+              </button>
+            </div>
+          </div>
+          <UsagePill usage={session?.usage} />
+          <button
+            id="claudeFork"
+            type="button"
+            className={`${buttonClass} flex items-center gap-1`}
+            title="Fork session"
+            aria-label="Fork session"
+            disabled={!session || session.running}
+            onClick={() => window.devinworkspaces.claudeFork(id)}
+          >
+            <GitFork size={12} />
+            Fork
+          </button>
+          <div id="claudeViewTabs" className="flex overflow-hidden rounded-md border border-[#39475a]">
+            {(['chat', 'terminal'] as const).map((tab) => (
+              <button
+                key={tab}
+                id={`view-${tab}`}
+                type="button"
+                className={`px-3 py-1 text-xs ${
+                  view === tab ? 'bg-[#27364a] text-[#e8edf5]' : 'text-[#7f8ca0] hover:bg-[#18212e]'
+                }`}
+                onClick={() => {
+                  setView(tab);
+                  if (tab === 'terminal') {
+                    setError(null);
+                    setTerminalActive(true);
+                  }
+                }}
+              >
+                {tab === 'chat' ? 'Chat' : 'Terminal'}
+              </button>
+            ))}
+          </div>
+          {claude.versions.mismatch && (
+            <span
+              id="claudeVersionWarning"
+              className="rounded-full border border-[#8a6a2b] px-2 py-0.5 font-mono text-[10px] text-[#e0a03c]"
+              title={`Claude CLI ${claude.versions.cli ?? '?'} · SDK targets ${claude.versions.sdkTarget ?? '?'}`}
+            >
+              CLI version mismatch
+            </span>
+          )}
+          <select
+            id="claudePermissionMode"
+            className={selectClass}
+            title="Permission mode"
+            value={session?.permissionMode ?? state!.settings.claude.defaultPermissionMode}
+            disabled={!session}
+            onChange={(event) => {
+              const mode = event.target.value;
+              if (isClaudePermissionMode(mode)) run(window.devinworkspaces.claudeSetPermissionMode(id, mode));
+            }}
+          >
+            {CLAUDE_PERMISSION_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {mode}
+              </option>
+            ))}
+          </select>
+          {session ? (
+            <ModelInput
+              value={session.model}
+              onCommit={(model) => run(window.devinworkspaces.claudeSetModel(id, model))}
+            />
+          ) : (
+            <input id="claudeModel" type="text" className={`${selectClass} w-36`} placeholder="default model" disabled />
+          )}
+        </header>
+      )}
       <div
         id="terminalPane"
         className="flex min-h-0 flex-1 flex-col"
-        style={{ display: view === 'terminal' ? 'flex' : 'none' }}
+        style={{ display: !subagentId && view === 'terminal' ? 'flex' : 'none' }}
       >
         {terminalActive &&
           Object.entries(terminalIds).map(([sid, ptyId]) => (
@@ -276,7 +340,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
             >
               <TerminalView
                 id={ptyId}
-                active={view === 'terminal' && sid === id}
+                active={!subagentId && view === 'terminal' && sid === id}
                 onRestart={() => {
                   window.devinworkspaces.terminalClose(ptyId);
                   forgetTerminal(sid);
@@ -288,50 +352,65 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
       <div
         id="chatPane"
         className="flex min-h-0 flex-1 flex-col"
-        style={{ display: view === 'chat' ? 'flex' : 'none' }}
+        style={{ display: subagentId || view === 'chat' ? 'flex' : 'none' }}
       >
-        <ChatView
-          session={session}
-          draftKey={id}
-          emptyText="Loading…"
-          composerPlaceholder="Message Claude…"
-          footerHint="Enter sends · Shift+Enter newline"
-          errorId="claudeError"
-          error={error}
-          disabledReason={session?.terminalOwned ? 'Close the terminal to chat here' : null}
-          onSend={(text) => {
-            setError(null);
-            run(window.devinworkspaces.claudePrompt(id, text));
-          }}
-          onCancel={() => run(window.devinworkspaces.claudeCancel(id))}
-          onPermission={(requestId, optionId) =>
-            run(window.devinworkspaces.claudePermission(id, requestId, optionId))
-          }
-          banner={
-            session?.terminalOwned ? (
-              <div
-                id="terminalOwnedBanner"
-                className="mb-2 flex items-center justify-between gap-2 rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-1.5 text-xs text-[#aeb9c8]"
-              >
-                <span>
-                  This session is open in the Terminal tab — close the terminal to chat here.
-                </span>
-                <button
-                  id="terminalOwnedClose"
-                  type="button"
-                  className={buttonClass}
-                  onClick={() => {
-                    const ptyId = terminalIds[session.id];
-                    if (ptyId) void window.devinworkspaces.terminalClose(ptyId);
-                    else setView('terminal');
-                  }}
+        {subagentId ? (
+          <ChatView
+            session={subagentSession}
+            draftKey={null}
+            emptyText="Loading subagent…"
+            composerPlaceholder=""
+            footerHint={null}
+            disabledReason="Subagent transcripts are read-only"
+            errorId="claudeError"
+            error={error}
+            readOnly
+            onSend={() => undefined}
+            onCancel={() => undefined}
+            onPermission={() => undefined}
+          />
+        ) : (
+          <ChatView
+            session={session}
+            draftKey={id}
+            emptyText="Loading…"
+            composerPlaceholder="Message Claude…"
+            footerHint="Enter sends · Shift+Enter newline"
+            errorId="claudeError"
+            error={error}
+            disabledReason={session?.terminalOwned ? 'Close the terminal to chat here' : null}
+            onSend={(text) => {
+              setError(null);
+              run(window.devinworkspaces.claudePrompt(id, text));
+            }}
+            onCancel={() => run(window.devinworkspaces.claudeCancel(id))}
+            onPermission={(requestId, optionId) =>
+              run(window.devinworkspaces.claudePermission(id, requestId, optionId))
+            }
+            banner={
+              session?.terminalOwned ? (
+                <div
+                  id="terminalOwnedBanner"
+                  className="mb-2 flex items-center justify-between gap-2 rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-1.5 text-xs text-[#aeb9c8]"
                 >
-                  Close terminal
-                </button>
-              </div>
-            ) : undefined
-          }
-        />
+                  <span>Live from the terminal — close it to chat here</span>
+                  <button
+                    id="terminalOwnedClose"
+                    type="button"
+                    className={buttonClass}
+                    onClick={() => {
+                      const ptyId = terminalIds[session.id];
+                      if (ptyId) void window.devinworkspaces.terminalClose(ptyId);
+                      else setView('terminal');
+                    }}
+                  >
+                    Close terminal
+                  </button>
+                </div>
+              ) : undefined
+            }
+          />
+        )}
       </div>
     </div>
   );

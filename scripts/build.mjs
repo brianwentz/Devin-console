@@ -139,6 +139,16 @@ await Promise.all([
     format: 'cjs',
     outfile: 'out/fixtures/fakeClaudeAgents.cjs',
   }),
+  // Phase 6 fake `gh` CLI for the PR-state fallback
+  // (DEVIN_WORKSPACES_TEST_GH_CMD).
+  build({
+    entryPoints: ['tests/fixtures/fakeGh.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    outfile: 'out/fixtures/fakeGh.cjs',
+  }),
 ]);
 
 await viteBuild({ configFile: 'vite.config.mts' });

@@ -59,6 +59,7 @@ export type SessionUsage = {
   thoughtTokens: number | null;
   cachedReadTokens: number | null;
   cachedWriteTokens: number | null;
+  costUsd: number | null;
 };
 
 // Subset of the SDK's experimental `Usage` carried by a prompt response.
@@ -69,6 +70,7 @@ export type PromptUsage = {
   thoughtTokens?: number | null;
   cachedReadTokens?: number | null;
   cachedWriteTokens?: number | null;
+  costUsd?: number | null;
 };
 
 export function emptyUsage(): SessionUsage {
@@ -81,6 +83,7 @@ export function emptyUsage(): SessionUsage {
     thoughtTokens: null,
     cachedReadTokens: null,
     cachedWriteTokens: null,
+    costUsd: null,
   };
 }
 
@@ -433,9 +436,10 @@ export function finishPrompt<S extends ChatStateLike>(
       'thoughtTokens',
       'cachedReadTokens',
       'cachedWriteTokens',
+      'costUsd',
     ] as const) {
       const value = usage[key];
-      if (typeof value === 'number') merged[key] = value;
+      if (typeof value === 'number' && Number.isFinite(value)) merged[key] = value;
     }
     next.usage = merged;
   }
