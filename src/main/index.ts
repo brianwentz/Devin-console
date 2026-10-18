@@ -146,8 +146,25 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       // best effort at shutdown
     }
     localHost()?.dispose();
-    await claudeHost().dispose();
-    claudeSessions().dispose();
+    // Claude teardown must never block or abort the quit sequence — a slow
+    // consumer close or a failure here would skip the settings snapshot below.
+    try {
+      await Promise.race([
+        claudeHost()?.dispose(),
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+    } catch (error) {
+      log('shell', 'claude-dispose-error', {
+        detail: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
+    try {
+      claudeSessions().dispose();
+    } catch (error) {
+      log('shell', 'claude-dispose-error', {
+        detail: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
     notificationsFlush();
     prsFlush();
     savePlacementNow();

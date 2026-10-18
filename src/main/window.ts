@@ -182,8 +182,10 @@ export function publicState(): ShellState {
 
 export function notifyShell(): void {
   // During shutdown the TabManager is disposed before its webContents finish closing; any
-  // late event must not overwrite the persisted tab snapshot with an empty list.
-  if (!state.shuttingDown) state.settings?.syncFromState();
+  // late event must not overwrite the persisted tab snapshot with an empty list. The same
+  // applies before createWindow finishes — transient layout/tab state is still at defaults
+  // and syncing it would clobber the just-loaded settings (surface, pane, tabSnapshot).
+  if (!state.shuttingDown && state.tabManager) state.settings?.syncFromState();
   if (state.shellView && !state.shellView.webContents.isDestroyed()) {
     state.shellView.webContents.send(IpcChannels.stateUpdate, publicState());
   }

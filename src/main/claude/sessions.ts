@@ -86,9 +86,18 @@ export class ClaudeSessions {
   start(): void {
     if (this.started) return;
     this.started = true;
-    this.registry = this.registryStore.load();
-    this.showArchived = state.settings?.current.claude.showArchived ?? false;
-    this.cliPath = resolveClaudePath(state.settings?.current.claude.path ?? null);
+    try {
+      this.registry = this.registryStore.load();
+      this.showArchived = state.settings?.current.claude.showArchived ?? false;
+      this.cliPath = resolveClaudePath(state.settings?.current.claude.path ?? null);
+      this.initRuntime();
+    } catch (error) {
+      this.lastError = { op: 'start', message: error instanceof Error ? error.message : String(error) };
+      this.emit();
+    }
+  }
+
+  private initRuntime(): void {
     this.host = new ClaudeHost({
       cliPath: () => this.cliPath,
       configDir: this.configDir,
