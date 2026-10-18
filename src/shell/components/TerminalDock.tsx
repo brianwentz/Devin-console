@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Rect } from '../../core/layout';
 import type { ShellState } from '../../shared/ipc';
-import { TerminalView } from '../local/TerminalView';
+import { TerminalView } from '../chat/TerminalView';
 
 type TerminalEntry = ShellState['terminals'][number];
 

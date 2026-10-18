@@ -106,7 +106,9 @@ export class SettingsStore {
         width: state.sessionsWidth,
       },
       surface: state.surface,
-      tabSnapshot: state.tabManager?.persistableState() ?? { version: 2, tabs: [] },
+      // No TabManager yet (startup init) — keep the loaded snapshot rather
+      // than clobbering it with an empty one.
+      tabSnapshot: state.tabManager?.persistableState() ?? this.value.tabSnapshot,
     };
     this.save();
   }

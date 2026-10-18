@@ -96,6 +96,10 @@ The **Claude** surface (sparkle icon in the rail) lists the Claude Code sessions
 - **Version warning** — a badge in the header appears when `claude --version` differs from the CLI version the bundled SDK targets.
 - PR URLs printed in a Claude session open as lazy background tabs in its GitHub scope, like Cloud and Local sessions (same *Open a tab when a session creates a PR* toggle).
 
+**Terminal tab.** The view header's *Terminal* tab opens `claude -r <id>` (or `claude attach <agent>`) in the session's working directory — a real interactive Claude Code session, not a transcript. Only one writer at a time: opening the terminal closes the chat's SDK query, disables the composer with a banner (*close the terminal to chat here*), and closing the pty re-syncs the transcript so terminal turns appear in chat. Opening the terminal while a prompt is running is refused — cancel first.
+
+**Background agents.** `claude --bg` agents are polled (`claude agents --json --all`, faster while the window is focused). An agent tied to a listed session puts a running badge on its row; others appear in a *Background agents* section at the top of the sidebar with *Attach* (opens its terminal in the dock) and *Stop* on their menu.
+
 ## Settings reference
 
 Settings is split into five tabs: **General**, **Link Handling**, **Passwords**, **Notifications** and **Updates**. Fields save automatically when you switch tabs, leave Settings or quit; invalid values are flagged inline and block the save. The API token Save/Clear and password Add/Edit buttons are explicit actions.

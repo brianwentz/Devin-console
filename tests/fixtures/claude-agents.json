@@ -1,0 +1,33 @@
+[
+  {
+    "pid": 12345,
+    "id": "700e3fe1",
+    "cwd": "C:\\work\\probe",
+    "kind": "background",
+    "startedAt": 1792271626155,
+    "sessionId": "700e3fe1-fdf7-4f40-9a68-5d5c78d771ba",
+    "name": "reply with the single word pong",
+    "status": "busy",
+    "state": "working"
+  },
+  {
+    "pid": 12346,
+    "id": "a1b2c3d4",
+    "cwd": "C:\\work\\other",
+    "kind": "background",
+    "startedAt": 1792271600000,
+    "sessionId": "a1b2c3d4-0000-4000-8000-000000000000",
+    "name": "finished task",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "id": "d4c3b2a1",
+    "cwd": "C:\\work\\other",
+    "kind": "background",
+    "startedAt": 1792271500000,
+    "sessionId": "d4c3b2a1-0000-4000-8000-000000000000",
+    "name": "stopped task",
+    "state": "done"
+  }
+]

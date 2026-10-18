@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Ellipsis, FolderPlus, Plus, RefreshCw } from 'lucide-react';
-import type { ClaudeSessionState } from '../../shared/ipc';
+import { ChevronDown, ChevronRight, Ellipsis, FolderPlus, Plus, RefreshCw } from 'lucide-react';
+import type { ClaudeAgent, ClaudeSessionState } from '../../shared/ipc';
 import {
   addFolder,
   buildSessionTree,
@@ -11,8 +11,9 @@ import {
 } from '../../core/sessionTree';
 import type { Rect } from '../../core/layout';
 import { useShellState } from '../store';
+import { requestTerminal } from '../claude/viewRequests';
 import { relativeTime } from './relativeTime';
-import { sessionRowClass } from './sessionRowStyles';
+import { sessionFolderHeaderClass, sessionMetaClass, sessionRowClass } from './sessionRowStyles';
 import { FolderNameInput } from './sidebar/FolderNameInput';
 import { SessionRow, SessionRowButton } from './sidebar/SessionRow';
 import { SectionHeader } from './sidebar/SectionHeader';
@@ -119,15 +120,48 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
     window.devinworkspaces.claudeFolderReorder(names);
   };
 
+  // Terminal for a session (optionally attaching a background agent): select
+  // it, then ask ClaudeView to switch to its Terminal tab.
+  const openTerminal = (sessionId: string, agentId?: string) => {
+    window.devinworkspaces.claudeOpen(sessionId);
+    requestTerminal(sessionId, agentId);
+  };
+  // Orphan agents have no session row to select; attach in the dock instead.
+  const attachInDock = (agentId: string) => {
+    if (!state!.terminalOpen) window.devinworkspaces.terminalToggle();
+    void window.devinworkspaces.terminalOpen({ kind: 'shell', command: ['claude', 'attach', agentId] });
+  };
+  const attachAgent = (agent: ClaudeAgent) => {
+    if (agent.sessionId) openTerminal(agent.sessionId, agent.id);
+    else attachInDock(agent.id);
+  };
+
   const sessionMenu = async (sessionId: string, x: number, y: number) => {
-    const { action } = await window.devinworkspaces.claudeContextMenu({
+    const result = await window.devinworkspaces.claudeContextMenu({
       kind: 'session',
       sessionId,
       x,
       y,
     });
+    const { action } = result;
     if (action === 'new-folder') setEditing({ kind: 'create', pendingSessionId: sessionId });
     else if (action === 'rename-session') setEditing({ kind: 'renameSession', sessionId });
+    else if (action === 'open-terminal') openTerminal(sessionId);
+    else if (action === 'attach-agent') {
+      const agentId =
+        result.agentId ?? claude.agents.find((a) => a.sessionId === sessionId)?.id;
+      openTerminal(sessionId, agentId);
+    }
+  };
+  const agentMenu = async (agent: ClaudeAgent, x: number, y: number) => {
+    const { action } = await window.devinworkspaces.claudeContextMenu({
+      kind: 'agent',
+      agentId: agent.id,
+      x,
+      y,
+    });
+    if (action === 'attach-agent') attachAgent(agent);
+    window.devinworkspaces.claudeAgentsRefresh();
   };
   const folderMenu = async (name: string, x: number, y: number) => {
     const { action } = await window.devinworkspaces.claudeContextMenu({
@@ -163,16 +197,26 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       'data-pinned': s.isPinned,
       'data-cwd': s.cwd ?? '',
       'data-archived': s.isArchived,
+      'data-agent-status': s.agentStatus ?? undefined,
     }),
-    badges: (s: ClaudeSessionState) =>
-      s.tag ? (
-        <span
-          className="shrink-0 px-1 rounded bg-[#243447] text-[10px] leading-[14px] text-[#9fc4ea]"
-          title={s.tag}
-        >
-          {s.tag}
-        </span>
-      ) : null,
+    badges: (s: ClaudeSessionState) => (
+      <>
+        {s.agentStatus === 'running' && (
+          <span
+            className="agent-dot shrink-0 w-2 h-2 rounded-full bg-[#8fd18f]"
+            title="Background agent running"
+          />
+        )}
+        {s.tag && (
+          <span
+            className="shrink-0 px-1 rounded bg-[#243447] text-[10px] leading-[14px] text-[#9fc4ea]"
+            title={s.tag}
+          >
+            {s.tag}
+          </span>
+        )}
+      </>
+    ),
     meta: (s: ClaudeSessionState) => (
       <>
         {s.cwd ? basename(s.cwd) : ''}
@@ -205,6 +249,14 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
         return claude.error ?? 'Error';
     }
   };
+
+  // Agents whose session has no visible row (or none at all) get their own
+  // section; mapped agents show as a dot on the session row instead.
+  const orphanAgents = useMemo(() => {
+    const visible = new Set(data.sessions.map((s) => s.id));
+    return claude.agents.filter((a) => !a.sessionId || !visible.has(a.sessionId));
+  }, [claude.agents, data.sessions]);
+  const [agentsCollapsed, setAgentsCollapsed] = useState(false);
 
   const q = query.trim().toLowerCase();
   const filtered: ClaudeSessionState[] = q
@@ -304,6 +356,46 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
         />
       </div>
       <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+        {!q && orphanAgents.length > 0 && (
+          <section data-section-kind="agents" className="mb-px">
+            <button
+              type="button"
+              data-section-name="agents"
+              aria-expanded={!agentsCollapsed}
+              className={`w-full flex items-center gap-1 px-1 py-1 ${sessionFolderHeaderClass} text-[#8b9bb0] hover:text-[#c9d4e3]`}
+              onClick={() => setAgentsCollapsed((v) => !v)}
+            >
+              {agentsCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+              <span className="flex-1 text-left truncate">Background agents</span>
+              <span className="text-[11px] leading-[14px] text-[#5c6b80]">{orphanAgents.length}</span>
+            </button>
+            {!agentsCollapsed &&
+              orphanAgents.map((agent) => (
+                <div
+                  key={agent.id}
+                  data-agent-id={agent.id}
+                  data-agent-status={agent.status}
+                  title={agent.cwd ?? undefined}
+                  className={`ml-4 flex items-center ${sessionRowClass} text-left text-[#c9d4e3] hover:bg-[#1a2735]`}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    void agentMenu(agent, e.clientX, e.clientY);
+                  }}
+                >
+                  <span
+                    className={`agent-dot shrink-0 w-2 h-2 rounded-full ${
+                      agent.status === 'running' ? 'bg-[#8fd18f]' : 'bg-[#39475a]'
+                    }`}
+                  />
+                  <span className="flex-1 min-w-0 truncate">{agent.name ?? agent.id}</span>
+                  <span className={`shrink-0 ${sessionMetaClass}`}>
+                    {agent.status}
+                    {agent.cwd ? ` · ${basename(agent.cwd)}` : ''}
+                  </span>
+                </div>
+              ))}
+          </section>
+        )}
         {q ? (
           filtered.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No matches</div>

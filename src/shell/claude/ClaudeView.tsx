@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } f
 import type { ClaudeChatSessionPublic, LocalResult } from '../../shared/ipc';
 import { CLAUDE_PERMISSION_MODES, isClaudePermissionMode } from '../../core/settingsDraft';
 import { ChatView } from '../chat/ChatView';
+import { TerminalView } from '../chat/TerminalView';
 import { UsagePill } from '../chat/UsagePill';
 import { buttonClass } from '../chat/Cards';
 import { useShellState } from '../store';
 import { useClaudeChatState } from './store';
+import { consumeTerminalRequest, useTerminalRequest } from './viewRequests';
 
 const liveColor: Record<ClaudeChatSessionPublic['live'], string> = {
   idle: 'bg-[#39475a]',
@@ -58,8 +60,64 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
   const session = id ? (chat?.sessions[id] ?? null) : null;
   const [error, setError] = useState<string | null>(null);
   const loadRequested = useRef<Set<string>>(new Set());
+  const [view, setView] = useState<'chat' | 'terminal'>('chat');
+  // Lazily open one claude pty per session once the Terminal tab is shown;
+  // every opened session's view stays mounted (display:none) so scrollback
+  // survives session switches. Same pattern as LocalPanel.
+  const [terminalActive, setTerminalActive] = useState(false);
+  const [terminalIds, setTerminalIds] = useState<Record<string, string>>({});
+  // Attach requests carry the agent id for the next open of that session.
+  const attachAgent = useRef<Record<string, string>>({});
+  const terminalRequest = useTerminalRequest();
 
   useEffect(() => setError(null), [id]);
+
+  const forgetTerminal = (sessionId: string) =>
+    setTerminalIds((map) => {
+      if (!map[sessionId]) return map;
+      const next = { ...map };
+      delete next[sessionId];
+      return next;
+    });
+
+  // Sidebar "Open in terminal" / "Attach": wait until the session is selected
+  // (the sidebar calls claudeOpen first), then show the terminal tab.
+  useEffect(() => {
+    if (!terminalRequest || terminalRequest.sessionId !== id) return;
+    if (terminalRequest.agentId) attachAgent.current[id] = terminalRequest.agentId;
+    setView('terminal');
+    setTerminalActive(true);
+    consumeTerminalRequest(terminalRequest.seq);
+  }, [terminalRequest, id]);
+
+  // Open (or reuse) the selected session's pty while the Terminal tab is shown
+  // (opening hands the session to the terminal, so never do it from Chat).
+  useEffect(() => {
+    if (view !== 'terminal' || !id || terminalIds[id]) return;
+    const targetId = id;
+    const agentId = attachAgent.current[targetId];
+    let cancelled = false;
+    void window.devinworkspaces
+      .terminalOpen(
+        agentId
+          ? { kind: 'claude', sessionId: targetId, mode: 'attach', agentId }
+          : { kind: 'claude', sessionId: targetId, mode: 'resume' },
+      )
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) {
+          delete attachAgent.current[targetId];
+          setTerminalIds((map) => (map[targetId] ? map : { ...map, [targetId]: result.id }));
+          setError(null);
+        } else {
+          setError(result.error);
+          setView('chat');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view, id, terminalIds]);
 
   // Listed transcripts start `loaded: false`; fetch the history once per id.
   useEffect(() => {
@@ -147,6 +205,27 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
           </div>
         </div>
         <UsagePill usage={session?.usage} />
+        <div id="claudeViewTabs" className="flex overflow-hidden rounded-md border border-[#39475a]">
+          {(['chat', 'terminal'] as const).map((tab) => (
+            <button
+              key={tab}
+              id={`view-${tab}`}
+              type="button"
+              className={`px-3 py-1 text-xs ${
+                view === tab ? 'bg-[#27364a] text-[#e8edf5]' : 'text-[#7f8ca0] hover:bg-[#18212e]'
+              }`}
+              onClick={() => {
+                setView(tab);
+                if (tab === 'terminal') {
+                  setError(null);
+                  setTerminalActive(true);
+                }
+              }}
+            >
+              {tab === 'chat' ? 'Chat' : 'Terminal'}
+            </button>
+          ))}
+        </div>
         {claude.versions.mismatch && (
           <span
             id="claudeVersionWarning"
@@ -182,23 +261,78 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
           <input id="claudeModel" type="text" className={`${selectClass} w-36`} placeholder="default model" disabled />
         )}
       </header>
-      <ChatView
-        session={session}
-        draftKey={id}
-        emptyText="Loading…"
-        composerPlaceholder="Message Claude…"
-        footerHint="Enter sends · Shift+Enter newline"
-        errorId="claudeError"
-        error={error}
-        onSend={(text) => {
-          setError(null);
-          run(window.devinworkspaces.claudePrompt(id, text));
-        }}
-        onCancel={() => run(window.devinworkspaces.claudeCancel(id))}
-        onPermission={(requestId, optionId) =>
-          run(window.devinworkspaces.claudePermission(id, requestId, optionId))
-        }
-      />
+      <div
+        id="terminalPane"
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ display: view === 'terminal' ? 'flex' : 'none' }}
+      >
+        {terminalActive &&
+          Object.entries(terminalIds).map(([sid, ptyId]) => (
+            <div
+              key={sid}
+              data-session-terminal={sid}
+              className="flex min-h-0 flex-1 flex-col"
+              style={{ display: sid === id ? 'flex' : 'none' }}
+            >
+              <TerminalView
+                id={ptyId}
+                active={view === 'terminal' && sid === id}
+                onRestart={() => {
+                  window.devinworkspaces.terminalClose(ptyId);
+                  forgetTerminal(sid);
+                }}
+              />
+            </div>
+          ))}
+      </div>
+      <div
+        id="chatPane"
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ display: view === 'chat' ? 'flex' : 'none' }}
+      >
+        <ChatView
+          session={session}
+          draftKey={id}
+          emptyText="Loading…"
+          composerPlaceholder="Message Claude…"
+          footerHint="Enter sends · Shift+Enter newline"
+          errorId="claudeError"
+          error={error}
+          disabledReason={session?.terminalOwned ? 'Close the terminal to chat here' : null}
+          onSend={(text) => {
+            setError(null);
+            run(window.devinworkspaces.claudePrompt(id, text));
+          }}
+          onCancel={() => run(window.devinworkspaces.claudeCancel(id))}
+          onPermission={(requestId, optionId) =>
+            run(window.devinworkspaces.claudePermission(id, requestId, optionId))
+          }
+          banner={
+            session?.terminalOwned ? (
+              <div
+                id="terminalOwnedBanner"
+                className="mb-2 flex items-center justify-between gap-2 rounded-md border border-[#39475a] bg-[#1a2330] px-2 py-1.5 text-xs text-[#aeb9c8]"
+              >
+                <span>
+                  This session is open in the Terminal tab — close the terminal to chat here.
+                </span>
+                <button
+                  id="terminalOwnedClose"
+                  type="button"
+                  className={buttonClass}
+                  onClick={() => {
+                    const ptyId = terminalIds[session.id];
+                    if (ptyId) void window.devinworkspaces.terminalClose(ptyId);
+                    else setView('terminal');
+                  }}
+                >
+                  Close terminal
+                </button>
+              </div>
+            ) : undefined
+          }
+        />
+      </div>
     </div>
   );
 }

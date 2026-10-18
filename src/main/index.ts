@@ -146,8 +146,25 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       // best effort at shutdown
     }
     localHost()?.dispose();
-    await claudeHost().dispose();
-    claudeSessions().dispose();
+    // Claude teardown must never block or abort the quit sequence — a slow
+    // consumer close or a failure here would skip the settings snapshot below.
+    try {
+      await Promise.race([
+        claudeHost()?.dispose(),
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+    } catch (error) {
+      log('shell', 'claude-dispose-error', {
+        detail: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
+    try {
+      claudeSessions().dispose();
+    } catch (error) {
+      log('shell', 'claude-dispose-error', {
+        detail: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
     notificationsFlush();
     prsFlush();
     savePlacementNow();
@@ -198,14 +215,31 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
           .map((w) => ({ url: w.getURL(), type: w.getType() })),
       },
     });
-    state.windowRef?.destroy();
+    try {
+      state.windowRef?.destroy();
+    } catch (error) {
+      // destroy() must never veto the exit path.
+      log('shell', 'window-destroy-error', {
+        detail: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
     state.windowRef = null;
     // app.quit() can be dropped while a quit is already in flight (the window
-    // close was vetoed to run this cleanup); exit() is unconditional. When an
+    // close was vetoed to run this cleanup); exit is unconditional. When an
     // update is downloaded, quitAndInstall is the exit — app.exit() would skip
     // the quit lifecycle and autoInstallOnAppQuit would never run.
     if (options.installUpdate || hasDownloadedUpdate()) quitAndInstall();
-    else app.exit(0);
+    else {
+      // Observed on Windows/Electron 44: when the first quit was already in
+      // flight (the close that started this cleanup was vetoed), app.exit()
+      // can block or return without exiting. Best-effort fallback only; the
+      // normal path exits inside app.exit().
+      setTimeout(() => {
+        log('shell', 'shutdown-exit-watchdog');
+        process.exit(0);
+      }, 5_000).unref();
+      app.exit(0);
+    }
   })();
   return state.shutdownPromise;
 }
@@ -232,8 +266,8 @@ async function createWindow(): Promise<void> {
     state.sessionsOpen = process.env.DEVIN_WORKSPACES_TEST_SESSIONS_OPEN === '1';
   }
   terminalHost.onChange = notifyShell;
-  terminalHost.onPullRequestUrl = (url, sessionId) => {
-    autoOpenLocalPr(url, localScope(sessionId), 'local-terminal');
+  terminalHost.onPullRequestUrl = (url, target) => {
+    autoOpenLocalPr(url, target.scope, target.source);
   };
   // Exclusive handoff: `devin -r` ptys take the CLI's per-session lock; the acp
   // agent releases it (restart) on open and reclaims the session on close.
@@ -347,6 +381,7 @@ async function createWindow(): Promise<void> {
   // Re-poll immediately on focus while the poller is in error (backoff drop).
   state.windowRef.on('focus', () => {
     notifier.onWindowFocus();
+    claudeSessions().onWindowFocus();
     updateOnWindowFocus();
   });
   state.windowRef.on('close', (event) => {

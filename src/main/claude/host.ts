@@ -25,6 +25,7 @@ import {
   removeSession,
   resetHistory,
   setPermission,
+  setTerminalOwned,
   startPrompt,
   upsertSession,
 } from '../../core/localModel';
@@ -142,6 +143,26 @@ export class ClaudeHost {
 
   isLoaded(id: string): boolean {
     return getChatState().sessions[id]?.loaded === true;
+  }
+
+  // Whether a query was ever created for this id (the transcript exists even
+  // when the store hasn't re-listed yet) — decides resume vs --session-id.
+  hasStarted(id: string): boolean {
+    return this.started.has(id);
+  }
+
+  setTerminalOwned(id: string, owned: boolean): void {
+    update((s) => setTerminalOwned(s, id, owned));
+  }
+
+  // Phase 3 terminal handoff: closes the live query for the session (the pty
+  // becomes the writer).
+  async closeLiveQuery(id: string): Promise<void> {
+    await this.closeLive(id);
+  }
+
+  isRunning(id: string): boolean {
+    return getChatState().sessions[id]?.running === true;
   }
 
   newSession(cwd: string): string {

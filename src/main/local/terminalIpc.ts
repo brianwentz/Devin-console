@@ -16,6 +16,8 @@ import { log } from '../log';
 import { state } from '../state';
 import { applyLayout, notifyShell } from '../window';
 import { terminalHost } from './terminalHost';
+import { getChatState } from '../claude/chatState';
+import { claudeSessions } from '../claude/sessions';
 
 // Handlers for the embedded terminal (P4b) and the F5 shell dock. Payloads are
 // zod-validated; terminal content is never logged.
@@ -23,6 +25,21 @@ export function setupTerminalIpc(): void {
   guardedHandle(IpcChannels.terminalOpen, (_event, payload: unknown) => {
     const parsed = TerminalOpenArg.safeParse(payload);
     if (!parsed.success) return { ok: false, error: 'invalid payload' };
+    if (parsed.data.kind === 'claude') {
+      const arg = parsed.data;
+      const chat = getChatState().sessions[arg.sessionId];
+      // 'new' only for an in-memory session the host never started — anything
+      // with a transcript resumes (claude -r <id>).
+      const mode =
+        arg.mode === 'attach' ? 'attach' : claudeSessions().terminalModeFor(arg.sessionId);
+      return terminalHost.open({
+        kind: 'claude',
+        sessionId: arg.sessionId,
+        mode,
+        agentId: arg.agentId,
+        cwd: chat?.cwd ?? null,
+      });
+    }
     return terminalHost.open(parsed.data);
   });
   guardedOn(IpcChannels.terminalInput, (_event, payload: unknown) => {

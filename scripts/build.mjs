@@ -129,6 +129,16 @@ await Promise.all([
     external: ['@anthropic-ai/claude-agent-sdk'],
     outfile: 'out/fixtures/fakeClaudeSdk.mjs',
   }),
+  // Phase 3 fake `claude` CLI for background agents
+  // (DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD).
+  build({
+    entryPoints: ['tests/fixtures/fakeClaudeAgents.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    outfile: 'out/fixtures/fakeClaudeAgents.cjs',
+  }),
 ]);
 
 await viteBuild({ configFile: 'vite.config.mts' });
