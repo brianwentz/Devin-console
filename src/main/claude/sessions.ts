@@ -471,6 +471,8 @@ export class ClaudeSessions {
       versions: this.versions,
       agents: this.agents,
       hooks: this.hooks,
+      // Set by the subagent view (claude:openSubagent); cleared on claude:open.
+      selectedSubagentId: null,
     };
   }
 

@@ -189,6 +189,7 @@ export function reconcile(
       missing: false,
       agentStatus: null,
       activity: null,
+      subagents: null,
       prs: prCountsFor(entry),
     });
   }
@@ -214,6 +215,7 @@ export function reconcile(
         missing: true,
         agentStatus: null,
         activity: null,
+        subagents: null,
         prs: prCountsFor(entry),
       });
     } else {

@@ -145,6 +145,9 @@ export const IpcChannels = {
   // Claude background agents (Phase 3).
   claudeAgentStop: 'claude:agentStop',
   claudeAgentsRefresh: 'claude:agentsRefresh',
+  // Claude subagent transcripts (read-only).
+  claudeSubagents: 'claude:subagents',
+  claudeOpenSubagent: 'claude:openSubagent',
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
@@ -514,6 +517,14 @@ export const ClaudeAgentSchema = z.object({
 });
 export type ClaudeAgent = z.infer<typeof ClaudeAgentSchema>;
 
+export const ClaudeSubagentSchema = z.object({
+  agentId: z.string(),
+  parentSessionId: z.string(),
+  title: z.string(),
+  messageCount: z.number().int().nullable(),
+});
+export type ClaudeSubagent = z.infer<typeof ClaudeSubagentSchema>;
+
 export const ClaudeSessionSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -531,6 +542,8 @@ export const ClaudeSessionSchema = z.object({
   agentStatus: ClaudeAgentStatusSchema.nullable(),
   // Live activity from hooks (terminal/external) or the chat host.
   activity: z.enum(['running', 'waiting']).nullable(),
+  // Subagent transcripts under this session: null = not loaded yet.
+  subagents: z.array(ClaudeSubagentSchema).nullable(),
   prs: z.object({
     open: z.number().int(),
     queued: z.number().int(),
@@ -567,6 +580,8 @@ export const ClaudeStateSchema = z.object({
     installed: z.boolean(),
     error: z.string().nullable(),
   }),
+  // Read-only subagent transcript shown in the chat column (null = the session itself).
+  selectedSubagentId: z.string().nullable(),
 });
 export type ClaudeState = z.infer<typeof ClaudeStateSchema>;
 export const UpdateCheckSourceSchema = z.enum([
@@ -874,6 +889,11 @@ export const ClaudeSetModelArg = z.object({
 });
 export const ClaudeLoadHistoryArg = z.object({ sessionId: ClaudeSessionId });
 export const ClaudeAgentStopArg = z.object({ agentId: z.string().min(1).max(64) });
+export const ClaudeSubagentsArg = z.object({ sessionId: ClaudeSessionId });
+export const ClaudeOpenSubagentArg = z.object({
+  sessionId: ClaudeSessionId,
+  agentId: z.string().min(1).max(128),
+});
 export const ClaudeContextMenuArg = z.object({
   kind: z.enum(['session', 'folder', 'header', 'agent']),
   sessionId: ClaudeSessionId.optional(),
@@ -970,6 +990,8 @@ const ChatSessionSchema = z.object({
       thoughtTokens: z.number().nullable(),
       cachedReadTokens: z.number().nullable(),
       cachedWriteTokens: z.number().nullable(),
+      // Cumulative USD cost reported by the Claude SDK (null for Devin).
+      costUsd: z.number().nullable().default(null),
     })
     .optional(),
   error: z.string().optional(),
@@ -990,6 +1012,8 @@ export const ClaudeChatSessionSchema = ChatSessionSchema.extend({
 export type ClaudeChatSessionPublic = z.infer<typeof ClaudeChatSessionSchema>;
 export const ClaudeChatStateSchema = z.object({
   sessions: z.record(z.string(), ClaudeChatSessionSchema),
+  // Read-only subagent transcripts keyed `<sessionId>/<agentId>`.
+  subagentSessions: z.record(z.string(), ClaudeChatSessionSchema).default({}),
 });
 export type ClaudeChatStatePublic = z.infer<typeof ClaudeChatStateSchema>;
 
