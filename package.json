@@ -44,7 +44,7 @@
     "vitest": "5.0.3"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.7.0",
+    "@agentclientprotocol/sdk": "1.8.0",
     "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "@dnd-kit/core": "6.3.1",
     "@dnd-kit/sortable": "10.0.0",
@@ -57,9 +57,9 @@
     "ajv-formats": "3.0.1",
     "electron-updater": "6.8.9",
     "fast-deep-equal": "3.1.3",
-    "fast-uri": "3.1.8",
+    "fast-uri": "4.2.2",
     "json-schema-traverse": "1.0.0",
-    "lucide-react": "1.52.0",
+    "lucide-react": "1.55.0",
     "node-pty": "1.1.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
