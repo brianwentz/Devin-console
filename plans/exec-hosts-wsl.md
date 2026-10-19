@@ -105,7 +105,7 @@ Rationale and numbers in §0.2 Q2. Mechanism, per WSL host:
 - `AppState.hosts: HostStatus[]` (pushed; `local` always first).
 - `ClaudeSessionSchema.host: HostIdSchema` (default `'local'` when absent in stored data); `ClaudeStateSchema` keeps `configDir`/`cliPath`/`versions` for the local host (unchanged for existing specs) and gains `hostErrors: Record<HostId, string>` for per-host status lines.
 - `ClaudeAgentSchema.host: HostIdSchema`; `TerminalSummarySchema.host: HostIdSchema`.
-- `LocalWorkspaceArg.path` accepts UNC (`WorkspacePath` already a non-empty string; add a `.refine` rejecting `\wsl.localhost\<D>` *roots* with no path below `<home>`-less form is **not** needed — any UNC dir is fine).
+- `LocalWorkspaceArg.path` accepts UNC unchanged (`WorkspacePath` is already a non-empty string; any `\wsl.localhost\<D>\…` directory is a valid workspace).
 - Channels: `hostsRefresh 'hosts:refresh'` (invoke `{ id?: HostId }` → re-enumerate / re-probe), `hostsSetEnabled 'hosts:setEnabled'` (invoke `{ id, enabled }`), `claudeRecheckEnv 'claude:recheckEnv'` (invoke `{ sessionId }` → re-capture for that session's host).
 - Settings (`HostsFields`): `wslEnabled: boolean`, `wslDistros: string[] | null`, `defaultWslDistro: string | null`, `overrides: Record<string, { claudePath?: string|null; devinPath?: string|null; home?: string|null; shell?: string|null; envCaptureDisabled?: boolean }>` under `hosts`, each with defaults so `parse({})` stays valid; `SettingsPatchSchema.hosts` partial.
 
