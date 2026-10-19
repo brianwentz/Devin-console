@@ -2,6 +2,30 @@ import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
 import { isAllowedAppUrl } from '../core/sessions';
 
+// Execution hosts: 'local' is this machine, 'wsl:<distro>' runs inside WSL.
+export const HostIdSchema = z.string().regex(/^(local|wsl:[A-Za-z0-9._-]+)$/);
+export type HostId = z.infer<typeof HostIdSchema>;
+
+// Per-host status pushed to the shell (never carries env values or paths in
+// the log-safe fields beyond what the user configured).
+export const HostStatusSchema = z.object({
+  id: HostIdSchema,
+  kind: z.enum(['local', 'wsl']),
+  label: z.string(),
+  state: z.enum(['ready', 'probing', 'stopped', 'disabled', 'error']),
+  error: z.string().nullable(),
+  probedAt: z.string().nullable(),
+  home: z.string().nullable(),
+  shell: z.string().nullable(),
+  claude: z.object({ path: z.string().nullable(), version: z.string().nullable() }),
+  devin: z.object({ path: z.string().nullable() }),
+  shellEnv: z.object({ ok: z.boolean(), count: z.number().int(), ms: z.number() }).nullable(),
+  hooks: z.enum(['ok', 'unreachable', 'untested']),
+  inotify: z.boolean(),
+  gh: z.boolean(),
+});
+export type HostStatus = z.infer<typeof HostStatusSchema>;
+
 export const IpcChannels = {
   stateGet: 'state:get',
   stateUpdate: 'state:update',
@@ -148,6 +172,10 @@ export const IpcChannels = {
   // Claude subagent transcripts (read-only).
   claudeSubagents: 'claude:subagents',
   claudeOpenSubagent: 'claude:openSubagent',
+  claudeRecheckEnv: 'claude:recheckEnv',
+  // Execution hosts (WSL): enumerate/probe and enable/disable.
+  hostsRefresh: 'hosts:refresh',
+  hostsSetEnabled: 'hosts:setEnabled',
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
@@ -266,6 +294,23 @@ const TerminalFields = {
   // default profile, else PowerShell).
   shell: z.string().max(1024),
 };
+// Execution hosts (WSL). wslDistros: null = auto (running + default);
+// overrides: per-host path/shell/env-capture settings keyed by HostId.
+const HostsFields = {
+  wslEnabled: z.boolean(),
+  wslDistros: z.array(z.string().max(128)).max(50).nullable(),
+  defaultWslDistro: z.string().max(128).nullable(),
+  overrides: z.record(
+    z.string(),
+    z.object({
+      claudePath: z.string().max(1024).nullable().optional(),
+      devinPath: z.string().max(1024).nullable().optional(),
+      home: z.string().max(1024).nullable().optional(),
+      shell: z.string().max(1024).nullable().optional(),
+      envCaptureDisabled: z.boolean().optional(),
+    }),
+  ),
+};
 // F3: tenant/api URLs must be https (http allowed for localhost only).
 const AppUrl = z.url().refine(isAllowedAppUrl, 'must be https (http allowed for localhost only)');
 const SettingsFields = {
@@ -376,6 +421,14 @@ export const SettingsObject = z.object({
       lastSessionId: null,
       hooksEnabled: false,
     }),
+  hosts: z
+    .object({
+      wslEnabled: HostsFields.wslEnabled.default(true),
+      wslDistros: HostsFields.wslDistros.default(null),
+      defaultWslDistro: HostsFields.defaultWslDistro.default(null),
+      overrides: HostsFields.overrides.default({}),
+    })
+    .default({ wslEnabled: true, wslDistros: null, defaultWslDistro: null, overrides: {} }),
 });
 
 // Every field has a default or is optional, so parse({}) yields valid Settings.
@@ -398,6 +451,7 @@ export const SettingsPatchSchema = z.object({
   terminal: z.object(TerminalFields).partial().optional(),
   sessions: z.object(SessionsFields).partial().optional(),
   claude: z.object(ClaudeFields).partial().optional(),
+  hosts: z.object(HostsFields).partial().optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
 
@@ -509,6 +563,7 @@ export type CloudState = z.infer<typeof CloudStateSchema>;
 export const ClaudeAgentStatusSchema = z.enum(['running', 'completed', 'stopped', 'unknown']);
 export const ClaudeAgentSchema = z.object({
   id: z.string(),
+  host: HostIdSchema,
   sessionId: z.string().nullable(),
   name: z.string().nullable(),
   status: ClaudeAgentStatusSchema,
@@ -527,6 +582,7 @@ export type ClaudeSubagent = z.infer<typeof ClaudeSubagentSchema>;
 
 export const ClaudeSessionSchema = z.object({
   id: z.string(),
+  host: HostIdSchema,
   title: z.string(),
   cwd: z.string().nullable(),
   gitBranch: z.string().nullable(),
@@ -564,6 +620,8 @@ export const ClaudeStateSchema = z.object({
   folders: z.array(z.string()),
   sessions: z.array(ClaudeSessionSchema),
   showArchived: z.boolean(),
+  // Per-host status line when a host's probe/env capture failed.
+  hostErrors: z.record(HostIdSchema, z.string()),
   // Transient mutation failure; cleared by the next successful refresh.
   lastError: z.object({ op: z.string(), message: z.string() }).nullable(),
   // `claude --version` vs the CLI version the pinned SDK targets.
@@ -626,6 +684,7 @@ export type ReleaseNotesReply = z.infer<typeof ReleaseNotesReplySchema>;
 
 export const TerminalSummarySchema = z.object({
   id: z.string(),
+  host: HostIdSchema,
   kind: z.enum(['devin', 'shell', 'claude']),
   // The local/claude session a devin- or claude-kind pty belongs to (null for shell-kind).
   sessionId: z.string().nullable().default(null),
@@ -718,6 +777,8 @@ export const ShellStateSchema = z.object({
   terminalHeight: z.number(),
   terminals: z.array(TerminalSummarySchema),
   activeTerminalId: z.string().nullable(),
+  // Execution hosts known to main (local first).
+  hosts: z.array(HostStatusSchema),
 });
 export type ShellState = z.infer<typeof ShellStateSchema>;
 
@@ -894,6 +955,10 @@ export const ClaudeOpenSubagentArg = z.object({
   sessionId: ClaudeSessionId,
   agentId: z.string().min(1).max(128),
 });
+export const ClaudeRecheckEnvArg = z.object({ sessionId: ClaudeSessionId });
+// hosts:refresh — re-enumerate + re-probe (all hosts when id absent).
+export const HostsRefreshArg = z.object({ id: HostIdSchema.optional() });
+export const HostsSetEnabledArg = z.object({ id: HostIdSchema, enabled: z.boolean() });
 export const ClaudeContextMenuArg = z.object({
   kind: z.enum(['session', 'folder', 'header', 'agent']),
   sessionId: ClaudeSessionId.optional(),

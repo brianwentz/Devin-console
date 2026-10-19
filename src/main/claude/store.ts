@@ -36,6 +36,7 @@ export class ClaudeStore {
     const infos = await sdk.listSessions({ includeProgrammatic: true });
     return infos.map((info) => ({
       id: info.sessionId,
+      host: 'local' as const,
       // The SDK already resolves title precedence: custom title →
       // auto-generated summary → first prompt.
       title: info.summary,

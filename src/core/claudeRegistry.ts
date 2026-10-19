@@ -4,11 +4,12 @@
 // when a mutation touches it, so the file stays small.
 
 import { z } from 'zod';
-import type { ClaudeSessionState } from '../shared/ipc';
+import type { HostId, ClaudeSessionState } from '../shared/ipc';
 import type { SessionPrCounts } from './cloudAcp';
 
 export interface ClaudeStoreSession {
   id: string;
+  host: HostId;
   title: string;
   cwd: string | null;
   gitBranch: string | null;
@@ -36,6 +37,7 @@ export const MAX_PRS_PER_SESSION = 20;
 
 export interface ClaudeRegistryEntry {
   id: string;
+  host: HostId;
   folder: string | null;
   pinned: boolean;
   archived: boolean;
@@ -87,6 +89,8 @@ const legacyPr = (url: string): ClaudeRegistryPr => ({
 const RegistryEntrySchema = z
   .object({
     id: z.string(),
+    // Execution host; legacy files lack it and default to 'local'.
+    host: z.string().default('local'),
     folder: z.string().nullable(),
     pinned: z.boolean(),
     archived: z.boolean(),
@@ -109,8 +113,9 @@ export const ClaudeRegistrySchema: z.ZodType<ClaudeRegistry, unknown> = z.object
   entries: z.record(z.string(), RegistryEntrySchema),
 });
 
-const newEntry = (id: string): ClaudeRegistryEntry => ({
+const newEntry = (id: string, host: HostId = 'local'): ClaudeRegistryEntry => ({
   id,
+  host,
   folder: null,
   pinned: false,
   archived: false,
@@ -176,6 +181,7 @@ export function reconcile(
     if (entry?.removed) continue;
     sessions.push({
       id: stored.id,
+      host: stored.host,
       title: stored.title,
       cwd: stored.cwd,
       gitBranch: stored.gitBranch,
@@ -202,6 +208,7 @@ export function reconcile(
     if (entry.pinned || entry.folder !== null) {
       sessions.push({
         id,
+        host: entry.host,
         title: '(transcript missing)',
         cwd: null,
         gitBranch: null,
@@ -243,7 +250,7 @@ export function reconcile(
         (unarchivedAt === null || stored.lastModified > unarchivedAt);
       if (eligible) {
         entries[stored.id] = {
-          ...(entry ?? newEntry(stored.id)),
+          ...(entry ?? newEntry(stored.id, stored.host)),
           archived: true,
           archivedAt: opts.now,
         };

@@ -28,6 +28,7 @@ const DAY = 86_400_000;
 
 const store = (over: Partial<ClaudeStoreSession> = {}): ClaudeStoreSession => ({
   id: 's1',
+  host: 'local',
   title: 'First session',
   cwd: 'C:\\proj',
   gitBranch: 'main',
@@ -40,6 +41,7 @@ const store = (over: Partial<ClaudeStoreSession> = {}): ClaudeStoreSession => ({
 
 const entry = (over: Partial<ClaudeRegistryEntry> = {}): ClaudeRegistryEntry => ({
   id: 's1',
+  host: 'local',
   folder: null,
   pinned: false,
   archived: false,
@@ -516,5 +518,44 @@ describe('folder ops', () => {
     const r = reg({ folders: ['A', 'B', 'C'] });
     expect(folderReorder(r, ['C', 'A']).folders).toEqual(['C', 'A', 'B']);
     expect(folderReorder(r, ['Z', 'B']).folders).toEqual(['B', 'A', 'C']);
+  });
+});
+
+describe('host', () => {
+  it('legacy registry entries without host parse as local', () => {
+    const raw = {
+      version: 1,
+      folders: [],
+      entries: {
+        s1: {
+          id: 's1',
+          folder: null,
+          pinned: false,
+          archived: false,
+          archivedAt: null,
+          unarchivedAt: null,
+          removed: false,
+          removedAt: null,
+          lastOpenedAt: null,
+          prs: [],
+        },
+      },
+    };
+    const parsed = ClaudeRegistrySchema.parse(raw);
+    expect(parsed.entries['s1']?.host).toBe('local');
+  });
+
+  it('reconcile carries the store row host into the session row', () => {
+    const { sessions } = reconcile(emptyRegistry(), [store({ host: 'wsl:Ubuntu-22.04' })], {
+      now: NOW,
+      autoArchiveDays: 0,
+    });
+    expect(sessions[0]?.host).toBe('wsl:Ubuntu-22.04');
+  });
+
+  it('missing pinned rows carry the entry host', () => {
+    const r = reg({ entries: { s1: entry({ host: 'wsl:Ubuntu-22.04', pinned: true }) } });
+    const { sessions } = reconcile(r, [], { now: NOW, autoArchiveDays: 0 });
+    expect(sessions[0]?.host).toBe('wsl:Ubuntu-22.04');
   });
 });

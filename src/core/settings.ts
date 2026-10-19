@@ -109,7 +109,7 @@ function mergeDefined<T extends object>(base: T, patch: { [K in keyof T]?: T[K] 
 export function mergeSettings(current: Settings, patch: unknown): Settings {
   const parsed = SettingsPatchSchema.safeParse(patch);
   if (!parsed.success) return current;
-  const { routing, pane, notifications, prs, local, tabs, layout, terminal, sessions, claude, ...rest } =
+  const { routing, pane, notifications, prs, local, tabs, layout, terminal, sessions, claude, hosts, ...rest } =
     parsed.data;
   const topLevel = Object.fromEntries(
     Object.entries(rest).filter(([, value]) => value !== undefined),
@@ -132,5 +132,22 @@ export function mergeSettings(current: Settings, patch: unknown): Settings {
     terminal: mergeDefined(current.terminal, terminal),
     sessions: mergeDefined(current.sessions, sessions),
     claude: mergeDefined(current.claude, claude),
+    hosts: hosts
+      ? {
+          ...mergeDefined(current.hosts, { ...hosts, overrides: undefined }),
+          // Per-host and per-field merge: patching 'wsl:X'.home keeps its paths.
+          overrides: hosts.overrides
+            ? Object.fromEntries(
+                Object.keys({ ...current.hosts.overrides, ...hosts.overrides }).map((id) => [
+                  id,
+                  mergeDefined(
+                    current.hosts.overrides[id] ?? {},
+                    hosts.overrides?.[id],
+                  ),
+                ]),
+              )
+            : current.hosts.overrides,
+        }
+      : current.hosts,
   };
 }

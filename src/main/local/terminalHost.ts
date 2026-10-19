@@ -575,6 +575,7 @@ export class TerminalHost {
   list(): TerminalSummary[] {
     return [...this.terminals.values()].map((entry) => ({
       id: entry.id,
+      host: 'local' as const,
       kind: entry.kind,
       sessionId: entry.sessionId,
       cwd: entry.cwd,

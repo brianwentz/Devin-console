@@ -265,6 +265,7 @@ export class ClaudeSessions {
         };
       }),
       showArchived: this.showArchived,
+      hostErrors: {},
       lastError: this.lastError,
       versions: this.versions,
       agents: this.agents,

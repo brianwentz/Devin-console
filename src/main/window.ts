@@ -16,7 +16,7 @@ import {
 } from '../core/layout';
 import { unreadPrCount, visiblePrs } from '../core/prPanelModel';
 import { effectiveScope } from '../core/tabModel';
-import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
+import { IpcChannels, SettingsSchema, type HostStatus, type ShellState } from '../shared/ipc';
 
 import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
@@ -176,6 +176,8 @@ export function publicState(): ShellState {
         ? state.activeTerminalId
         : (terminals.at(-1)?.id ?? null);
     })(),
+    // Only 'local' exists until the host registry lands (exec-hosts stage 2).
+    hosts: [LOCAL_HOST_STATUS],
   };
 }
 
@@ -218,6 +220,24 @@ export function ensureAttached(view: View | null): void {
 // A transparent raised view does not composite over sibling WebContentsViews
 // on macOS (it whites out); only Windows keeps the see-through raise.
 const OVERLAY_TRANSPARENT = process.platform !== 'darwin';
+
+// Pushed until the host registry (exec-hosts stage 2) owns the list.
+const LOCAL_HOST_STATUS: HostStatus = {
+  id: 'local',
+  kind: 'local',
+  label: 'This PC',
+  state: 'ready',
+  error: null,
+  probedAt: null,
+  home: null,
+  shell: null,
+  claude: { path: null, version: null },
+  devin: { path: null },
+  shellEnv: null,
+  hooks: 'untested',
+  inotify: false,
+  gh: false,
+};
 
 // Raise the shell DOM over every hosted view — used by shell-DOM overlays
 // (notifications panel, autofill picker/prompt).
