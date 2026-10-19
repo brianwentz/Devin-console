@@ -264,7 +264,7 @@ export function registerTestHooks(): void {
       terminalPid: (id: string) => terminalHost.pid(id),
       clipboardWrite: (text: string) => clipboard.writeText(text),
       clipboardRead: () => clipboard.readText(),
-      // Claude sidebar (Phase 1 PR 3).
+      // Claude sidebar.
       claudeState: () => claudeSessions().snapshot(),
       claudeRefresh: () => claudeSessions().refresh('test'),
       claudeSelect: (id: string | null) => {
@@ -279,7 +279,7 @@ export function registerTestHooks(): void {
       claudeMenuClick: (id: string) => claudeSessions().clickMenuItem(id),
       claudeMutations: () => claudeSessions().mutationLog(),
       claudeConfigDir: () => claudeSessions().snapshot().configDir,
-      // Phase 2 chat.
+      // Chat.
       claudeChatState: () => publicChatState(),
       claudeNewSession: (cwd: string | null) => claudeSessions().newSession(cwd),
       claudePrompt: (id: string, text: string) => claudeHost().prompt(id, text),
@@ -287,10 +287,10 @@ export function registerTestHooks(): void {
       claudePermission: (id: string, requestId: string, optionId: string) =>
         claudeHost().respondPermission(id, requestId, optionId),
       claudeLiveCount: () => claudeHost().liveCount(),
-      // Phase 3: background agents + claude terminal.
+      // Background agents + claude terminal.
       claudeAgents: () => claudeSessions().agentsList(),
       claudeAgentsRefresh: () => claudeSessions().refreshAgents(),
-      // Phase 5 — Claude PR tracking: record a PR on the registry, list a
+      // Claude PR tracking: record a PR on the registry, list a
       // session's recorded PRs, seed the title/state cache, force a refresh.
       claudeRecordPr: (sessionId: string, url: string) =>
         claudeSessions().recordPr(sessionId, url, 'hook'),
@@ -298,14 +298,14 @@ export function registerTestHooks(): void {
       claudeRefreshPrStates: () => claudeSessions().refreshPrStates('test'),
       prTitlesSeed: (url: string, info: { title: string | null; state: string | null }) =>
         prTitles.seed(url, { title: info.title, state: info.state as 'open' | 'draft' | 'merged' | 'closed' | null }),
-      // Phase 6 — subagents + message ids + shutdown state.
+      // Subagents + message ids + shutdown state.
       claudeSubagents: (sessionId: string) => claudeSessions().loadSubagents(sessionId),
       claudeOpenSubagent: (sessionId: string, agentId: string) =>
         claudeSessions().openSubagent(sessionId, agentId),
       claudeChatMessageIds: (sessionId: string) =>
         getChatState().sessions[sessionId]?.messages.map((m) => m.messageId ?? null) ?? [],
       shutdownState: () => ({ complete: state.shutdownComplete, inFlight: state.shuttingDown }),
-      // Phase 4 — hook listener info (port + token for test POSTs), the
+      // Hook listener info (port + token for test POSTs), the
       // hook-derived activity map, a test POST against the listener, and the
       // path of <configDir>/settings.json (global install target).
       claudeHookInfo: () => claudeSessions().hookInfo(),
@@ -380,9 +380,11 @@ export function registerTestHooks(): void {
       },
     },
   });
-  // Lets the shell page (and therefore the installed smoke spec, which cannot
-  // evaluate in the main context over CDP) dispatch into the hooks above.
-  // Test-mode only: this handler simply is not registered otherwise.
+  // test:hook — the one generic dispatch into the hooks above. The installed
+  // smoke spec depends on it: Electron's browser CDP target cannot
+  // Runtime.evaluate in the main process, so the spec reaches these hooks
+  // through `devinworkspaces.testHook(name, ...args)` from the shell page.
+  // Test-mode only: this handler is not registered otherwise.
   guardedHandle('test:hook', (_event, name: unknown, args: unknown) => {
     const hooks = (globalThis as Record<string, unknown>).__devinworkspaces as
       | Record<string, unknown>

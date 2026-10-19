@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ArrowLeft, GitFork } from 'lucide-react';
 import type { ClaudeChatSessionPublic, LocalResult } from '../../shared/ipc';
 import { CLAUDE_PERMISSION_MODES, isClaudePermissionMode } from '../../core/settingsDraft';
@@ -73,10 +73,10 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
   const loadRequested = useRef<Set<string>>(new Set());
   // Chat/Terminal tab, remembered per session in shell memory (viewRequests).
   const [view, setViewState] = useState<ClaudeViewTab>(() => (id ? getLastView(id) : 'chat'));
-  const setView = (next: ClaudeViewTab) => {
+  const setView = useCallback((next: ClaudeViewTab) => {
     setViewState(next);
     if (id) rememberView(id, next);
-  };
+  }, [id]);
   useEffect(() => {
     if (id) setViewState(getLastView(id));
   }, [id]);
@@ -107,7 +107,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
     setView('terminal');
     setTerminalActive(true);
     consumeTerminalRequest(terminalRequest.seq);
-  }, [terminalRequest, id]);
+  }, [terminalRequest, id, setView]);
 
   // Open (or reuse) the selected session's pty while the Terminal tab is shown
   // (opening hands the session to the terminal, so never do it from Chat).
@@ -136,7 +136,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
     return () => {
       cancelled = true;
     };
-  }, [view, id, terminalIds]);
+  }, [view, id, terminalIds, setView]);
 
   // Listed transcripts start `loaded: false`; fetch the history once per id.
   useEffect(() => {

@@ -227,11 +227,13 @@ describe('translateSdkMessage', () => {
       {
         sessionUpdate: 'tool_call_update',
         toolCallId: 'task1',
+        appendContent: true,
         content: [{ type: 'content', content: { type: 'text', text: '↳ Grep TODO' } }],
       },
       {
         sessionUpdate: 'tool_call_update',
         toolCallId: 'task1',
+        appendContent: true,
         content: [{ type: 'content', content: { type: 'text', text: '↳ npm test' } }],
       },
     ];
@@ -251,6 +253,7 @@ describe('translateSdkMessage', () => {
     expect(updates[0]).toEqual({
       sessionUpdate: 'tool_call_update',
       toolCallId: 'tu1',
+      appendContent: true,
       status: 'completed',
       rawOutput: 'ok\nline2',
       content: [{ type: 'content', content: { type: 'text', text: 'ok\nline2' } }],
@@ -263,6 +266,7 @@ describe('translateSdkMessage', () => {
     expect(updates[2]).toEqual({
       sessionUpdate: 'tool_call_update',
       toolCallId: 'tu3',
+      appendContent: true,
       status: 'completed',
       rawOutput: [{ type: 'image', source: {} }],
     });
@@ -421,6 +425,39 @@ describe('translateSdkMessage', () => {
 });
 
 describe('round trip through the reducers', () => {
+  it('parent Task call: two subagent folds then a tool_result keep all content in order', () => {
+    type S = ChatStateLike & { sessions: Record<string, ReturnType<typeof newChatSession>> };
+    let state: S = { sessions: { [SID]: { ...newChatSession({ id: SID }) } } };
+    state = startPrompt(state, SID, 'hi', '2026-10-01T00:00:00Z');
+    state = applyUpdate(state, SID, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'task1',
+      title: 'Task',
+      status: 'in_progress',
+    });
+    const messages: unknown[] = [
+      assistant([{ type: 'tool_use', id: 'sub1', name: 'Grep', input: { pattern: 'a' } }], 'task1', 'a-1'),
+      assistant([{ type: 'tool_use', id: 'sub2', name: 'Bash', input: { command: 'go' } }], 'task1', 'a-2'),
+      user([{ type: 'tool_result', tool_use_id: 'task1', content: 'done', is_error: false }]),
+    ];
+    for (const msg of messages) {
+      for (const update of translateSdkMessage(msg, LIVE).updates) {
+        state = applyUpdate(state, SID, update);
+      }
+    }
+    expect(state.sessions[SID]!.toolCalls.task1).toEqual({
+      id: 'task1',
+      title: 'Task',
+      status: 'completed',
+      rawOutput: 'done',
+      content: [
+        { type: 'content', content: { type: 'text', text: '↳ Grep a' } },
+        { type: 'content', content: { type: 'text', text: '↳ go' } },
+        { type: 'content', content: { type: 'text', text: 'done' } },
+      ],
+    });
+  });
+
   it('live turn: init, deltas, tool_use, tool_result, result', () => {
     type S = ChatStateLike & { sessions: Record<string, ReturnType<typeof newChatSession> & { cwd: string }> };
     let state: S = { sessions: { [SID]: { ...newChatSession({ id: SID }), cwd: '/w' } } };
@@ -498,7 +535,12 @@ describe('round trip through the reducers', () => {
       status: 'completed',
       rawInput: { command: 'ls' },
       rawOutput: 'a.ts\nb.ts',
-      content: [{ type: 'content', content: { type: 'text', text: '↳ Read a.ts' } }],
+      // appendContent keeps arrival order: the tool_result text landed
+      // before the subagent fold (replace semantics used to drop it).
+      content: [
+        { type: 'content', content: { type: 'text', text: 'a.ts\nb.ts' } },
+        { type: 'content', content: { type: 'text', text: '↳ Read a.ts' } },
+      ],
     });
     expect(session.usage).toMatchObject({
       used: 130,

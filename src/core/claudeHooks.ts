@@ -1,4 +1,4 @@
-// Phase 4 — Claude Code hook block builder and the pure settings.json merge /
+// Claude Code hook block builder and the pure settings.json merge /
 // remove used for both the `--settings` flag (env-var auth, our ptys) and the
 // global opt-in (`~/.claude/settings.json`, literal token). Our entries are
 // identified purely by URL (loopback + HOOK_PATH_PREFIX) so a port or token
@@ -22,9 +22,8 @@ export const HOOK_EVENTS = [
   'PostToolUse',
 ] as const;
 
-export type HookEvent = (typeof HOOK_EVENTS)[number];
 
-export type HookAuth = { kind: 'env'; envVar: string } | { kind: 'token'; token: string };
+type HookAuth = { kind: 'env'; envVar: string } | { kind: 'token'; token: string };
 
 type JsonObject = Record<string, unknown>;
 

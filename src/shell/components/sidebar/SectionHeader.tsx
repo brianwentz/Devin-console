@@ -6,7 +6,7 @@ import { FolderNameInput } from './FolderNameInput';
 import { FOLDER_MIME, isEditableFolder, isMoveTarget, SECTION_LABELS, SESSION_MIME } from './dnd';
 
 // Collapsible section header with folder drag/drop targets and an optional
-// "new in folder" button (Cloud only — Phase 1 Claude folders have no such
+// "new in folder" button (Cloud only — Claude folders have no such
 // action).
 export function SectionHeader({
   section,

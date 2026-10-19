@@ -11,8 +11,8 @@ Design history of the Claude Code integration (Phases 0–7). The files are kept
 | `claude-sessions-phase-3.md` | Phase 3 — terminal tab + background agents | Done (PR #61) |
 | `claude-sessions-phase-4.md` | Phase 4 — notifications via Claude Code hooks | Done (PR #65) |
 | `claude-sessions-phase-5.md` | Phase 5 — Claude PRs in the PR panel, sidebar PR badges, final docs | Done (PR #66) |
-| `claude-sessions-phase-6.md` | Phase 6 — limitations and deferrals from Phases 1–5 | In progress |
-| `claude-sessions-phase-7-cleanup.md` | Phase 7 — code hygiene, lint, docs consolidation, dependency/installer budget, repository hygiene | In progress |
+| `claude-sessions-phase-6.md` | Phase 6 — limitations and deferrals from Phases 1–5 | Done (PR #68) |
+| `claude-sessions-phase-7-cleanup.md` | Phase 7 — code hygiene, lint, docs consolidation, dependency/installer budget, repository hygiene | 7a done (PR #69); 7b in progress |
 
 ## How we worked
 

@@ -1,7 +1,7 @@
 // Background-agent poller: `claude agents --json --all` on a focus-aware
 // cadence (15 s focused / 60 s unfocused, plus an immediate poll on focus and
 // after stop). Output parses through the tolerant core/claudeAgents.ts
-// parser — the item shape was probed in Phase 3 §0
+// parser — the item shape comes from `claude agents --json --all` output
 // (docs/evidence/claude-agents-probe.json). Logs counts only.
 
 import { execFile } from 'node:child_process';

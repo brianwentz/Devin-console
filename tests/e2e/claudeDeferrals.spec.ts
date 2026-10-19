@@ -1,5 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
@@ -7,7 +6,6 @@ import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
   launchWithClaudeFixture,
   shellPage,
-  evaluateInShell,
 } from './helpers';
 import type { ClaudeState, ClaudeSubagent } from '../../src/shared/ipc';
 

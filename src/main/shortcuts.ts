@@ -114,7 +114,7 @@ export function handleShortcut(
     handled = true;
   } else if (ctrl && !input.shift && !input.alt && key === 'n') {
     if (state.surface === 'claude') {
-      // Phase 2: a new Claude chat session (cwd picker / test env var).
+      // A new Claude chat session (cwd picker / test env var).
       void claudeSessions().newSession(null);
     } else {
       openNewSession();

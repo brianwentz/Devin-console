@@ -109,14 +109,7 @@ The **Claude** surface (sparkle icon in the rail) lists the Claude Code sessions
 
 **Pull requests.** PR links that show up in a Claude session — in its chat output, in its terminal, or in a `gh pr` command reported by hooks — are recorded per session (in `claude-sessions.json`) and listed in the PR panel (rail button) alongside Devin PRs; a sparkle glyph marks the Claude rows. Opening one selects the session on the Claude surface and opens the PR in that session's tab scope. Each PR's state (open, draft, merged, closed) is read from its GitHub page using the app's GitHub sign-in and refreshed about every 10 minutes while the app is focused; a PR that merges or closes leaves the panel and raises a *pr-completed* notification once. Session rows in the sidebar show the same PR badges as Cloud sessions.
 
-**Known limitations.**
-
-- Subagent transcripts are not shown yet.
-- *Fork* is available from the sidebar menu only.
-- Consecutive assistant messages within one turn render as one message.
-- Under permission mode `auto` Claude rarely prompts, so permission notifications for terminal/external sessions are best-effort.
-- PR state is only available for PRs the signed-in GitHub session can load.
-- One writer at a time — the chat composer is disabled while that session's Terminal tab is open.
+**Known limitation.** One writer at a time — while a session's Terminal tab is open the chat shows its live history but you type in the terminal; the composer re-enables when the terminal closes.
 
 ## Settings reference
 

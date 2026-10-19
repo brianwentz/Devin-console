@@ -1,51 +1,35 @@
 import { emptyLocalState, type LocalState } from '../../core/localModel';
 import { IpcChannels, LocalStateSchema } from '../../shared/ipc';
-import { log } from '../log';
-import { state } from '../state';
+import { createPushedStore } from '../pushedStore';
 
 // In-memory LocalState; mutated only through `update()` with pure reducers from
 // core/localModel. Pushes are coalesced per tick so a burst of session/update
 // notifications becomes one `local:update` message.
-let current: LocalState = emptyLocalState(null);
-let scheduled = false;
+const store = createPushedStore<LocalState>({
+  schema: LocalStateSchema,
+  channel: IpcChannels.localUpdate,
+  initial: emptyLocalState(null),
+  empty: (current) => emptyLocalState(current.cliPath),
+  logTag: 'local',
+  logEvent: 'state-invalid',
+});
 
 export function getLocalState(): LocalState {
-  return current;
+  return store.get();
 }
 
 export function replaceLocalState(next: LocalState): void {
-  current = next;
-  schedulePublish();
+  store.replace(next);
 }
 
 export function update(reducer: (state: LocalState) => LocalState): LocalState {
-  const next = reducer(current);
-  if (next !== current) {
-    current = next;
-    schedulePublish();
-  }
-  return current;
-}
-
-function schedulePublish(): void {
-  if (scheduled) return;
-  scheduled = true;
-  setImmediate(() => {
-    scheduled = false;
-    publishLocalState();
-  });
+  return store.update(reducer);
 }
 
 export function publicLocalState(): LocalState {
-  // Validate the outgoing payload so the renderer never sees a malformed state.
-  const parsed = LocalStateSchema.safeParse(current);
-  if (parsed.success) return parsed.data as LocalState;
-  log('local', 'state-invalid', { detail: { issues: parsed.error.issues.slice(0, 5) } });
-  return emptyLocalState(current.cliPath);
+  return store.publicState();
 }
 
 export function publishLocalState(): void {
-  const view = state.shellView;
-  if (!view || view.webContents.isDestroyed()) return;
-  view.webContents.send(IpcChannels.localUpdate, publicLocalState());
+  store.publish();
 }

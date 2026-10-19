@@ -120,12 +120,9 @@ export class ClaudeHost {
   // once the SDK wrote its transcript a died-and-restarted query must resume
   // (isOnDisk lags until the next store list).
   private readonly started = new Set<string>();
-  // Subagent tool_use titles per parent call; tool_call_update content is
-  // replace-semantics, so the host accumulates and re-sends the full array.
-  private readonly subagentNotes = new Map<string, Map<string, unknown[]>>();
   // Current API message id per session (message_start → event.message.id) —
   // stamped on stream deltas so consecutive API messages render as separate
-  // agent bubbles (#3).
+  // agent bubbles.
   private readonly currentMessageIds = new Map<string, string | null>();
   private readonly scanners = new Map<string, LinkScanner>();
   private readonly pendingPermissions = new Map<
@@ -152,7 +149,7 @@ export class ClaudeHost {
     this.onEvent = opts.onEvent ?? (() => undefined);
   }
 
-  // Chat-derived notification events (Phase 4): finished on end_turn, blocked
+  // Chat-derived notification events: finished on end_turn, blocked
   // on any other terminal stop reason except cancelled (never emitted).
   private emitFinish(id: string, stopReason: string, error?: string): void {
     if (stopReason === 'end_turn') this.onEvent(id, 'finished');
@@ -181,7 +178,7 @@ export class ClaudeHost {
     update((s) => setTerminalOwned(s, id, owned));
   }
 
-  // Phase 3 terminal handoff: closes the live query for the session (the pty
+  // Terminal handoff: closes the live query for the session (the pty
   // becomes the writer).
   async closeLiveQuery(id: string): Promise<void> {
     await this.closeLive(id);
@@ -221,7 +218,6 @@ export class ClaudeHost {
   dropSession(id: string): void {
     void this.closeLive(id);
     this.scanners.delete(id);
-    this.subagentNotes.delete(id);
     this.currentMessageIds.delete(id);
     update((s) => ({
       ...removeSession(s, id),
@@ -232,7 +228,7 @@ export class ClaudeHost {
   }
 
   // Read-only subagent transcript chat state keyed '<sessionId>/<agentId>'
-  // (#1): never a live query, never prompts.
+  // never a live query, never prompts.
   ensureSubagentSession(key: string, info: { cwd: string | null }): void {
     if (getChatState().subagentSessions[key]) return;
     const session: ClaudeChatSession = {
@@ -306,9 +302,7 @@ export class ClaudeHost {
     const sdk = await loadSdk();
     const messages = (await sdk.getSessionMessages(id)) as unknown[];
     let count = 0;
-    // resetHistory wipes the tool calls — the accumulators must reset with it
-    // or a second load duplicates folded content.
-    this.subagentNotes.delete(id);
+    // resetHistory wipes the tool calls — the LinkScanner must reset with it.
     this.scanners.delete(id);
     update((s) => resetHistory(s, id));
     for (const msg of messages) {
@@ -603,33 +597,6 @@ export class ClaudeHost {
   }
 
   private applySessionUpdate(id: string, update_: SessionUpdate): void {
-    // Subagent tool_use updates carry only toolCallId + content and fold into
-    // the parent call — applyUpdate replaces content wholesale, so accumulate
-    // here and re-send the full array. A tool_result update carries status;
-    // its content is appended once (after the stored notes) but never stored.
-    if (update_.sessionUpdate === 'tool_call_update') {
-      const call = update_ as {
-        toolCallId: string;
-        status?: string;
-        content?: unknown[];
-      };
-      if (call.status === undefined && Array.isArray(call.content)) {
-        let notes = this.subagentNotes.get(id);
-        if (!notes) {
-          notes = new Map();
-          this.subagentNotes.set(id, notes);
-        }
-        const existing = notes.get(call.toolCallId) ?? [];
-        const merged = [...existing, ...call.content];
-        notes.set(call.toolCallId, merged);
-        update_ = { ...update_, content: merged } as SessionUpdate;
-      } else if (call.status !== undefined && Array.isArray(call.content)) {
-        const notes = this.subagentNotes.get(id)?.get(call.toolCallId);
-        if (notes?.length) {
-          update_ = { ...update_, content: [...notes, ...call.content] } as SessionUpdate;
-        }
-      }
-    }
     // PR links: feed agent text chunks and tool-result text (never prompts).
     let scanner = this.scanners.get(id);
     if (!scanner) {

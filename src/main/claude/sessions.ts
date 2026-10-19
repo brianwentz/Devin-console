@@ -5,7 +5,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { app, clipboard, dialog, Menu, shell } from 'electron';
+import { app, clipboard, dialog, shell } from 'electron';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type {
@@ -26,27 +26,15 @@ import {
   touchOpened,
 } from '../../core/claudeRegistry';
 import { claudeScope } from '../../core/tabModel';
-import {
-  openPrsOf,
-  prCountsFor,
-  recordPr as recordRegistryPr,
-  setPrState,
-  type ClaudePrState,
-} from '../../core/claudeRegistry';
-import {
-  activityFor,
-  applyHookEvent,
-  expireActivity,
-  type ActivityState,
-  type ClaudeHookEvent,
-} from '../../core/claudeActivity';
-import { settingsFlagJson } from '../../core/claudeHooks';
-import { notificationsForHookEvent } from '../../core/claudeNotify';
-import { prTitle, type SessionPrLink } from '../../core/notifyModel';
-import type { NotificationKind } from '../../core/notificationModel';
+import { ClaudeContextMenu, type MenuAction } from './contextMenu';
+import { ClaudeHooks } from './hooks';
+import { ClaudePrTracking } from './prTracking';
+import { prCountsFor } from '../../core/claudeRegistry';
+import { activityFor, type ActivityState } from '../../core/claudeActivity';
+import type { SessionPrLink } from '../../core/notifyModel';
 import type { ClaudeAgent, ClaudeState, ClaudeSubagent, Settings } from '../../shared/ipc';
 import { log } from '../log';
-import { fixtureOrigins, state, testMode } from '../state';
+import { state, testMode } from '../state';
 import { applyLayout, notifyShell } from '../window';
 import { resolveClaudePath, INSTALL_GUIDANCE } from './claudePath';
 import { ClaudeRegistryStore } from './registry';
@@ -56,42 +44,29 @@ import { sdkTargetCliVersion } from './sdk';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
 import { terminalHost } from '../local/terminalHost';
 import { ClaudeBackgroundAgents } from './backgroundAgents';
-import { ClaudeHookServer } from './hookServer';
-import { applyGlobalHooks } from './hooksInstall';
 import { getChatState } from './chatState';
-import { notificationStore } from '../notifications';
-import { allOpenPullRequests, prStore } from '../prs';
-import { prTitles } from '../prTitles';
 import { titleFromPrompt } from '../../core/localModel';
 
 const execFileAsync = promisify(execFile);
 
-// Claude PR state refresh: every 10 min while the window is focused, and
-// again each time the PR panel opens (setPrsPanel seam).
-const PR_STATE_REFRESH_MS = 10 * 60_000;
-
-type MenuAction =
-  | 'rename'
-  | 'rename-session'
-  | 'new-folder'
-  | 'open-terminal'
-  | 'attach-agent'
-  | null;
-
 export class ClaudeSessions {
   private store: ClaudeStore;
   private registryStore: ClaudeRegistryStore;
-  private registry: ClaudeRegistry = emptyRegistry();
+  /** @internal read by contextMenu/prTracking; written via saveRegistry/applyRegistry. */
+  registry: ClaudeRegistry = emptyRegistry();
   private storeSessions: ClaudeStoreSession[] = [];
-  private sessions: ClaudeState['sessions'] = [];
+  /** @internal read by contextMenu/prTracking. */
+  sessions: ClaudeState['sessions'] = [];
   private status: ClaudeState['status'] = 'loading';
-  private configDir: string;
+  /** @internal read by the hooks collaborator. */
+  readonly configDir: string;
   private cliPath: string | null = null;
   private error: string | null = null;
   private lastSyncAt: string | null = null;
   private lastError: { op: string; message: string } | null = null;
-  private showArchived = false;
-  // Filled by the Phase 2 version check (`claude --version` vs the SDK manifest).
+  /** @internal read by contextMenu; written via setShowArchived. */
+  showArchived = false;
+  // `claude --version` vs the SDK manifest target — powers the header warning badge.
   versions: ClaudeState['versions'] = { cli: null, sdkTarget: null, mismatch: false };
   private refreshInFlight = false;
   private refreshDirty: string | null = null;
@@ -102,16 +77,10 @@ export class ClaudeSessions {
   private agents: ClaudeAgent[] = [];
   private backgroundAgents: ClaudeBackgroundAgents | null = null;
   private mutations: { op: string; payload: Record<string, unknown> }[] = [];
-  // Phase 4 — hook listener + activity + global-install state.
-  private hookServer: ClaudeHookServer | null = null;
-  private hooks: ClaudeState['hooks'] = {
-    port: null,
-    enabled: false,
-    installed: false,
-    error: null,
-  };
-  private activity: ActivityState = {};
-  // Subagent transcript lists per session (#1): loaded lazily on expand;
+  private readonly hook: ClaudeHooks;
+  private readonly pr: ClaudePrTracking;
+  private readonly menu: ClaudeContextMenu;
+  // Subagent transcript lists per session: loaded lazily on expand;
   // invalidated at turn end and on store change for that session.
   private subagentLists = new Map<string, ClaudeSubagent[]>();
   // The subagent view currently open in the chat column (agentId, or null).
@@ -120,31 +89,6 @@ export class ClaudeSessions {
   // the store watcher reports the transcript file changed.
   private historyTimers = new Map<string, NodeJS.Timeout>();
   private historyInFlight = new Set<string>();
-  private recentPermission = new Map<string, number>();
-  private activityTimer: NodeJS.Timeout | null = null;
-  private prRefreshTimer: NodeJS.Timeout | null = null;
-  private readonly onPrCacheChange = (): void => {
-    // prTitles cache landed/changed — push fresh states into the registry;
-    // a first flip to merged|closed raises one pr-completed notification.
-    let registry = this.registry;
-    let changed = false;
-    for (const [id, entry] of Object.entries(registry.entries)) {
-      for (const pr of entry.prs) {
-        const info = prTitles.getInfo(pr.url);
-        if (!info || info.state === pr.state) continue;
-        const result = setPrState(registry, id, pr.url, info.state, Date.now());
-        registry = result.registry;
-        changed = true;
-        if (result.completed) this.notifyPrCompleted(id, pr.url, info.state);
-      }
-    }
-    if (!changed) return;
-    this.registry = registry;
-    this.registryStore.save(registry);
-    prStore().reconcile(allOpenPullRequests(), Date.now());
-    this.emit();
-  };
-
   private userData: string;
 
   constructor(opts: {
@@ -155,6 +99,9 @@ export class ClaudeSessions {
     this.configDir = opts.configDir;
     this.registryStore = opts.registryStore;
     this.userData = opts.userData;
+    this.menu = new ClaudeContextMenu(this);
+    this.pr = new ClaudePrTracking(this);
+    this.hook = new ClaudeHooks(this, this.configDir);
     this.store = new ClaudeStore({
       configDir: this.configDir,
       onChange: (files) => {
@@ -187,7 +134,7 @@ export class ClaudeSessions {
         this.recordPr(id, url, 'chat');
         autoOpenLocalPr(url, claudeScope(id), 'claude-chat');
       },
-      onEvent: (id, kind, detail) => this.onChatEvent(id, kind, detail),
+      onEvent: (id, kind, detail) => this.hook.onChatEvent(id, kind, detail),
     });
     setClaudeHost(this.host);
     this.backgroundAgents = new ClaudeBackgroundAgents({
@@ -202,58 +149,30 @@ export class ClaudeSessions {
       onExit: (id) => this.endTerminal(id),
     };
     this.backgroundAgents.start();
-    // PR state tracking: title/state cache landings feed setPrState; refresh
-    // non-final entries every 10 min while focused.
-    prTitles.onChange = this.onPrCacheChange;
-    this.prRefreshTimer = setInterval(() => {
-      if (state.windowRef?.isFocused()) this.refreshPrStates('timer');
-    }, PR_STATE_REFRESH_MS);
-    this.prRefreshTimer.unref?.();
-    this.hookServer = new ClaudeHookServer({
-      userData: this.userData,
-      onEvent: (e) => this.onHookEvent(e),
-    });
-    void this.hookServer.start().then((result) => {
-      if ('error' in result) {
-        this.hooks = { ...this.hooks, error: result.error };
-      } else {
-        this.hooks = { ...this.hooks, port: result.port, error: null };
-        this.applyHooks();
-      }
-      this.emit();
-    });
-    this.activityTimer = setInterval(() => this.expireActivity(), 10 * 60_000);
-    this.activityTimer.unref?.();
+    this.pr.start();
+    this.hook.start(this.userData);
     void this.checkVersions();
     this.store.start();
     void this.refresh('start');
   }
 
-  private expireActivity(): void {
-    const next = expireActivity(this.activity, Date.now());
-    if (next !== this.activity) {
-      this.activity = next;
-      this.emit();
-    }
+  // --- collaborators -------------------------------------------------------
+  // Menu building, PR tracking and hook wiring live in their own modules as
+  // collaborator classes that take this controller; the public method
+  // signatures below delegate unchanged.
+
+  /** @internal registry write used by prTracking (save only — no reconcile). */
+  saveRegistry(next: ClaudeRegistry): void {
+    this.registry = next;
+    this.registryStore.save(next);
   }
 
-  // Global opt-in: (re)write our hook block into <configDir>/settings.json so
-  // external terminals report activity too; off removes exactly our entries.
-  private applyHooks(): void {
-    const info = this.hookServer?.info();
-    const enabled = state.settings?.current.claude.hooksEnabled ?? false;
-    this.hooks = { ...this.hooks, enabled };
-    if (!info) {
-      if (enabled) {
-        this.hooks = { ...this.hooks, installed: false, error: 'hook listener unavailable' };
-      }
-      return;
-    }
-    const result = applyGlobalHooks(this.configDir, enabled, info.port, info.token);
-    this.hooks = { ...this.hooks, enabled, installed: result.installed, error: result.error };
+  /** @internal drop a cached subagent list (turn end / transcript change). */
+  invalidateSubagentList(sessionId: string): void {
+    this.subagentLists.delete(sessionId);
   }
 
-  private titleFor(sessionId: string, cwd: string | undefined): string {
+  titleFor(sessionId: string, cwd: string | undefined): string {
     return (
       this.sessions.find((s) => s.id === sessionId)?.title ??
       (cwd ? basename(cwd) : null) ??
@@ -261,171 +180,27 @@ export class ClaudeSessions {
     );
   }
 
-  private onHookEvent(e: ClaudeHookEvent): void {
-    const next = applyHookEvent(this.activity, e);
-    if (next !== this.activity) {
-      this.activity = next;
-      this.emit();
-    }
-    if (!(state.settings?.current.notifications.collect ?? true)) return;
-    const kinds = state.settings?.current.notifications.kinds;
-    const { notifications, prUrls } = notificationsForHookEvent(e, {
-      titleFor: (id, cwd) => this.titleFor(id, cwd),
-      enabled: {
-        waiting: kinds?.waiting ?? true,
-        finished: kinds?.finished ?? false,
-        prOpened: kinds?.prOpened ?? true,
-      },
-      now: Date.now(),
-      recentPermission: this.recentPermission,
-      githubOrigins: fixtureOrigins,
-    });
-    for (const n of notifications) notificationStore().add(n);
-    for (const url of prUrls) {
-      this.recordPr(e.session_id, url, 'hook');
-      autoOpenLocalPr(url, claudeScope(e.session_id), 'claude-hook');
-    }
-  }
-
-  // One funnel for every detected Claude PR URL (chat link scanner, claude-pty
-  // output, PostToolUse hook) — records it on the registry entry before any
-  // auto-open so the PR panel + sidebar badges see it even without a Devin
-  // token.
   recordPr(sessionId: string, url: string, source: 'chat' | 'terminal' | 'hook'): void {
-    const { registry, added } = recordRegistryPr(
-      this.registry,
-      sessionId,
-      url,
-      source,
-      Date.now(),
-    );
-    if (!added) return;
-    this.registry = registry;
-    this.registryStore.save(registry);
-    prTitles.ensure([url]);
-    prStore().reconcile(allOpenPullRequests(), Date.now());
-    this.emit();
+    this.pr.recordPr(sessionId, url, source);
   }
 
-  // Claude open PRs for the panel: non-removed, non-missing sessions, newest
-  // seenAt first (openPrsOf already drops merged/closed). Unknown state counts
-  // as open.
   claudeOpenPullRequests(): SessionPrLink[] {
-    const missing = new Set(
-      this.sessions.filter((s) => s.missing).map((s) => s.id),
-    );
-    return openPrsOf(this.registry)
-      .filter(({ sessionId }) => !missing.has(sessionId))
-      .map(({ sessionId, pr }) => ({
-        sessionId,
-        sessionTitle: this.titleFor(sessionId, undefined),
-        ref: prTitle(pr.url),
-        url: pr.url,
-        state: pr.state,
-        source: 'claude' as const,
-      }));
+    return this.pr.claudeOpenPullRequests();
   }
 
-  // Re-fetch non-final Claude PR states (title cache fetch → setPrState via
-  // the onChange subscription).
   refreshPrStates(reason: string): void {
-    const urls = openPrsOf(this.registry).map(({ pr }) => pr.url);
-    if (urls.length === 0) return;
-    log('claude', 'claude-pr-refresh', { detail: { count: urls.length, reason } });
-    prTitles.ensure(urls, { maxAgeMs: PR_STATE_REFRESH_MS });
+    this.pr.refreshPrStates(reason);
   }
 
   prsOf(sessionId: string): { url: string; state: string | null }[] {
-    return (this.registry.entries[sessionId]?.prs ?? []).map((pr) => ({
-      url: pr.url,
-      state: pr.state,
-    }));
+    return this.pr.prsOf(sessionId);
   }
 
-  private notifyPrCompleted(
-    sessionId: string,
-    url: string,
-    prState: ClaudePrState | null,
-  ): void {
-    if (prState !== 'merged' && prState !== 'closed') return;
-    if (!(state.settings?.current.notifications.collect ?? true)) return;
-    if (!(state.settings?.current.notifications.kinds.prCompleted ?? true)) return;
-    const sessionTitle = this.titleFor(sessionId, undefined);
-    notificationStore().add({
-      kind: 'pr-completed',
-      sessionId,
-      source: 'claude',
-      ownerUserId: null,
-      sessionTitle,
-      prUrl: url,
-      prState,
-      title: `PR ${prTitle(url)} ${prState}`,
-      body: sessionTitle,
-      createdAt: Date.now(),
-    });
-  }
-
-  // Chat-derived notifications — the SDK host reports its own state changes;
-  // hook events never overlap (chat sessions get no hooks injected).
-  private onChatEvent(
-    sessionId: string,
-    kind: 'waiting' | 'finished' | 'blocked',
-    detail?: { tool?: string; error?: string },
-  ): void {
-    // A finished turn may have written subagent transcripts — drop the
-    // cached list so the next expand re-lists (#1 live chip).
-    if (kind !== 'waiting') this.subagentLists.delete(sessionId);
-    if (!(state.settings?.current.notifications.collect ?? true)) return;
-    const kinds = state.settings?.current.notifications.kinds;
-    const enabled: Record<'waiting' | 'finished' | 'blocked', boolean> = {
-      waiting: kinds?.waiting ?? true,
-      finished: kinds?.finished ?? false,
-      blocked: kinds?.blocked ?? true,
-    };
-    if (!enabled[kind]) return;
-    const sessionTitle = this.titleFor(sessionId, undefined);
-    notificationStore().add({
-      kind: kind as NotificationKind,
-      sessionId,
-      source: 'claude',
-      ownerUserId: null,
-      sessionTitle,
-      title:
-        kind === 'waiting'
-          ? 'Waiting for permission'
-          : kind === 'finished'
-            ? 'Finished a turn'
-            : 'Session error',
-      body:
-        kind === 'waiting'
-          ? `${detail?.tool ?? 'A tool'} in ${sessionTitle}`
-          : kind === 'finished'
-            ? sessionTitle
-            : (detail?.error ?? 'error').slice(0, 200),
-      createdAt: Date.now(),
-    });
-  }
-
-  // Pty spawn injection for claude-kind terminals: `--settings` hook block +
-  // the bearer token env var. Mode `attach` gets none (the background agent
-  // already runs) and a failed listener means no injection at all.
   hookInjection(
     sessionId: string,
     mode: 'resume' | 'new' | 'attach',
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
-    if (mode === 'attach') return null;
-    const info = this.hookServer?.info();
-    if (!info) return null;
-    const envVar = 'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN';
-    return {
-      extraArgs: [
-        '--settings',
-        settingsFlagJson(info.port, envVar),
-        '--permission-mode',
-        state.settings?.current.claude.defaultPermissionMode ?? 'default',
-      ],
-      extraEnv: { [envVar]: info.token },
-    };
+    return this.hook.injection(mode);
   }
 
   // `claude --version` once at start (and when claude.path changes) vs the
@@ -478,7 +253,7 @@ export class ClaudeSessions {
           // Subagent children load lazily — null until the row is expanded.
           subagents: this.subagentLists.get(s.id) ?? null,
           activity: activityFor(
-            this.activity,
+            this.hook.activity,
             chat
               ? {
                   running: chat.running === true,
@@ -493,22 +268,22 @@ export class ClaudeSessions {
       lastError: this.lastError,
       versions: this.versions,
       agents: this.agents,
-      hooks: this.hooks,
+      hooks: this.hook.hooks,
       // Set by the subagent view (claude:openSubagent); cleared on claude:open.
       selectedSubagentId: this.selectedSubagentId,
     };
   }
 
   activityMap(): ActivityState {
-    return this.activity;
+    return this.hook.activity;
   }
 
   hookInfo(): { port: number; token: string } | null {
-    return this.hookServer?.info() ?? null;
+    return this.hook.info();
   }
 
   hooksSettingsPath(): string {
-    return join(this.configDir, 'settings.json');
+    return this.hook.settingsPath();
   }
 
   agentsList(): ClaudeAgent[] {
@@ -583,7 +358,8 @@ export class ClaudeSessions {
     }
   }
 
-  private emit(): void {
+  /** @internal collaborators emit through this. */
+  emit(): void {
     const json = JSON.stringify(this.snapshot());
     if (json === this.lastSnapshotJson) return;
     this.lastSnapshotJson = json;
@@ -618,7 +394,7 @@ export class ClaudeSessions {
     if (chat && !chat.isLoaded(sessionId)) void chat.loadHistory(sessionId);
   }
 
-  // --- Terminal tab (Phase 3 one-writer handoff) ------------------------------
+  // --- Terminal tab (one-writer handoff) -------------------------------------
   // beginTerminal runs BEFORE the pty spawns (claudeGate.onOpen): a running
   // chat prompt refuses; the live SDK query closes and the session is marked
   // terminalOwned until the pty exits.
@@ -641,7 +417,7 @@ export class ClaudeSessions {
     if (host) void host.loadHistory(sessionId);
   }
 
-  // --- Subagents (#1) ----------------------------------------------------------
+  // --- Subagents ---------------------------------------------------------------
   // Expand loads the row's `subagents` list (cached; null = not loaded).
   async loadSubagents(sessionId: string): Promise<ClaudeSubagent[]> {
     const cached = this.subagentLists.get(sessionId);
@@ -691,7 +467,7 @@ export class ClaudeSessions {
   }
 
   // Open a subagent transcript read-only in the chat column: a synthetic
-  // `<sessionId>/<agentId>` chat session in the parent's scope (#1).
+  // `<sessionId>/<agentId>` chat session in the parent's scope.
   async openSubagent(sessionId: string, agentId: string): Promise<null> {
     const host = this.host;
     if (!host) throw new Error('claude host not started');
@@ -708,7 +484,7 @@ export class ClaudeSessions {
     return null;
   }
 
-  // #6: transcript/subagent file changes from the store watcher. A terminal-
+  // Transcript/subagent file changes from the store watcher. A terminal-
   // owned session's own file → debounced loadHistory (terminal turns appear
   // live in the chat column); any change → invalidate the subagent list.
   private onTranscriptFiles(files: string[]): void {
@@ -960,43 +736,23 @@ export class ClaudeSessions {
       this.emit();
     }
     if (previous.claude.hooksEnabled !== next.claude.hooksEnabled) {
-      this.applyHooks();
+      this.hook.applyHooks();
       this.emit();
     }
   }
 
   // --- context menus ------------------------------------------------------
-  // Same test seam as cloudSessions: in test mode the popup is described and
-  // the claudeMenuItems/claudeMenuClick hooks drive the same callbacks.
-  private pendingMenu = new Map<string, Electron.MenuItemConstructorOptions>();
-  private lastMenuDesc: Record<string, unknown>[] = [];
-  private pendingAction: MenuAction = null;
-  // Test mode only: the contextMenu invoke stays open until a click resolves
-  // it — same shape as the production popup resolving with pendingAction.
-  private pendingMenuResolve: ((result: { action: MenuAction }) => void) | null = null;
+  // Building lives in ClaudeContextMenu; these keep the public signatures.
 
   menuItems(): Record<string, unknown>[] {
-    return this.lastMenuDesc;
+    return this.menu.items();
   }
 
   clickMenuItem(id: string): { action: MenuAction } {
-    const item = this.pendingMenu.get(id);
-    if (!item?.click) return { action: null };
-    const next = !(item.checked ?? false);
-    item.checked = next;
-    item.click(
-      { checked: next } as Electron.MenuItem,
-      state.windowRef!,
-      {} as Electron.KeyboardEvent,
-    );
-    const action = this.pendingAction;
-    this.pendingAction = null;
-    this.pendingMenuResolve?.({ action });
-    this.pendingMenuResolve = null;
-    return { action };
+    return this.menu.clickItem(id);
   }
 
-  async contextMenu(arg: {
+  contextMenu(arg: {
     kind: 'session' | 'folder' | 'header' | 'agent';
     sessionId?: string | undefined;
     name?: string | undefined;
@@ -1004,159 +760,7 @@ export class ClaudeSessions {
     x: number;
     y: number;
   }): Promise<{ action: MenuAction; items?: Record<string, unknown>[] }> {
-    this.pendingAction = null;
-    const items: Electron.MenuItemConstructorOptions[] = [];
-
-    if (arg.kind === 'agent' && arg.agentId) {
-      const agentId = arg.agentId;
-      items.push(
-        {
-          label: 'Attach',
-          click: () => {
-            this.pendingAction = 'attach-agent';
-          },
-        },
-        { label: 'Stop', click: () => void this.agentStop(agentId) },
-      );
-    } else if (arg.kind === 'header') {
-      items.push({
-        label: 'Show archived sessions',
-        type: 'checkbox',
-        checked: this.showArchived,
-        click: (item) => this.setShowArchived(item.checked),
-      });
-      items.push({ label: 'Refresh', click: () => void this.refresh('menu') });
-    } else if (arg.kind === 'folder' && arg.name) {
-      const name = arg.name;
-      items.push(
-        {
-          label: 'Rename…',
-          click: () => {
-            this.pendingAction = 'rename';
-          },
-        },
-        {
-          label: 'Delete…',
-          click: () => void this.folderDelete(name),
-        },
-      );
-    } else if (arg.kind === 'session' && arg.sessionId) {
-      const session = this.sessions.find((s) => s.id === arg.sessionId);
-      if (!session) return { action: null };
-      const submenu: Electron.MenuItemConstructorOptions[] = this.registry.folders.map(
-        (name) => ({
-          label: name,
-          type: 'checkbox',
-          checked: session.folder === name,
-          click: () => void this.sessionMove(session.id, name),
-        }),
-      );
-      submenu.push(
-        { type: 'separator' },
-        {
-          label: 'Remove from folder',
-          enabled: session.folder !== null,
-          click: () => void this.sessionMove(session.id, null),
-        },
-        {
-          label: 'New folder…',
-          click: () => {
-            this.pendingAction = 'new-folder';
-          },
-        },
-      );
-      items.push(
-        {
-          label: 'Rename…',
-          click: () => {
-            this.pendingAction = 'rename-session';
-          },
-        },
-        { label: 'Fork', click: () => void this.fork(session.id) },
-        {
-          label: 'Open in terminal',
-          click: () => {
-            this.pendingAction = 'open-terminal';
-          },
-        },
-        { type: 'separator' },
-        { label: 'Move to folder', submenu },
-        {
-          label: session.isPinned ? 'Unpin' : 'Pin',
-          click: () => void this.sessionPin(session.id, !session.isPinned),
-        },
-        {
-          label: session.isArchived ? 'Unarchive' : 'Archive',
-          click: () => void this.sessionArchive(session.id, !session.isArchived),
-        },
-        { type: 'separator' },
-        { label: 'Reveal transcript', click: () => void this.revealTranscript(session.id) },
-        { label: 'Copy session id', click: () => this.copySessionId(session.id) },
-        { type: 'separator' },
-        { label: 'Remove from list', click: () => void this.sessionRemove(session.id) },
-        {
-          label: 'Delete transcript…',
-          click: () => void this.sessionDeleteTranscript(session.id),
-        },
-      );
-    } else {
-      return { action: null };
-    }
-
-    if (items.length === 0) return { action: null };
-    if (testMode) {
-      this.pendingMenu.clear();
-      let n = 0;
-      const assign = (list: Electron.MenuItemConstructorOptions[]) =>
-        list.forEach((item) => {
-          if (item.type === 'separator') return;
-          item.id = `m${n++}`;
-          this.pendingMenu.set(item.id, item);
-          if (Array.isArray(item.submenu)) {
-            assign(item.submenu as Electron.MenuItemConstructorOptions[]);
-          }
-        });
-      assign(items);
-      const describe = (
-        list: Electron.MenuItemConstructorOptions[],
-      ): Record<string, unknown>[] =>
-        list.map((item) => ({
-          id: item.id,
-          label: item.label ?? item.role ?? '',
-          type: item.type ?? 'normal',
-          enabled: item.enabled !== false,
-          ...(item.type === 'checkbox' ? { checked: item.checked } : {}),
-          ...(item.submenu
-            ? { submenu: describe(item.submenu as Electron.MenuItemConstructorOptions[]) }
-            : {}),
-        }));
-      this.lastMenuDesc = describe(items);
-      // Production resolves the invoke when the popup closes with
-      // pendingAction; the click hook resolves it here the same way.
-      return await new Promise<{ action: MenuAction }>((resolve) => {
-        const timer = setTimeout(() => {
-          this.pendingMenuResolve = null;
-          resolve({ action: null });
-        }, 30_000);
-        this.pendingMenuResolve = (result) => {
-          clearTimeout(timer);
-          this.pendingMenuResolve = null;
-          resolve(result);
-        };
-      });
-    }
-    const menu = Menu.buildFromTemplate(items);
-    log('claude', 'claude-menu', { detail: { kind: arg.kind } });
-    await new Promise<void>((resolve) => {
-      const opts: Electron.PopupOptions = {
-        x: Math.round(arg.x),
-        y: Math.round(arg.y),
-        callback: () => resolve(),
-      };
-      if (state.windowRef) menu.popup({ ...opts, window: state.windowRef });
-      else menu.popup(opts);
-    });
-    return { action: this.pendingAction };
+    return this.menu.popup(arg);
   }
 
   mutationLog(): { op: string; payload: Record<string, unknown> }[] {
@@ -1166,14 +770,10 @@ export class ClaudeSessions {
   dispose(): void {
     this.backgroundAgents?.dispose();
     if (terminalHost.claudeGate) terminalHost.claudeGate = null;
-    this.hookServer?.dispose();
-    if (this.activityTimer) clearInterval(this.activityTimer);
-    this.activityTimer = null;
-    if (this.prRefreshTimer) clearInterval(this.prRefreshTimer);
-    this.prRefreshTimer = null;
+    this.hook.stop();
+    this.pr.stop();
     for (const timer of this.historyTimers.values()) clearTimeout(timer);
     this.historyTimers.clear();
-    if (prTitles.onChange === this.onPrCacheChange) prTitles.onChange = null;
     this.store.dispose();
     this.registryStore.dispose();
   }

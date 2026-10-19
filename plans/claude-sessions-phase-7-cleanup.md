@@ -1,6 +1,6 @@
 # Phase 7 — Cleanup
 
-Status: In progress (branch `claude/phase7-cleanup`; §1 lint/Markdown, §2 plans index + README tidy and §3 installer budget landed first, the rest follows Phase 6).
+Status: 7a done (PR #69 — branch `claude/phase7-cleanup`: §1 lint/Markdown, §2 plans index + README tidy, §3 installer budget); 7b in progress (branch `claude/phase7b`: the remaining §1 code hygiene, the §2 AGENTS.md/README consolidation, then §3 SDK bump and §4 repository hygiene).
 
 Housekeeping after the Claude integration (Phases 1–6). Nothing here changes behaviour; every step is verifiable by the existing gates. Destructive steps (branch/repo deletion) are listed with what they delete and are **confirmed with the user before running**.
 
