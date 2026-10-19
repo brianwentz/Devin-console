@@ -68,6 +68,23 @@ export type PublicState = {
     exitCode: number | null;
   }>;
   activeTerminalId: string | null;
+  // Execution hosts (local first).
+  hosts: Array<{
+    id: string;
+    kind: 'local' | 'wsl';
+    label: string;
+    state: 'ready' | 'probing' | 'stopped' | 'disabled' | 'error';
+    error: string | null;
+    probedAt: string | null;
+    home: string | null;
+    shell: string | null;
+    claude: { path: string | null; version: string | null };
+    devin: { path: string | null };
+    shellEnv: { ok: boolean; count: number; ms: number } | null;
+    hooks: 'ok' | 'unreachable' | 'untested';
+    inotify: boolean;
+    gh: boolean;
+  }>;
   // P5
   notifications: {
     collect: boolean;
@@ -96,6 +113,8 @@ export type PublicState = {
   cloud: import('../../src/shared/ipc').CloudState;
 };
 
+const profileWslRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsl-'));
+
 export async function launchApp(
   userData: string,
   logFile: string,
@@ -120,6 +139,11 @@ export async function launchApp(
       DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '0',
       DEVIN_WORKSPACES_TEST_RELEASES_URL: fixtures.apiUrl,
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+      // Route every wsl.exe call through the fake; with no distros the app
+      // stays local-only. Specs opt into distros via FAKE_WSL_DISTROS.
+      DEVIN_WORKSPACES_TEST_WSL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeWsl.cjs')}`,
+      FAKE_WSL_DISTROS: '',
+      FAKE_WSL_ROOT: join(profileWslRoot, 'root'),
       ...extraEnv,
     },
   });

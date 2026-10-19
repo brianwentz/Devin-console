@@ -3,6 +3,7 @@ import {
   displayPath,
   hostIdForPath,
   isWslHost,
+  shellFamily,
   LOCAL_HOST,
   mergeShellEnv,
   parseShellEnv,
@@ -173,7 +174,7 @@ describe('ptySpec', () => {
       cwd: null,
       args: [
         '-d', 'Ubuntu-22.04', '--cd', '/p', '-e', '/usr/bin/zsh',
-        '-ilc', 'exec "$@"', '--', '/usr/bin/env', 'K=v', '/x/claude', '-r', 'id',
+        '-ilc', 'exec "$0" "$@"', '/usr/bin/env', 'K=v', '/x/claude', '-r', 'id',
       ],
     });
   });
@@ -213,5 +214,19 @@ describe('isWslHost / wslHost', () => {
     expect(isWslHost(LOCAL_HOST)).toBe(false);
     expect(isWslHost(UB) && UB.mount).toBe('/mnt');
     expect(UB.id).toBe('wsl:Ubuntu-22.04');
+  });
+});
+
+describe('shellFamily', () => {
+  it('fish is its own family; everything else is posix', () => {
+    expect(shellFamily('/usr/bin/fish')).toBe('fish');
+    expect(shellFamily('fish')).toBe('fish');
+    expect(shellFamily('/bin/bash')).toBe('posix');
+    expect(shellFamily('zsh')).toBe('posix');
+    expect(shellFamily(null)).toBe('posix');
+  });
+  it('fish ptys use exec $argv', () => {
+    const spec = ptySpec(UB, { file: '/x', args: [], cwd: '/p' }, '/usr/bin/fish');
+    expect(spec.args).toContain('exec $argv');
   });
 });

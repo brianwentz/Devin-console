@@ -67,6 +67,9 @@ class PrTitleCache {
   private changeTimer: NodeJS.Timeout | null = null;
   /** Single subscription — Claude sessions wire cache landings to setPrState. */
   onChange: (() => void) | null = null;
+  /** Per-URL gh override: Claude PR tracking resolves the session's host so
+   * `gh pr view` runs where the session runs (null → local gh). */
+  ghResolver: ((url: string) => { cmd: string; args: string[] } | null) | null = null;
 
   get(url: string): string | null {
     return this.cache.get(url)?.title ?? null;
@@ -156,7 +159,7 @@ class PrTitleCache {
     // PATH, `gh pr view` fills title + state (auth is the user's `gh auth`).
     let via: 'page' | 'gh' = 'page';
     if (state === null) {
-      const gh = await resolveGhCmd();
+      const gh = this.ghResolver?.(url) ?? (await resolveGhCmd());
       if (gh) {
         try {
           const { stdout } = await execFileAsync(

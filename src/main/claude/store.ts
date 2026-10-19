@@ -3,40 +3,64 @@
 // The SDK is loaded lazily on the first list() via loadSdk() — a load failure
 // surfaces as an error status on the controller, never as a thrown require.
 
-import { existsSync, readdirSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
+import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
+import { hosts } from '../hosts';
 import { loadSdk } from './sdk';
 
 const WATCH_DEBOUNCE_MS = 250;
 const POLL_MS = 30_000;
+// WSL tiered polling: hot transcripts every 2 s while the Claude surface is
+// visible (fs.watch does not work over the wsl UNC), full scan every 30 s.
+const HOT_POLL_MS = 2_000;
+const HOT_COUNT = 20;
 
 export class ClaudeStore {
   private configDir: string;
+  private host: ExecHost;
   private onChange: (files: string[]) => void;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
+  private hotTimer: NodeJS.Timeout | null = null;
+  private hotIds: () => string[] = () => [];
+  private visible: () => boolean = () => false;
+  private inotify: ChildProcess | null = null;
+  private hotMtimes = new Map<string, number>();
   private started = false;
   private watchRestarts = 0;
   private watchFailed = false;
 
-  constructor(opts: { configDir: string; onChange: (files: string[]) => void }) {
+  constructor(opts: { host: ExecHost; configDir: string; onChange: (files: string[]) => void }) {
+    this.host = opts.host;
     this.configDir = opts.configDir;
     this.onChange = opts.onChange;
+  }
+
+  /** Sessions whose transcripts get the 2 s hot-stat tier; visible() gates it. */
+  hot(ids: () => string[], visible: () => boolean): void {
+    this.hotIds = ids;
+    this.visible = visible;
   }
 
   private get projectsDir(): string {
     return join(this.configDir, 'projects');
   }
 
+  private run<T>(fn: () => Promise<T>): Promise<T> {
+    return hosts().withConfigDir(this.host, fn);
+  }
+
   async list(): Promise<ClaudeStoreSession[]> {
     const sdk = await loadSdk();
-    const infos = await sdk.listSessions({ includeProgrammatic: true });
+    const infos = await this.run(() => sdk.listSessions({ includeProgrammatic: true }));
     return infos.map((info) => ({
       id: info.sessionId,
-      host: 'local' as const,
+      host: this.host.id,
       // The SDK already resolves title precedence: custom title →
       // auto-generated summary → first prompt.
       title: info.summary,
@@ -51,28 +75,28 @@ export class ClaudeStore {
 
   async rename(id: string, title: string): Promise<void> {
     const sdk = await loadSdk();
-    await sdk.renameSession(id, title);
+    await this.run(() => sdk.renameSession(id, title));
   }
 
   async fork(id: string): Promise<{ sessionId: string }> {
     const sdk = await loadSdk();
-    const result = await sdk.forkSession(id);
+    const result = await this.run(() => sdk.forkSession(id));
     return { sessionId: result.sessionId };
   }
 
   async deleteTranscript(id: string): Promise<void> {
     const sdk = await loadSdk();
-    await sdk.deleteSession(id);
+    await this.run(() => sdk.deleteSession(id));
   }
 
   async listSubagents(id: string): Promise<string[]> {
     const sdk = await loadSdk();
-    return sdk.listSubagents(id);
+    return this.run(() => sdk.listSubagents(id));
   }
 
   async subagentMessages(id: string, agentId: string): Promise<unknown[]> {
     const sdk = await loadSdk();
-    return (await sdk.getSubagentMessages(id, agentId)) as unknown[];
+    return this.run(() => sdk.getSubagentMessages(id, agentId)) as Promise<unknown[]>;
   }
 
   // The SDK exposes no transcript-path API: <configDir>/projects/<encoded cwd>/
@@ -92,7 +116,148 @@ export class ClaudeStore {
   start(): void {
     if (this.started) return;
     this.started = true;
+    if (isWslHost(this.host)) {
+      // fs.watch fails over the wsl UNC (EISDIR) — inotifywait inside the
+      // distro when the probe found it, else tiered polling.
+      const status = hosts().status(this.host.id);
+      if (status?.inotify) this.startInotify();
+      else this.startTieredPoll();
+      return;
+    }
     this.startWatch();
+  }
+
+  // `wsl.exe -d D -e inotifywait -m -r -q -e <ev> --format %w%f <projects>` —
+  // each stdout line is a changed file; same debounce as fs.watch. A dead
+  // child falls back to tiered polling.
+  private startInotify(): void {
+    const wsl = hosts().wslCmd();
+    if (!wsl || !isWslHost(this.host)) {
+      this.startTieredPoll();
+      return;
+    }
+    const [file, ...prefix] = wsl;
+    const projects = this.projectsDirLinux();
+    const child = spawn(
+      file!,
+      [
+        ...prefix,
+        '-d',
+        this.host.distro,
+        '-e',
+        '/usr/bin/inotifywait',
+        '-m',
+        '-r',
+        '-q',
+        '-e',
+        'modify,create,delete,moved_to',
+        '--format',
+        '%w%f',
+        projects,
+      ],
+      { windowsHide: true },
+    );
+    this.inotify = child;
+    const changed = new Set<string>();
+    let rest = '';
+    child.stdout?.on('data', (data: Buffer) => {
+      rest += data.toString('utf8');
+      const lines = rest.split('\n');
+      rest = lines.pop() ?? '';
+      for (const line of lines) {
+        const rel = line.trim().slice(projects.length).replace(/^\/+/, '');
+        if (rel) changed.add(rel);
+      }
+      if (this.watchTimer) return;
+      this.watchTimer = setTimeout(() => {
+        this.watchTimer = null;
+        const files = [...changed];
+        changed.clear();
+        this.onChange(files);
+      }, WATCH_DEBOUNCE_MS);
+    });
+    const fallback = () => {
+      if (this.inotify !== child) return;
+      this.inotify = null;
+      if (this.started) this.startTieredPoll();
+    };
+    child.once('exit', fallback);
+    child.once('error', fallback);
+    log('claude', 'claude-watch', { detail: { mode: 'inotify', host: this.host.id, events: 0 } });
+  }
+
+  // Windows-side <configDir>/projects → the linux path inside the distro.
+  private projectsDirLinux(): string {
+    const dir = this.projectsDir.replace(/\\/g, '/');
+    const m = /^\/{2}[^/]+\/[^/]+(\/.*)$/.exec(dir);
+    return m && m[1] ? m[1] : dir;
+  }
+
+  // Tiered polling: stat the N most recent + terminal-owned transcripts every
+  // 2 s while the Claude surface is visible; full readdir scan every 30 s.
+  private startTieredPoll(): void {
+    log('claude', 'claude-watch', {
+      detail: { mode: 'poll-tiered', host: this.host.id, events: 0 },
+    });
+    this.startPoll();
+    this.hotTimer = setInterval(() => {
+      if (!this.visible()) return;
+      try {
+        const paths = new Set(this.recentTranscripts());
+        for (const id of this.hotIds()) {
+          const path = this.transcriptFor(id);
+          if (path) paths.add(path);
+        }
+        let changed = false;
+        for (const path of paths) {
+          if (!existsSync(path)) continue;
+          const mtime = statSync(path).mtimeMs;
+          const prev = this.hotMtimes.get(path);
+          if (prev !== undefined && prev !== mtime) changed = true;
+          this.hotMtimes.set(path, mtime);
+        }
+        if (changed) this.onChange([]);
+      } catch {
+        /* transient stat failures — next tick retries */
+      }
+    }, HOT_POLL_MS);
+    this.hotTimer.unref?.();
+  }
+
+  private transcriptFor(id: string): string | null {
+    try {
+      for (const project of readdirSync(this.projectsDir)) {
+        const candidate = join(this.projectsDir, project, `${id}.jsonl`);
+        if (existsSync(candidate)) return candidate;
+      }
+    } catch {
+      /* no projects dir */
+    }
+    return null;
+  }
+
+  private recentTranscripts(): string[] {
+    try {
+      const files: { path: string; mtime: number }[] = [];
+      for (const project of readdirSync(this.projectsDir)) {
+        const dir = join(this.projectsDir, project);
+        for (const name of readdirSync(dir)) {
+          if (!name.endsWith('.jsonl')) continue;
+          const path = join(dir, name);
+          try {
+            files.push({ path, mtime: statSync(path).mtimeMs });
+          } catch {
+            /* transient */
+          }
+        }
+      }
+      return files
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, HOT_COUNT)
+        .map((f) => f.path);
+    } catch {
+      return [];
+    }
   }
 
   private startWatch(): void {
@@ -159,10 +324,15 @@ export class ClaudeStore {
   }
 
   dispose(): void {
+    this.started = false;
     this.watcher?.close();
     this.watcher = null;
+    this.inotify?.kill();
+    this.inotify = null;
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = null;
+    if (this.hotTimer) clearInterval(this.hotTimer);
+    this.hotTimer = null;
     this.stopPoll();
   }
 }

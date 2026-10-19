@@ -6,7 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ClaudeAgent } from '../../shared/ipc';
+import type { ClaudeAgent, HostId } from '../../shared/ipc';
 import { parseAgentsJson } from '../../core/claudeAgents';
 import { log } from '../log';
 import { state, testMode } from '../state';
@@ -28,6 +28,12 @@ function pollMs(): number {
 export class ClaudeBackgroundAgents {
   private readonly cliPath: () => string | null;
   private readonly onChange: (agents: ClaudeAgent[]) => void;
+  // Host tag stamped on emitted rows; 'local' when unset.
+  private readonly hostId: HostId;
+  // wsl hosts bypass the local CLI: these run `claude agents`/`claude stop`
+  // through the host bridge and return raw stdout.
+  private readonly execList: (() => Promise<string>) | undefined;
+  private readonly execStop: ((agentId: string) => Promise<void>) | undefined;
   private agents: ClaudeAgent[] = [];
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
@@ -37,9 +43,15 @@ export class ClaudeBackgroundAgents {
   constructor(opts: {
     cliPath: () => string | null;
     onChange: (agents: ClaudeAgent[]) => void;
+    hostId?: HostId;
+    execList?: () => Promise<string>;
+    execStop?: (agentId: string) => Promise<void>;
   }) {
     this.cliPath = opts.cliPath;
     this.onChange = opts.onChange;
+    this.hostId = opts.hostId ?? 'local';
+    this.execList = opts.execList;
+    this.execStop = opts.execStop;
   }
 
   start(): void {
@@ -82,28 +94,33 @@ export class ClaudeBackgroundAgents {
     this.inFlight = true;
     const t0 = Date.now();
     try {
-      const cli =
-        (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
-        this.cliPath() ||
-        resolveClaudePath(state.settings?.current.claude.path ?? null);
-      if (!cli) {
-        log('claude', 'claude-agents', {
-          detail: { count: -1, running: 0, ms: Date.now() - t0, source },
-        });
-        this.schedule();
-        return;
+      let stdout: string;
+      if (this.execList) {
+        stdout = await this.execList();
+      } else {
+        const cli =
+          (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
+          this.cliPath() ||
+          resolveClaudePath(state.settings?.current.claude.path ?? null);
+        if (!cli) {
+          log('claude', 'claude-agents', {
+            detail: { count: -1, running: 0, ms: Date.now() - t0, source },
+          });
+          this.schedule();
+          return;
+        }
+        const [file, ...prefixArgs] = testMode &&
+          process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD
+            ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
+            : [cli];
+        ({ stdout } = await execFileAsync(
+          file!,
+          [...prefixArgs, 'agents', '--json', '--all'],
+          { timeout: 5_000, windowsHide: true },
+        ));
       }
-      const [file, ...prefixArgs] = testMode &&
-        process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD
-          ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
-          : [cli];
-      const { stdout } = await execFileAsync(
-        file!,
-        [...prefixArgs, 'agents', '--json', '--all'],
-        { timeout: 5_000, windowsHide: true },
-      );
       const { agents, unknownKeys } = parseAgentsJson(stdout);
-      this.agents = agents;
+      this.agents = agents.map((agent) => ({ ...agent, host: this.hostId }));
       if (unknownKeys.length > 0) {
         log('claude', 'claude-agents-parse', {
           detail: { count: agents.length, unknownKeys },
@@ -136,23 +153,31 @@ export class ClaudeBackgroundAgents {
   }
 
   async stop(agentId: string): Promise<void> {
-    const cli =
-      (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
-      this.cliPath() ||
-      resolveClaudePath(state.settings?.current.claude.path ?? null);
-    if (!cli) return;
-    const [file, ...prefixArgs] = testMode &&
-      process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD
-        ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
-        : [cli];
     let ok = true;
-    try {
-      await execFileAsync(file!, [...prefixArgs, 'stop', agentId], {
-        timeout: 3_000,
-        windowsHide: true,
-      });
-    } catch {
-      ok = false;
+    if (this.execStop) {
+      try {
+        await this.execStop(agentId);
+      } catch {
+        ok = false;
+      }
+    } else {
+      const cli =
+        (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
+        this.cliPath() ||
+        resolveClaudePath(state.settings?.current.claude.path ?? null);
+      if (!cli) return;
+      const [file, ...prefixArgs] = testMode &&
+        process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD
+          ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
+          : [cli];
+      try {
+        await execFileAsync(file!, [...prefixArgs, 'stop', agentId], {
+          timeout: 3_000,
+          windowsHide: true,
+        });
+      } catch {
+        ok = false;
+      }
     }
     log('claude', 'claude-agent-stop', { detail: { agentId, ok } });
     await this.refresh('mutate');

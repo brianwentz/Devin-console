@@ -40,13 +40,26 @@ import { log } from '../log';
 import { getChatState, update, type ClaudeChatState } from './chatState';
 import { loadSdk } from './sdk';
 import { resolveClaudePath } from './claudePath';
+import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
+import { hosts } from '../hosts';
 
 export type ClaudeChatSession = ChatSession & {
+  host: HostId;
   cwd: string;
   permissionMode: ClaudePermissionMode;
   model: string | null;
   live: 'idle' | 'starting' | 'live' | 'stopped';
 };
+
+/** Keys in `env` that differ from (or are absent in) process.env — the exact
+ * additions the SDK made for its child (CLAUDE_* vars). */
+function diffEnv(env: Record<string, string | undefined> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (value !== undefined && value !== process.env[key]) out[key] = value;
+  }
+  return out;
+}
 
 type SdkUserMessage = {
   type: 'user';
@@ -109,6 +122,7 @@ export class ClaudeHost {
   private readonly configDir: string;
   private readonly cliPath: () => string | null;
   private readonly isOnDisk: (id: string) => boolean;
+  private readonly hostFor: (id: string) => ExecHost;
   private readonly onPullRequestUrl: (sessionId: string, url: string) => void;
   private readonly onEvent: (
     sessionId: string,
@@ -135,6 +149,7 @@ export class ClaudeHost {
     cliPath: () => string | null;
     configDir: string;
     isOnDisk: (id: string) => boolean;
+    hostFor?: (id: string) => ExecHost;
     onPullRequestUrl: (sessionId: string, url: string) => void;
     onEvent?: (
       sessionId: string,
@@ -145,6 +160,7 @@ export class ClaudeHost {
     this.cliPath = opts.cliPath;
     this.configDir = opts.configDir;
     this.isOnDisk = opts.isOnDisk;
+    this.hostFor = opts.hostFor ?? (() => LOCAL_HOST);
     this.onPullRequestUrl = opts.onPullRequestUrl;
     this.onEvent = opts.onEvent ?? (() => undefined);
   }
@@ -188,11 +204,12 @@ export class ClaudeHost {
     return getChatState().sessions[id]?.running === true;
   }
 
-  newSession(cwd: string): string {
+  newSession(cwd: string, host: HostId = 'local'): string {
     const id = randomUUID();
     const settings = state.settings?.current.claude;
     const session: ClaudeChatSession = {
       ...(newChatSession({ id, loaded: true }) as ChatSession),
+      host,
       cwd,
       permissionMode: settings?.defaultPermissionMode ?? 'default',
       model: settings?.model ?? null,
@@ -202,11 +219,12 @@ export class ClaudeHost {
     return id;
   }
 
-  ensureSession(id: string, info: { cwd: string | null }): void {
+  ensureSession(id: string, info: { cwd: string | null; host?: HostId }): void {
     const existing = getChatState().sessions[id];
     if (existing) return;
     const session: ClaudeChatSession = {
       ...(newChatSession({ id, loaded: false }) as ChatSession),
+      host: info.host ?? 'local',
       cwd: info.cwd ?? '',
       permissionMode: state.settings?.current.claude.defaultPermissionMode ?? 'default',
       model: state.settings?.current.claude.model ?? null,
@@ -229,10 +247,11 @@ export class ClaudeHost {
 
   // Read-only subagent transcript chat state keyed '<sessionId>/<agentId>'
   // never a live query, never prompts.
-  ensureSubagentSession(key: string, info: { cwd: string | null }): void {
+  ensureSubagentSession(key: string, info: { cwd: string | null; host?: HostId }): void {
     if (getChatState().subagentSessions[key]) return;
     const session: ClaudeChatSession = {
       ...(newChatSession({ id: key, loaded: false }) as ChatSession),
+      host: info.host ?? 'local',
       cwd: info.cwd ?? '',
       permissionMode: state.settings?.current.claude.defaultPermissionMode ?? 'default',
       model: null,
@@ -251,9 +270,8 @@ export class ClaudeHost {
   ): Promise<void> {
     const t0 = Date.now();
     const sdk = await loadSdk();
-    const messages = (await sdk.getSubagentMessages(
-      parentSessionId,
-      agentId,
+    const messages = (await hosts().withConfigDir(this.hostFor(parentSessionId), () =>
+      sdk.getSubagentMessages(parentSessionId, agentId),
     )) as unknown[];
     let count = 0;
     // The generic reducers address `sessions[id]` — run them against a
@@ -300,7 +318,9 @@ export class ClaudeHost {
   async loadHistory(id: string): Promise<void> {
     const t0 = Date.now();
     const sdk = await loadSdk();
-    const messages = (await sdk.getSessionMessages(id)) as unknown[];
+    const messages = (await hosts().withConfigDir(this.hostFor(id), () =>
+      sdk.getSessionMessages(id),
+    )) as unknown[];
     let count = 0;
     // resetHistory wipes the tool calls — the LinkScanner must reset with it.
     this.scanners.delete(id);
@@ -409,9 +429,17 @@ export class ClaudeHost {
     const abort = new AbortController();
     const t0 = Date.now();
     const onDisk = this.isOnDisk(id) || this.started.has(id);
+    const execHost = this.hostFor(id);
+    if (isWslHost(execHost)) {
+      // Prime the §1.4 env cache so spawnOn uses the captured shell env.
+      await hosts().shellEnv(execHost);
+    }
     const options = {
       cwd: session.cwd || undefined,
-      pathToClaudeCodeExecutable: this.cliPath() ?? undefined,
+      pathToClaudeCodeExecutable:
+        (isWslHost(execHost)
+          ? (hosts().status(execHost.id)?.claude.path ?? 'claude')
+          : this.cliPath()) ?? undefined,
       permissionMode: session.permissionMode,
       model: session.model ?? undefined,
       includePartialMessages: true,
@@ -424,6 +452,29 @@ export class ClaudeHost {
         }),
       abortController: abort,
       ...(onDisk ? { resume: id } : { sessionId: id }),
+      ...(isWslHost(execHost)
+        ? {
+            // The SDK hands us {command,args,cwd,env,signal}; env is the full
+            // Windows env, so only the SDK's own additions are forwarded.
+            spawnClaudeCodeProcess: (o: {
+              command: string;
+              args: string[];
+              cwd?: string;
+              env?: Record<string, string | undefined>;
+              signal: AbortSignal;
+            }) =>
+              hosts().spawnOn(
+                execHost,
+                {
+                  file: o.command,
+                  args: o.args,
+                  cwd: o.cwd || session.cwd || '/',
+                  env: diffEnv(o.env),
+                },
+                { signal: o.signal },
+              ),
+          }
+        : {}),
     };
     const q = sdk.query({ prompt: queue, options } as never);
     const liveQuery: LiveQuery = {

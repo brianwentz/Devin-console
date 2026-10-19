@@ -129,6 +129,15 @@ await Promise.all([
     external: ['@anthropic-ai/claude-agent-sdk'],
     outfile: 'out/fixtures/fakeClaudeSdk.mjs',
   }),
+  // Fake wsl.exe for hosts e2e (DEVIN_WORKSPACES_TEST_WSL_CMD).
+  build({
+    entryPoints: ['tests/fixtures/fakeWsl.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    outfile: 'out/fixtures/fakeWsl.cjs',
+  }),
   // Phase 3 fake `claude` CLI for background agents
   // (DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD).
   build({

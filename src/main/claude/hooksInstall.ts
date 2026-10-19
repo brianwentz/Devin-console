@@ -13,6 +13,7 @@ export function applyGlobalHooks(
   enabled: boolean,
   port: number,
   token: string,
+  addr?: string,
 ): { installed: boolean; error: string | null } {
   const file = join(configDir, 'settings.json');
   const backup = `${file}.devin-workspaces.bak`;
@@ -25,7 +26,10 @@ export function applyGlobalHooks(
     return { installed: false, error: message };
   }
   const result = enabled
-    ? mergeHooksIntoSettings(current, buildHooksBlock({ port, auth: { kind: 'token', token } }))
+    ? mergeHooksIntoSettings(
+        current,
+        buildHooksBlock({ port, auth: { kind: 'token', token }, ...(addr ? { addr } : {}) }),
+      )
     : removeHooksFromSettings(current);
   if ('error' in result) {
     log('claude', 'claude-hooks-install', { detail: { enabled, changed: false, ok: false } });

@@ -25,6 +25,8 @@ interface HookConfig {
 
 export class ClaudeHookServer {
   private server: Server | null = null;
+  private extraServers: Server[] = [];
+  private boundAddrs = new Set<string>();
   private config: HookConfig | null = null;
 
   constructor(
@@ -133,10 +135,16 @@ export class ClaudeHookServer {
     }
   }
 
+  // Token-free liveness route used by the WSL hook-reachability probe; it
+  // must be checked before the event match ('health' matches [A-Za-z]+).
   private handle(
     request: import('node:http').IncomingMessage,
     response: import('node:http').ServerResponse,
   ): void {
+    if (request.method === 'GET' && request.url === `${HOOK_PATH_PREFIX}health`) {
+      response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      return;
+    }
     const match = new RegExp(`^${HOOK_PATH_PREFIX}([A-Za-z]+)$`).exec(request.url ?? '');
     if (!match) {
       response.writeHead(404).end();
@@ -195,12 +203,39 @@ export class ClaudeHookServer {
     });
   }
 
+  // A second listen on a non-loopback address (the vEthernet (WSL) IPv4) for
+  // NAT-mode distros that cannot reach 127.0.0.1. Same handler, same token.
+  listenOn(addr: string): void {
+    const port = this.config?.port;
+    if (!this.server || !port || this.boundAddrs.has(addr)) return;
+    this.boundAddrs.add(addr);
+    const extra = createServer((request, response) => this.handle(request, response));
+    extra.on('error', (error) => {
+      log('claude', 'claude-hooks-error', {
+        detail: { message: error.message, code: (error as NodeJS.ErrnoException).code },
+      });
+    });
+    extra.listen(port, addr, () => {
+      log('claude', 'claude-hooks-listen', { detail: { port, probed: 0, extra: true } });
+    });
+    this.extraServers.push(extra);
+  }
+
   dispose(): void {
     try {
       this.server?.close();
     } catch {
       /* best effort */
     }
+    for (const extra of this.extraServers) {
+      try {
+        extra.close();
+      } catch {
+        /* best effort */
+      }
+    }
+    this.extraServers = [];
+    this.boundAddrs.clear();
     this.server = null;
   }
 }

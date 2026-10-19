@@ -199,6 +199,14 @@ export function spawnSpec(
   };
 }
 
+// Posix-shell invocation style for `-c 'exec …' <argv0> <args…>`: bash/zsh/sh
+// accept `exec "$0" "$@"` ($0 is the first positional after the command
+// string); fish's positional list is $argv.
+export function shellFamily(shell: string | null): 'fish' | 'posix' {
+  const base = (shell ?? '').replace(/\\/g, '/').split('/').pop() ?? '';
+  return base === 'fish' ? 'fish' : 'posix';
+}
+
 /**
  * node-pty spec: an interactive login shell `exec`ing the CLI — exactly what
  * the user gets in Windows Terminal. Only `cmd.env` is sent through
@@ -213,6 +221,7 @@ export function ptySpec(
     return { file: cmd.file, args: cmd.args, cwd: cmd.cwd };
   }
   const env = mergeShellEnv({}, cmd.env ?? {});
+  const family = shellFamily(shell);
   return {
     file: 'wsl.exe',
     args: [
@@ -223,8 +232,7 @@ export function ptySpec(
       '-e',
       shell ?? '/bin/bash',
       '-ilc',
-      'exec "$@"',
-      '--',
+      family === 'fish' ? 'exec $argv' : 'exec "$0" "$@"',
       '/usr/bin/env',
       ...kvPairs(env),
       cmd.file,

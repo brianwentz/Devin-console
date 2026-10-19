@@ -1068,6 +1068,7 @@ export type ChatSessionPublic = z.infer<typeof ChatSessionSchema>;
 const LocalSessionSchema = ChatSessionSchema.extend({ workspace: z.string() });
 
 export const ClaudeChatSessionSchema = ChatSessionSchema.extend({
+  host: HostIdSchema.default('local'),
   cwd: z.string(),
   permissionMode: ClaudePermissionModeSchema,
   model: z.string().nullable(),

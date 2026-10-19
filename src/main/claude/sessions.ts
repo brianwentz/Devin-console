@@ -26,6 +26,7 @@ import {
   touchOpened,
 } from '../../core/claudeRegistry';
 import { claudeScope } from '../../core/tabModel';
+import { LOCAL_HOST, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
 import { ClaudeContextMenu, type MenuAction } from './contextMenu';
 import { ClaudeHooks } from './hooks';
 import { ClaudePrTracking } from './prTracking';
@@ -39,6 +40,7 @@ import { applyLayout, notifyShell } from '../window';
 import { resolveClaudePath, INSTALL_GUIDANCE } from './claudePath';
 import { ClaudeRegistryStore } from './registry';
 import { ClaudeStore } from './store';
+import { hosts } from '../hosts';
 import { ClaudeHost, setClaudeHost } from './host';
 import { sdkTargetCliVersion } from './sdk';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
@@ -50,8 +52,10 @@ import { titleFromPrompt } from '../../core/localModel';
 const execFileAsync = promisify(execFile);
 
 export class ClaudeSessions {
-  private store: ClaudeStore;
+  private stores = new Map<HostId, ClaudeStore>();
   private registryStore: ClaudeRegistryStore;
+  /** Per-host store list failures; merged into the pushed hostErrors. */
+  private listErrors: Record<string, string> = {};
   /** @internal read by contextMenu/prTracking; written via saveRegistry/applyRegistry. */
   registry: ClaudeRegistry = emptyRegistry();
   private storeSessions: ClaudeStoreSession[] = [];
@@ -75,7 +79,8 @@ export class ClaudeSessions {
   private lastSnapshotJson = '';
   private host: ClaudeHost | null = null;
   private agents: ClaudeAgent[] = [];
-  private backgroundAgents: ClaudeBackgroundAgents | null = null;
+  private agentsByHost = new Map<HostId, ClaudeAgent[]>();
+  private backgroundAgents = new Map<HostId, ClaudeBackgroundAgents>();
   private mutations: { op: string; payload: Record<string, unknown> }[] = [];
   private readonly hook: ClaudeHooks;
   private readonly pr: ClaudePrTracking;
@@ -102,13 +107,56 @@ export class ClaudeSessions {
     this.menu = new ClaudeContextMenu(this);
     this.pr = new ClaudePrTracking(this);
     this.hook = new ClaudeHooks(this, this.configDir);
-    this.store = new ClaudeStore({
-      configDir: this.configDir,
-      onChange: (files) => {
-        void this.refresh('watch');
-        this.onTranscriptFiles(files);
-      },
-    });
+  }
+
+  /** One store per enabled host, created lazily so a host enabled mid-run is
+   * picked up by the next refresh. */
+  private storeForHost(host: ExecHost): ClaudeStore {
+    let store = this.stores.get(host.id);
+    if (!store) {
+      store = new ClaudeStore({
+        host,
+        configDir: hosts().configDir(host),
+        onChange: (files) => {
+          void this.refresh('watch');
+          this.onTranscriptFiles(files);
+        },
+      });
+      store.hot(
+        () =>
+          Object.values(getChatState().sessions)
+            .filter((s) => s.terminalOwned)
+            .map((s) => s.id),
+        () => state.surface === 'claude',
+      );
+      this.stores.set(host.id, store);
+      if (this.started) store.start();
+    }
+    return store;
+  }
+
+  private storeForSession(id: string): ClaudeStore {
+    return this.storeForHost(this.execHostFor(id));
+  }
+
+  /** The ExecHost a session belongs to: sidebar row → store row → chat state. */
+  private execHostFor(id: string): ExecHost {
+    return hosts().hostById(this.hostIdFor(id)) ?? LOCAL_HOST;
+  }
+
+  private hostIdFor(id: string): HostId {
+    return (
+      (this.sessions.find((s) => s.id === id)?.host ??
+        this.storeSessions.find((s) => s.id === id)?.host ??
+        getChatState().sessions[id]?.host ??
+        'local') as HostId
+    );
+  }
+
+  private startStores(): void {
+    for (const host of hosts().list()) {
+      this.storeForHost(host).start();
+    }
   }
 
   start(): void {
@@ -129,6 +177,7 @@ export class ClaudeSessions {
     this.host = new ClaudeHost({
       cliPath: () => this.cliPath,
       configDir: this.configDir,
+      hostFor: (id) => this.execHostFor(id),
       isOnDisk: (id) => this.storeSessions.some((s) => s.id === id),
       onPullRequestUrl: (id, url) => {
         this.recordPr(id, url, 'chat');
@@ -137,22 +186,21 @@ export class ClaudeSessions {
       onEvent: (id, kind, detail) => this.hook.onChatEvent(id, kind, detail),
     });
     setClaudeHost(this.host);
-    this.backgroundAgents = new ClaudeBackgroundAgents({
-      cliPath: () => this.cliPath,
-      onChange: (agents) => {
-        this.agents = agents;
-        this.emit();
-      },
-    });
+    // One agents poller per host; local keeps the PATH/CLI resolution,
+    // wsl hosts run `claude agents` through the host bridge.
+    for (const host of hosts().list()) this.agentsForHost(host).start();
     terminalHost.claudeGate = {
       onOpen: (id) => this.beginTerminal(id),
       onExit: (id) => this.endTerminal(id),
+      resolveHost: (id) => this.hostIdFor(id),
     };
-    this.backgroundAgents.start();
+    hosts().hookPort = () => this.hook.info()?.port ?? null;
+    hosts().hookAddrBind = (addr) => this.hook.listenOn(addr);
+    hosts().onStatusChange = () => this.emit();
     this.pr.start();
     this.hook.start(this.userData);
     void this.checkVersions();
-    this.store.start();
+    this.startStores();
     void this.refresh('start');
   }
 
@@ -200,7 +248,16 @@ export class ClaudeSessions {
     sessionId: string,
     mode: 'resume' | 'new' | 'attach',
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
-    return this.hook.injection(mode);
+    return this.hook.injection(
+      mode,
+      hosts().hookAddrFor(this.hostIdFor(sessionId)) ?? undefined,
+    );
+  }
+
+  /** Recapture the shell environment for the session's host (claude:recheckEnv). */
+  async recheckEnv(sessionId: string): Promise<void> {
+    await hosts().recheckEnv(this.hostIdFor(sessionId));
+    this.emit();
   }
 
   // `claude --version` once at start (and when claude.path changes) vs the
@@ -265,7 +322,7 @@ export class ClaudeSessions {
         };
       }),
       showArchived: this.showArchived,
-      hostErrors: {},
+      hostErrors: { ...hosts().errors(), ...this.listErrors },
       lastError: this.lastError,
       versions: this.versions,
       agents: this.agents,
@@ -291,17 +348,64 @@ export class ClaudeSessions {
     return this.agents;
   }
 
+  private agentsForHost(host: ExecHost): ClaudeBackgroundAgents {
+    let agents = this.backgroundAgents.get(host.id);
+    if (!agents) {
+      agents = new ClaudeBackgroundAgents({
+        cliPath: () => this.cliPath,
+        hostId: host.id,
+        ...(isWslHost(host)
+          ? {
+              execList: () =>
+                hosts().execOn(
+                  host,
+                  {
+                    file: hosts().status(host.id)?.claude.path ?? 'claude',
+                    args: ['agents', '--json', '--all'],
+                    cwd: '/',
+                  },
+                  5_000,
+                ),
+              execStop: (agentId: string) =>
+                hosts()
+                  .execOn(
+                    host,
+                    {
+                      file: hosts().status(host.id)?.claude.path ?? 'claude',
+                      args: ['stop', agentId],
+                      cwd: '/',
+                    },
+                    3_000,
+                  )
+                  .then(() => undefined),
+            }
+          : {}),
+        onChange: (agents) => {
+          this.agentsByHost.set(host.id, agents);
+          this.agents = [...this.agentsByHost.values()].flat();
+          this.emit();
+        },
+      });
+      this.backgroundAgents.set(host.id, agents);
+      if (this.started) agents.start();
+    }
+    return agents;
+  }
+
   refreshAgents(): Promise<void> {
-    return this.backgroundAgents?.refresh('manual') ?? Promise.resolve();
+    return Promise.all([...this.backgroundAgents.values()].map((a) => a.refresh('manual'))).then(
+      () => undefined,
+    );
   }
 
   onWindowFocus(): void {
-    this.backgroundAgents?.onWindowFocus();
+    for (const agents of this.backgroundAgents.values()) agents.onWindowFocus();
   }
 
   agentStop(agentId: string): Promise<void> {
     this.recordMutation('agentStop', { agentId });
-    return this.backgroundAgents?.stop(agentId) ?? Promise.resolve();
+    const hostId = (this.agents.find((a) => a.id === agentId)?.host ?? 'local') as HostId;
+    return this.backgroundAgents.get(hostId)?.stop(agentId) ?? Promise.resolve();
   }
 
   // --- refresh -------------------------------------------------------------
@@ -315,7 +419,25 @@ export class ClaudeSessions {
     this.refreshInFlight = true;
     const t0 = Date.now();
     try {
-      const list = await this.store.list();
+      // One store per enabled host; a failed non-local host degrades to a
+      // hostErrors line instead of taking the whole surface down.
+      const list: ClaudeStoreSession[] = [];
+      let localError: unknown = null;
+      for (const host of hosts().list()) {
+        if (this.started) this.agentsForHost(host).start();
+        try {
+          list.push(...(await this.storeForHost(host).list()));
+          delete this.listErrors[host.id];
+        } catch (error) {
+          if (!isWslHost(host)) {
+            localError = error;
+          } else {
+            this.listErrors[host.id] =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
+      }
+      if (localError) throw localError;
       this.storeSessions = list;
       const { registry, sessions, changed } = reconcile(this.registry, list, {
         now: Date.now(),
@@ -331,7 +453,9 @@ export class ClaudeSessions {
       this.lastError = null;
       this.lastSyncAt = new Date().toISOString();
       // Every listed transcript gets an in-memory chat session (history lazy).
-      for (const s of sessions) this.host?.ensureSession(s.id, { cwd: s.cwd });
+      for (const s of sessions) {
+        this.host?.ensureSession(s.id, { cwd: s.cwd, host: s.host as HostId });
+      }
       if (!this.restoredSelection) {
         this.restoredSelection = true;
         const last = state.settings?.current.claude.lastSessionId;
@@ -425,12 +549,12 @@ export class ClaudeSessions {
     if (cached) return cached;
     const subs: ClaudeSubagent[] = [];
     try {
-      const agentIds = await this.store.listSubagents(sessionId);
+      const agentIds = await this.storeForSession(sessionId).listSubagents(sessionId);
       for (const agentId of agentIds) {
         let title = `agent-${agentId}`;
         let messageCount: number | null = null;
         try {
-          const messages = (await this.store.subagentMessages(
+          const messages = (await this.storeForSession(sessionId).subagentMessages(
             sessionId,
             agentId,
           )) as { type?: string; message?: { content?: unknown } }[];
@@ -478,6 +602,7 @@ export class ClaudeSessions {
         getChatState().sessions[sessionId]?.cwd ??
         this.sessions.find((s) => s.id === sessionId)?.cwd ??
         null,
+      host: this.hostIdFor(sessionId),
     });
     await host.loadSubagentHistory(key, sessionId, agentId);
     this.selectedSubagentId = agentId;
@@ -545,24 +670,50 @@ export class ClaudeSessions {
       else {
         const win = state.windowRef;
         if (!win) return null;
+        // The configured default WSL distro becomes the picker's starting dir.
+        const defaultDistro = state.settings?.current.hosts.defaultWslDistro;
+        const defaultHost = defaultDistro
+          ? hosts().hostById(`wsl:${defaultDistro}`)
+          : null;
+        const defaultPath =
+          defaultHost && isWslHost(defaultHost)
+            ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
+            : undefined;
         const result = await dialog.showOpenDialog(win, {
           title: 'Choose the working directory for the new Claude session',
           properties: ['openDirectory', 'createDirectory'],
+          ...(defaultPath ? { defaultPath } : {}),
         });
         if (result.canceled || result.filePaths.length === 0) return null;
         dir = result.filePaths[0]!;
       }
     }
     this.recordMutation('newSession', {});
-    const id = this.host?.newSession(dir) ?? null;
-    if (id) this.open(id);
+    // A UNC pick (\\wsl.localhost\<D>\…) selects the wsl host; the stored
+    // cwd is the linux path inside that distro.
+    const hostId = hosts().pathHostId(dir);
+    const execHost = hosts().hostById(hostId) ?? LOCAL_HOST;
+    const storedDir = isWslHost(execHost) ? hosts().hostPath(execHost, dir) : dir;
+    const id = this.host?.newSession(storedDir, hostId) ?? null;
+    if (id) {
+      this.open(id);
+      // touchOpened created the entry with the default local host.
+      const entry = this.registry.entries[id];
+      if (entry && entry.host !== hostId) {
+        this.registry = {
+          ...this.registry,
+          entries: { ...this.registry.entries, [id]: { ...entry, host: hostId } },
+        };
+        this.registryStore.save(this.registry);
+      }
+    }
     return id;
   }
 
   rename(sessionId: string, title: string): Promise<void> {
     this.recordMutation('rename', { sessionId });
     return this.mutate('rename', async () => {
-      await this.store.rename(sessionId, title);
+      await this.storeForSession(sessionId).rename(sessionId, title);
       // The watcher re-lists; refresh now so the title lands even when the
       // watch event is delayed.
       await this.refresh('mutate');
@@ -572,7 +723,7 @@ export class ClaudeSessions {
   fork(sessionId: string): Promise<void> {
     this.recordMutation('fork', { sessionId });
     return this.mutate('fork', async () => {
-      const { sessionId: forkedId } = await this.store.fork(sessionId);
+      const { sessionId: forkedId } = await this.storeForSession(sessionId).fork(sessionId);
       const source = this.registry.entries[sessionId];
       // Folder/pin follow the fork; archive/removal state does not.
       if (source && (source.folder !== null || source.pinned)) {
@@ -580,6 +731,7 @@ export class ClaudeSessions {
           ...this.registry,
           entries: {
             ...this.registry.entries,
+            // The fork lands next to its source on the same host.
             [forkedId]: { ...source, id: forkedId },
           },
         };
@@ -636,7 +788,7 @@ export class ClaudeSessions {
     if (!confirmed) return;
     this.recordMutation('sessionDeleteTranscript', { sessionId });
     return this.mutate('sessionDeleteTranscript', async () => {
-      await this.store.deleteTranscript(sessionId);
+      await this.storeForSession(sessionId).deleteTranscript(sessionId);
       const entries = { ...this.registry.entries };
       delete entries[sessionId];
       this.applyRegistry({ ...this.registry, entries });
@@ -647,7 +799,7 @@ export class ClaudeSessions {
 
   async revealTranscript(sessionId: string): Promise<void> {
     this.recordMutation('revealTranscript', { sessionId });
-    const path = await this.store.transcriptPath(sessionId);
+    const path = await this.storeForSession(sessionId).transcriptPath(sessionId);
     if (path) shell.showItemInFolder(path);
   }
 
@@ -769,13 +921,15 @@ export class ClaudeSessions {
   }
 
   dispose(): void {
-    this.backgroundAgents?.dispose();
+    for (const agents of this.backgroundAgents.values()) agents.dispose();
+    this.backgroundAgents.clear();
     if (terminalHost.claudeGate) terminalHost.claudeGate = null;
     this.hook.stop();
     this.pr.stop();
     for (const timer of this.historyTimers.values()) clearTimeout(timer);
     this.historyTimers.clear();
-    this.store.dispose();
+    for (const store of this.stores.values()) store.dispose();
+    this.stores.clear();
     this.registryStore.dispose();
   }
 }

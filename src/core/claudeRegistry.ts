@@ -179,6 +179,12 @@ export function reconcile(
   for (const stored of store) {
     const entry = entries[stored.id];
     if (entry?.removed) continue;
+    // Entries created lazily by a mutation default to 'local' — stamp the
+    // host the store row actually came from.
+    if (entry && entry.host !== stored.host) {
+      entries[stored.id] = { ...entry, host: stored.host };
+      changed = true;
+    }
     sessions.push({
       id: stored.id,
       host: stored.host,

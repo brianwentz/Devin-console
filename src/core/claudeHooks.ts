@@ -68,8 +68,10 @@ export function buildHooksBlock(opts: { port: number; auth: HookAuth; addr?: str
 }
 
 /** Compact JSON for `claude --settings <json>` with env-var auth. */
-export function settingsFlagJson(port: number, envVar: string): string {
-  return JSON.stringify(buildHooksBlock({ port, auth: { kind: 'env', envVar } }));
+export function settingsFlagJson(port: number, envVar: string, addr?: string): string {
+  return JSON.stringify(
+    buildHooksBlock({ port, auth: { kind: 'env', envVar }, ...(addr ? { addr } : {}) }),
+  );
 }
 
 const serialise = (obj: unknown): string => `${JSON.stringify(obj, null, 2)}\n`;
