@@ -185,7 +185,7 @@ export function notifyShell(): void {
   // applies before createWindow finishes — transient layout/tab state is still at defaults
   // and syncing it would clobber the just-loaded settings (surface, pane, tabSnapshot).
   if (!state.shuttingDown && state.tabManager) state.settings?.syncFromState();
-  if (state.shellView && !state.shellView.webContents.isDestroyed()) {
+  if (state.shellView?.webContents && !state.shellView.webContents.isDestroyed()) {
     state.shellView.webContents.send(IpcChannels.stateUpdate, publicState());
   }
 }

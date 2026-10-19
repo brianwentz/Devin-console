@@ -128,6 +128,9 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
         if (closeDuringShutdown) {
           closeDuringShutdown = false;
           state.windowRef?.destroy();
+          // The view's webContents getter is undefined from here on — don't
+          // rely on 'closed' having fired yet.
+          state.shellView = null;
         }
         // The probe may have discarded the active tab — restore a tab in the
         // visible scope only (never pull a hidden-scope tab into the strip).
@@ -238,6 +241,9 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     state.shutdownComplete = true;
     try {
       state.windowRef?.destroy();
+      // The view's webContents getter is undefined from here on — don't rely
+      // on 'closed' having fired yet.
+      state.shellView = null;
     } catch (error) {
       // destroy() must never veto the exit path.
       log('shell', 'window-destroy-error', {
@@ -429,6 +435,9 @@ async function createWindow(): Promise<void> {
   state.windowRef.on('closed', () => {
     log('shell', 'window-closed');
     state.windowRef = null;
+    // The shell view dies with the window; late publishes must see null, not
+    // a view whose webContents getter already returns undefined.
+    state.shellView = null;
   });
 
   const activeId = state.tabManager.activeId;

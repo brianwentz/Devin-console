@@ -65,7 +65,8 @@ export function createPushedStore<T>(opts: {
     },
     publish() {
       const view = state.shellView;
-      if (!view || view.webContents.isDestroyed()) return;
+      // `webContents` is undefined once the owning window has been destroyed.
+      if (!view?.webContents || view.webContents.isDestroyed()) return;
       view.webContents.send(opts.channel, store.publicState());
     },
   };
