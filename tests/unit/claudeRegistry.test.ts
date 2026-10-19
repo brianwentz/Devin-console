@@ -3,16 +3,11 @@ import {
   ClaudeRegistrySchema,
   MAX_PRS_PER_SESSION,
   emptyRegistry,
-  folderCreate,
-  folderDelete,
-  folderRename,
-  folderReorder,
   openPrsOf,
   prCountsFor,
   reconcile,
   recordPr,
   setArchived,
-  setFolder,
   setPinned,
   setPrState,
   setRemoved,
@@ -42,7 +37,6 @@ const store = (over: Partial<ClaudeStoreSession> = {}): ClaudeStoreSession => ({
 const entry = (over: Partial<ClaudeRegistryEntry> = {}): ClaudeRegistryEntry => ({
   id: 's1',
   host: 'local',
-  folder: null,
   pinned: false,
   archived: false,
   archivedAt: null,
@@ -73,8 +67,8 @@ const URL2 = 'https://github.com/o/r/pull/2';
 
 describe('ClaudeRegistrySchema', () => {
   it('round-trips a valid registry and drops unknown fields', () => {
-    const parsed = ClaudeRegistrySchema.parse(reg({ folders: ['A'] }));
-    expect(parsed.folders).toEqual(['A']);
+    const parsed = ClaudeRegistrySchema.parse(reg());
+    expect(parsed.legacyFolders).toBeUndefined();
     expect(parsed.version).toBe(1);
     const withExtra = ClaudeRegistrySchema.safeParse({
       version: 1,
@@ -119,7 +113,7 @@ describe('ClaudeRegistrySchema', () => {
 
 describe('reconcile', () => {
   it('emits one row per non-removed store session with defaults', () => {
-    const { sessions, changed } = reconcile(reg(), [store()], { now: NOW, autoArchiveDays: 0 });
+    const { sessions, changed } = reconcile(reg(), [store()], { now: NOW, autoArchiveDays: 0, workspaces: [] });
     expect(changed).toBe(false);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]).toMatchObject({
@@ -134,23 +128,28 @@ describe('reconcile', () => {
     });
   });
 
-  it('maps entry folder/pin/archive onto the row', () => {
-    const r = reg({ entries: { s1: entry({ folder: 'Work', pinned: true, archived: true }) } });
-    const { sessions } = reconcile(r, [store()], { now: NOW, autoArchiveDays: 0 });
-    expect(sessions[0]).toMatchObject({ folder: 'Work', isPinned: true, isArchived: true });
+  it('derives the workspace folder from host+cwd and maps pin/archive', () => {
+    const r = reg({ entries: { s1: entry({ pinned: true, archived: true }) } });
+    const { sessions } = reconcile(r, [store()], {
+      now: NOW,
+      autoArchiveDays: 0,
+      workspaces: ['C:\\proj'],
+    });
+    expect(sessions[0]).toMatchObject({ folder: 'C:\\proj', isPinned: true, isArchived: true });
   });
 
   it('does not create entries for untouched store sessions (lazy entries)', () => {
     const { registry } = reconcile(reg(), [store(), store({ id: 's2' })], {
       now: NOW,
       autoArchiveDays: 0,
+    workspaces: [],
     });
     expect(Object.keys(registry.entries)).toHaveLength(0);
   });
 
   it('skips removed sessions entirely', () => {
     const r = reg({ entries: { s1: entry({ removed: true, removedAt: NOW }) } });
-    const { sessions } = reconcile(r, [store()], { now: NOW, autoArchiveDays: 0 });
+    const { sessions } = reconcile(r, [store()], { now: NOW, autoArchiveDays: 0, workspaces: [] });
     expect(sessions).toHaveLength(0);
   });
 
@@ -161,6 +160,7 @@ describe('reconcile', () => {
     const { registry, sessions, changed } = reconcile(r, [store()], {
       now: NOW,
       autoArchiveDays: 0,
+    workspaces: [],
     });
     expect(changed).toBe(true);
     expect(registry.entries.s1?.removed).toBe(false);
@@ -168,14 +168,14 @@ describe('reconcile', () => {
     expect(sessions).toHaveLength(1);
   });
 
-  it('keeps a missing session only when pinned or foldered, flagged missing', () => {
+  it('keeps a missing session only when pinned, flagged missing', () => {
     const r = reg({
       entries: {
         gone: entry({ id: 'gone', pinned: true, lastOpenedAt: NOW - 5 * DAY }),
         stray: entry({ id: 'stray' }),
       },
     });
-    const { registry, sessions, changed } = reconcile(r, [], { now: NOW, autoArchiveDays: 0 });
+    const { registry, sessions, changed } = reconcile(r, [], { now: NOW, autoArchiveDays: 0, workspaces: [] });
     expect(changed).toBe(true);
     expect(registry.entries.stray).toBeUndefined();
     expect(registry.entries.gone).toBeDefined();
@@ -188,10 +188,16 @@ describe('reconcile', () => {
     });
   });
 
-  it('keeps a missing foldered session too', () => {
+  it('drops a missing session whose legacy folder cannot be derived (no cwd)', () => {
     const r = reg({ entries: { gone: entry({ id: 'gone', folder: 'Work' }) } });
-    const { sessions } = reconcile(r, [], { now: NOW, autoArchiveDays: 0 });
-    expect(sessions.find((s) => s.id === 'gone')).toMatchObject({ missing: true, folder: 'Work' });
+    const { registry, sessions, changed } = reconcile(r, [], {
+      now: NOW,
+      autoArchiveDays: 0,
+      workspaces: [],
+    });
+    expect(changed).toBe(true);
+    expect(sessions.find((s) => s.id === 'gone')).toBeUndefined();
+    expect(registry.entries.gone).toBeUndefined();
   });
 
   it('auto-archives idle, unpinned, unfoldered sessions when enabled', () => {
@@ -199,6 +205,7 @@ describe('reconcile', () => {
     const { registry, sessions, changed } = reconcile(reg(), [old], {
       now: NOW,
       autoArchiveDays: 30,
+    workspaces: [],
     });
     expect(changed).toBe(true);
     expect(registry.entries['s1']).toMatchObject({ archived: true, archivedAt: NOW });
@@ -210,26 +217,27 @@ describe('reconcile', () => {
     const { registry, sessions, changed } = reconcile(reg(), [old], {
       now: NOW,
       autoArchiveDays: 0,
+    workspaces: [],
     });
     expect(changed).toBe(false);
     expect(registry.entries['s1']).toBeUndefined();
     expect(sessions[0]?.isArchived).toBe(false);
   });
 
-  it('does not auto-archive pinned or foldered sessions', () => {
-    const r = reg({
-      entries: {
-        s1: entry({ pinned: true }),
-        s2: entry({ id: 's2', folder: 'Work' }),
-      },
-    });
+  it('does not auto-archive pinned or workspace-member sessions', () => {
+    const r = reg({ entries: { s1: entry({ pinned: true }) } });
     const { registry } = reconcile(
       r,
-      [store({ lastModified: NOW - 90 * DAY }), store({ id: 's2', lastModified: NOW - 90 * DAY })],
-      { now: NOW, autoArchiveDays: 30 },
+      [
+        store({ lastModified: NOW - 90 * DAY }),
+        store({ id: 's2', cwd: 'C:\\ws', lastModified: NOW - 90 * DAY }),
+      ],
+      { now: NOW, autoArchiveDays: 30, workspaces: ['C:\\ws'] },
     );
     expect(registry.entries['s1']?.archived).toBe(false);
-    expect(registry.entries['s2']?.archived).toBe(false);
+    // s2 is exempt via workspace membership — the lazy entry is never even
+    // created (nothing else touched it).
+    expect(registry.entries['s2']?.archived).toBeFalsy();
   });
 
   it('suppresses auto-archive after a manual unarchive until the session is modified again', () => {
@@ -240,12 +248,14 @@ describe('reconcile', () => {
     const suppressed = reconcile(r, [store({ lastModified: NOW - 45 * DAY })], {
       now: NOW,
       autoArchiveDays: 30,
+    workspaces: [],
     });
     expect(suppressed.registry.entries['s1']?.archived).toBe(false);
     // Idle AND modified after unarchivedAt → eligible again
     const eligible = reconcile(r, [store({ lastModified: NOW - 35 * DAY })], {
       now: NOW,
       autoArchiveDays: 30,
+    workspaces: [],
     });
     expect(eligible.registry.entries['s1']?.archived).toBe(true);
   });
@@ -262,7 +272,7 @@ describe('reconcile', () => {
         gone: entry({ id: 'gone', pinned: true, prs: [pr({ state: 'closed', completedAt: NOW })] }),
       },
     });
-    const { sessions } = reconcile(r, [store()], { now: NOW, autoArchiveDays: 0 });
+    const { sessions } = reconcile(r, [store()], { now: NOW, autoArchiveDays: 0, workspaces: [] });
     expect(sessions.find((s) => s.id === 's1')?.prs).toEqual({
       open: 1,
       queued: 0,
@@ -282,20 +292,14 @@ describe('reconcile', () => {
       store({ id: 's2', lastModified: NOW - DAY }),
     ];
     const r = reg({ entries: { stray: entry({ id: 'stray' }) } });
-    const first = reconcile(r, input, { now: NOW, autoArchiveDays: 30 });
-    const second = reconcile(first.registry, input, { now: NOW, autoArchiveDays: 30 });
+    const first = reconcile(r, input, { now: NOW, autoArchiveDays: 30, workspaces: [] });
+    const second = reconcile(first.registry, input, { now: NOW, autoArchiveDays: 30, workspaces: [] });
     expect(second.changed).toBe(false);
     expect(second.registry).toBe(first.registry);
   });
 });
 
 describe('mutations', () => {
-  it('setFolder creates the entry lazily and moves it', () => {
-    const r = setFolder(reg(), 's1', 'Work');
-    expect(r.entries['s1']).toMatchObject({ folder: 'Work' });
-    expect(setFolder(r, 's1', null).entries['s1']?.folder).toBeNull();
-  });
-
   it('setPinned toggles pinned', () => {
     expect(setPinned(reg(), 's1', true).entries['s1']?.pinned).toBe(true);
     expect(setPinned(reg(), 's1', false).entries['s1']?.pinned).toBe(false);
@@ -325,7 +329,7 @@ describe('recordPr', () => {
   it('creates the entry lazily and appends a null-state PR', () => {
     const { registry, added } = recordPr(reg(), 's1', URL1, 'terminal', NOW);
     expect(added).toBe(true);
-    expect(registry.entries['s1']).toMatchObject({ id: 's1', folder: null, removed: false });
+    expect(registry.entries['s1']).toMatchObject({ id: 's1', removed: false });
     expect(registry.entries['s1']?.prs).toEqual([
       { url: URL1, state: null, seenAt: NOW, completedAt: null, source: 'terminal' },
     ]);
@@ -484,43 +488,6 @@ describe('openPrsOf', () => {
   });
 });
 
-describe('folder ops', () => {
-  it('folderCreate appends unseen names only', () => {
-    const r = folderCreate(reg({ folders: ['A'] }), 'B');
-    expect(r.folders).toEqual(['A', 'B']);
-    expect(folderCreate(r, 'A').folders).toEqual(['A', 'B']);
-  });
-
-  it('folderRename renames the folder and its member entries', () => {
-    const r = reg({
-      folders: ['A', 'B'],
-      entries: { s1: entry({ folder: 'A' }), s2: entry({ id: 's2', folder: 'B' }) },
-    });
-    const renamed = folderRename(r, 'A', 'Z');
-    expect(renamed.folders).toEqual(['Z', 'B']);
-    expect(renamed.entries['s1']?.folder).toBe('Z');
-    expect(renamed.entries['s2']?.folder).toBe('B');
-    expect(folderRename(r, 'nope', 'Z').folders).toEqual(['A', 'B']);
-  });
-
-  it('folderDelete removes the folder and unfolders its members', () => {
-    const r = reg({
-      folders: ['A'],
-      entries: { s1: entry({ folder: 'A' }), s2: entry({ id: 's2' }) },
-    });
-    const deleted = folderDelete(r, 'A');
-    expect(deleted.folders).toEqual([]);
-    expect(deleted.entries['s1']?.folder).toBeNull();
-    expect(deleted.entries['s2']?.folder).toBeNull();
-  });
-
-  it('folderReorder keeps unknown names appended', () => {
-    const r = reg({ folders: ['A', 'B', 'C'] });
-    expect(folderReorder(r, ['C', 'A']).folders).toEqual(['C', 'A', 'B']);
-    expect(folderReorder(r, ['Z', 'B']).folders).toEqual(['B', 'A', 'C']);
-  });
-});
-
 describe('host', () => {
   it('legacy registry entries without host parse as local', () => {
     const raw = {
@@ -549,13 +516,14 @@ describe('host', () => {
     const { sessions } = reconcile(emptyRegistry(), [store({ host: 'wsl:Ubuntu-22.04' })], {
       now: NOW,
       autoArchiveDays: 0,
+    workspaces: [],
     });
     expect(sessions[0]?.host).toBe('wsl:Ubuntu-22.04');
   });
 
   it('missing pinned rows carry the entry host', () => {
     const r = reg({ entries: { s1: entry({ host: 'wsl:Ubuntu-22.04', pinned: true }) } });
-    const { sessions } = reconcile(r, [], { now: NOW, autoArchiveDays: 0 });
+    const { sessions } = reconcile(r, [], { now: NOW, autoArchiveDays: 0, workspaces: [] });
     expect(sessions[0]?.host).toBe('wsl:Ubuntu-22.04');
   });
 });

@@ -7,24 +7,25 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
   ClaudeStoreSession,
 } from '../../core/claudeRegistry';
 import {
   emptyRegistry,
-  folderCreate,
-  folderDelete,
-  folderRename,
-  folderReorder,
   reconcile,
   setArchived,
-  setFolder,
   setPinned,
   setRemoved,
   touchOpened,
 } from '../../core/claudeRegistry';
+import {
+  migrateLegacyFolders,
+  renameWorkspace,
+  reorderWorkspaces,
+  defaultWorkspaceLabel,
+} from '../../core/workspaceTree';
 import { claudeScope } from '../../core/tabModel';
 import { LOCAL_HOST, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
 import { ClaudeContextMenu, type MenuAction } from './contextMenu';
@@ -302,7 +303,7 @@ export class ClaudeSessions {
       installGuidance: INSTALL_GUIDANCE,
       error: this.error,
       lastSyncAt: this.lastSyncAt,
-      folders: this.registry.folders,
+      folders: state.settings?.current.claude.workspaces ?? [],
       sessions: sessions.map((s) => {
         const chat = getChatState().sessions[s.id];
         return {
@@ -427,12 +428,14 @@ export class ClaudeSessions {
       // hostErrors line instead of taking the whole surface down.
       const list: ClaudeStoreSession[] = [];
       let localError: unknown = null;
+      let storeComplete = true;
       for (const host of hosts().list()) {
         if (this.started) this.agentsForHost(host).start();
         try {
           list.push(...(await this.storeForHost(host).list()));
           hosts().setError(host.id, 'store', null);
         } catch (error) {
+          storeComplete = false;
           if (!isWslHost(host)) {
             localError = error;
           } else {
@@ -449,12 +452,14 @@ export class ClaudeSessions {
       const { registry, sessions, changed } = reconcile(this.registry, list, {
         now: Date.now(),
         autoArchiveDays: state.settings?.current.claude.autoArchiveDays ?? 0,
+        ...this.workspaceOpts(),
       });
       if (changed) {
         this.registry = registry;
         this.registryStore.save(registry);
       }
       this.sessions = sessions;
+      this.migrateLegacyFoldersOnce(storeComplete);
       this.status = 'ready';
       this.error = null;
       this.lastError = null;
@@ -732,8 +737,9 @@ export class ClaudeSessions {
     return this.mutate('fork', async () => {
       const { sessionId: forkedId } = await this.storeForSession(sessionId).fork(sessionId);
       const source = this.registry.entries[sessionId];
-      // Folder/pin follow the fork; archive/removal state does not.
-      if (source && (source.folder !== null || source.pinned)) {
+      // Pin follows the fork; archive/removal state does not. (ux2: folder is
+      // derived — the fork files itself from its cwd, same as the source.)
+      if (source?.pinned) {
         this.registry = {
           ...this.registry,
           entries: {
@@ -749,11 +755,105 @@ export class ClaudeSessions {
     });
   }
 
-  sessionMove(sessionId: string, folder: string | null): Promise<void> {
-    this.recordMutation('sessionMove', { sessionId, folder });
-    return this.mutate('sessionMove', () => {
-      this.applyRegistry(setFolder(this.registry, sessionId, folder));
+  // --- workspaces (ux2 D8) ---------------------------------------------------
+  // The workspace list/labels live in settings.claude.*; a session's folder
+  // is derived (exact host+cwd match in reconcile) — never stored.
+
+  // Picks a directory (same seam as newSession(null): test mode reads
+  // DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD, else the folder dialog starting in
+  // the configured default WSL distro's home).
+  private async pickWorkspaceDir(title: string): Promise<string | null> {
+    const envCwd = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD?.trim() : '';
+    if (envCwd) return envCwd;
+    const win = state.windowRef;
+    if (!win) return null;
+    const defaultDistro = state.settings?.current.claude.defaultWslDistro;
+    const defaultHost = defaultDistro
+      ? hosts().hostById(`wsl:${defaultDistro}`)
+      : null;
+    const defaultPath =
+      defaultHost && isWslHost(defaultHost)
+        ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
+        : undefined;
+    const result = await dialog.showOpenDialog(win, {
+      title,
+      properties: ['openDirectory', 'createDirectory'],
+      ...(defaultPath ? { defaultPath } : {}),
     });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0]!;
+  }
+
+  async workspaceAdd(path?: string): Promise<void> {
+    this.recordMutation('workspaceAdd', {});
+    const picked = path ?? (await this.pickWorkspaceDir('Add Claude workspace folder'));
+    if (!picked) return;
+    const normalized = resolve(picked);
+    const current = state.settings?.current.claude.workspaces ?? [];
+    if (current.includes(normalized)) return;
+    state.settings?.merge({ claude: { workspaces: [...current, normalized] } });
+    applyLayout();
+    const hostId = hosts().pathHostId(normalized);
+    log('claude', 'claude-workspace-add', { detail: { host: hostId } });
+    this.rederive();
+  }
+
+  workspaceReorder(paths: string[]): Promise<void> {
+    this.recordMutation('workspaceReorder', { count: paths.length });
+    return this.mutate('workspaceReorder', () => {
+      const current = state.settings?.current.claude.workspaces ?? [];
+      const next = reorderWorkspaces(current, paths);
+      if (next === current) return;
+      state.settings?.merge({ claude: { workspaces: next } });
+      applyLayout();
+      log('claude', 'claude-workspace-reorder', { detail: { count: next.length } });
+      this.emit();
+    });
+  }
+
+  workspaceRename(path: string, label: string): Promise<void> {
+    this.recordMutation('workspaceRename', {});
+    return this.mutate('workspaceRename', () => {
+      const normalized = resolve(path);
+      const labels = state.settings?.current.claude.workspaceLabels ?? {};
+      state.settings?.merge({
+        claude: { workspaceLabels: renameWorkspace(labels, normalized, label) },
+      });
+      applyLayout();
+      log('claude', 'claude-workspace-rename', {});
+      this.emit();
+    });
+  }
+
+  async workspaceRemove(path: string): Promise<void> {
+    this.recordMutation('workspaceRemove', {});
+    const win = state.windowRef;
+    let confirmed = testMode;
+    if (!confirmed && win) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['Remove', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        message: `Remove workspace "${defaultWorkspaceLabel(resolve(path))}"?`,
+        detail: 'Sessions stay — they just file under Recent.',
+      });
+      confirmed = response === 0;
+    }
+    if (!confirmed) return;
+    const normalized = resolve(path);
+    const current = state.settings?.current.claude;
+    const labels = { ...(current?.workspaceLabels ?? {}) };
+    delete labels[normalized];
+    state.settings?.merge({
+      claude: {
+        workspaces: (current?.workspaces ?? []).filter((p) => p !== normalized),
+        workspaceLabels: labels,
+      },
+    });
+    applyLayout();
+    log('claude', 'claude-workspace-remove', {});
+    this.rederive();
   }
 
   sessionPin(sessionId: string, pinned: boolean): Promise<void> {
@@ -810,47 +910,9 @@ export class ClaudeSessions {
     if (path) shell.showItemInFolder(path);
   }
 
-  folderCreate(name: string): Promise<void> {
-    this.recordMutation('folderCreate', { name });
-    return this.mutate('folderCreate', () => {
-      this.applyRegistry(folderCreate(this.registry, name));
-    });
-  }
 
-  folderRename(oldName: string, newName: string): Promise<void> {
-    this.recordMutation('folderRename', {});
-    return this.mutate('folderRename', () => {
-      this.applyRegistry(folderRename(this.registry, oldName, newName));
-    });
-  }
 
-  async folderDelete(name: string): Promise<void> {
-    const win = state.windowRef;
-    let confirmed = testMode;
-    if (!confirmed && win) {
-      const { response } = await dialog.showMessageBox(win, {
-        type: 'warning',
-        buttons: ['Delete', 'Cancel'],
-        defaultId: 0,
-        cancelId: 1,
-        message: `Delete folder "${name}"?`,
-        detail: "Sessions stay — they're just unfoldered.",
-      });
-      confirmed = response === 0;
-    }
-    if (!confirmed) return;
-    this.recordMutation('folderDelete', { name });
-    return this.mutate('folderDelete', () => {
-      this.applyRegistry(folderDelete(this.registry, name));
-    });
-  }
 
-  folderReorder(names: string[]): Promise<void> {
-    this.recordMutation('folderReorder', { count: names.length });
-    return this.mutate('folderReorder', () => {
-      this.applyRegistry(folderReorder(this.registry, names));
-    });
-  }
 
   setShowArchived(value: boolean): void {
     this.showArchived = value;
@@ -864,12 +926,95 @@ export class ClaudeSessions {
     this.recordMutation('copySessionId', { sessionId });
   }
 
+  private workspaceOpts(): { workspaces: string[]; uncRoot?: string | undefined; uncHostId?: HostId | undefined } {
+    return {
+      workspaces: state.settings?.current.claude.workspaces ?? [],
+      ...(testMode && process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT
+        ? {
+            uncRoot: process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT,
+            uncHostId: hosts().list().find((h) => h.kind === 'wsl')?.id,
+          }
+        : {}),
+    };
+  }
+
+  // One-shot (ux2 D8): legacy free-form registry folders → path-bound
+  // workspaces. Runs once after the first successful refresh; the legacy
+  // fields are then stripped (serializeRegistry never writes them back).
+  private migratedLegacyFolders = false;
+  private migrateLegacyFoldersOnce(storeComplete: boolean): void {
+    if (this.migratedLegacyFolders) return;
+    const legacy = this.registry.legacyFolders ?? [];
+    if (legacy.length === 0) {
+      this.migratedLegacyFolders = true;
+      return;
+    }
+    // A failed host store looks like "no candidates" — defer to the next
+    // complete refresh rather than dropping those folders permanently.
+    if (!storeComplete) return;
+    this.migratedLegacyFolders = true;
+    const settings = state.settings?.current;
+    if (!settings || settings.claude.workspaces.length > 0) {
+      this.stripLegacyFolders();
+      return;
+    }
+    const candidates = this.storeSessions.map((stored) => ({
+      id: stored.id,
+      host: stored.host as HostId,
+      cwd: stored.cwd,
+      folder: this.registry.entries[stored.id]?.folder ?? null,
+    }));
+    const toWindows = (host: HostId, cwd: string): string | null => {
+      const execHost = hosts().hostById(host) ?? null;
+      // Unknown/disabled host → null (never store a linux cwd as a workspace).
+      return execHost ? hosts().windowsPath(execHost, cwd) : null;
+    };
+    const result = migrateLegacyFolders(legacy, candidates, toWindows);
+    if (result.workspaces.length > 0) {
+      state.settings?.merge({
+        claude: {
+          workspaces: [...(settings.claude.workspaces ?? []), ...result.workspaces],
+          workspaceLabels: { ...settings.claude.workspaceLabels, ...result.labels },
+        },
+      });
+      applyLayout();
+    }
+    this.stripLegacyFolders();
+    log('claude', 'claude-folders-migrated', {
+      detail: { converted: result.converted, dropped: result.dropped },
+    });
+  }
+
+  private stripLegacyFolders(): void {
+    const reg = this.registry;
+    const hasFolder = Object.values(reg.entries).some((e) => e.folder !== undefined);
+    if (!reg.legacyFolders && !hasFolder) return;
+    this.registry = {
+      ...reg,
+      entries: Object.fromEntries(
+        Object.entries(reg.entries).map(([id, e]) => {
+          const { folder: _f, ...rest } = e;
+          return [id, rest];
+        }),
+      ),
+    };
+    delete this.registry.legacyFolders;
+    this.registryStore.save(this.registry);
+  }
+
   private applyRegistry(next: ClaudeRegistry): void {
     this.registry = next;
     this.registryStore.save(next);
+    this.rederive();
+  }
+
+  // Re-run reconcile against the same store rows — workspace mutations change
+  // the derived folder without touching the registry or store.
+  private rederive(): void {
     const { sessions } = reconcile(this.registry, this.storeSessions, {
       now: Date.now(),
       autoArchiveDays: state.settings?.current.claude.autoArchiveDays ?? 0,
+      ...this.workspaceOpts(),
     });
     this.sessions = sessions;
     this.emit();
@@ -913,9 +1058,9 @@ export class ClaudeSessions {
   }
 
   contextMenu(arg: {
-    kind: 'session' | 'folder' | 'header' | 'agent';
+    kind: 'session' | 'workspace' | 'header' | 'agent';
     sessionId?: string | undefined;
-    name?: string | undefined;
+    path?: string | undefined;
     agentId?: string | undefined;
     x: number;
     y: number;
