@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { computeBounds, RAIL_WIDTH } from '../core/layout';
+import { computeBounds, dockSurface, RAIL_WIDTH } from '../core/layout';
 import { renderBadgeDataUrl } from './badge';
 import { handleSettingsFlush } from './settingsDraft';
 import { useShellState } from './store';
@@ -74,9 +74,7 @@ export function App() {
   }, []);
 
   if (!state) return null;
-  const terminalVisible =
-    state.terminalOpen &&
-    (state.surface === 'cloud' || state.surface === 'local' || state.surface === 'claude');
+  const terminalVisible = state.terminalOpen && dockSurface(state.surface);
   const bounds = computeBounds(size, {
     paneOpen: state.paneOpen,
     paneFraction: state.paneFraction,

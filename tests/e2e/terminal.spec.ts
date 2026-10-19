@@ -2,10 +2,20 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
+import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { evaluateInShell, launchApp, readEvents, shellPage, state, waitForEvent } from './helpers';
+import {
+  closeApp,
+  evaluateInShell,
+  launchApp,
+  launchWithClaudeFixture,
+  readEvents,
+  shellPage,
+  state,
+  waitForEvent,
+} from './helpers';
 
 type Hooks = {
   terminalOpen(
@@ -20,12 +30,15 @@ type Hooks = {
   localAddWorkspace(path: string): string | null;
   localNewSession(workspace: string): Promise<string>;
   localState(): { agents: Record<string, { status: string }> };
-  setSurface(value: 'cloud' | 'local' | 'settings'): void;
+  setSurface(value: 'cloud' | 'local' | 'claude' | 'settings' | 'analytics'): void;
+  claudeState(): { status: string };
+  claudeSelect(id: string | null): void;
   setTerminalOpen(value: boolean): void;
   setTerminalHeight(value: number): void;
   getDevinBounds(): { y: number; height: number } | null;
+  getShellWebContents(): Electron.WebContents;
   childViews(): Array<{ bounds: { x: number; y: number; width: number; height: number }; url: string | null }>;
-  layoutRects(): { terminal: { x: number; y: number; width: number; height: number } };
+  layoutRects(): { terminal: { x: number; y: number; width: number; height: number } | null };
   setPaneOpen(value: boolean): void;
   clipboardWrite(text: string): void;
   clipboardRead(): string;
@@ -249,7 +262,8 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
       (globalThis as G).__devinworkspaces.layoutRects(),
       (globalThis as G).__devinworkspaces.childViews(),
     ]);
-    const term = rects.terminal;
+    const term = rects.terminal!;
+    expect(term).toBeTruthy();
     const overlaps = (b: { x: number; y: number; width: number; height: number }) =>
       b.x < term.x + term.width && b.x + b.width > term.x && b.y < term.y + term.height && b.y + b.height > term.y;
     for (const view of views) {
@@ -682,4 +696,188 @@ test('terminal: devin pty resumes with -r, reuses the live pty per session', asy
       }
     }
   }
+});
+
+// ux2 P2: the dock is a work-surface feature — core/layout dockSurface() gates
+// main (native bounds), App (shell DOM), Rail (button) and Ctrl+` identically.
+// `layout.terminalOpen` survives a visit to Settings/Analytics untouched.
+test.describe('dock surfaces', () => {
+  const FAKE_SDK = resolve(__dirname, '../../out/fixtures/fakeClaudeSdk.mjs');
+  const CLAUDE_UA = '11111111-0000-4000-8000-00000000000a';
+  type TRect = { x: number; y: number; width: number; height: number };
+
+  const terminalRect = (app: ElectronApplication): Promise<TRect | null> =>
+    app.evaluate(() => (globalThis as G).__devinworkspaces.layoutRects().terminal);
+  const setSurface = (app: ElectronApplication, surface: Parameters<Hooks['setSurface']>[0]) =>
+    app.evaluate((_e, v) => (globalThis as G).__devinworkspaces.setSurface(v), surface);
+  const read = (app: ElectronApplication, id: string) =>
+    app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id);
+  const toggleEvents = async (logFile: string) =>
+    (await readEvents(logFile)).filter((e) => e.event === 'terminal-toggle');
+  // CDP-dispatched keys (page.keyboard) bypass Electron's before-input-event;
+  // sendInputEvent takes the native path the shortcut handler listens on.
+  const ctrlBacktick = (app: ElectronApplication) =>
+    app.evaluate(() => {
+      const contents = (globalThis as G).__devinworkspaces.getShellWebContents();
+      contents.sendInputEvent({ type: 'keyDown', keyCode: '`', modifiers: ['control'] });
+      contents.sendInputEvent({ type: 'keyUp', keyCode: '`', modifiers: ['control'] });
+    });
+
+  test('visible on cloud/local/claude, hidden + inert on settings/analytics, preference survives the visit', async () => {
+    const { app, profile } = await launchWithClaudeFixture(fixtures, {
+      DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
+      DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
+      DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    });
+    const logFile = join(profile, 'events.jsonl');
+    try {
+      await expect
+        .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+        .toBe(true);
+      const page = await shellPage(app);
+      const dock = page.locator('#terminalDock');
+      const toggle = page.locator('#terminalToggle');
+      await toggle.waitFor({ timeout: 10_000 });
+      expect((await state(app)).surface).toBe('cloud');
+      await expect(dock).toBeHidden();
+      expect(await terminalRect(app)).toBeNull();
+
+      // Cloud: Ctrl+` (main-process before-input-event on the shell) opens the dock.
+      await ctrlBacktick(app);
+      await expect.poll(async () => (await state(app)).terminalOpen).toBe(true);
+      await expect(dock).toBeVisible();
+      await expect.poll(async () => (await toggleEvents(logFile)).length).toBe(1);
+      expect((await toggleEvents(logFile))[0]!.detail).toMatchObject({ open: true, source: 'shortcut' });
+      await expect(toggle).toBeEnabled();
+      await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+      const cloudRect = await terminalRect(app);
+      expect(cloudRect).not.toBeNull();
+      const cloudBox = await dock.boundingBox();
+      expect(cloudBox!.y).toBe(cloudRect!.y);
+      expect(cloudBox!.height).toBe(cloudRect!.height);
+
+      // A shell in the dock, so there is an xterm to focus later on.
+      await page.click('#terminalNew');
+      await expect
+        .poll(async () => (await state(app)).terminals.filter((t) => t.kind === 'shell').length)
+        .toBe(1);
+      const dockId = (await state(app)).terminals.find((t) => t.kind === 'shell')!.id;
+      await expect.poll(() => read(app, dockId)).toContain('ready');
+
+      // Local: still a dock surface.
+      await setSurface(app, 'local');
+      await expect.poll(async () => (await state(app)).surface).toBe('local');
+      await expect(dock).toBeVisible();
+      expect(await terminalRect(app)).not.toBeNull();
+      await expect(toggle).toBeEnabled();
+
+      // Settings: dock hidden, rail toggle disabled, Ctrl+` is a no-op; the
+      // persisted preference is untouched (aria-pressed still reflects it).
+      await setSurface(app, 'settings');
+      await expect.poll(async () => (await state(app)).surface).toBe('settings');
+      await expect(dock).toBeHidden();
+      expect(await terminalRect(app)).toBeNull();
+      await expect(toggle).toBeDisabled();
+      await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+      await ctrlBacktick(app);
+      await page.waitForTimeout(400);
+      expect((await state(app)).terminalOpen).toBe(true);
+      expect((await toggleEvents(logFile)).length).toBe(1);
+      await expect(dock).toBeHidden();
+
+      // Analytics: same gating.
+      await setSurface(app, 'analytics');
+      await expect.poll(async () => (await state(app)).surface).toBe('analytics');
+      await expect(dock).toBeHidden();
+      expect(await terminalRect(app)).toBeNull();
+      await expect(toggle).toBeDisabled();
+      await ctrlBacktick(app);
+      await page.waitForTimeout(400);
+      expect((await state(app)).terminalOpen).toBe(true);
+      expect((await toggleEvents(logFile)).length).toBe(1);
+
+      // Back to Cloud: the dock re-appears at the same geometry, no re-toggle,
+      // and the shell it hosted is still live.
+      await setSurface(app, 'cloud');
+      await expect.poll(async () => (await state(app)).surface).toBe('cloud');
+      await expect(dock).toBeVisible();
+      expect(await terminalRect(app)).toEqual(cloudRect);
+      await expect(toggle).toBeEnabled();
+      expect((await state(app)).terminals.find((t) => t.id === dockId)?.exitCode).toBeNull();
+
+      // Claude: the dock and the per-session Terminal tab coexist.
+      await expect
+        .poll(async () => (await app.evaluate(() => (globalThis as G).__devinworkspaces.claudeState())).status)
+        .toBe('ready');
+      await setSurface(app, 'claude');
+      await expect.poll(async () => (await state(app)).surface).toBe('claude');
+      await expect(dock).toBeVisible();
+      await expect(toggle).toBeEnabled();
+      await app.evaluate((_e, id) => (globalThis as G).__devinworkspaces.claudeSelect(id as string), CLAUDE_UA);
+      await page.locator('#view-terminal').click();
+      const claudePane = page.locator(`[data-session-terminal="${CLAUDE_UA}"]`);
+      await expect(claudePane).toBeAttached({ timeout: 10_000 });
+      await expect(claudePane.locator('.xterm')).toBeVisible({ timeout: 10_000 });
+      let claudePtyId = '';
+      await expect
+        .poll(async () => {
+          claudePtyId = (await state(app)).terminals.find((t) => t.sessionId === CLAUDE_UA)?.id ?? '';
+          return claudePtyId;
+        })
+        .not.toBe('');
+      await expect.poll(() => read(app, claudePtyId)).toContain(`-r ${CLAUDE_UA}`);
+
+      // Geometry: dock sits below the chat column (bounds.terminal), flush with
+      // the window bottom; the Claude terminal pane ends above it.
+      await expect(dock).toBeVisible();
+      const claudeRect = await terminalRect(app);
+      expect(claudeRect).not.toBeNull();
+      expect((await dock.boundingBox())!.y).toBe(claudeRect!.y);
+      const claudeBox = await claudePane.boundingBox();
+      expect(claudeBox).toBeTruthy();
+      expect(claudeBox!.height).toBeGreaterThan(100);
+      expect(claudeBox!.y + claudeBox!.height).toBeLessThanOrEqual(claudeRect!.y + 1);
+      const clientHeight = await page.evaluate(() => document.documentElement.clientHeight);
+      expect(claudeRect!.y + claudeRect!.height).toBe(clientHeight);
+
+      // Focus does not fight: re-show the dock while the Claude Terminal tab is
+      // active — focus lands in the dock xterm and typed input reaches ITS pty only.
+      await app.evaluate(() => (globalThis as G).__devinworkspaces.setTerminalOpen(false));
+      await expect(dock).toBeHidden();
+      await expect(claudePane.locator('.xterm')).toBeVisible();
+      await app.evaluate(() => (globalThis as G).__devinworkspaces.setTerminalOpen(true));
+      await expect(dock).toBeVisible();
+      await expect
+        .poll(async () =>
+          page.evaluate(
+            (id) =>
+              document.activeElement?.closest(`[data-terminal-id="${id}"]`) !== null &&
+              document.activeElement?.classList.contains('xterm-helper-textarea'),
+            dockId,
+          ),
+        )
+        .toBe(true);
+      await page.keyboard.type('dockping\r');
+      await expect.poll(() => read(app, dockId)).toContain('echo:dockping');
+      expect(await read(app, claudePtyId)).not.toContain('dockping');
+
+      // Clicking the Claude terminal moves focus there; the dock stays open.
+      await claudePane.locator('.xterm-screen').click();
+      await page.keyboard.type('claudeping\r');
+      await expect.poll(() => read(app, claudePtyId)).toContain('claudeping');
+      expect(await read(app, dockId)).not.toContain('claudeping');
+      await expect(dock).toBeVisible();
+      expect((await state(app)).terminalOpen).toBe(true);
+    } finally {
+      await closeApp(app);
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          rmSync(profile, { recursive: true, force: true });
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+    }
+  });
 });

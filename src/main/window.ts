@@ -4,6 +4,7 @@ import {
   clampSessionsWidth,
   clampTerminalHeight,
   computeBounds,
+  dockSurface,
   fractionFromPx,
   leftChrome,
   MIN_DEVIN_WIDTH,
@@ -30,12 +31,9 @@ import { allOpenPullRequests, prStore } from './prs';
 import { state } from './state';
 import { updateState } from './updater';
 
-// The dock is a Cloud-surface feature unless the user opts in for all surfaces.
+// Dock visibility = persisted toggle ∧ a dock surface (core/layout dockSurface).
 export function terminalVisible(): boolean {
-  return (
-    state.terminalOpen &&
-    (state.surface === 'cloud' || state.surface === 'local' || state.surface === 'claude')
-  );
+  return state.terminalOpen && dockSurface(state.surface);
 }
 
 function nativeBounds(rect: Rect | null): Electron.Rectangle {

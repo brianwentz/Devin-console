@@ -8,6 +8,7 @@ import {
   DEFAULT_PANE_FRACTION,
   DEFAULT_SESSIONS_WIDTH,
   DEFAULT_TERMINAL_HEIGHT,
+  dockSurface,
   fractionFromPx,
   leftChrome,
   MIN_TERMINAL_HEIGHT,
@@ -20,6 +21,7 @@ import {
   SPLITTER_WIDTH,
   type LayoutState,
 } from '../../src/core/layout';
+import type { Surface } from '../../src/shared/ipc';
 
 function layout(overrides: Partial<LayoutState> = {}): LayoutState {
   return {
@@ -349,5 +351,14 @@ describe('sessions column', () => {
         10000,
       ),
     ).toBe(2484);
+  });
+});
+
+describe('dockSurface', () => {
+  it('is true for the work surfaces and false for Settings/Analytics', () => {
+    const surfaces: Surface[] = ['cloud', 'local', 'claude', 'settings', 'analytics'];
+    expect(surfaces.filter(dockSurface)).toEqual(['cloud', 'local', 'claude']);
+    expect(dockSurface('settings')).toBe(false);
+    expect(dockSurface('analytics')).toBe(false);
   });
 });
