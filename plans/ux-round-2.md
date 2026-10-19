@@ -1,6 +1,6 @@
 # UX round 2 — composer keys, terminal dock, Settings tabs, workspaces in the session column
 
-Status: Implementing — P0+P4a merged (#77); P1–P3 PRs open; P4b/P5 in flight
+Status: Implemented — PRs open/merged (see plans/README.md)
 
 ## 0. The ask
 
@@ -116,6 +116,11 @@ Removes the shared-file contention before anything runs in parallel.
 - **Q4 → dock on chat surfaces + Cloud only**, never on Analytics or Settings. (D3.)
 
 ## 6. Implementation notes
+
+- **Local agent autostart** (found by the lead's real-WSL check): the session-column rewrite moved workspace listing off LocalPanel's mount,
+  so nothing started agents for seeded workspaces — `acpHost` now autostarts configured workspaces once hosts are enumerated
+  (`agents-autostart {count, skipped}`; a UNC workspace on a disabled distro is skipped, a missing CLI keeps `missing-cli`).
+
 
 Deviations from the plan above, as implemented:
 

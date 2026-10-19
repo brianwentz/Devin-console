@@ -254,7 +254,7 @@ export function GeneralTab() {
           checked={draft.sessionsOpen}
           onChange={(event) => updateDraft({ sessionsOpen: event.target.checked })}
         />
-        <span>Show the sessions column (Cloud and Claude)</span>
+        <span>Show the sessions column (Cloud, Devin Local and Claude)</span>
       </label>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">Shell command</span>

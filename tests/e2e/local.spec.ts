@@ -746,6 +746,7 @@ test('Local composer: plain Enter inserts a newline, Ctrl+Enter sends', async ()
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
   });
   const agentPids: number[] = [];
   try {

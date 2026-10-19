@@ -146,7 +146,6 @@ variable that selects it.
   needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), labels/collapse keyed by workspace path.
 - `claude.{workspaces: string[], workspaceLabels, defaultWslDistro}` — the Claude workspace list (separate from `workspaces`), labels by path,
   `defaultWslDistro` (`#claudeDefaultWslDistroSelect`; read by Claude `newSession(null)`); collapse state reuses `claude.collapsedFolders` keyed by path.
-  <!-- verify after P4b -->
 - `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
   `claude.defaultWslDistro` where those are still absent, then deletes the old key; `main/settings.ts` spots it in the raw file, logs
   `settings-migrated {from:'hosts.defaultWslDistro'}` and re-saves once.
@@ -338,7 +337,9 @@ variable that selects it.
   (confirm dialog, auto-confirmed in test mode); session: *Open terminal*, *Copy session id*, *Delete*; header: *Add workspace…*, *Refresh all*; actions
   that need shell UI resolve as `{action}` for the sidebar to perform; test mode keeps the invoke open until `localMenuClick`). Log events
   `workspace-add`/`workspace-remove` (`{workspace}` path), `local-workspace-reorder {count}`, `local-workspace-rename` (no detail),
-  `local-session-copy-id` (no detail). Test hooks `localMenuItems` / `localMenuClick(id)`.
+  `local-session-copy-id` (no detail). Test hooks `localMenuItems` / `localMenuClick(id)`. Agents for configured workspaces autostart after
+  window creation — `acpHost` waits for `HostsRegistry.whenEnumerated()` first so enabled WSL distros are known; a UNC workspace on a
+  disabled/absent distro is skipped and a missing CLI keeps `missing-cli`.
 - PR links: `src/core/prLinks.ts` (`stripAnsi`, `extractPullRequestUrls`, `LinkScanner`) scans agent chat output (acpHost via injected `onPullRequestUrl`
   — never user chunks) and devin-pty output (terminalHost `flush`); a new PR URL calls `src/main/local/prAutoOpen.ts` `autoOpenLocalPr` → lazy
   background tab in `local:<sessionId>` gated on `prs.autoOpenTabs`, `pr-auto-open` event with `detail.source` = `local-chat|local-terminal`. xterm uses
@@ -378,18 +379,18 @@ variable that selects it.
   not a commit error), `claude.autoArchiveDays` (0-365, 0 = off; `#claudeAutoArchiveInput`), `claude.showArchived`, `claude.collapsedFolders`,
   `claude.workspaces`/`claude.workspaceLabels`/`claude.defaultWslDistro` (see Settings keys).
   `preload.setSurface` guards on `SurfaceSchema` — new surfaces must be added to the schema.
-- Workspaces (ux2 P4b, plan D8 — in flight): Claude folders become path-bound workspaces with the same `WorkspaceSidebar` adapter as Local
-  (`ClaudeSidebar` keeps subagent rows, the background-agents section, host chip and activity dots through `rowOpts`/extra slots). A session's folder is
-  *derived* — the workspace whose path matches its `cwd`, host-aware via a matcher in `core/workspaceTree.ts` (`pathHostId` + `toWindowsPath`: a
-  `\\wsl.localhost\D\…` workspace matches a `wsl:D` session with the Linux cwd) — else `recent`. IPC `claude:workspaceAdd|Reorder|Rename|Remove` (channel
-  names are already in `IpcChannels`); `newSession(cwd)` from a header passes the path through without the picker, `fork` keeps the cwd. The free-form
-  registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`) is marked deprecated in `ipc.ts` and is deleted by P4b;
-  its one-shot migration (each folder → workspace at the most common session `cwd`, label = folder name; unresolvable folders dropped → *Recent*) runs in
-  `ClaudeSessions` after the first store refresh (it needs the session cwds), not at settings load, and logs `claude-folders-migrated {converted,dropped}`.
-  Context menu gains *Add workspace…*, *New session here*, *Rename…*, *Reveal*, *Open terminal here*, *Remove workspace*. <!-- verify after P4b -->
-- Log events (ids/counts/durations only, never `configDir` in details): `claude-sdk-load`, `claude-list`, `claude-watch`, `claude-select`, `claude-mutate`,
-  `claude-menu`, `claude-registry-load-error`, `claude-registry-save-error`. Test hooks: `claudeState`, `claudeRefresh`, `claudeSelect`, `claudeMenuItems`,
-  `claudeMenuClick`, `claudeMutations`, `claudeConfigDir`, `claudeSdkProbe`.
+- Workspaces (ux2 P4b, plan D8 — landed): Claude folders became path-bound workspaces on the shared `WorkspaceSidebar` (`ClaudeSidebar` is the adapter;
+  subagent rows, the background-agents section, host chip and activity dots survive through `renderRow`/`extraSections`/`rowOpts`). A session's folder is
+  *derived* — the workspace whose path matches its `cwd`, host-aware via `workspaceFor` in `core/workspaceTree.ts` (local paths compare
+  case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, exact match — a sub-folder is Recent). IPC
+  `claude:workspaceAdd|Reorder|Rename|Remove`; `newSession(cwd)` from a header passes the path through without the picker; `fork` files itself from the
+  same cwd. The free-form folder registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`, the `folders` list) is
+  deleted — the loader still tolerates the legacy fields and `serializeRegistry` never writes them back. The one-shot migration (`migrateLegacyFolders`
+  → most-common `(host,cwd)` per folder → `toWindowsPath`, label = folder name when it differs from the basename) runs in `ClaudeSessions` after the
+  first *complete* store refresh — a pass where any host's store fails skips it and retries next refresh — and drops folders whose members resolve to
+  no session or an unresolvable host. Logs `claude-folders-migrated {converted,dropped}`.
+  Context menu gains *Add workspace…* (header) and on workspaces *New session here*, *Rename…*, *Open terminal here*, *Reveal in Explorer*,
+  *Remove workspace*.
 
 ### Chat host (landed Phase 2)
 - `src/main/claude/host.ts` keeps ONE streaming-input `query()` per live session (`prompt: AsyncIterable<SDKUserMessage>` — a pushable `PromptQueue`;
@@ -629,14 +630,17 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |
 | `local-workspace-reorder` | `{ count }`. |
+| `agents-autostart` | `{ count, skipped }` — configured workspaces autostart after window creation (fix/ux2-local-startup); UNC workspaces whose distro isn't enabled count as `skipped`; a missing CLI keeps `missing-cli`. |
 | `local-workspace-rename` / `local-session-copy-id` | No detail (label and id are never logged). |
 | `agent-restart` / `session-reclaim-error` / `terminal-session-release-error` / `terminal-session-locked` | Local terminal handoff. |
 | `shutdown-exit-watchdog` | 5 s `process.exit` fallback after `app.exit(0)`. |
 | `claude-sdk-load` | `{ok,ms,version}` (version read by resolving the SDK entry — its exports map blocks `./package.json`). |
 | `claude-list` / `claude-watch` / `claude-select` / `claude-mutate` / `claude-menu` | Sidebar/registry ops. |
 | `claude-registry-load-error` / `claude-registry-save-error` | Registry persistence. |
-| `claude-folders-migrated` | `{ converted, dropped }` — one-shot folder → workspace migration (P4b). <!-- verify after P4b --> |
-| `claude-workspace-*` | Claude workspace add/reorder/rename/remove — counts only, never paths or labels (P4b; exact names pending). <!-- verify after P4b --> |
+| `claude-folders-migrated` | `{ converted, dropped }` — one-shot folder → workspace migration (P4b). |
+| `claude-workspace-add` | `{ host }` — `claude:workspaceAdd` (the path is never logged). |
+| `claude-workspace-reorder` | `{ count }`. |
+| `claude-workspace-rename` / `claude-workspace-remove` | No detail (paths and labels are never logged). |
 | `claude-query` | `{mode:new\|resume,ms}`. |
 | `claude-prompt` | `{length}`. |
 | `claude-turn` | `{stopReason,ms}`. |
