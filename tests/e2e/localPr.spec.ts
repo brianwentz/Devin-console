@@ -52,7 +52,7 @@ async function typeAndSend(app: ElectronApplication, text: string): Promise<void
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
       setter.call(el, ${JSON.stringify(text)});
       el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
       return true;
     })()`,
   );
@@ -71,6 +71,7 @@ test('local PR urls auto-open lazy tabs from chat and the devin pty', async () =
   const termPrUrl = `${fixtures.githubUrl}/acme/widgets/pull/8`;
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_LINK_URL: chatPrUrl,

@@ -161,6 +161,44 @@ async function shellCount(app: ElectronApplication, selector: string): Promise<n
   return (await evaluateInShell(app, `document.querySelectorAll(${JSON.stringify(selector)}).length`)) as number;
 }
 
+// Right-click a selector by dispatching contextmenu (avoids CSS path quoting).
+async function rightClick(app: ElectronApplication, selector: string): Promise<void> {
+  const ok = await evaluateInShell(
+    app,
+    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 })); return true; })()`,
+  );
+  expect(ok).toBe(true);
+}
+
+// Same for a workspace section header, matching the data-section-name path.
+async function rightClickWorkspace(app: ElectronApplication, path: string): Promise<void> {
+  const ok = await evaluateInShell(
+    app,
+    `(() => {
+      const el = [...document.querySelectorAll('[data-section-name]')]
+        .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)});
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
+      return true;
+    })()`,
+  );
+  expect(ok).toBe(true);
+}
+
+type MenuItem = { id: string; label: string; enabled: boolean };
+async function localMenuItems(app: ElectronApplication): Promise<MenuItem[]> {
+  return app.evaluate(
+    () => (globalThis as any).__devinworkspaces.localMenuItems(),
+  ) as Promise<MenuItem[]>;
+}
+async function localMenuClick(app: ElectronApplication, id: string): Promise<void> {
+  await app.evaluate((_e, v) => (globalThis as any).__devinworkspaces.localMenuClick(v), id);
+}
+async function menuItem(app: ElectronApplication, label: string): Promise<MenuItem | undefined> {
+  const items = await localMenuItems(app);
+  return items.find((i) => i.label === label);
+}
+
 async function shellClick(app: ElectronApplication, selector: string): Promise<boolean> {
   return (await evaluateInShell(
     app,
@@ -179,7 +217,7 @@ async function typeAndSend(app: ElectronApplication, text: string): Promise<void
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
       setter.call(el, ${JSON.stringify(text)});
       el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
       return true;
     })()`,
   );
@@ -211,6 +249,7 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
   const linkUrl = `${fixtures.githubUrl}/page/pr-1`;
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_DELETE: '1',
@@ -232,7 +271,7 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     expect(local.agents[ws]?.capabilities).toEqual({ loadSession: true, sessionList: true, sessionDelete: true });
     expect(((await state(app)).settings as { workspaces: string[] }).workspaces).toContain(ws);
     await expect.poll(() => shellCount(app, '#agentBadge[data-status="ready"]')).toBe(1);
-    await expect.poll(() => shellCount(app, `.ws-item[data-status="ready"]`)).toBe(1);
+    await expect.poll(() => shellCount(app, `[data-workspace][data-status="ready"]`)).toBe(1);
     const firstPid = await agentPid(app, ws);
     expect(firstPid).toBeGreaterThan(0);
     agentPids = [firstPid];
@@ -353,19 +392,17 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     ).toContain('delete yes');
     const secondId = await newSession(app, ws);
     await expect.poll(() => shellCount(app, `.session-item[data-session-id="${secondId}"]`)).toBe(1);
-    await expect.poll(() => shellCount(app, '.session-delete')).toBe(2);
 
-    const deleteButton = `.session-delete[data-session-id="${secondId}"]`;
-    // Deleting while running is refused: the trash is disabled and the
+    // Deleting while running is refused: the menu item is disabled and the
     // host-level delete throws.
     await promptNoWait(app, secondId, 'please be slow');
     await expect.poll(async () => (await localState(app)).sessions[secondId]?.running).toBe(true);
-    expect(
-      await evaluateInShell(
-        app,
-        `document.querySelector(${JSON.stringify(deleteButton)})?.disabled`,
-      ),
-    ).toBe(true);
+    await rightClick(app, `.session-item[data-session-id="${secondId}"]`);
+    const runningDelete = await menuItem(app, 'Delete');
+    expect(runningDelete).toBeTruthy();
+    expect(runningDelete!.enabled).toBe(false);
+    // Resolve the parked menu (Copy session id is a no-op here).
+    await localMenuClick(app, (await menuItem(app, 'Copy session id'))!.id);
     const refusal = await app.evaluate(
       async (_e, id) => {
         try {
@@ -384,8 +421,11 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     );
     await expect.poll(async () => (await localState(app)).sessions[secondId]?.running).toBe(false);
 
-    // One click on the trash → row and state drop; the agent no longer lists it.
-    expect(await shellClick(app, deleteButton)).toBe(true);
+    // Menu Delete → row and state drop; the agent no longer lists it.
+    await rightClick(app, `.session-item[data-session-id="${secondId}"]`);
+    const deleteItem = await menuItem(app, 'Delete');
+    expect(deleteItem?.enabled).toBe(true);
+    await localMenuClick(app, deleteItem!.id);
     await expect.poll(() => shellCount(app, `.session-item[data-session-id="${secondId}"]`)).toBe(0);
     await expect.poll(async () => (await localState(app)).sessions[secondId]).toBeUndefined();
     const deleteEvents = (await readEvents(logFile)).filter(
@@ -400,11 +440,13 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     // new sessions make three.
     const bulkA = await newSession(app, ws);
     await newSession(app, ws);
-    await expect.poll(() => shellCount(app, '#sessionList .session-item')).toBe(3);
+    await expect.poll(() => shellCount(app, '.session-item')).toBe(3);
     await promptNoWait(app, bulkA, 'please be slow');
     await expect.poll(async () => (await localState(app)).sessions[bulkA]?.running).toBe(true);
-    await expect.poll(() => shellCount(app, '#sessionDeleteAll')).toBe(1);
-    expect(await shellClick(app, '#sessionDeleteAll')).toBe(true);
+    await rightClickWorkspace(app, ws);
+    const deleteAllItem = await menuItem(app, 'Delete all sessions…');
+    expect(deleteAllItem?.enabled).toBe(true);
+    await localMenuClick(app, deleteAllItem!.id);
     await expect.poll(() => shellCount(app, '#sessionDeleteAllConfirm')).toBe(1);
     const confirmLabel = await evaluateInShell(
       app,
@@ -415,11 +457,13 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     // Cancel keeps everything.
     expect(await shellClick(app, '#sessionDeleteAllCancel')).toBe(true);
     await expect.poll(() => shellCount(app, '#sessionDeleteAllConfirm')).toBe(0);
-    expect(await shellCount(app, '#sessionList .session-item')).toBe(3);
+    expect(await shellCount(app, '.session-item')).toBe(3);
     // Confirm → all rows and state drop, including the running one.
-    expect(await shellClick(app, '#sessionDeleteAll')).toBe(true);
+    await rightClickWorkspace(app, ws);
+    await localMenuClick(app, (await menuItem(app, 'Delete all sessions…'))!.id);
+    await expect.poll(() => shellCount(app, '#sessionDeleteAllConfirm')).toBe(1);
     expect(await shellClick(app, '#sessionDeleteAllConfirm')).toBe(true);
-    await expect.poll(() => shellCount(app, '#sessionList .session-item')).toBe(0);
+    await expect.poll(() => shellCount(app, '.session-item')).toBe(0);
     await expect
       .poll(async () =>
         Object.values((await localState(app)).sessions).filter((s) => s.workspace === ws).length,
@@ -433,7 +477,6 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     expect((deleteAllEvent!.detail as any)?.cancelled).toBe(1);
     expect((deleteAllEvent!.detail as any)?.failed).toBe(0);
     expect(await listSessions(app, ws)).toEqual([]);
-    await expect.poll(() => shellCount(app, '#sessionDeleteAll')).toBe(0);
 
     // Markdown rendering must not trip the shell CSP (no inline styles/scripts).
     const consoleEvents = (await readEvents(logFile)).filter((entry) => entry.event === 'console-message');
@@ -469,7 +512,7 @@ test('Local: fake agent without list/load — local-index history, load error, c
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-local-'));
   const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
   const logFile = join(profile, 'events.jsonl');
-  const env = { DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD };
+  const env = { DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD, DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' };
   let app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
   const agentPids: number[] = [];
   try {
@@ -509,8 +552,21 @@ test('Local: fake agent without list/load — local-index history, load error, c
     expect(
       (await evaluateInShell(app, `document.querySelector('.session-item .history-label').textContent`)) as string,
     ).toBe('history not supported by agent');
-    expect(await shellCount(app, '.session-delete')).toBe(0);
-    expect(await shellCount(app, '#sessionDeleteAll')).toBe(0);
+    // No delete capability: the session-menu Delete and the workspace-menu
+    // Delete-all items are both disabled.
+    await rightClick(app, `.session-item[data-session-id="${sessionId}"]`);
+    expect((await menuItem(app, 'Delete'))?.enabled).toBe(false);
+    await localMenuClick(app, (await menuItem(app, 'Copy session id'))!.id);
+    await rightClickWorkspace(app, ws);
+    expect((await menuItem(app, 'Delete all sessions…'))?.enabled).toBe(false);
+    // Rename… → inline input; Escape cancels it (also resolves the menu).
+    await localMenuClick(app, (await menuItem(app, 'Rename…'))!.id);
+    await expect.poll(() => shellCount(app, '#sessionFolderEdit')).toBe(1);
+    await evaluateInShell(
+      app,
+      `document.getElementById('sessionFolderEdit').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`,
+    );
+    await expect.poll(() => shellCount(app, '#sessionFolderEdit')).toBe(0);
 
     // session/load is refused when the agent lacks loadSession.
     expect(await loadSession(app, ws, sessionId)).toBe('history not supported by agent');
@@ -574,6 +630,7 @@ test('Local composer: native editing shortcuts work (Ctrl+A/C/V/X/Z) — regress
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
   });
   const agentPids: number[] = [];
   try {
@@ -638,6 +695,7 @@ test('Local composer keeps unsent text across a surface switch', async () => {
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
   });
   const agentPids: number[] = [];
   try {
@@ -688,6 +746,7 @@ test('Local: thinking indicator and token usage while a prompt runs', async () =
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_USAGE: '1',
     FAKE_ACP_PROMPT_DELAY_MS: '1500',
   });
@@ -748,6 +807,7 @@ test('terminal handoff: devin -r takes the session lock; closing reclaims it', a
   const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
     DEVIN_WORKSPACES_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_PROMPT_DELAY_MS: '4000',
@@ -847,5 +907,146 @@ test('terminal handoff: devin -r takes the session lock; closing reclaims it', a
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+// ux2 P4a — the workspace sidebar itself: sections at start, DnD reorder,
+// collapse, rename, remove, sessions-column toggle, WSL host chip.
+test('Local sidebar: sections list at start, reorder/collapse/rename persist, context-menu new/remove, WSL chip, toggle off', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-side-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
+  const wsB = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsB-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    FAKE_ACP_LIST: '1',
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const hasSection = (path: string) =>
+    evaluateInShell(
+      app,
+      `[...document.querySelectorAll('[data-section-name]')].some((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)})`,
+    ) as Promise<boolean>;
+  const sectionLabel = (path: string) =>
+    evaluateInShell(
+      app,
+      `[...document.querySelectorAll('[data-section-name]')].find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)})?.querySelector('[data-section-label]')?.textContent ?? ''`,
+    ) as Promise<string>;
+  const dndSections = (from: string, to: string) =>
+    evaluateInShell(
+      app,
+      `(() => {
+        const els = [...document.querySelectorAll('[data-section-name]')];
+        const src = els.find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(from)});
+        const tgt = els.find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(to)});
+        if (!src || !tgt) return false;
+        const dt = new DataTransfer();
+        const fire = (el, t) => el.dispatchEvent(new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt }));
+        fire(src, 'dragstart'); fire(tgt, 'dragover'); fire(tgt, 'drop'); fire(src, 'dragend');
+        return true;
+      })()`,
+    );
+  try {
+    await waitForHooks(app);
+    const a = await addWorkspace(app, wsA);
+    const b = await addWorkspace(app, wsB);
+    const wslWs = `${uncRoot}\\home\\u\\ws`;
+    const w = await addWorkspace(app, wslWs);
+    await expect.poll(async () => (await localState(app)).agents[a]?.status).toBe('ready');
+    await expect.poll(async () => (await localState(app)).agents[b]?.status).toBe('ready');
+    // Sessions in BOTH workspaces, created before the surface opens.
+    const sa = await newSession(app, a);
+    const sb = await newSession(app, b);
+
+    await setSurfaceLocal(app);
+    await expect.poll(() => shellCount(app, '[data-sidebar="local"]')).toBe(1);
+    // Both sections list their rows without any selection click.
+    await expect.poll(() => shellCount(app, '.session-item')).toBe(2);
+    expect(await hasSection(a)).toBe(true);
+    expect(await hasSection(b)).toBe(true);
+    expect(await hasSection(w)).toBe(true);
+    expect(await shellCount(app, `.session-item[data-session-id="${sa}"]`)).toBe(1);
+    expect(await shellCount(app, `.session-item[data-session-id="${sb}"]`)).toBe(1);
+
+    // WSL workspace → host chip in its header.
+    const chip = (await evaluateInShell(
+      app,
+      `[...document.querySelectorAll('[data-section-name]')].find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(w)})?.querySelector('[data-host-chip]')?.textContent ?? ''`,
+    )) as string;
+    expect(chip).toBe('Fake');
+
+    // DnD reorder: B before A → settings.workspaces order follows.
+    expect(await dndSections(b, a)).toBe(true);
+    await expect
+      .poll(async () => ((await state(app)).settings as { workspaces: string[] }).workspaces)
+      .toEqual([b, a, w]);
+
+    // Collapse A → rows gone, persisted in local.collapsedWorkspaces.
+    await evaluateInShell(
+      app,
+      `[...document.querySelectorAll('[data-section-name]')].find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(a)})?.click()`,
+    );
+    await expect.poll(() => shellCount(app, `.session-item[data-session-id="${sa}"]`)).toBe(0);
+    await expect
+      .poll(async () =>
+        ((await state(app)).settings as unknown as { local: { collapsedWorkspaces: string[] } }).local
+          .collapsedWorkspaces,
+      )
+      .toContain(a);
+
+    // Rename A → persisted in local.workspaceLabels, header shows the label.
+    await rightClickWorkspace(app, a);
+    await localMenuClick(app, (await menuItem(app, 'Rename…'))!.id);
+    await expect.poll(() => shellCount(app, '#sessionFolderEdit')).toBe(1);
+    const page = await shellPage(app);
+    await page.locator('#sessionFolderEdit').fill('Renamed A');
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(async () =>
+        ((await state(app)).settings as unknown as { local: { workspaceLabels: Record<string, string> } })
+          .local.workspaceLabels[a],
+      )
+      .toBe('Renamed A');
+    await expect.poll(() => sectionLabel(a)).toBe('Renamed A');
+
+    // Context-menu New session on B → a session in B's workspace.
+    await rightClickWorkspace(app, b);
+    await localMenuClick(app, (await menuItem(app, 'New session'))!.id);
+    await expect.poll(async () => {
+      const local = await localState(app);
+      return Object.values(local.sessions).filter((s) => s.workspace === b).length;
+    }).toBe(2);
+    await expect
+      .poll(async () => (await state(app)).localSessionId)
+      .not.toBeNull();
+
+    // Remove A via the workspace menu → agent stopped + section gone.
+    await rightClickWorkspace(app, a);
+    await localMenuClick(app, (await menuItem(app, 'Remove workspace'))!.id);
+    await expect.poll(() => hasSection(a)).toBe(false);
+    await expect
+      .poll(async () => (await localState(app)).agents[a])
+      .toBeUndefined();
+
+    // Sessions-column toggle off → no sidebar, LocalPanel still spans.
+    await evaluateInShell(
+      app,
+      `window.devinworkspaces.setSettings({ sessions: { open: false } })`,
+    );
+    await expect.poll(() => shellCount(app, '[data-sidebar="local"]')).toBe(0);
+    expect(await shellCount(app, '#localPanel')).toBe(1);
+
+    await app.evaluate(({ app: electronApp }) => electronApp.quit());
+    await waitForEventCount(logFile, 'window-close-complete', 1);
+    await app.close();
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(wsA, { recursive: true, force: true });
+    rmSync(wsB, { recursive: true, force: true });
+    rmSync(uncRoot, { recursive: true, force: true });
   }
 });

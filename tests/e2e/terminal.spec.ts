@@ -68,6 +68,7 @@ test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphan
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
   });
   let closed = false;
   try {

@@ -26,7 +26,7 @@ import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { state, testMode } from './state';
 import { applyLayout, layoutState, publicState, setPaneOpen, setSessionsOpen } from './window';
 import { shutdown } from './index';
-import { localHost } from './local/ipc';
+import { localContextMenuClick, localContextMenuItems, localHost } from './local/ipc';
 import { loadSdk } from './claude/sdk';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
@@ -284,6 +284,8 @@ export function registerTestHooks(): void {
       },
       claudeMenuItems: () => claudeSessions().menuItems(),
       claudeMenuClick: (id: string) => claudeSessions().clickMenuItem(id),
+      localMenuItems: () => localContextMenuItems(),
+      localMenuClick: (id: string) => localContextMenuClick(id),
       claudeMutations: () => claudeSessions().mutationLog(),
       claudeConfigDir: () => claudeSessions().snapshot().configDir,
       // Chat.

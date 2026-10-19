@@ -4,6 +4,7 @@ import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
   IpcChannels,
   LocalActiveSessionArg,
+  LocalContextMenuRequestSchema,
   LocalCancelArg,
   LocalOpenLinkArg,
   LocalPermissionArg,
@@ -14,6 +15,9 @@ import {
   LocalSessionLoadArg,
   LocalSessionNewArg,
   LocalWorkspaceArg,
+  WorkspaceRenameSchema,
+  WorkspaceReorderSchema,
+  type LocalContextMenuRequest,
   type LocalResult,
 } from '../../shared/ipc';
 import { log } from '../log';
@@ -22,6 +26,8 @@ import { fixtureOrigins, state, testMode } from '../state';
 import { applyLayout } from '../window';
 import { localScope } from '../../core/tabModel';
 import { DevinLocalHost } from './acpHost';
+import { LocalContextMenu } from './contextMenu';
+import { renameWorkspace, reorderWorkspaces } from '../../core/workspaceTree';
 import { autoOpenLocalPr } from './prAutoOpen';
 import { getLocalState, publicLocalState } from './localState';
 import { hosts } from '../hosts';
@@ -30,9 +36,18 @@ import { setupTerminalIpc } from './terminalIpc';
 import { terminalHost } from './terminalHost';
 
 let host: DevinLocalHost | null = null;
+let localContextMenu: LocalContextMenu | null = null;
 
 export function localHost(): DevinLocalHost | null {
   return host;
+}
+
+export function localContextMenuItems(): Record<string, unknown>[] {
+  return localContextMenu?.items() ?? [];
+}
+
+export function localContextMenuClick(id: string): { action: unknown } {
+  return localContextMenu?.clickItem(id) ?? { action: null };
 }
 
 function requireHost(): DevinLocalHost {
@@ -50,6 +65,8 @@ export function setupLocal(): void {
     workspaces: settings?.current.workspaces ?? [],
     onWorkspacesChanged: (workspaces) => {
       state.settings?.merge({ workspaces });
+      // The sidebar reads workspaces from pushed settings — republish.
+      applyLayout();
     },
     onPullRequestUrl: (url, sessionId) => {
       autoOpenLocalPr(url, localScope(sessionId), 'local-chat');
@@ -58,6 +75,22 @@ export function setupLocal(): void {
   });
   setupTerminalIpc();
   app.on('before-quit', () => host?.dispose());
+
+  const removeWorkspace = (path: string): void => {
+    // Forget the lifted selection when its session lived in this workspace —
+    // the sessions map is read before removeWorkspace drops it.
+    const selectedWorkspace = state.localSessionId
+      ? getLocalState().sessions[state.localSessionId]?.workspace
+      : undefined;
+    terminalHost.closeForWorkspace(path);
+    requireHost().removeWorkspace(path);
+    if (selectedWorkspace && resolve(selectedWorkspace) === resolve(path)) {
+      state.localSessionId = null;
+      applyLayout();
+    }
+  };
+  const menu = new LocalContextMenu(localHost, terminalHost, removeWorkspace);
+  localContextMenu = menu;
 
   guardedHandle(IpcChannels.localState, () => publicLocalState());
 
@@ -86,18 +119,33 @@ export function setupLocal(): void {
 
   handleResult(IpcChannels.localWorkspaceAdd, LocalWorkspaceArg, ({ path }) => requireHost().addWorkspace(path));
   handleResult(IpcChannels.localWorkspaceRemove, LocalWorkspaceArg, ({ path }) => {
-    // Forget the lifted selection when its session lived in this workspace —
-    // the sessions map is read before removeWorkspace drops it.
-    const selectedWorkspace = state.localSessionId
-      ? getLocalState().sessions[state.localSessionId]?.workspace
-      : undefined;
-    terminalHost.closeForWorkspace(path);
-    requireHost().removeWorkspace(path);
-    if (selectedWorkspace && resolve(selectedWorkspace) === resolve(path)) {
-      state.localSessionId = null;
-      applyLayout();
-    }
+    removeWorkspace(path);
     return null;
+  });
+  handleResult(IpcChannels.localWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) => {
+    const current = state.settings?.current.workspaces ?? [];
+    const next = reorderWorkspaces(current, paths);
+    if (next === current) return null;
+    state.settings?.merge({ workspaces: next });
+    requireHost().syncWorkspaces(next);
+    applyLayout();
+    log('local', 'local-workspace-reorder', { detail: { count: next.length } });
+    return null;
+  });
+  handleResult(IpcChannels.localWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) => {
+    const normalized = resolve(path);
+    const labels = state.settings?.current.local.workspaceLabels ?? {};
+    state.settings?.merge({
+      local: { workspaceLabels: renameWorkspace(labels, normalized, label) },
+    });
+    applyLayout();
+    log('local', 'local-workspace-rename', {});
+    return null;
+  });
+  guardedHandle(IpcChannels.localContextMenu, (_event, payload: unknown) => {
+    const parsed = LocalContextMenuRequestSchema.safeParse(payload);
+    if (!parsed.success) return { action: null };
+    return menu.popup(parsed.data as LocalContextMenuRequest);
   });
   handleResult(IpcChannels.localSessionNew, LocalSessionNewArg, ({ workspace }) =>
     requireHost().newSession(workspace),

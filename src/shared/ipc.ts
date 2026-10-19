@@ -1006,6 +1006,8 @@ export const LocalContextMenuRequestSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('header'), x: z.number().finite(), y: z.number().finite() }),
 ]);
 export const LocalContextMenuResultSchema = z.object({ action: z.string().nullable() });
+export type LocalContextMenuRequest = z.infer<typeof LocalContextMenuRequestSchema>;
+export type LocalContextMenuResult = z.infer<typeof LocalContextMenuResultSchema>;
 
 // Arg schemas for ipcMain.on channels (safeParse; invalid payloads ignored).
 export const TabIdArg = z.string();
