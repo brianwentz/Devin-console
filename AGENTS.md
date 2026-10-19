@@ -120,15 +120,36 @@ variable that selects it.
 ### Frame & shortcuts
 - Frame: `titleBarStyle: 'hidden'` + `titleBarOverlay` on the BaseWindow, `Menu.setApplicationMenu(null)`; the shell's `TitleBar.tsx` renders the drag
   region and the GitHub tab strip. Zoom (Ctrl+= / Ctrl+- / Ctrl+0) and detached DevTools (F12 / Ctrl+Shift+I, dev only) live in `src/main/shortcuts.ts`;
-  Ctrl+` toggles the terminal dock.
+  Ctrl+` toggles the terminal dock — only on dock surfaces (`dockSurface(surface)` in `src/core/layout.ts`: `cloud | local | claude`; the predicate is
+  the single source of truth for `window.ts: terminalVisible()`, `App.tsx` and the `Rail` button, which is `disabled` on Settings/Analytics). Off a dock
+  surface the shortcut is a no-op and `layout.terminalOpen` keeps its value; a shortcut toggle logs `terminal-toggle {open, source:'shortcut'}`.
+- e2e: Playwright's `page.keyboard.press` does NOT reach Electron's `before-input-event`, so main-process shortcuts must be driven with
+  `webContents.sendInputEvent` from `app.evaluate` (see `ctrlBacktick` in `tests/e2e/terminal.spec.ts`: `keyDown`+`keyUp` with `modifiers:['control']`
+  on `__devinworkspaces.getShellWebContents()`).
+- Composer (`src/shell/chat/ChatView.tsx`, shared by Local and Claude): Enter with `ctrlKey || metaKey` sends; plain Enter and Shift+Enter insert a
+  newline. `sendShortcutLabel()` (`⌘+Enter` on darwin via `window.devinworkspaces.platform`, else `Ctrl+Enter`) feeds both footer hints.
 - `window.devinworkspaces.platform` (a static `process.platform` string exposed by the preload) is the only platform signal in the shell — no IPC needed.
 
 ### Settings keys
 - `pane.open` + `pane.fraction` (0..1 share of the available width — px guards are derived in `computeBounds`, never persisted; `pane.width` migrates to
-  fraction on load), `windowPlacements` (per-display-config window bounds/maximized), `layout.terminalOpen`/`layout.terminalHeight`,
-  `terminal.allSurfaces` (show the dock on Local/Settings too), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
+  fraction on load), `windowPlacements` (per-display-config window bounds/maximized), `layout.terminalOpen`/`layout.terminalHeight` (the dock's
+  visibility is `terminalOpen ∧ dockSurface(surface)` — there is no per-surface opt-in key any more; `terminal.allSurfaces` was deleted in ux2 P0 and is
+  stripped as an unknown key on load), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
 - `sessions.open`/`sessions.width`/`sessions.collapsedFolders` (Cloud session sidebar, below); `sessions.open` also drives the Settings checkbox
-  `#sessionsColumnToggle`; `sessions.maxLiveViews` (1..20, default 6) + `sessions.keepAliveHours` (0..168, default 24) — the Cloud view pool caps/idle TTL.
+  `#sessionsColumnToggle` and applies to the `cloud`, `claude` and `local` surfaces (`computeBounds` reserves the column for all three);
+  `sessions.maxLiveViews` (1..20, default 6) + `sessions.keepAliveHours` (0..168, default 24) — the Cloud view pool caps/idle TTL.
+- `workspaces` (root array) is **Local-only** storage: the Devin Local agent roster and the pty cwd allow-list (`terminalHost.ts`/`terminalIpc.ts`); its
+  array order is the display order of the Local sidebar (reorder = rewrite the array via `local:workspaceReorder`). No Settings UI — managed from the
+  session column.
+- `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
+  `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
+  needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), labels/collapse keyed by workspace path.
+- `claude.{workspaces: string[], workspaceLabels, defaultWslDistro}` — the Claude workspace list (separate from `workspaces`), labels by path,
+  `defaultWslDistro` (`#claudeDefaultWslDistroSelect`; read by Claude `newSession(null)`); collapse state reuses `claude.collapsedFolders` keyed by path.
+  <!-- verify after P4b -->
+- `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
+  `claude.defaultWslDistro` where those are still absent, then deletes the old key; `main/settings.ts` spots it in the raw file, logs
+  `settings-migrated {from:'hosts.defaultWslDistro'}` and re-saves once.
 - `notifications.userId` (manual user-id override for service-user tokens; `''` = detect automatically).
 - `routing.rules` (LinkRule `{id, kind: 'prefix'|'regex', pattern, enabled}`, max 100 — matched http(s) links open as GitHub-pane tabs; matcher in
   `src/core/linkRules.ts`, RouteKind `'rule'` ranks after github/tenant; gh-tab decisions reached via a rule log `rule-tab`/`rule-tab-background` with
@@ -268,10 +289,18 @@ variable that selects it.
   `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume`.
 
 ### Settings page
-- Five tabs (`#settingsTabs` tablist, `[data-settings-tab=general|links|passwords|notifications|updates]`, `#settingsPanel-<id>` tabpanel) — active tab is
-  shell-only state in `src/shell/store.ts` (`useSettingsTab`/`setSettingsTab`). The `links` "Link Handling" tab (`LinksTab.tsx`, `#linkRulesList` rows
-  `[data-rule-id][data-rule-invalid]`, `#linkRuleAdd`, `#linkRuleTestInput`/`#linkRuleTestResult`) sits after General and also hosts the
-  `#allowExternalInput` "Open non-GitHub links in system browser" checkbox.
+- Seven tabs (`#settingsTabs` tablist, `[data-settings-tab=general|local|claude|links|passwords|notifications|updates]`, `#settingsPanel-<id>` tabpanel)
+  — active tab is shell-only state in `src/shell/store.ts` (`useSettingsTab`/`setSettingsTab`); `SettingsTabId` + the field → tab map `FIELD_TAB` in
+  `src/core/settingsDraft.ts` route a validation error to the tab holding the field. The `links` "Link Handling" tab (`LinksTab.tsx`, `#linkRulesList`
+  rows `[data-rule-id][data-rule-invalid]`, `#linkRuleAdd`, `#linkRuleTestInput`/`#linkRuleTestResult`) also hosts the `#allowExternalInput` "Open
+  non-GitHub links in system browser" checkbox.
+- ux2 P3 tabs (`settings/LocalTab.tsx`, `settings/ClaudeTab.tsx`, shared bits in `settings/fields.tsx`: `CliPathHint`, `FieldError`, `WslDistroSelect`,
+  `HostsPointer`): **Devin Local** = `#devinPathInput` (+ `#devinPathInputError` not-found hint from `local.cliPath`), `#localDefaultWslDistroSelect`,
+  read-only `#localAgentsSummary` (`[data-local-agent=<path>][data-local-agent-status]` rows from `local.agents`); **Claude Code** = `#claudePathInput`,
+  `#claudeAutoArchiveInput`, `#claudePermissionModeDefault`, `#claudeModelInput`, `#claudeKeepAliveInput` (1–240), `#claudeMaxLiveAgentsInput` (1–10),
+  `#claudeDefaultWslDistroSelect`, `#claudeHooksEnabledMirror` (not a draft field — commits `claude.hooksEnabled` through `setSettings` like the
+  Notifications checkbox). General keeps tenant/API base, tab + Cloud pools, `#sessionsColumnToggle`, shell command and `#hostsBlock` (minus the
+  default-distro select); the Workspaces block and `#terminalAllSurfacesInput` are gone (P0).
 - Field edits live in a draft (`src/core/settingsDraft.ts` pure model + `src/shell/settingsDraft.ts` store); saves are implicit on tab switch, leaving
   Settings (`requestSurface` in `src/shell/surface.ts` vetoes on invalid drafts), and quit (`settings:flush` push → `commitDraft('quit')` →
   `settings:flushDone`, 1 s timeout in `src/main/settingsFlush.ts`). `settings:commit` (guardedHandle) returns
@@ -295,6 +324,21 @@ variable that selects it.
   the rest); `session-delete-all` log event `{ workspace, requested, deleted, cancelled, failed }` (counts + path only); the panel keeps an inline
   confirm for bulk delete while single delete is one click. Test hooks: `localDeleteSession`, `localDeleteWorkspaceSessions`. Log prompt/message lengths
   and ids, never content.
+- Workspaces in the session column (ux2 P4a): `src/shell/local/LocalSidebar.tsx` is a thin adapter over the shared
+  `src/shell/components/sidebar/WorkspaceSidebar.tsx` (header *New session* / *Add workspace* / *Refresh* / *More*, filter box, `SectionHeader` sections
+  with collapse/rename/DnD-reorder/new-in-folder, `SessionRow` rows, `moveDisabled` + `onMove` no-op — sessions never move between workspaces, D7);
+  `<section data-sidebar="local">`, headers carry `data-workspace`/`data-status`, agent status dot + `[data-host-chip]` for `\\wsl.localhost` paths as
+  `headerLeading`. Tree data from the pure `src/core/workspaceTree.ts` (`defaultWorkspaceLabel` = last path segment, `workspaceEntries`,
+  `workspaceListData` — folders = workspace paths in array order, unmatched sessions → `recent`; `reorderWorkspaces` permutation guard; shared with
+  P4b). `LocalPanel` has no `<aside>` any more (header/chat/terminal only); sessions for every workspace are listed at start, not on first selection.
+  IPC: `local:workspace:add|remove|pick`, `local:workspaceReorder {paths}` (`WorkspaceReorderSchema`, rewrites `settings.workspaces` +
+  `syncWorkspaces`), `local:workspaceRename {path,label}` (`WorkspaceRenameSchema` → `local.workspaceLabels`), `local:contextMenu`
+  (`LocalContextMenuRequestSchema`, kinds `workspace|session|header`; `src/main/local/contextMenu.ts` `LocalContextMenu` — workspace: *New session*,
+  *Rename…*, *Open terminal here*, *Reveal in Explorer*, *Delete all sessions…* (needs `sessionDelete` capability + sessions), *Remove workspace*
+  (confirm dialog, auto-confirmed in test mode); session: *Open terminal*, *Copy session id*, *Delete*; header: *Add workspace…*, *Refresh all*; actions
+  that need shell UI resolve as `{action}` for the sidebar to perform; test mode keeps the invoke open until `localMenuClick`). Log events
+  `workspace-add`/`workspace-remove` (`{workspace}` path), `local-workspace-reorder {count}`, `local-workspace-rename` (no detail),
+  `local-session-copy-id` (no detail). Test hooks `localMenuItems` / `localMenuClick(id)`.
 - PR links: `src/core/prLinks.ts` (`stripAnsi`, `extractPullRequestUrls`, `LinkScanner`) scans agent chat output (acpHost via injected `onPullRequestUrl`
   — never user chunks) and devin-pty output (terminalHost `flush`); a new PR URL calls `src/main/local/prAutoOpen.ts` `autoOpenLocalPr` → lazy
   background tab in `local:<sessionId>` gated on `prs.autoOpenTabs`, `pr-auto-open` event with `detail.source` = `local-chat|local-terminal`. xterm uses
@@ -330,9 +374,19 @@ variable that selects it.
 - Sidebar components shared with Cloud live in `src/shell/components/sidebar/` (generic `SessionRow`/`SectionHeader`/`FolderNameInput`/`PrBadges`/
   `useOptimisticList`/`useRowKeyboardNav`/`dnd.ts` — Cloud-specifics arrive as render props; Cloud DOM ids unchanged, `<section data-sidebar="cloud|claude">`).
   The claude GitHub-tab scope is `claude:<sessionId>` (`claudeScope`/`effectiveScope`).
-- Settings `claude.path` (Settings → General `#claudePathInput`; a non-empty path that doesn't resolve is flagged inline from `claude.cliPath === null`,
-  not a commit error), `claude.autoArchiveDays` (0-365, 0 = off; `#claudeAutoArchiveInput`), `claude.showArchived`, `claude.collapsedFolders`.
+- Settings `claude.path` (Settings → Claude Code `#claudePathInput`; a non-empty path that doesn't resolve is flagged inline from `claude.cliPath === null`,
+  not a commit error), `claude.autoArchiveDays` (0-365, 0 = off; `#claudeAutoArchiveInput`), `claude.showArchived`, `claude.collapsedFolders`,
+  `claude.workspaces`/`claude.workspaceLabels`/`claude.defaultWslDistro` (see Settings keys).
   `preload.setSurface` guards on `SurfaceSchema` — new surfaces must be added to the schema.
+- Workspaces (ux2 P4b, plan D8 — in flight): Claude folders become path-bound workspaces with the same `WorkspaceSidebar` adapter as Local
+  (`ClaudeSidebar` keeps subagent rows, the background-agents section, host chip and activity dots through `rowOpts`/extra slots). A session's folder is
+  *derived* — the workspace whose path matches its `cwd`, host-aware via a matcher in `core/workspaceTree.ts` (`pathHostId` + `toWindowsPath`: a
+  `\\wsl.localhost\D\…` workspace matches a `wsl:D` session with the Linux cwd) — else `recent`. IPC `claude:workspaceAdd|Reorder|Rename|Remove` (channel
+  names are already in `IpcChannels`); `newSession(cwd)` from a header passes the path through without the picker, `fork` keeps the cwd. The free-form
+  registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`) is marked deprecated in `ipc.ts` and is deleted by P4b;
+  its one-shot migration (each folder → workspace at the most common session `cwd`, label = folder name; unresolvable folders dropped → *Recent*) runs in
+  `ClaudeSessions` after the first store refresh (it needs the session cwds), not at settings load, and logs `claude-folders-migrated {converted,dropped}`.
+  Context menu gains *Add workspace…*, *New session here*, *Rename…*, *Reveal*, *Open terminal here*, *Remove workspace*. <!-- verify after P4b -->
 - Log events (ids/counts/durations only, never `configDir` in details): `claude-sdk-load`, `claude-list`, `claude-watch`, `claude-select`, `claude-mutate`,
   `claude-menu`, `claude-registry-load-error`, `claude-registry-save-error`. Test hooks: `claudeState`, `claudeRefresh`, `claudeSelect`, `claudeMenuItems`,
   `claudeMenuClick`, `claudeMutations`, `claudeConfigDir`, `claudeSdkProbe`.
@@ -446,7 +500,7 @@ variable that selects it.
 - `src/main/hosts.ts` singleton: async enumeration (`-l -v` utf16le, running+default or explicit `settings.hosts.wslDistros`; a stopped distro is never started implicitly — only explicit listing enables it), per-host probe (`home`/`shell`/CLI paths/`gh`/`inotifywait`/hook reachability — loopback then `vEthernet (WSL)` IPv4 with a second `hookServer.listenOn`), `-ilc` env capture (spawn `stdio:['ignore',…]`, marker-parsed, 60 s cache refreshed at next spawn — `shellEnv()` primes, `spawnOn`/`execOn`/`ptySpawnSpec` read the cache), `withConfigDir` (per-process mutex swapping `CLAUDE_CONFIG_DIR`), `errorParts` joined into `hostErrors`.
 - The *path form selects the host* — a UNC `\\wsl.localhost\<D>` cwd/workspace means wsl everywhere (session rows, agent spawn, pty, store, gh). `hosts.errors()` feeds `claude.hostErrors`; `hooks.ts` applies the hooks block per `allHosts()`; `store.ts` watches per host (inotifywait → tiered poll: 30 s scan computes the recent-20 ∪ hot set, 2 s tick stats it and emits `<proj>/<id>.jsonl` relative paths).
 - Never log env values or filesystem paths under hosts — `host-list`/`host-probe`/`host-env`/`host-spawn` carry ids, counts, ms only. Test hooks: `hosts`, `hostStatus(id)`, `hostRefresh(id?)`, `hostShellEnvKeys(id)`.
-- Settings: `hosts.{wslEnabled,wslDistros:null|auto,defaultWslDistro,overrides[id].{claudePath,devinPath,home,shell,envCaptureDisabled}}`; the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`).
+- Settings: `hosts.{wslEnabled,wslDistros:null|auto,overrides[id].{claudePath,devinPath,home,shell,envCaptureDisabled}}`; the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`). The default-distro select moved to the per-surface keys `local.defaultWslDistro` / `claude.defaultWslDistro` (see Settings keys) — `hosts.defaultWslDistro` is migrated away on load.
 
 ### Deferrals closed (landed Phase 6)
 - Subagent transcripts under a session row — `claude:subagents` (`loadSubagents`, lazy + cached, invalidated at turn end and on watch changes, title =
@@ -514,6 +568,7 @@ All are `__devinworkspaces` hooks (test mode only; reachable from the installed 
 | `getAnalyticsBounds` | Analytics view bounds. |
 | `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume` | Updater simulation (no network in test mode). |
 | `localDeleteSession` / `localDeleteWorkspaceSessions` | Devin Local single / bulk delete. |
+| `localMenuItems` / `localMenuClick(id)` | Local sidebar context-menu descriptions (test mode describes instead of popping), resolve the open `local:contextMenu` invoke by item id → `{action}`. |
 | `claudeState` / `claudeRefresh` / `claudeSelect` | Claude sidebar snapshot / refresh / select a session. |
 | `claudeMenuItems` / `claudeMenuClick` / `claudeMutations` | Claude context-menu descriptions, resolve the open `claude:contextMenu` invoke, recorded mutations. |
 | `claudeConfigDir` / `claudeSdkProbe` | Resolved Claude home / SDK load probe. |
@@ -536,7 +591,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `terminal-clipboard` | op + length only. |
 | `terminal-env` | `added: [...]` (`WT_SESSION`/`TERM_PROGRAM` added to devin-kind ptys). |
 | `terminal-dispose-error` / `terminal-dispose-failed` | ConPTY teardown misbehaving at quit. |
-| `terminal-toggle` | Terminal dock toggled. |
+| `terminal-toggle` | Terminal dock toggled; from the Ctrl+` shortcut carries `{ open, source:'shortcut' }` (not emitted off dock surfaces — the shortcut is a no-op there). |
 | `terminal-open` | carries `sessionId`/`resume`. |
 | `pane-toggle` | `{ paneOpen, source, resized, fromWidth, toWidth, maximized }`. |
 | `window-placement` | Window bounds persisted per display config. |
@@ -568,14 +623,20 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `update-check` / `update-check-skipped` | `{ source }` / `{ source, reason: disabled\|in-flight\|throttled, sinceMs }`. |
 | `release-notes` | version/ok/status/length, never body. |
 | `settings-commit` / `settings-flush` | field names and counts only. |
+| `settings-repaired` / `settings-migrated` | `{ dropped }` key names / `{ from: 'hosts.defaultWslDistro' \| 'spike-state.json' }` — one-shot load-time migrations. |
 | `analytics-refresh` / `analytics-view-created` / `analytics` | `mode: reload\|navigate`; `load-error`. |
 | `active-session` | Local selected session lifted to state. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
+| `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |
+| `local-workspace-reorder` | `{ count }`. |
+| `local-workspace-rename` / `local-session-copy-id` | No detail (label and id are never logged). |
 | `agent-restart` / `session-reclaim-error` / `terminal-session-release-error` / `terminal-session-locked` | Local terminal handoff. |
 | `shutdown-exit-watchdog` | 5 s `process.exit` fallback after `app.exit(0)`. |
 | `claude-sdk-load` | `{ok,ms,version}` (version read by resolving the SDK entry — its exports map blocks `./package.json`). |
 | `claude-list` / `claude-watch` / `claude-select` / `claude-mutate` / `claude-menu` | Sidebar/registry ops. |
 | `claude-registry-load-error` / `claude-registry-save-error` | Registry persistence. |
+| `claude-folders-migrated` | `{ converted, dropped }` — one-shot folder → workspace migration (P4b). <!-- verify after P4b --> |
+| `claude-workspace-*` | Claude workspace add/reorder/rename/remove — counts only, never paths or labels (P4b; exact names pending). <!-- verify after P4b --> |
 | `claude-query` | `{mode:new\|resume,ms}`. |
 | `claude-prompt` | `{length}`. |
 | `claude-turn` | `{stopReason,ms}`. |

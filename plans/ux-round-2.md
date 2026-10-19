@@ -1,6 +1,6 @@
 # UX round 2 — composer keys, terminal dock, Settings tabs, workspaces in the session column
 
-Status: Round 1 approved (decisions D1–D9 settled with the user); P0 next
+Status: Implementing — P0+P4a merged (#77); P1–P3 PRs open; P4b/P5 in flight
 
 ## 0. The ask
 
@@ -114,3 +114,14 @@ Removes the shared-file contention before anything runs in parallel.
 - **Q2 → two lists** (`settings.workspaces` for Local, `claude.workspaces` for Claude) with the same UI controls and feel on both surfaces. (D8, D9.)
 - **Q3 → per-surface default distro** on the Devin Local and Claude Code tabs, removed from General → Hosts; values may differ. (D5.)
 - **Q4 → dock on chat surfaces + Cloud only**, never on Analytics or Settings. (D3.)
+
+## 6. Implementation notes
+
+Deviations from the plan above, as implemented:
+
+- **P0 inlined the dock rule.** The contracts PR replaced `terminal.allSurfaces` with the literal `surface === 'cloud' || 'local' || 'claude'` in `window.ts`, `App.tsx` and `Rail.tsx`; P2 extracted it into `dockSurface()` in `src/core/layout.ts` (unit-tested) and made the shortcut honour it.
+- **The Rail dock toggle was only dimmed off-surface before P2.** P0 left the button clickable with `opacity-50` on Settings/Analytics; P2 made it `disabled` (and the Ctrl+` shortcut a no-op there, logging `terminal-toggle {open, source:'shortcut'}` only when it acts). The persisted `layout.terminalOpen` is never touched by a visit to an off-surface.
+- **Claude folder → workspace migration runs in `ClaudeSessions`, not at settings load.** D8/P0 placed it in `main/settings.ts`, but the conversion needs each session's `cwd` (most common cwd per folder), which only the store knows — so it runs once after the first store refresh, and logs `claude-folders-migrated {converted, dropped}` from there. P0 only shipped the `hosts.defaultWslDistro` migration (`migrateSettingsRaw` in `src/core/settings.ts`, `settings-migrated {from:'hosts.defaultWslDistro'}`).
+- **`local.devinPath` changes need an app restart.** `DevinLocalHost` resolves the command once at construction; P3 did not add a live restart and instead shows a "restart the app to apply a changed path" hint under the field (the P3 open question in §3 resolved as "restart required").
+- **e2e: `page.keyboard.press` never reaches Electron's `before-input-event`.** Main-process shortcuts (Ctrl+`) are driven with `webContents.sendInputEvent` from `app.evaluate` — `ctrlBacktick` in `tests/e2e/terminal.spec.ts`.
+- **Local context menu gained a `header` kind** (*Add workspace…*, *Refresh all*) beyond the workspace/session kinds listed in P4a, and *Copy id* shipped as *Copy session id* (`local-session-copy-id`).
