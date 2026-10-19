@@ -12,7 +12,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import {
@@ -22,8 +22,16 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
 
+import { parseShellEnv, spawnSpec, wslHost } from '../src/core/execHost';
+
 const evidenceDir = resolve(process.env.DEVIN_WORKSPACES_EVIDENCE_DIR ?? 'docs/evidence');
-const outputPath = join(evidenceDir, 'p4-acp-contract.jsonl');
+// DEVIN_WORKSPACES_HOST=wsl:<distro> runs the agent through wsl.exe with the
+// distro's captured -ilc environment; cwd becomes the distro home.
+const probeHost = process.env.DEVIN_WORKSPACES_HOST;
+const outputPath = join(
+  evidenceDir,
+  probeHost ? 'p4-acp-contract-wsl.jsonl' : 'p4-acp-contract.jsonl',
+);
 const timeoutMs = 60_000;
 
 type Check = { name: string; ok: boolean; detail?: unknown };
@@ -78,6 +86,63 @@ function resolveDevin(): string | null {
   return first && existsSync(first) ? first : null;
 }
 
+// Minimal -ilc env capture (mirrors src/main/hosts.ts; no Electron imports).
+const WSL_ENV_MARKER = '__DW_ENV__';
+function runWslArgs(args: string[], requireSuccess = true): Promise<Buffer> {
+  return new Promise((resolveP, reject) => {
+    const child = spawn('wsl.exe', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const out: Buffer[] = [];
+    const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+    child.stdout.on('data', (c: Buffer) => out.push(c));
+    child.once('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      if (requireSuccess && code !== 0) reject(new Error(`wsl.exe exited ${code}`));
+      else resolveP(Buffer.concat(out));
+    });
+  });
+}
+
+async function wslSpawnSpec(distro: string): Promise<{
+  file: string;
+  args: string[];
+  spawnCwd: string;
+  agentCwd: string;
+  devinPath: string | null;
+} | null> {
+  const home =
+    (await runWslArgs(['-d', distro, '-e', '/bin/sh', '-c', 'echo "$HOME"']))
+      .toString('utf8')
+      .trim()
+      .split('\n')[0] ?? '/root';
+  const shell =
+    (await runWslArgs(['-d', distro, '-e', '/bin/sh', '-c', 'getent passwd "$(id -un)" | cut -d: -f7']))
+      .toString('utf8')
+      .trim()
+      .split('\n')[0] ?? '/bin/bash';
+  const cap = await runWslArgs(
+    ['-d', distro, '-e', shell, '-ilc', `printf "\\0${WSL_ENV_MARKER}\\0"; env -0`],
+    false,
+  );
+  const env = parseShellEnv(cap, WSL_ENV_MARKER) ?? {};
+  const devinOut = await runWslArgs(
+    ['-d', distro, '-e', shell, '-ilc', 'command -v devin'],
+    false,
+  );
+  const devinPath =
+    devinOut.length > 0 ? devinOut.toString('utf8').trim().split('\n')[0]! : null;
+  if (!devinPath) return null;
+  const spec = spawnSpec(
+    wslHost(distro, home),
+    { file: devinPath, args: ['acp'], cwd: home },
+    env,
+  );
+  return { file: spec.file, args: spec.args, spawnCwd: spec.cwd ?? homedir(), agentCwd: home, devinPath };
+}
+
 async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolveExit) => {
@@ -101,13 +166,35 @@ async function run(): Promise<void> {
   const updates: SessionNotification[] = [];
 
   try {
-    if (!devin) {
-      status = 'missing-cli';
-      record({ kind: 'missing-cli', message: 'devin not found on PATH (set DEVIN_CLI to override)' });
-      return;
+    let spawnFile = devin;
+    let spawnArgs = ['acp'];
+    let spawnCwd = workspace;
+    let agentCwd = workspace;
+    if (probeHost?.startsWith('wsl:')) {
+      const spec = await wslSpawnSpec(probeHost.slice(4));
+      if (!spec) {
+        status = 'missing-cli';
+        record({
+          kind: 'missing-cli',
+          message: `devin not found inside ${probeHost}`,
+          host: probeHost,
+        });
+        return;
+      }
+      spawnFile = spec.file;
+      spawnArgs = spec.args;
+      spawnCwd = spec.spawnCwd;
+      agentCwd = spec.agentCwd;
+      record({ kind: 'start', devin: spec.devinPath, host: probeHost, agentCwd });
+    } else {
+      if (!devin) {
+        status = 'missing-cli';
+        record({ kind: 'missing-cli', message: 'devin not found on PATH (set DEVIN_CLI to override)' });
+        return;
+      }
+      record({ kind: 'start', devin, workspace, platform: process.platform });
     }
-    record({ kind: 'start', devin, workspace, platform: process.platform });
-    child = spawn(devin, ['acp'], { cwd: workspace, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(spawnFile!, spawnArgs, { cwd: spawnCwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
       stderrText += chunk;
@@ -143,7 +230,7 @@ async function run(): Promise<void> {
     check('agentCapabilities.loadSession is boolean', typeof init.agentCapabilities?.loadSession === 'boolean', loadSession);
     check('agentCapabilities.sessionCapabilities present', init.agentCapabilities?.sessionCapabilities !== undefined, { sessionList });
 
-    const created = await withTimeout(connection.newSession({ cwd: workspace, mcpServers: [] }), 'session/new');
+    const created = await withTimeout(connection.newSession({ cwd: agentCwd, mcpServers: [] }), 'session/new');
     record({ kind: 'session/new', response: { sessionId: created.sessionId } });
     check('session/new returns sessionId', typeof created.sessionId === 'string' && created.sessionId.length > 0);
     const sessionId = created.sessionId;
@@ -171,7 +258,7 @@ async function run(): Promise<void> {
     check('cancel → stopReason cancelled', cancelled.stopReason === 'cancelled', cancelled.stopReason);
 
     if (sessionList) {
-      const list = await withTimeout(connection.listSessions({ cwd: workspace }), 'session/list');
+      const list = await withTimeout(connection.listSessions({ cwd: agentCwd }), 'session/list');
       record({ kind: 'session/list', count: list.sessions.length, ids: list.sessions.map((s) => s.sessionId) });
       check('session/list includes our session', list.sessions.some((s) => s.sessionId === sessionId));
     } else {
@@ -180,7 +267,7 @@ async function run(): Promise<void> {
 
     if (loadSession) {
       const beforeLoad = updates.length;
-      await withTimeout(connection.loadSession({ sessionId, cwd: workspace, mcpServers: [] }), 'session/load');
+      await withTimeout(connection.loadSession({ sessionId, cwd: agentCwd, mcpServers: [] }), 'session/load');
       const replayed = updates.slice(beforeLoad).filter((u) => u.sessionId === sessionId);
       record({ kind: 'session/load', replayed: replayed.map((u) => u.update.sessionUpdate) });
       check(

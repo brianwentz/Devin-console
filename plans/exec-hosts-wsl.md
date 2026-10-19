@@ -1,6 +1,6 @@
 # Phase 8 — Execution hosts: Claude Code and Devin sessions inside WSL
 
-Status: Approved — in progress.
+Status: Implemented — PR pending.
 
 The app runs on Windows; the user's Claude Code (and Devin CLI) sessions mostly run inside WSL. Today every integration point assumes the CLI, its `~/.claude` store and the session cwd all live on the Windows side. This phase introduces one **execution host** abstraction that the Claude surface and the Devin Local surface both use, with two host kinds in scope — `local` (unchanged behaviour) and `wsl:<distro>` — and an interface shaped so an `ssh:<name>` kind can be added later without touching the callers.
 

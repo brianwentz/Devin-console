@@ -30,8 +30,14 @@ Electron desktop client for Devin (BaseWindow + WebContentsViews; the React shel
 - `npm start` / `npm run acp:probe`
 - `npm run acp:contract` — P4 contract run against the real `devin acp` (initialize/new/prompt/cancel/list/load); writes
   `docs/evidence/p4-acp-contract.jsonl` (git-ignored); exit 0 also when the CLI is missing/unauthenticated (reported in the file)
-- `npm run claude:sdk-probe` / `claude:hooks-probe` / `claude:store-probe` — build then run `scripts/claude-*-probe.ts` → `out/scripts/*.cjs`; evidence
-  under `docs/evidence/claude-*` (git-ignored); exit 0 when the claude CLI is missing (reported in the file)
+`- `npm run claude:sdk-probe` / `claude:hooks-probe` / `claude:store-probe` — build then run `scripts/claude-*-probe.ts` → `out/scripts/*.cjs`; evidence
+  under `docs/evidence/claude-*` (git-ignored); exit 0 when the claude CLI is missing (reported in the file). `claude:sdk-probe --host wsl:<distro>`
+  (or `DEVIN_WORKSPACES_PROBE_HOST`) runs new+resume + a Bash turn inside the distro through `spawnSpec`.
+- `npm run hosts:probe` — build then run `scripts/hosts-probe.ts` → `out/scripts/hosts-probe.cjs` → `docs/evidence/hosts-probe.json`; real-WSL
+  measurements (enumeration/probe/env-capture vs plain env/argv round-trip/UNC timings/fs.watch EISDIR/inotify/hook reachability); exit 0 when
+  `wsl.exe` or distros are absent.
+- `acp:contract` honours `DEVIN_WORKSPACES_HOST=wsl:<distro>` — spawns `devin acp` through `spawnSpec` + captured env with cwd = distro home; evidence
+  `docs/evidence/p4-acp-contract-wsl.jsonl`.
 - CI:
   - `.github/workflows/windows.yml` — push/PR: typecheck, lint, unit, build, e2e, dist:win, smoke:install, plus a `macos` job running
     typecheck/lint/unit/build/dist:mac only — e2e and smoke stay Windows-only.
@@ -85,6 +91,9 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD` | test mode | Whole command, e.g. `node out/fixtures/fakeClaudeAgents.cjs` — replaces the `claude` binary for background agents; the fake prints `FAKE_CLAUDE_AGENTS` for `agents --json --all` and appends `stop <id>` to `FAKE_CLAUDE_AGENTS_LOG`. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS` | test mode | Background-agent poll interval. |
 | `DEVIN_WORKSPACES_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
+| `DEVIN_WORKSPACES_TEST_WSL_CMD` | test mode | Full command line replacing `wsl.exe` for *every* invocation (enumeration, probe, spawn, pty, inotify). `launchApp` defaults it to `node out/fixtures/fakeWsl.cjs` with `FAKE_WSL_DISTROS=''` so specs stay local-only; the fake reads `FAKE_WSL_DISTROS` (`"Fake:Running:default,Other:Stopped"`), `FAKE_WSL_HOME` (default `/home/u`), `FAKE_WSL_ROOT` (`--cd` map root), `FAKE_WSL_ENV_MARKER`, `FAKE_WSL_NO_CLAUDE`, `FAKE_WSL_NO_GH`, `FAKE_WSL_INOTIFY`, `FAKE_WSL_HOOKS`, `FAKE_WSL_CLAUDE_CMD`, `FAKE_WSL_DEVIN_CMD`, `FAKE_WSL_SPAWN_LOG`. |
+| `DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`configDir`, `toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro. |
+| `DEVIN_WORKSPACES_PROBE_HOST` / `DEVIN_WORKSPACES_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `DEVIN_WORKSPACES_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
 | `DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN` | always (set by the app) | Bearer token placed in claude-kind pty `extraEnv` and referenced from the injected `--settings` hooks block. |
 | `WT_SESSION` / `TERM_PROGRAM` | always (set by the app) | Set on devin-kind ptys when unset so the `devin` CLI doesn't detect conhost (`terminal-env` carries `added: [...]`). |
@@ -431,6 +440,13 @@ variable that selects it.
   `claudeSessions().open` + tab in `claude:<id>` — the Phase 4 notification path extracted).
 - Persisted `notifications.json` schema gained `source` (zod strips unknown keys — without it Claude entries died at reload and got `pruneForeign`d).
   Test hooks: `claudeRecordPr`, `claudePrs(id)`, `claudeRefreshPrStates`, `prTitlesSeed(url,{title,state})`.
+
+### Execution hosts (WSL) (landed Phase 8)
+- `src/core/execHost.ts` (pure): `HostId` `'local' | \`wsl:<distro>\``, `hostIdForPath`/`toHostPath`/`toWindowsPath` (UNC forms `\\wsl.localhost`/`\\wsl$`/`//wsl.localhost`), `spawnSpec`/`ptySpec` (`wsl.exe -d D --cd <linux cwd> -e /usr/bin/env …` / `-ilc 'exec "$0" "$@"'`; fish → `exec $argv`), `parseShellEnv`/`mergeShellEnv` (`WSL_ENV_DENYLIST`), `parseWslList`, `shellFamily`, `displayPath`/`workspaceLabel`.
+- `src/main/hosts.ts` singleton: async enumeration (`-l -v` utf16le, running+default or explicit `settings.hosts.wslDistros`; a stopped distro is never started implicitly — only explicit listing enables it), per-host probe (`home`/`shell`/CLI paths/`gh`/`inotifywait`/hook reachability — loopback then `vEthernet (WSL)` IPv4 with a second `hookServer.listenOn`), `-ilc` env capture (spawn `stdio:['ignore',…]`, marker-parsed, 60 s cache refreshed at next spawn — `shellEnv()` primes, `spawnOn`/`execOn`/`ptySpawnSpec` read the cache), `withConfigDir` (per-process mutex swapping `CLAUDE_CONFIG_DIR`), `errorParts` joined into `hostErrors`.
+- The *path form selects the host* — a UNC `\\wsl.localhost\<D>` cwd/workspace means wsl everywhere (session rows, agent spawn, pty, store, gh). `hosts.errors()` feeds `claude.hostErrors`; `hooks.ts` applies the hooks block per `allHosts()`; `store.ts` watches per host (inotifywait → tiered poll: 30 s scan computes the recent-20 ∪ hot set, 2 s tick stats it and emits `<proj>/<id>.jsonl` relative paths).
+- Never log env values or filesystem paths under hosts — `host-list`/`host-probe`/`host-env`/`host-spawn` carry ids, counts, ms only. Test hooks: `hosts`, `hostStatus(id)`, `hostRefresh(id?)`, `hostShellEnvKeys(id)`.
+- Settings: `hosts.{wslEnabled,wslDistros:null|auto,defaultWslDistro,overrides[id].{claudePath,devinPath,home,shell,envCaptureDisabled}}`; the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`).
 
 ### Deferrals closed (landed Phase 6)
 - Subagent transcripts under a session row — `claude:subagents` (`loadSubagents`, lazy + cached, invalidated at turn end and on watch changes, title =

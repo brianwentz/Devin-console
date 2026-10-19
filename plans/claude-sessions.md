@@ -93,6 +93,9 @@ Closes every item deferred in Phases 1–5 and the README "Known limitations": s
 ### Phase 7 — Cleanup (`plans/claude-sessions-phase-7-cleanup.md`)
 Code hygiene (phase breadcrumbs, `sessions.ts` split, reducer `appendContent`, pushed-store dedupe, lint), docs consolidation (AGENTS.md restructure, README, `plans/README.md` index), SDK bump policy + installer budget, and repository hygiene (merged branches, the reference `claude-workspace` repo — user-confirmed).
 
+### Phase 8 — Execution hosts (WSL) (`plans/exec-hosts-wsl.md`)
+Host registry (`wsl.exe -l -v`, running + default distros; explicit opt-in for the rest via Settings → Hosts) with per-host probe (`home`/`shell`/CLI/`gh`/`inotifywait`, interactive `-ilc` env capture, hook reachability incl. the `vEthernet` fallback). Claude sessions and Devin Local workspaces under `\wsl.localhost\<distro>` run inside the distro: per-host session stores, `spawnOn`/`ptySpawnSpec` spawns through `wsl.exe -e /usr/bin/env`, hooks applied per host config dir, terminal tab via a distro login shell. Settings → General Hosts block (enable, re-check, per-host overrides, default distro). Probes: `hosts:probe`, `claude:sdk-probe --host`, `acp:contract` `DEVIN_WORKSPACES_HOST`.
+
 ## 5. Phase 0 (already done) — what carries over from `claude-workspace`
 - `plans/claude-sessions-findings.md` (this repo) — the verdicts.
 - `scripts/sdk-probe.ts`, `scripts/hooks-probe.ts`, `scripts/store-probe.ts` — port verbatim with env/name changes (`CLAUDE_WORKSPACES_HOOK_TOKEN` → `DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN`), wired like `acp:contract`.

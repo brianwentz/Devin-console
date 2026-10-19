@@ -53,3 +53,34 @@ All 11 steps passed with identical results under plain `node` and under `electro
 | A | Option A (Agent SDK in main) **confirmed**; SDK external + dynamic import; no session lock → Phase 3 restart dance dropped |
 | B | HTTP hooks **confirmed**; `SessionStart`/`idle_prompt` unavailable → activity model built on `UserPromptSubmit`/`Stop`/`SessionEnd`/`PermissionRequest` |
 | C | **SDK store API** replaces the own-parser design; `fs.watch` + `listSessions` for change detection; subagents nest under their session |
+
+## Phase 8 — Execution hosts (WSL)
+
+Verdicts backing `plans/exec-hosts-wsl.md`. Probe evidence: `docs/evidence/hosts-probe.json` (enumeration/probe/env/UNC/watch/hooks, two distros), `docs/evidence/claude-sdk-probe-node-*.jsonl` (`--host wsl:Ubuntu-22.04`), `docs/evidence/p4-acp-contract-wsl.jsonl`.
+
+### Facts 0.1-1…6 (from the plan; re-verified by `hosts:probe` on 2026-10-19)
+| Fact | Result |
+|---|---|
+| 0.1-1 SDK → WSL claude via `spawnClaudeCodeProcess` | `wsl-new`: init, session id match, `plugins 4 / skills 19`; `wsl-resume-bash` resumed the transcript and the tool turn ran inside Linux (13.8 s) |
+| 0.1-2 SDK store over UNC, `CLAUDE_CONFIG_DIR` read per call | `listSessions` → 233 sessions in 1625 ms over `\wsl.localhost\…\.claude` |
+| 0.1-3 `fs.watch` over `\wsl.localhost` fails | `watchError: "EISDIR"` confirmed on this machine → the store's tiered poll for wsl hosts |
+| 0.1-4 Hook reachability from inside the distro | `loopback: "ok"` (curl → Windows 127.0.0.1 server 200; mirrored networking); `veth: "no-veth"` on this box |
+| 0.1-5 `wsl.exe` refuses a UNC process cwd | kept — spawns pass `--cd <linux cwd>` with a Windows-side `cwd` of the user home |
+| 0.1-6 Distro facts | `Ubuntu-22.04` Running+default, `Ubuntu-24.04` Running, `wsl-vpnkit` Stopped (enumeration 97 ms); probe line 179 ms (`home`, user, `/bin/bash`); `inotifywait` absent in both distros → tiered poll |
+
+### Q2 — Interactive `-ilc` env capture vs plain spawn (hosts-probe, Ubuntu-22.04)
+| Launch | Vars | Delta |
+|---|---|---|
+| `wsl.exe -e env` (plain) | 17 | baseline |
+| `bash -ilc` capture | 45 in 688 ms | adds `SSH_AUTH_SOCK`/`SSH_AGENT_PID`, `GITHUB_TOKEN`, `JAVA_HOME`, `NVM_*`, `SDKMAN_*`, `AWS_PROFILE`, `DATADOG_API_KEY`, `LAUNCHDARKLY_API_KEY`, `NPM_TOKEN`, `LS_COLORS`, `*_SERVICE_PATH` — PATH head `/home/brian/.local/bin:/opt/google/chrome:/home/brian/bin`; `ssh-add -l` exit 0 under it |
+
+### Q4 — `system/init` inside the distro (`claude:sdk-probe --host`)
+`plugins: 4`, `skills: 19`, `initFieldsPresent: true` — the distro user's `~/.claude` settings/skills/plugins load with `settingSources` on; the resumed Bash turn printed `SSH_AUTH_SOCK` (`sawSockPath`), `which node` (`sawNodePath`) and `pwd` = distro home (`pwdIsHome`).
+
+### Lead-verified through the app on 2026-10-19
+- `wsl:Ubuntu-22.04` reached `ready` in <10 s; env capture 45 vars in 668 ms incl. `SSH_AUTH_SOCK`/`GITHUB_TOKEN`/`JAVA_HOME`; hooks `ok`.
+- Sidebar merged 231 WSL + 3 local rows; a new session under `\wsl.localhost\Ubuntu-22.04\home\brian` → `host: wsl:Ubuntu-22.04`, `cwd: /home/brian`.
+- A live turn ran a Bash permission prompt → approved → tool output `/tmp/ssh-XXXXXXQzenLh/agent.579` (SSH_AUTH_SOCK), `/home/brian/.local/bin/node` (which node), `/home/brian` (pwd); cost $0.20.
+
+### ACP contract in WSL (`DEVIN_WORKSPACES_HOST=wsl:Ubuntu-22.04`)
+All 9 checks pass against the real `devin acp` inside the distro spawned via `spawnSpec` + captured env (initialize/new/prompt/cancel/list/load → `status: "pass"`).
