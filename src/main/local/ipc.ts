@@ -24,6 +24,8 @@ import { localScope } from '../../core/tabModel';
 import { DevinLocalHost } from './acpHost';
 import { autoOpenLocalPr } from './prAutoOpen';
 import { getLocalState, publicLocalState } from './localState';
+import { hosts } from '../hosts';
+import { isWslHost } from '../../core/execHost';
 import { setupTerminalIpc } from './terminalIpc';
 import { terminalHost } from './terminalHost';
 
@@ -61,9 +63,15 @@ export function setupLocal(): void {
 
   guardedHandle(IpcChannels.localWorkspacePick, async (): Promise<LocalResult<string | null>> => {
     try {
+      // Start the picker in the configured default WSL distro's home.
+      const defaultDistro = state.settings?.current.hosts.defaultWslDistro;
+      const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
       const options: Electron.OpenDialogOptions = {
         title: 'Add workspace folder',
         properties: ['openDirectory'],
+        ...(defaultHost && isWslHost(defaultHost) && defaultHost.home
+          ? { defaultPath: hosts().windowsPath(defaultHost, defaultHost.home) }
+          : {}),
       };
       const result = state.windowRef
         ? await dialog.showOpenDialog(state.windowRef, options)

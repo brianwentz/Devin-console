@@ -20,7 +20,7 @@ const HOT_POLL_MS = 2_000;
 const HOT_COUNT = 20;
 
 export class ClaudeStore {
-  private configDir: string;
+  private configDirFn: string | (() => string);
   private host: ExecHost;
   private onChange: (files: string[]) => void;
   private watcher: FSWatcher | null = null;
@@ -36,9 +36,13 @@ export class ClaudeStore {
   private watchRestarts = 0;
   private watchFailed = false;
 
-  constructor(opts: { host: ExecHost; configDir: string; onChange: (files: string[]) => void }) {
+  constructor(opts: {
+    host: ExecHost;
+    configDir: string | (() => string);
+    onChange: (files: string[]) => void;
+  }) {
     this.host = opts.host;
-    this.configDir = opts.configDir;
+    this.configDirFn = opts.configDir;
     this.onChange = opts.onChange;
   }
 
@@ -46,6 +50,12 @@ export class ClaudeStore {
   hot(ids: () => string[], visible: () => boolean): void {
     this.hotIds = ids;
     this.visible = visible;
+  }
+
+  // A wsl host's home is unknown until the probe lands — resolve lazily so
+  // early-created stores pick up the probed home on the next access.
+  private get configDir(): string {
+    return typeof this.configDirFn === 'function' ? this.configDirFn() : this.configDirFn;
   }
 
   private get projectsDir(): string {
@@ -209,6 +219,19 @@ export class ClaudeStore {
     this.hotTimer = setInterval(() => {
       if (!this.visible()) return;
       try {
+        // Hot ids whose transcript appeared since the last recompute get
+        // resolved lazily — a new file counts as changed immediately.
+        const known = new Set([...this.hotPaths.keys()].map((p) => basename(p, '.jsonl')));
+        for (const id of this.hotIds()) {
+          if (known.has(id)) continue;
+          const path = this.transcriptFor(id);
+          if (!path) continue;
+          try {
+            this.hotPaths.set(path, statSync(path).mtimeMs - 1);
+          } catch {
+            /* gone already */
+          }
+        }
         const changed: string[] = [];
         for (const [path, prev] of this.hotPaths) {
           let mtime: number | null = null;
@@ -221,7 +244,12 @@ export class ClaudeStore {
           this.hotPaths.set(path, mtime);
           changed.push(relative(this.projectsDir, path));
         }
-        if (changed.length > 0) this.onChange(changed);
+        if (changed.length > 0) {
+          log('claude', 'claude-watch', {
+            detail: { mode: 'poll-tiered', host: this.host.id, events: changed.length },
+          });
+          this.onChange(changed);
+        }
       } catch {
         /* transient stat failures — next tick retries */
       }
@@ -263,6 +291,18 @@ export class ClaudeStore {
         /* no projects dir yet */
       }
     });
+  }
+
+  private transcriptFor(id: string): string | null {
+    try {
+      for (const project of readdirSync(this.projectsDir)) {
+        const candidate = join(this.projectsDir, project, `${id}.jsonl`);
+        if (existsSync(candidate)) return candidate;
+      }
+    } catch {
+      /* no projects dir */
+    }
+    return null;
   }
 
   private startWatch(): void {

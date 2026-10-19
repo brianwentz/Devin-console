@@ -115,7 +115,8 @@ export class ClaudeSessions {
     if (!store) {
       store = new ClaudeStore({
         host,
-        configDir: hosts().configDir(host),
+        // Lazy: a wsl host's home lands on the first probe.
+        configDir: () => hosts().configDir(host),
         onChange: (files) => {
           void this.refresh('watch');
           this.onTranscriptFiles(files);

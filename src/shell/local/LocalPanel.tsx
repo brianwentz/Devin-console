@@ -9,6 +9,7 @@ import { useShellState } from '../store';
 import { useLocalState } from './store';
 import { sessionTitleClass } from '../components/sessionRowStyles';
 import { clearDraft } from '../chat/drafts';
+import { workspaceLabel } from '../../core/execHost';
 
 type Session = LocalStatePublic['sessions'][string];
 
@@ -248,6 +249,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
                   type="button"
                   className="ws-select flex-1 truncate text-left"
                   title={path}
+                  data-workspace-label={workspaceLabel(path)}
                   onClick={() => {
                     setWorkspace(path);
                     setSessionId(null);
@@ -264,7 +266,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
                             : 'bg-[#39475a]'
                     }`}
                   />
-                  {baseName(path)}
+                  {workspaceLabel(path)}
                 </button>
                 <button
                   type="button"

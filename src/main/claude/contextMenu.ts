@@ -138,6 +138,11 @@ export class ClaudeContextMenu {
           label: session.isArchived ? 'Unarchive' : 'Archive',
           click: () => void this.owner.sessionArchive(session.id, !session.isArchived),
         },
+        {
+          label: 'Re-check host environment',
+          visible: session.host !== 'local',
+          click: () => void this.owner.recheckEnv(session.id),
+        },
         { type: 'separator' },
         { label: 'Reveal transcript', click: () => void this.owner.revealTranscript(session.id) },
         { label: 'Copy session id', click: () => this.owner.copySessionId(session.id) },

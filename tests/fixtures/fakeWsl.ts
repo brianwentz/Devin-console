@@ -17,7 +17,7 @@
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, watch } from 'node:fs';
+import { appendFileSync, mkdirSync, watch } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = process.env.FAKE_WSL_ROOT ?? '.';
@@ -186,6 +186,21 @@ const main = (): number => {
   }
   if (args[0] !== '-d') return 1;
   let rest = args.slice(2);
+  // FAKE_WSL_SPAWN_LOG records every -d invocation: the full argv plus the
+  // linux --cd value the caller asked for (specs assert on it).
+  const linuxCwdIdx = rest.findIndex((a, i) => a === '--cd' && rest[i + 1]);
+  const linuxCwd = linuxCwdIdx === -1 ? null : rest[linuxCwdIdx + 1]!;
+  if (process.env.FAKE_WSL_SPAWN_LOG) {
+    try {
+      appendFileSync(
+        process.env.FAKE_WSL_SPAWN_LOG,
+        `${JSON.stringify({ argv: args, cwd: linuxCwd })}
+`,
+      );
+    } catch {
+      /* log failure never fails the fake */
+    }
+  }
   let cwd = process.cwd();
   while (rest[0] === '--cd' && rest[1]) {
     cwd = linuxToLocal(rest[1]);

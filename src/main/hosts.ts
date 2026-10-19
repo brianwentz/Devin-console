@@ -286,11 +286,45 @@ export class HostsRegistry {
 
   statuses(): HostStatus[] {
     const statuses: HostStatus[] = [localStatus()];
-    for (const { name, stopped } of this.enabledDistros()) {
-      const entry = this.entryFor(name, stopped);
+    const explicit = state.settings?.current.hosts.wslDistros ?? null;
+    const enabled = new Set(this.enabledDistros().map((d) => d.name));
+    for (const row of this.enumerate()) {
+      if (!enabled.has(row.name)) {
+        // Not enabled: an existing entry reports disabled (explicit list) or
+        // stopped (auto mode); an unknown distro gets a bare status row so
+        // Settings can list it with an unchecked box. Never probed.
+        const entry = this.entries.get(`wsl:${row.name}` as HostId);
+        if (entry) {
+          statuses.push({
+            ...entry.status,
+            state: explicit !== null ? 'disabled' : 'stopped',
+          });
+        } else {
+          statuses.push({
+            id: `wsl:${row.name}`,
+            kind: 'wsl',
+            label: row.name,
+            state: explicit !== null ? 'disabled' : 'stopped',
+            error: null,
+            probedAt: null,
+            home: null,
+            shell: null,
+            claude: { path: null, version: null },
+            devin: { path: null },
+            shellEnv: null,
+            hooks: 'untested',
+            inotify: false,
+            gh: false,
+          });
+        }
+        continue;
+      }
+      const entry = this.entryFor(row.name, row.state === 'Stopped');
       statuses.push(entry.status);
       // Lazily probe each enabled, running distro once per app run.
-      if (!stopped && !entry.probed && !entry.probing) void this.probe(entry);
+      if (row.state !== 'Stopped' && !entry.probed && !entry.probing) {
+        void this.probe(entry);
+      }
     }
     return statuses;
   }
@@ -576,10 +610,20 @@ export class HostsRegistry {
   }
 
   /** Piped child (SDK stream, ACP, gh, probes). shellEnv() primes the cache. */
+  /** spawnSpec/ptySpec hardcode `wsl.exe` — swap in the test-seam prefix. */
+  private applyWslCmd(spec: { file: string; args: string[] }): { file: string; args: string[] } {
+    if (spec.file !== 'wsl.exe') return spec;
+    const wsl = this.wslCmd();
+    if (!wsl) return spec;
+    const [file, ...prefix] = wsl;
+    return { file: file!, args: [...prefix, ...spec.args] };
+  }
+
   spawnOn(host: ExecHost, cmd: HostCommand, opts?: { signal?: AbortSignal }): ChildProcess {
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
+    const applied = this.applyWslCmd(spec);
     const t0 = Date.now();
-    const child = spawn(spec.file, spec.args, {
+    const child = spawn(applied.file, applied.args, {
       cwd: spec.cwd ?? homedir(),
       env: host.kind === 'local' ? { ...process.env, ...cmd.env } : process.env,
       windowsHide: true,
@@ -603,7 +647,8 @@ export class HostsRegistry {
   async execOn(host: ExecHost, cmd: HostCommand, timeout = PROBE_TIMEOUT_MS): Promise<string> {
     await this.shellEnv(host);
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
-    const { stdout } = await execFileAsync(spec.file, spec.args, {
+    const applied = this.applyWslCmd(spec);
+    const { stdout } = await execFileAsync(applied.file, applied.args, {
       cwd: spec.cwd ?? homedir(),
       env: host.kind === 'local' ? { ...process.env, ...cmd.env } : process.env,
       timeout,
@@ -616,7 +661,9 @@ export class HostsRegistry {
   /** node-pty spec; the caller supplies the pty options (cols/rows/env). */
   ptySpawnSpec(host: ExecHost, cmd: HostCommand): HostPtySpec {
     const shell = isWslHost(host) ? (this.entries.get(host.id)?.status.shell ?? null) : null;
-    return ptySpec(host, cmd, shell);
+    const spec = ptySpec(host, cmd, shell);
+    const applied = this.applyWslCmd(spec);
+    return { file: applied.file, args: applied.args, cwd: spec.cwd };
   }
 
   // --- paths -------------------------------------------------------------------

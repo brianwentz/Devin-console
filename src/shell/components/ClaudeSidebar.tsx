@@ -187,6 +187,7 @@ function RenameSessionInput({
 export function ClaudeSidebar({ rect }: { rect: Rect }) {
   const state = useShellState();
   const claude = state!.claude;
+  const multiHost = (state?.hosts ?? []).some((host) => host.kind === 'wsl');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<
     | { kind: 'create'; pendingSessionId?: string }
@@ -354,6 +355,15 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
             title="Background agent running"
           />
         )}
+        {multiHost && s.host && s.host !== 'local' && (
+          <span
+            data-host-chip
+            className="shrink-0 px-1 rounded bg-[#243447] text-[10px] leading-[14px] text-[#9fc4ea]"
+            title={`Runs on ${s.host}`}
+          >
+            {s.host.replace(/^wsl:/, '')}
+          </span>
+        )}
         {s.tag && (
           <span
             className="shrink-0 px-1 rounded bg-[#243447] text-[10px] leading-[14px] text-[#9fc4ea]"
@@ -485,6 +495,15 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
           Claude Code CLI not found — set the path in Settings
         </div>
       )}
+      {Object.entries(claude.hostErrors ?? {}).map(([id, message]) => (
+        <div
+          key={id}
+          data-host-error
+          className="px-3 pb-1.5 text-[11px] text-[#e0a03c] truncate"
+        >
+          {id === 'local' ? 'This PC' : id.replace(/^wsl:/, '')}: {message}
+        </div>
+      ))}
       {claude.lastError && (
         <div
           id="sessionsError"

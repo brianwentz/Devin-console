@@ -29,6 +29,7 @@ export interface SettingsDraft {
   sessionsKeepAliveHours: string;
   terminalAllSurfaces: boolean;
   terminalShell: string;
+  defaultWslDistro: string;
   claudePath: string;
   claudeAutoArchiveDays: string;
   claudePermissionMode: ClaudePermissionMode;
@@ -54,6 +55,7 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   sessionsKeepAliveHours: 'general',
   terminalAllSurfaces: 'general',
   terminalShell: 'general',
+  defaultWslDistro: 'general',
   claudePath: 'general',
   claudeAutoArchiveDays: 'general',
   claudePermissionMode: 'general',
@@ -80,6 +82,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     sessionsKeepAliveHours: String(settings.sessions.keepAliveHours),
     terminalAllSurfaces: settings.terminal.allSurfaces,
     terminalShell: settings.terminal.shell,
+    defaultWslDistro: settings.hosts.defaultWslDistro ?? '',
     claudePath: settings.claude.path ?? '',
     claudeAutoArchiveDays: String(settings.claude.autoArchiveDays),
     claudePermissionMode: settings.claude.defaultPermissionMode,
@@ -114,6 +117,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     Number(draft.sessionsKeepAliveHours) !== Number(base.sessionsKeepAliveHours) ||
     draft.terminalAllSurfaces !== base.terminalAllSurfaces ||
     draft.terminalShell.trim() !== base.terminalShell ||
+    draft.defaultWslDistro !== base.defaultWslDistro ||
     draft.claudePath.trim() !== base.claudePath ||
     Number(draft.claudeAutoArchiveDays) !== Number(base.claudeAutoArchiveDays) ||
     draft.claudePermissionMode !== base.claudePermissionMode ||
@@ -198,6 +202,7 @@ export function validateDraft(
         keepAliveHours: sessionsKeepAlive,
       },
       terminal: { allSurfaces: draft.terminalAllSurfaces, shell: draft.terminalShell.trim() },
+      hosts: { defaultWslDistro: draft.defaultWslDistro.trim() || null },
       claude: {
         path: draft.claudePath.trim() || null,
         autoArchiveDays: claudeAutoArchive,
@@ -222,6 +227,7 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'sessions.keepAliveHours': 'sessionsKeepAliveHours',
   'terminal.allSurfaces': 'terminalAllSurfaces',
   'terminal.shell': 'terminalShell',
+  'hosts.defaultWslDistro': 'defaultWslDistro',
   'claude.path': 'claudePath',
   'claude.autoArchiveDays': 'claudeAutoArchiveDays',
   'claude.defaultPermissionMode': 'claudePermissionMode',

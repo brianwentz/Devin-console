@@ -368,7 +368,9 @@ export class TerminalHost {
       options.kind === 'claude'
         ? (hosts().hostById(this.claudeGate?.resolveHost(options.sessionId) ?? 'local') ??
           LOCAL_HOST)
-        : LOCAL_HOST;
+        : options.kind === 'devin'
+          ? (hosts().hostById(hosts().pathHostId(options.workspace)) ?? LOCAL_HOST)
+          : LOCAL_HOST;
     const wslExec = isWslHost(execHost);
     const normalized =
       options.kind === 'devin'
@@ -418,10 +420,15 @@ export class TerminalHost {
     // session's terminalOwned state. For a wsl-host claude pty the binary is
     // the distro's `claude` (probed path or login-shell PATH lookup).
     let command: ResolvedCommand | { error: string };
-    if (options.kind === 'claude' && wslExec) {
-      const probePath = hosts().status(execHost.id)?.claude.path;
+    if (wslExec && options.kind !== 'shell') {
+      // The binary lives inside the distro: probed path, else a login-shell
+      // PATH lookup via the `-ilc` wrapper.
+      const status = hosts().status(execHost.id);
       command = {
-        file: probePath ?? 'claude',
+        file:
+          options.kind === 'claude'
+            ? (status?.claude.path ?? 'claude')
+            : (status?.devin.path ?? 'devin'),
         args: [],
         label: isWslHost(execHost) ? execHost.distro : null,
         appendCwd: false,
@@ -497,14 +504,15 @@ export class TerminalHost {
         ...this.ptyEnv(options.kind),
         ...(options.kind === 'claude' ? options.extraEnv : {}),
       };
-      if (options.kind === 'claude' && wslExec) {
+      if (wslExec) {
         // Wrap in `wsl.exe -d D --cd <linux cwd> -e <shell> -ilc 'exec …'` so
         // the pty runs an interactive login shell inside the distro.
         const spec = hosts().ptySpawnSpec(execHost, {
           file: command.file,
           args,
-          cwd: normalized,
-          env: options.extraEnv ?? {},
+          // devin's normalized is the UNC workspace — convert to host form.
+          cwd: options.kind === 'devin' ? hosts().hostPath(execHost, normalized) : normalized,
+          env: options.kind === 'claude' ? (options.extraEnv ?? {}) : {},
         });
         spawnFile = spec.file;
         args = spec.args;

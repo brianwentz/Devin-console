@@ -93,6 +93,15 @@ export function toWindowsPath(host: ExecHost, hostPath: string): string {
 }
 
 /** How the shell displays a host path; host chip only when several hosts exist. */
+/** Sidebar label for a stored workspace path: UNC paths get
+ * `<distro> · <linux>` form when a host map is given, else the stored string. */
+export function workspaceLabel(path: string): string {
+  const id = hostIdForPath(path);
+  if (id === 'local') return path;
+  const host = wslHost(id.slice(4), null);
+  return displayPath(host, toHostPath(host, path), true);
+}
+
 export function displayPath(host: ExecHost, hostPath: string, multiHost: boolean): string {
   return multiHost && isWslHost(host) ? `${host.distro} · ${hostPath}` : hostPath;
 }
