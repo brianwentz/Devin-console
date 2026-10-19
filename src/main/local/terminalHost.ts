@@ -525,7 +525,7 @@ export class TerminalHost {
         this.claudeGate?.onExit(entry.sessionId);
       }
       const view = state.shellView;
-      if (view && !view.webContents.isDestroyed()) {
+      if (view?.webContents && !view.webContents.isDestroyed()) {
         view.webContents.send(IpcChannels.terminalExit, {
           id: entry.id,
           exitCode,
@@ -616,7 +616,7 @@ export class TerminalHost {
       }
     }
     const view = state.shellView;
-    if (view && !view.webContents.isDestroyed()) {
+    if (view?.webContents && !view.webContents.isDestroyed()) {
       view.webContents.send(IpcChannels.terminalData, { id: entry.id, data });
     }
     // F2: sample the event log — per-flush logging writes a line every ~8 ms

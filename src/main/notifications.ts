@@ -164,7 +164,7 @@ export class NotificationStore {
   }
 
   private shellView() {
-    return state.shellView && !state.shellView.webContents.isDestroyed()
+    return state.shellView?.webContents && !state.shellView.webContents.isDestroyed()
       ? state.shellView
       : null;
   }

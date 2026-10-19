@@ -237,7 +237,7 @@ export class TabManager {
       .filter(
         (entry) =>
           scopeOf(entry) === scope &&
-          (!entry.view || entry.view.webContents.isDestroyed()) &&
+          (!entry.view?.webContents || entry.view.webContents.isDestroyed()) &&
           !entry.closing &&
           !entry.discarding,
       )
@@ -253,7 +253,7 @@ export class TabManager {
           if (
             entry &&
             scopeOf(entry) === this.scope &&
-            (!entry.view || entry.view.webContents.isDestroyed()) &&
+            (!entry.view?.webContents || entry.view.webContents.isDestroyed()) &&
             !entry.closing &&
             !entry.discarding
           ) {
@@ -667,7 +667,7 @@ export class TabManager {
     this.probeVetoes = new Set();
     const vetoed: string[] = [];
     const live = [...this.entries.values()].filter(
-      (entry) => entry.view && !entry.view.webContents.isDestroyed() && !entry.closing,
+      (entry) => entry.view?.webContents && !entry.view.webContents.isDestroyed() && !entry.closing,
     );
     try {
       // Parallel: tabs are independent; worst case stays ~3 s, not 3 s × N.
