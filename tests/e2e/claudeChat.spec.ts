@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { launchApp, launchWithClaudeFixture, shellPage } from './helpers';
+import { closeApp, launchApp, launchWithClaudeFixture, shellPage } from './helpers';
 import type { ClaudeChatStatePublic, ClaudeState } from '../../src/shared/ipc';
 
 // §3.5: the Claude chat view end-to-end over the fake SDK
@@ -108,7 +108,7 @@ test('new session: prompt → Echo, turn summary, sidebar lists the transcript',
       })
       .toBeGreaterThan(2);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(newCwd, { recursive: true, force: true });
   }
@@ -132,7 +132,7 @@ test('relaunch restores claude.lastSessionId and loads the transcript history', 
       .poll(async () => (await h.claudeChatState()).sessions[id!]?.lastStopReason)
       .toBe('end_turn');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
   }
 
   const app2 = await launchApp(
@@ -193,7 +193,7 @@ test('tool permission: card with 3 options, Allow completes the turn', async () 
       'end_turn',
     );
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(newCwd, { recursive: true, force: true });
   }
@@ -223,7 +223,7 @@ test('cancel mid-turn finishes as cancelled and re-enables the composer', async 
     );
     await expect(shell.locator('#composer')).toBeEnabled();
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(newCwd, { recursive: true, force: true });
   }
@@ -249,7 +249,7 @@ test('opening a fixture session renders history; live stays 0 until a prompt', a
     await expect(shell.locator('#composer')).toBeEnabled();
     expect(await h.claudeLiveCount()).toBe(0);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -274,7 +274,7 @@ test('setPermissionMode updates the session and the header select', async () => 
       .poll(async () => (await h.claudeChatState()).sessions[id]?.permissionMode)
       .toBe('plan');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(newCwd, { recursive: true, force: true });
   }

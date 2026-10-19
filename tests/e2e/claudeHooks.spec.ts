@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { evaluateInShell, launchWithClaudeFixture, shellPage } from './helpers';
+import { closeApp, evaluateInShell, launchWithClaudeFixture, shellPage } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §3.5: the Phase 4 hook listener + global settings install + chat-derived
@@ -198,7 +198,7 @@ test('hook events drive sidebar activity + notification entries (dedup + kinds)'
       .poll(async () => (await h.claudeActivity())[UA]?.activity ?? null)
       .toBe(null);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -247,7 +247,7 @@ test('PostToolUse gh pr create → pr-opened entry + auto-opened tab in claude s
     await new Promise((r) => setTimeout(r, 300));
     expect((await h.notifications()).length).toBe(before);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -280,7 +280,7 @@ test('a bad token is rejected (401 + claude-hook-rejected)', async () => {
     );
     expect(notFound).toBe(404);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -312,7 +312,7 @@ test('opening a waiting notification selects the session on the claude surface',
     await expect.poll(async () => (await h.state()).surface).toBe('claude');
     await expect.poll(async () => (await h.state()).claudeSessionId).toBe(UA);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -361,7 +361,7 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
     expect(removed).not.toContain('/devin-workspaces/hook/');
     expect(removed).toContain('echo foreign');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -401,7 +401,7 @@ test('claude pty gets --settings hook block + token env (resume mode)', async ()
     expect(text).toContain('default');
     expect(text).toContain('env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=set');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -440,7 +440,7 @@ test('chat: permission card → waiting entry; Allow → finished', async () => 
       )
       .toBe(1);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });

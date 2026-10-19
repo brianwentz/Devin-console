@@ -6,6 +6,7 @@ import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
   launchWithClaudeFixture,
   shellPage,
+  closeApp,
 } from './helpers';
 import type { ClaudeState, ClaudeSubagent } from '../../src/shared/ipc';
 
@@ -133,7 +134,7 @@ test('subagent row expands, opens read-only, back returns', async () => {
     await shell.locator('#claudeSubagentBack').click();
     await expect.poll(async () => (await h.claudeState()).selectedSubagentId).toBe(null);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -154,7 +155,7 @@ test('header fork creates and selects a new session', async () => {
     expect(id).not.toBe(UA);
     expect((await h.claudeState()).sessions.some((s) => s.id === id)).toBe(true);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -182,7 +183,7 @@ test('two API messages in one turn → two agent bubbles', async () => {
     await h.claudeSelect(id);
     await expect(shell.locator('#messageList')).toContainText('Echo:hi');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -232,7 +233,7 @@ test('terminal-owned session reloads history on transcript change', async () => 
       timeout: 8_000,
     });
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -258,7 +259,7 @@ test('cost reaches the usage pill', async () => {
     const shell = await shellPage(app);
     await expect(shell.locator('#tokenUsage')).toContainText('$', { timeout: 10_000 });
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });

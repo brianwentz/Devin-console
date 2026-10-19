@@ -1017,7 +1017,10 @@ test('settings shows the app version and an Update now button', async () => {
       )
       .toBe(1);
 
-    // Focus and resume within their throttle windows are skipped.
+    // Focus and resume within their throttle windows are skipped. The
+    // simulated manual check settles on a 0-timeout — wait for it or the
+    // focus check lands in the in-flight gate instead of the throttle.
+    await expect.poll(async () => (await state(app)).update.checking).toBe(false);
     await h.simulateUpdateFocus();
     await expect
       .poll(async () =>
@@ -1066,6 +1069,14 @@ test('settings shows the app version and an Update now button', async () => {
     await expect
       .poll(async () => ((await h.notifications()) as { kind: string }[]).filter((e) => e.kind === 'update').length)
       .toBe(0);
+  } catch (error) {
+    console.log(
+      `[update-debug]\n${(await readEvents(logFile))
+        .filter((e) => (e.event as string).includes('update'))
+        .map((e) => JSON.stringify(e))
+        .join('\n')}`,
+    );
+    throw error;
   } finally {
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });

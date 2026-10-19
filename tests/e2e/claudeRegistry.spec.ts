@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { CLAUDE_FIXTURE_HOME, launchApp, launchWithClaudeFixture, shellPage } from './helpers';
+import { closeApp, CLAUDE_FIXTURE_HOME, launchApp, launchWithClaudeFixture, shellPage } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §4.5: hook-driven claude sidebar e2e (the shell UI lands in PR 4). The app
@@ -118,7 +118,7 @@ test('claudeState reaches ready with the fixture sessions and title precedence',
     expect(byId.get(UA)?.cwd).toBe('C:\\work\\alpha');
     expect(byId.get(UC)?.gitBranch).toBe('feature');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -139,7 +139,7 @@ test('a new transcript file in the config dir is listed within a second', async 
     const added_row = (await h.claudeState()).sessions.find((s) => s.id === added);
     expect(added_row?.cwd).toBe('C:\\work\\beta');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -189,7 +189,7 @@ test('pin + move persist in claude-sessions.json across a relaunch', async () =>
       })
       .toMatchObject({ pinned: true, folder: 'E2E folder' });
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
   }
 
   // Relaunch against the same profile + fixture copy — pin/folder survive.
@@ -241,7 +241,7 @@ test('remove from list hides the row; a newer transcript mtime brings it back', 
       })
       .toBe('Resumed beta');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -260,7 +260,7 @@ test('delete transcript removes the file and drops the row (test-mode auto-confi
       .toBeUndefined();
     expect(existsSync(join(claudeHome, 'projects', 'C--work-alpha', `${UB}.jsonl`))).toBe(false);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -299,7 +299,7 @@ test('autoArchiveDays archives an idle session; showArchived reveals it', async 
       .toBe(true);
     expect((await h.claudeState()).showArchived).toBe(true);
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -316,7 +316,7 @@ test('selecting a session drives currentScope to claude:<id>', async () => {
     await h.setSurface('cloud');
     await expect.poll(async () => h.currentScope()).toBe('');
   } finally {
-    await app.close().catch(() => undefined);
+    await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
   }
 });

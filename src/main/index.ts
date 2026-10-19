@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { app, BaseWindow, dialog, Menu, screen, session, webContents, WebContentsView } from 'electron';
 import { clampFraction01 } from '../core/layout';
 import { auditCookies, startCookieAudit } from './cookieAudit';
@@ -137,6 +138,22 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
         return;
       }
     }
+    // Detached self-kill on a 20 s fuse — spawned past the beforeunload veto
+    // (a cancelled quit keeps running). Covers the observed wedge where the
+    // Node loop dies mid-quit (Windows: quit starts after the window is
+    // destroyed, the loop tears down, the process never exits — an in-loop
+    // watchdog can't fire). A worker thread keeps its own loop alive; the
+    // SIGKILL runs inside it. unref'd so it never delays a healthy exit, and
+    // a finished process kills the worker anyway.
+    try {
+      const killer = new Worker(
+        `setTimeout(() => { try { process.kill(process.pid, 'SIGKILL') } catch {} }, 20000)`,
+        { eval: true },
+      );
+      killer.unref();
+    } catch {
+      // best-effort only — the in-loop watchdog at the tail is the primary net.
+    }
     notifier.stop('window-close');
     cloudSessions().stop();
     if (state.dragging) cancelDrag(false, 'window-close');
@@ -235,7 +252,9 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     if (options.installUpdate || hasDownloadedUpdate()) quitAndInstall();
     else {
       // Last-resort watchdog: if the quit lifecycle itself stalls (the
-      // mid-quit app.exit() hang), force-exit rather than leak the process.
+      // mid-quit app.quit() no-op hang — seen on Windows when a vetoed
+      // quit left Electron mid-shutdown), force-exit rather than leak the
+      // process.
       setTimeout(() => {
         log('shell', 'shutdown-exit-watchdog');
         process.exit(0);
@@ -445,5 +464,11 @@ app
 app.on('activate', () => {
   if (!state.windowRef) void createWindow();
 });
-app.on('window-all-closed', () => app.quit());
+// During shutdown the window destroy() re-enters window-all-closed — let the
+// shutdown tail issue the single quit instead of starting an in-flight quit
+// sequence mid-destroy that can stall (Windows: quit starts, the loop tears
+// down, the process never exits).
+app.on('window-all-closed', () => {
+  if (!state.shuttingDown) app.quit();
+});
 app.whenReady().then(setupUpdater, () => undefined);

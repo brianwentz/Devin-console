@@ -1,6 +1,6 @@
 # Phase 6 — Limitations and deferrals
 
-Status: In progress.
+Status: Done — merged as PR #68.
 
 Technical plan to close every item deferred during Phases 1–5 and every entry in the README "Known limitations" list. Based on `main` after Phase 5. Three concurrent streams (core / main / shell) against the §1 contracts, then one integration pass (full e2e + isolated smoke — the settings schema changes).
 
