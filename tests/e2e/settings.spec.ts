@@ -264,6 +264,177 @@ test('updates tab reports missing release notes on a non-2xx response', async ()
   }
 });
 
+const hasEl = (app: ElectronApplication, id: string) =>
+  shell(app, `Boolean(document.getElementById('${id}'))`);
+// PublicState types settings loosely; the P3 tabs read these two sections.
+const settingsOf = async (app: ElectronApplication) =>
+  (await state(app)).settings as unknown as {
+    local: { defaultWslDistro: string | null };
+    claude: { hooksEnabled: boolean; keepAliveMinutes: number; defaultWslDistro: string | null };
+  };
+const readSettings = (profile: string) =>
+  JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+// React's <select onChange> listens for the native 'change' event.
+const setSelectValue = (app: ElectronApplication, id: string, value: string) =>
+  shell(
+    app,
+    `(() => {
+      const el = document.getElementById(${JSON.stringify(id)});
+      if (!el) return false;
+      el.value = ${JSON.stringify(value)};
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`,
+  );
+
+test('Devin Local tab renders the devin path and the agents summary', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  try {
+    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await clickTab(app, 'local');
+    await expect.poll(async () => selectedTab(app)).toBe('local');
+    await expect.poll(async () => hasEl(app, 'devinPathInput')).toBe(true);
+    expect(await hasEl(app, 'localAgentsSummary')).toBe(true);
+    expect(await hasEl(app, 'settingsPanel-local')).toBe(true);
+    // No fake distros by default → the select is replaced by the muted line.
+    expect(await hasEl(app, 'localDefaultWslDistroSelect')).toBe(false);
+    expect(await shell(app, `document.getElementById('settingsPanel-local').textContent`)).toContain(
+      'No WSL distros detected.',
+    );
+    // The Claude controls no longer live on General.
+    await clickTab(app, 'general');
+    await expect.poll(async () => hasEl(app, 'tenantUrlInput')).toBe(true);
+    expect(await hasEl(app, 'claudePathInput')).toBe(false);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('Claude Code tab renders the moved and new controls', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  try {
+    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await clickTab(app, 'claude');
+    await expect.poll(async () => selectedTab(app)).toBe('claude');
+    await expect.poll(async () => hasEl(app, 'claudePathInput')).toBe(true);
+    for (const id of [
+      'claudeAutoArchiveInput',
+      'claudePermissionModeDefault',
+      'claudeModelInput',
+      'claudeKeepAliveInput',
+      'claudeMaxLiveAgentsInput',
+      'claudeHooksEnabledMirror',
+    ]) {
+      expect(await hasEl(app, id), id).toBe(true);
+    }
+    expect(await hasEl(app, 'claudeDefaultWslDistroSelect')).toBe(false);
+
+    // An out-of-range max-live value blocks the tab switch and flags the field.
+    await setInputValue(app, 'claudeMaxLiveAgentsInput', '11');
+    await clickTab(app, 'general');
+    await expect.poll(async () => selectedTab(app)).toBe('claude');
+    await expect
+      .poll(async () =>
+        shell(
+          app,
+          `document.getElementById('claudeMaxLiveAgentsInput')?.getAttribute('aria-invalid')`,
+        ),
+      )
+      .toBe('true');
+    await expect.poll(async () => hasEl(app, 'claudeMaxLiveAgentsInputError')).toBe(true);
+    await expect.poll(async () => hasEl(app, 'settingsError')).toBe(true);
+
+    // Fixing it plus a keep-alive change saves and persists to settings.json.
+    await setInputValue(app, 'claudeMaxLiveAgentsInput', '4');
+    await setInputValue(app, 'claudeKeepAliveInput', '45');
+    await clickTab(app, 'general');
+    await expect.poll(async () => selectedTab(app)).toBe('general');
+    await expect.poll(async () => (await settingsOf(app)).claude.keepAliveMinutes).toBe(45);
+    await expect.poll(async () => readSettings(profile).claude).toMatchObject({
+      keepAliveMinutes: 45,
+      maxLiveAgents: 4,
+    });
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('the hooks mirror and the Notifications checkbox reflect each other', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  const checked = (id: string) => shell(app, `document.getElementById('${id}')?.checked`);
+  try {
+    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await clickTab(app, 'claude');
+    await expect.poll(async () => hasEl(app, 'claudeHooksEnabledMirror')).toBe(true);
+    const initial = (await checked('claudeHooksEnabledMirror')) as boolean;
+    expect((await settingsOf(app)).claude.hooksEnabled).toBe(initial);
+
+    await shell(app, `document.getElementById('claudeHooksEnabledMirror').click()`);
+    await expect
+      .poll(async () => (await settingsOf(app)).claude.hooksEnabled)
+      .toBe(!initial);
+    await expect.poll(async () => checked('claudeHooksEnabledMirror')).toBe(!initial);
+
+    await clickTab(app, 'notifications');
+    await expect.poll(async () => hasEl(app, 'claudeHooksToggle')).toBe(true);
+    expect(await checked('claudeHooksToggle')).toBe(!initial);
+
+    await shell(app, `document.getElementById('claudeHooksToggle').click()`);
+    await expect
+      .poll(async () => (await settingsOf(app)).claude.hooksEnabled)
+      .toBe(initial);
+    await clickTab(app, 'claude');
+    await expect.poll(async () => hasEl(app, 'claudeHooksEnabledMirror')).toBe(true);
+    expect(await checked('claudeHooksEnabledMirror')).toBe(initial);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('both distro selects list the fake distro and persist independently', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile, { FAKE_WSL_DISTROS: 'Fake:Running:default' });
+  const options = (id: string) =>
+    shell(app, `[...document.querySelectorAll('#${id} option')].map((o) => o.value).join(',')`);
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.some((h) => h.id === 'wsl:Fake'), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await clickTab(app, 'local');
+    await expect.poll(async () => hasEl(app, 'localDefaultWslDistroSelect')).toBe(true);
+    expect(await options('localDefaultWslDistroSelect')).toBe(',Fake');
+    expect(await setSelectValue(app, 'localDefaultWslDistroSelect', 'Fake')).toBe(true);
+    await expect
+      .poll(async () => shell(app, `document.getElementById('localDefaultWslDistroSelect').value`))
+      .toBe('Fake');
+
+    await clickTab(app, 'claude');
+    await expect.poll(async () => selectedTab(app)).toBe('claude');
+    await expect.poll(async () => hasEl(app, 'claudeDefaultWslDistroSelect')).toBe(true);
+    expect(await options('claudeDefaultWslDistroSelect')).toBe(',Fake');
+    expect(
+      await shell(app, `document.getElementById('claudeDefaultWslDistroSelect').value`),
+    ).toBe('');
+
+    await expect.poll(async () => (await settingsOf(app)).local.defaultWslDistro).toBe('Fake');
+    const persisted = readSettings(profile);
+    expect(persisted.local.defaultWslDistro).toBe('Fake');
+    expect(persisted.claude.defaultWslDistro ?? null).toBeNull();
+  } finally {
+    await quit(app, profile);
+  }
+});
+
 test('a dirty draft is flushed on quit', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
