@@ -428,12 +428,14 @@ export class ClaudeSessions {
       // hostErrors line instead of taking the whole surface down.
       const list: ClaudeStoreSession[] = [];
       let localError: unknown = null;
+      let storeComplete = true;
       for (const host of hosts().list()) {
         if (this.started) this.agentsForHost(host).start();
         try {
           list.push(...(await this.storeForHost(host).list()));
           hosts().setError(host.id, 'store', null);
         } catch (error) {
+          storeComplete = false;
           if (!isWslHost(host)) {
             localError = error;
           } else {
@@ -457,7 +459,7 @@ export class ClaudeSessions {
         this.registryStore.save(registry);
       }
       this.sessions = sessions;
-      this.migrateLegacyFoldersOnce();
+      this.migrateLegacyFoldersOnce(storeComplete);
       this.status = 'ready';
       this.error = null;
       this.lastError = null;
@@ -940,11 +942,17 @@ export class ClaudeSessions {
   // workspaces. Runs once after the first successful refresh; the legacy
   // fields are then stripped (serializeRegistry never writes them back).
   private migratedLegacyFolders = false;
-  private migrateLegacyFoldersOnce(): void {
+  private migrateLegacyFoldersOnce(storeComplete: boolean): void {
     if (this.migratedLegacyFolders) return;
-    this.migratedLegacyFolders = true;
     const legacy = this.registry.legacyFolders ?? [];
-    if (legacy.length === 0) return;
+    if (legacy.length === 0) {
+      this.migratedLegacyFolders = true;
+      return;
+    }
+    // A failed host store looks like "no candidates" — defer to the next
+    // complete refresh rather than dropping those folders permanently.
+    if (!storeComplete) return;
+    this.migratedLegacyFolders = true;
     const settings = state.settings?.current;
     if (!settings || settings.claude.workspaces.length > 0) {
       this.stripLegacyFolders();
@@ -956,9 +964,10 @@ export class ClaudeSessions {
       cwd: stored.cwd,
       folder: this.registry.entries[stored.id]?.folder ?? null,
     }));
-    const toWindows = (host: HostId, cwd: string): string => {
+    const toWindows = (host: HostId, cwd: string): string | null => {
       const execHost = hosts().hostById(host) ?? null;
-      return execHost ? hosts().windowsPath(execHost, cwd) : cwd;
+      // Unknown/disabled host → null (never store a linux cwd as a workspace).
+      return execHost ? hosts().windowsPath(execHost, cwd) : null;
     };
     const result = migrateLegacyFolders(legacy, candidates, toWindows);
     if (result.workspaces.length > 0) {

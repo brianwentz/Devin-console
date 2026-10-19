@@ -190,6 +190,17 @@ describe('migrateLegacyFolders (D8)', () => {
     expect(result.labels).toEqual({});
   });
 
+  it('drops a folder whose only members live on an unknown host (toWindows null)', () => {
+    const result = migrateLegacyFolders(
+      ['Wsl folder'],
+      [{ id: 'w1', host: 'wsl:Gone', cwd: '/home/u/x', folder: 'Wsl folder' }],
+      () => null,
+    );
+    expect(result.workspaces).toEqual([]);
+    expect(result.labels).toEqual({});
+    expect(result).toMatchObject({ converted: 0, dropped: 1 });
+  });
+
   it('drops the second folder when both resolve to the same path', () => {
     const result = migrateLegacyFolders(
       ['A', 'B'],
