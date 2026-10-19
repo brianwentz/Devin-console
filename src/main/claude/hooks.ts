@@ -102,7 +102,7 @@ export class ClaudeHooks {
         installed = result.installed;
         firstError = result.error;
       }
-      hosts().setError(host.id, result.error);
+      hosts().setError(host.id, 'hooksInstall', result.error);
       if (result.error && !firstError) firstError = result.error;
     }
     this.hooks = { ...this.hooks, enabled, installed, error: firstError };

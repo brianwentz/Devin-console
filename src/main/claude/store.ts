@@ -5,7 +5,7 @@
 
 import { existsSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
 import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
@@ -30,7 +30,8 @@ export class ClaudeStore {
   private hotIds: () => string[] = () => [];
   private visible: () => boolean = () => false;
   private inotify: ChildProcess | null = null;
-  private hotMtimes = new Map<string, number>();
+  // abs path → last known mtime, recomputed on the 30 s full-scan tick
+  private hotPaths = new Map<string, number>();
   private started = false;
   private watchRestarts = 0;
   private watchFailed = false;
@@ -193,30 +194,34 @@ export class ClaudeStore {
     return m && m[1] ? m[1] : dir;
   }
 
-  // Tiered polling: stat the N most recent + terminal-owned transcripts every
-  // 2 s while the Claude surface is visible; full readdir scan every 30 s.
+  // Tiered polling (wsl without inotify): the 30 s full-scan tick recomputes
+  // the recent-20 ∪ hot-id path set once; the 2 s tick only stats that cached
+  // set and reports changed transcripts as <encoded-cwd>/<id>.jsonl relative
+  // paths — the same shape fs.watch emits, so onTranscriptFiles parses them.
   private startTieredPoll(): void {
     log('claude', 'claude-watch', {
       detail: { mode: 'poll-tiered', host: this.host.id, events: 0 },
     });
-    this.startPoll();
+    void this.recomputeHotPaths();
+    this.startPoll(() => {
+      void this.recomputeHotPaths();
+    });
     this.hotTimer = setInterval(() => {
       if (!this.visible()) return;
       try {
-        const paths = new Set(this.recentTranscripts());
-        for (const id of this.hotIds()) {
-          const path = this.transcriptFor(id);
-          if (path) paths.add(path);
+        const changed: string[] = [];
+        for (const [path, prev] of this.hotPaths) {
+          let mtime: number | null = null;
+          try {
+            mtime = statSync(path).mtimeMs;
+          } catch {
+            /* gone between ticks */
+          }
+          if (mtime === null || mtime === prev) continue;
+          this.hotPaths.set(path, mtime);
+          changed.push(relative(this.projectsDir, path));
         }
-        let changed = false;
-        for (const path of paths) {
-          if (!existsSync(path)) continue;
-          const mtime = statSync(path).mtimeMs;
-          const prev = this.hotMtimes.get(path);
-          if (prev !== undefined && prev !== mtime) changed = true;
-          this.hotMtimes.set(path, mtime);
-        }
-        if (changed) this.onChange([]);
+        if (changed.length > 0) this.onChange(changed);
       } catch {
         /* transient stat failures — next tick retries */
       }
@@ -224,40 +229,40 @@ export class ClaudeStore {
     this.hotTimer.unref?.();
   }
 
-  private transcriptFor(id: string): string | null {
-    try {
-      for (const project of readdirSync(this.projectsDir)) {
-        const candidate = join(this.projectsDir, project, `${id}.jsonl`);
-        if (existsSync(candidate)) return candidate;
-      }
-    } catch {
-      /* no projects dir */
-    }
-    return null;
-  }
-
-  private recentTranscripts(): string[] {
-    try {
-      const files: { path: string; mtime: number }[] = [];
-      for (const project of readdirSync(this.projectsDir)) {
-        const dir = join(this.projectsDir, project);
-        for (const name of readdirSync(dir)) {
-          if (!name.endsWith('.jsonl')) continue;
-          const path = join(dir, name);
-          try {
-            files.push({ path, mtime: statSync(path).mtimeMs });
-          } catch {
-            /* transient */
+  // Full readdir scan: the 20 most recent transcripts plus any hot (e.g.
+  // terminal-owned) ids, keyed abs-path → mtime. Runs on the 30 s tick and
+  // once at watcher start.
+  private async recomputeHotPaths(): Promise<void> {
+    await this.run(async () => {
+      try {
+        const files: { path: string; mtime: number }[] = [];
+        for (const project of readdirSync(this.projectsDir)) {
+          const dir = join(this.projectsDir, project);
+          for (const name of readdirSync(dir)) {
+            if (!name.endsWith('.jsonl')) continue;
+            const path = join(dir, name);
+            try {
+              files.push({ path, mtime: statSync(path).mtimeMs });
+            } catch {
+              /* transient */
+            }
           }
         }
+        const hot = new Set(this.hotIds());
+        const next = new Map<string, number>();
+        for (const file of files.sort((a, b) => b.mtime - a.mtime).slice(0, HOT_COUNT)) {
+          next.set(file.path, file.mtime);
+        }
+        for (const file of files) {
+          if (hot.has(basename(file.path, '.jsonl')) && !next.has(file.path)) {
+            next.set(file.path, file.mtime);
+          }
+        }
+        this.hotPaths = next;
+      } catch {
+        /* no projects dir yet */
       }
-      return files
-        .sort((a, b) => b.mtime - a.mtime)
-        .slice(0, HOT_COUNT)
-        .map((f) => f.path);
-    } catch {
-      return [];
-    }
+    });
   }
 
   private startWatch(): void {
@@ -300,7 +305,7 @@ export class ClaudeStore {
     }
   }
 
-  private startPoll(): void {
+  private startPoll(onTick?: () => void): void {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(() => {
       const dirExists = existsSync(this.projectsDir);
@@ -311,7 +316,10 @@ export class ClaudeStore {
         this.startWatch();
         return;
       }
-      if (dirExists) this.onChange([]);
+      if (dirExists) {
+        onTick?.();
+        this.onChange([]);
+      }
     }, POLL_MS);
     this.pollTimer.unref?.();
   }

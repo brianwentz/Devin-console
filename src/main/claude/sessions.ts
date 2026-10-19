@@ -54,8 +54,7 @@ const execFileAsync = promisify(execFile);
 export class ClaudeSessions {
   private stores = new Map<HostId, ClaudeStore>();
   private registryStore: ClaudeRegistryStore;
-  /** Per-host store list failures; merged into the pushed hostErrors. */
-  private listErrors: Record<string, string> = {};
+
   /** @internal read by contextMenu/prTracking; written via saveRegistry/applyRegistry. */
   registry: ClaudeRegistry = emptyRegistry();
   private storeSessions: ClaudeStoreSession[] = [];
@@ -196,7 +195,11 @@ export class ClaudeSessions {
     };
     hosts().hookPort = () => this.hook.info()?.port ?? null;
     hosts().hookAddrBind = (addr) => this.hook.listenOn(addr);
-    hosts().onStatusChange = () => this.emit();
+    // Enumeration/probe completion re-publishes the host list; a new wsl host
+    // also needs its store created, so refresh rather than emit only.
+    hosts().onStatusChange = () => {
+      void this.refresh('hosts');
+    };
     this.pr.start();
     this.hook.start(this.userData);
     void this.checkVersions();
@@ -322,7 +325,7 @@ export class ClaudeSessions {
         };
       }),
       showArchived: this.showArchived,
-      hostErrors: { ...hosts().errors(), ...this.listErrors },
+      hostErrors: hosts().errors(),
       lastError: this.lastError,
       versions: this.versions,
       agents: this.agents,
@@ -427,13 +430,16 @@ export class ClaudeSessions {
         if (this.started) this.agentsForHost(host).start();
         try {
           list.push(...(await this.storeForHost(host).list()));
-          delete this.listErrors[host.id];
+          hosts().setError(host.id, 'store', null);
         } catch (error) {
           if (!isWslHost(host)) {
             localError = error;
           } else {
-            this.listErrors[host.id] =
-              error instanceof Error ? error.message : String(error);
+            hosts().setError(
+              host.id,
+              'store',
+              error instanceof Error ? error.message : String(error),
+            );
           }
         }
       }

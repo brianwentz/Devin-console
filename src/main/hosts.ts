@@ -4,7 +4,7 @@
 // core/execHost. `withConfigDir` serialises SDK store calls across hosts.
 // Never logs env values or resolved paths.
 
-import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
@@ -80,80 +80,142 @@ const localStatus = (): HostStatus => {
   return status;
 };
 
+type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store';
+
+interface WslRun {
+  stdout: Buffer;
+  stderr: Buffer;
+  code: number | null;
+}
+
 export class HostsRegistry {
   private wsl: { file: string; args: string[] } | null | undefined;
+  /** Resolves once the async `wsl.exe` lookup settles; awaited where the
+   * binary is needed, never on the publish path. */
+  private ready: Promise<void>;
   private distros: { at: number; rows: ReturnType<typeof parseWslList> } | null = null;
+  private enumInFlight = false;
   private entries = new Map<HostId, WslEntry>();
   private configMutex: Promise<unknown> = Promise.resolve();
-  private hostErrors: Record<string, string> = {};
+  private errorParts = new Map<string, Partial<Record<HostErrorPart, string>>>();
+
+  constructor() {
+    this.ready = this.resolveWsl();
+  }
 
   // --- command plumbing ----------------------------------------------------
 
-  /** The `wsl.exe` invocation prefix ([file, ...args]) or null when absent. */
-  wslCmd(): string[] | null {
-    if (this.wsl !== undefined) return this.wsl ? [this.wsl.file, ...this.wsl.args] : null;
+  private async resolveWsl(): Promise<void> {
     if (testMode && process.env.DEVIN_WORKSPACES_TEST_WSL_CMD?.trim()) {
       const parts = process.env.DEVIN_WORKSPACES_TEST_WSL_CMD.trim().split(/\s+/).filter(Boolean);
       this.wsl = parts.length ? { file: parts[0]!, args: parts.slice(1) } : null;
-      return this.wsl ? [this.wsl.file, ...this.wsl.args] : null;
+      return;
     }
     if (process.platform !== 'win32') {
       this.wsl = null;
-      return null;
+      return;
     }
     try {
-      const found = spawnSync(
-        process.platform === 'win32' ? 'where.exe' : 'which',
-        ['wsl.exe'],
-        { encoding: 'utf8', windowsHide: true },
-      );
-      this.wsl = found.status === 0 ? { file: 'wsl.exe', args: [] } : null;
+      const { stdout } = await execFileAsync('where.exe', ['wsl.exe'], { windowsHide: true });
+      this.wsl = stdout.trim() ? { file: 'wsl.exe', args: [] } : null;
     } catch {
       this.wsl = null;
     }
+  }
+
+  /** False until the async `wsl.exe` lookup settles (callers caching a null
+   * result should check this first). */
+  get wslResolved(): boolean {
+    return this.wsl !== undefined;
+  }
+
+  /** The `wsl.exe` invocation prefix ([file, ...args]); null when absent or
+   * the async lookup hasn't settled yet. */
+  wslCmd(): string[] | null {
     return this.wsl ? [this.wsl.file, ...this.wsl.args] : null;
   }
 
-  private async execWsl(args: string[], timeout = PROBE_TIMEOUT_MS): Promise<string> {
-    const cmd = this.wslCmd();
-    if (!cmd) throw new Error('wsl.exe not found');
-    const [file, ...prefix] = cmd;
-    const { stdout } = await execFileAsync(file!, [...prefix, ...args], {
-      timeout,
-      windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024,
+  // Spawn with stdin closed — an rc file that reads stdin must not hang the
+  // probe until the timeout; a non-zero exit only rejects when
+  // `requireSuccess` is set (an rc file may `exit 1` after `env -0` has
+  // already printed, and the marker-validated output is still usable).
+  private runWsl(
+    args: string[],
+    opts: { timeout?: number; requireSuccess?: boolean } = {},
+  ): Promise<WslRun> {
+    const timeout = opts.timeout ?? PROBE_TIMEOUT_MS;
+    const requireSuccess = opts.requireSuccess ?? true;
+    return new Promise((resolvePromise, reject) => {
+      void this.ready.then(() => {
+        const cmd = this.wslCmd();
+        if (!cmd) {
+          reject(new Error('wsl.exe not found'));
+          return;
+        }
+        const [file, ...prefix] = cmd;
+        const child = spawn(file!, [...prefix, ...args], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+        }, timeout);
+        timer.unref?.();
+        child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+        child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+        child.once('error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          if (requireSuccess && code !== 0) {
+            reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
+            return;
+          }
+          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code });
+        });
+      });
     });
-    return stdout;
   }
 
-  private execWslSync(args: string[], encoding: BufferEncoding = 'utf8'): string | null {
-    const cmd = this.wslCmd();
-    if (!cmd) return null;
-    const [file, ...prefix] = cmd;
-    try {
-      const result = spawnSync(file!, [...prefix, ...args], {
-        encoding,
-        timeout: PROBE_TIMEOUT_MS,
-        windowsHide: true,
-        maxBuffer: 4 * 1024 * 1024,
-      });
-      return result.status === 0 ? (result.stdout as string) : null;
-    } catch {
-      return null;
-    }
+  private async execWsl(args: string[], timeout = PROBE_TIMEOUT_MS): Promise<string> {
+    const { stdout } = await this.runWsl(args, { timeout });
+    return stdout.toString('utf8');
   }
 
   // --- enumeration -----------------------------------------------------------
 
-  /** Distro list from `wsl.exe -l -v` (5 min cache). */
+  /** Cached distro rows ([] until the first async `-l -v` lands). Never
+   * blocks: a stale cache kicks off an async enumeration and the completion
+   * re-publishes via onStatusChange. */
   enumerate(): ReturnType<typeof parseWslList> {
     if (this.distros && Date.now() - this.distros.at < ENUM_CACHE_MS) return this.distros.rows;
-    const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
-    const out = wslEnabled ? this.execWslSync(['-l', '-v'], 'utf16le') : null;
-    const rows = out ? parseWslList(out) : [];
-    this.distros = { at: Date.now(), rows };
-    log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0 } });
-    return rows;
+    if (!this.enumInFlight) void this.enumerateAsync();
+    return this.distros?.rows ?? [];
+  }
+
+  private async enumerateAsync(): Promise<void> {
+    this.enumInFlight = true;
+    try {
+      const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
+      let rows: ReturnType<typeof parseWslList> = [];
+      if (wslEnabled) {
+        try {
+          const { stdout } = await this.runWsl(['-l', '-v']);
+          rows = parseWslList(stdout.toString('utf16le'));
+        } catch {
+          rows = [];
+        }
+      }
+      this.distros = { at: Date.now(), rows };
+      log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0 } });
+      this.onStatusChange?.();
+    } finally {
+      this.enumInFlight = false;
+    }
   }
 
   /** Enabled wsl distros: explicit settings list, else Running or default. */
@@ -234,7 +296,12 @@ export class HostsRegistry {
   }
 
   errors(): Record<string, string> {
-    return { ...this.hostErrors };
+    const out: Record<string, string> = {};
+    for (const [id, parts] of this.errorParts) {
+      const joined = Object.values(parts).filter(Boolean).join(' \u00b7 ');
+      if (joined) out[id] = joined;
+    }
+    return out;
   }
 
   /** A wsl host whose settings overrides apply (path/shell/home). */
@@ -313,11 +380,11 @@ export class HostsRegistry {
       }
       const sdkTarget = sdkTargetCliVersion();
       if (claudePath && version && sdkTarget && version !== sdkTarget) {
-        this.hostErrors[id] = `claude ${version} (SDK targets ${sdkTarget})`;
+        this.setPart(id, 'cli', `claude ${version} (SDK targets ${sdkTarget})`);
       } else if (!claudePath) {
-        this.hostErrors[id] = 'Claude Code not found — set the path in Settings';
+        this.setPart(id, 'cli', 'Claude Code not found — set the path in Settings');
       } else {
-        delete this.hostErrors[id];
+        this.setPart(id, 'cli', null);
       }
       // Hook listener reachability: loopback first, then the WSL vEthernet
       // address for NAT-mode distros.
@@ -357,20 +424,17 @@ export class HostsRegistry {
     const id = entry.host.id;
     try {
       const cmd = `printf "\\0${ENV_MARKER}\\0"; env -0`;
-      const { stdout } = await this.rawWsl([
-        '-d',
-        entry.host.distro,
-        '-e',
-        shell,
-        '-ilc',
-        cmd,
-      ]);
+      // exit code ignored: an rc file may exit non-zero after printing.
+      const { stdout } = await this.runWsl(
+        ['-d', entry.host.distro, '-e', shell, '-ilc', cmd],
+        { requireSuccess: false },
+      );
       const env = parseShellEnv(stdout, ENV_MARKER);
       if (env === null) {
         entry.env = null;
         entry.envAt = Date.now();
         entry.status = { ...entry.status, shellEnv: { ok: false, count: 0, ms: Date.now() - t0 } };
-        this.hostErrors[id] = 'shell environment unavailable — using the plain WSL environment';
+        this.setPart(id, 'env', 'shell environment unavailable — using the plain WSL environment');
         log('host', 'host-env', {
           detail: { host: id, ok: false, ms: Date.now() - t0, count: 0, reason: 'no-marker' },
         });
@@ -382,7 +446,7 @@ export class HostsRegistry {
         ...entry.status,
         shellEnv: { ok: true, count: Object.keys(env).length, ms: Date.now() - t0 },
       };
-      delete this.hostErrors[id];
+      this.setPart(id, 'env', null);
       log('host', 'host-env', {
         detail: { host: id, ok: true, ms: Date.now() - t0, count: Object.keys(env).length },
       });
@@ -390,7 +454,7 @@ export class HostsRegistry {
       entry.env = null;
       entry.envAt = Date.now();
       entry.status = { ...entry.status, shellEnv: { ok: false, count: 0, ms: Date.now() - t0 } };
-      this.hostErrors[id] = 'shell environment unavailable — using the plain WSL environment';
+      this.setPart(id, 'env', 'shell environment unavailable — using the plain WSL environment');
       log('host', 'host-env', {
         detail: {
           host: id,
@@ -401,28 +465,6 @@ export class HostsRegistry {
         },
       });
     }
-  }
-
-  private rawWsl(args: string[]): Promise<{ stdout: Buffer; stderr: Buffer }> {
-    const cmd = this.wslCmd();
-    if (!cmd) return Promise.reject(new Error('wsl.exe not found'));
-    const [file, ...prefix] = cmd;
-    return new Promise((resolve, reject) => {
-      execFile(
-        file!,
-        [...prefix, ...args],
-        {
-          timeout: PROBE_TIMEOUT_MS,
-          windowsHide: true,
-          maxBuffer: 4 * 1024 * 1024,
-          encoding: 'buffer',
-        },
-        (error, stdout, stderr) => {
-          if (error) reject(error);
-          else resolve({ stdout, stderr });
-        },
-      );
-    });
   }
 
   private async probeHooks(entry: WslEntry): Promise<'ok' | 'unreachable' | 'untested'> {
@@ -483,10 +525,17 @@ export class HostsRegistry {
     return this.entries.get(id as HostId)?.hookAddr ?? null;
   }
 
+  private setPart(id: string, part: HostErrorPart, message: string | null): void {
+    const parts = this.errorParts.get(id) ?? {};
+    if (message) parts[part] = message;
+    else delete parts[part];
+    if (Object.values(parts).some(Boolean)) this.errorParts.set(id, parts);
+    else this.errorParts.delete(id);
+  }
+
   /** Record or clear a per-host status line (hooks install, store errors). */
-  setError(id: string, message: string | null): void {
-    if (message) this.hostErrors[id] = message;
-    else delete this.hostErrors[id];
+  setError(id: string, part: 'hooksInstall' | 'store', message: string | null): void {
+    this.setPart(id, part, message);
   }
 
   // --- env + spawn -------------------------------------------------------------
@@ -651,10 +700,10 @@ export class HostsRegistry {
   /** hosts:refresh — re-enumerate and re-probe. */
   async refresh(id?: string): Promise<void> {
     this.distros = null;
+    await this.enumerateAsync();
     const targets = id
       ? [...this.entries.values()].filter((e) => e.host.id === id)
-      : [...this.entries.values()];
-    this.enumerate();
+      : this.enabledDistros().map((d) => this.entryFor(d.name, d.stopped));
     for (const entry of targets) {
       entry.probed = false;
       await this.probe(entry);

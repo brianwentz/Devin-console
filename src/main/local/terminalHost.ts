@@ -184,7 +184,8 @@ export class TerminalHost {
     const cmd = hosts().wslCmd();
     try {
       if (!cmd) {
-        this.wslDistrosCache = [];
+        // Don't freeze an unresolved-lookup miss for the process lifetime.
+        if (hosts().wslResolved) this.wslDistrosCache = [];
         return [];
       }
       const [file, ...prefix] = cmd;
