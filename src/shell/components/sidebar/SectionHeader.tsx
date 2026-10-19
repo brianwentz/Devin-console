@@ -20,6 +20,7 @@ export function SectionHeader({
   onReorder,
   onNewInFolder,
   label,
+  title,
   leading,
   dataAttrs,
   moveDisabled = false,
@@ -37,6 +38,8 @@ export function SectionHeader({
   // Optional display label rendered instead of section.name (e.g. a workspace
   // label while the path stays the section key).
   label?: string;
+  // Optional tooltip on the header button (e.g. the long workspace path).
+  title?: string;
   // Optional leading node (e.g. an agent status dot) before the label.
   leading?: ReactNode;
   // Extra data-* attributes on the header button (e.g. agent status).
@@ -66,6 +69,7 @@ export function SectionHeader({
         type="button"
         data-section-kind={section.kind}
         data-section-name={section.name}
+        {...(title !== undefined ? { title } : {})}
         {...dataAttrs}
         data-drop-target={dropTarget}
         data-drop-before={dropBefore}

@@ -7,6 +7,7 @@ import type { SidebarListData, SidebarSession } from '../../../core/sessionTree'
 import { buildSessionTree } from '../../../core/sessionTree';
 import type { WorkspaceEntry } from '../../../core/workspaceTree';
 import type { Rect } from '../../../core/layout';
+import { workspaceLabel } from '../../../core/execHost';
 import { SessionRow, SessionRowButton, type RowRenderOpts } from './SessionRow';
 import { SectionHeader } from './SectionHeader';
 import { useOptimisticList } from './useOptimisticList';
@@ -254,6 +255,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
                     ? {
                         onNewInFolder: onNewSession,
                         label,
+                        title: workspaceLabel(sectionItem.name),
                         leading: headerLeading?.(sectionItem.name),
                         ...(headerAttrs ? { dataAttrs: headerAttrs(sectionItem.name) } : {}),
                       }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SidebarSession } from '../../src/core/sessionTree';
 import {
+  defaultWorkspaceLabel,
   renameWorkspace,
   reorderWorkspaces,
   workspaceEntries,
@@ -24,15 +25,23 @@ function session(overrides: Partial<SidebarSession> & { id: string }): SidebarSe
   };
 }
 
+describe('defaultWorkspaceLabel', () => {
+  it('is the last non-empty segment for win paths, forward slashes, trailing separators, and UNC', () => {
+    expect(defaultWorkspaceLabel(ws1)).toBe('one');
+    expect(defaultWorkspaceLabel('C:/ws/two')).toBe('two');
+    expect(defaultWorkspaceLabel('C:\\ws\\trail\\')).toBe('trail');
+    expect(defaultWorkspaceLabel('/home/u/proj')).toBe('proj');
+    expect(defaultWorkspaceLabel(unc)).toBe('proj');
+  });
+});
+
 describe('workspaceEntries', () => {
-  it('defaults the label to workspaceLabel and honours overrides', () => {
+  it('defaults the label to the basename and honours overrides', () => {
     const entries = workspaceEntries([ws1, unc], { [unc]: 'mine' });
-    expect(entries[0]).toEqual({ path: ws1, label: ws1 });
+    expect(entries[0]).toEqual({ path: ws1, label: 'one' });
     expect(entries[1]).toEqual({ path: unc, label: 'mine' });
-    // No label → the computed display label (UNC shows `<distro> · <linux>`).
-    expect(workspaceEntries([unc], {})[1 - 1]!.label).toBe(
-      'Ubuntu-22.04 · /home/u/proj',
-    );
+    // No label → the basename default.
+    expect(workspaceEntries([unc], {})[0]!.label).toBe('proj');
   });
 });
 
@@ -66,8 +75,13 @@ describe('renameWorkspace', () => {
     expect(labels).toEqual({ [ws1]: 'mine' });
     labels = renameWorkspace(labels, ws1, '   ');
     expect(labels).toEqual({});
-    // Same as the computed default → no key.
-    expect(renameWorkspace({}, unc, 'Ubuntu-22.04 · /home/u/proj')).toEqual({});
+    // Same as the computed basename default → no key.
+    expect(renameWorkspace({}, unc, 'proj')).toEqual({});
+    expect(renameWorkspace({}, ws1, 'one')).toEqual({});
+    // The long form is a *real* label, not the default.
+    expect(renameWorkspace({}, unc, 'Ubuntu-22.04 · /home/u/proj')).toEqual({
+      [unc]: 'Ubuntu-22.04 · /home/u/proj',
+    });
     // Trimmed whitespace around a custom label is stored trimmed.
     expect(renameWorkspace({}, ws1, '  x  ')).toEqual({ [ws1]: 'x' });
   });

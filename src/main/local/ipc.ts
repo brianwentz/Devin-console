@@ -89,7 +89,7 @@ export function setupLocal(): void {
       applyLayout();
     }
   };
-  const menu = new LocalContextMenu(localHost, terminalHost, removeWorkspace);
+  const menu = new LocalContextMenu(localHost, terminalHost, removeWorkspace, applyLayout);
   localContextMenu = menu;
 
   guardedHandle(IpcChannels.localState, () => publicLocalState());

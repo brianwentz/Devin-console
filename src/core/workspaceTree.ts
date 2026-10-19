@@ -2,7 +2,6 @@
 // sidebar sections. Generic over the session type — Local files by a stored
 // `session.workspace`; P4b (Claude) maps via a host-aware cwd matcher. Pure.
 
-import { workspaceLabel } from './execHost';
 import type { SidebarListData, SidebarSession } from './sessionTree';
 
 export interface WorkspaceEntry {
@@ -10,11 +9,19 @@ export interface WorkspaceEntry {
   label: string;
 }
 
+// Default display label: the last non-empty path segment (handles `\` and
+// `/` separators, trailing separators, and UNC `\wsl.localhost\<d>\...\x`
+// -> `x`). The full `workspaceLabel(path)` stays available as the header title.
+export function defaultWorkspaceLabel(path: string): string {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
 export function workspaceEntries(
   paths: string[],
   labels: Record<string, string>,
 ): WorkspaceEntry[] {
-  return paths.map((path) => ({ path, label: labels[path] ?? workspaceLabel(path) }));
+  return paths.map((path) => ({ path, label: labels[path] ?? defaultWorkspaceLabel(path) }));
 }
 
 // Folders = workspace paths in array order (folderTotals is a Cloud-server
@@ -43,14 +50,14 @@ export function reorderWorkspaces(paths: string[], next: string[]): string[] {
 
 // A label identical to the computed default (or blank) stores nothing —
 // the default still renders, and the row reverts when the path's default
-// label changes (e.g. a UNC path gains its distro prefix).
+// label changes.
 export function renameWorkspace(
   labels: Record<string, string>,
   path: string,
   label: string,
 ): Record<string, string> {
   const trimmed = label.trim();
-  if (trimmed === '' || trimmed === workspaceLabel(path)) {
+  if (trimmed === '' || trimmed === defaultWorkspaceLabel(path)) {
     if (!(path in labels)) return labels;
     const next = { ...labels };
     delete next[path];

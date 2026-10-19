@@ -1,10 +1,11 @@
 // Local sidebar context menus — the same test seam as claude/contextMenu.ts:
 // in test mode the popup is described and the localMenuItems/localMenuClick
 // test hooks drive the same callbacks.
-import { clipboard, Menu, shell } from 'electron';
+import { clipboard, dialog, Menu, shell } from 'electron';
 import { resolve } from 'node:path';
 import type { LocalContextMenuRequest } from '../../shared/ipc';
 import { log } from '../log';
+import { defaultWorkspaceLabel } from '../../core/workspaceTree';
 import { getLocalState } from './localState';
 import { state, testMode } from '../state';
 import type { DevinLocalHost } from './acpHost';
@@ -35,6 +36,9 @@ export class LocalContextMenu {
     private readonly host: () => Host | null,
     private readonly terminals: Terminals,
     private readonly removeWorkspace: (path: string) => void,
+    // Republish shell state after a main-side selection change (kept as a
+    // callback so contextMenu.ts doesn't import window.ts).
+    private readonly publish: () => void,
   ) {}
 
   items(): Record<string, unknown>[] {
@@ -109,7 +113,7 @@ export class LocalContextMenu {
         },
         {
           label: 'Remove workspace',
-          click: () => this.removeWorkspace(normalized),
+          click: () => void this.confirmRemove(normalized),
         },
       );
     } else if (arg.kind === 'session') {
@@ -204,6 +208,26 @@ export class LocalContextMenu {
 
   private async newSession(workspace: string): Promise<void> {
     const id = await this.host()?.newSession(workspace);
-    if (typeof id === 'string' && id) state.localSessionId = id;
+    if (typeof id === 'string' && id) {
+      state.localSessionId = id;
+      this.publish();
+    }
+  }
+
+  private async confirmRemove(path: string): Promise<void> {
+    const win = state.windowRef;
+    let confirmed = testMode;
+    if (!confirmed && win) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['Remove', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        message: `Remove workspace "${defaultWorkspaceLabel(path)}"?`,
+        detail: 'Sessions stay on disk; the Local agent for this folder is stopped.',
+      });
+      confirmed = response === 0;
+    }
+    if (confirmed) this.removeWorkspace(path);
   }
 }
