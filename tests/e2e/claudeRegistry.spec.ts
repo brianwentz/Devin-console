@@ -88,7 +88,7 @@ function findMenuItem(items: MenuItem[], label: string): MenuItem | undefined {
 // same contextMenu() items a row right-click would produce.
 async function openClaudeMenu(
   app: ElectronApplication,
-  arg: { kind: 'session' | 'folder' | 'header'; sessionId?: string; name?: string },
+  arg: { kind: 'session' | 'workspace' | 'header'; sessionId?: string; path?: string },
 ): Promise<MenuItem[]> {
   const shell = await shellPage(app);
   // The invoke stays open until a claudeMenuClick resolves it — don't await.
@@ -144,24 +144,24 @@ test('a new transcript file in the config dir is listed within a second', async 
   }
 });
 
-test('pin + move persist in claude-sessions.json across a relaunch', async () => {
+test('pin + workspace persist across a relaunch (ux2 D8)', async () => {
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures);
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
-    // Create the folder via the same IPC the sidebar's inline editor uses.
+    // Add the workspace covering the alpha cwd via the same IPC the sidebar uses.
     const shell = await shellPage(app);
-    await shell.evaluate(() => (window as any).devinworkspaces.claudeFolderCreate('E2E folder'));
-    await expect.poll(async () => (await h.claudeState()).folders).toContain('E2E folder');
+    await shell.evaluate(() =>
+      (window as any).devinworkspaces.claudeWorkspaceAdd('C:\\work\\alpha'),
+    );
+    await expect
+      .poll(async () => (await h.claudeState()).folders)
+      .toContain('C:\\work\\alpha');
 
     const menu = await openClaudeMenu(app, { kind: 'session', sessionId: UA });
     const pin = findMenuItem(menu, 'Pin');
-    const moveToFolder = findMenuItem(menu, 'E2E folder');
-    expect(pin && moveToFolder).toBeTruthy();
+    expect(pin).toBeTruthy();
     await h.claudeMenuClick(pin!.id);
-    await openClaudeMenu(app, { kind: 'session', sessionId: UA });
-    const menu2 = await h.claudeMenuItems();
-    await h.claudeMenuClick(findMenuItem(menu2, 'E2E folder')!.id);
 
     await expect
       .poll(async () =>
@@ -172,7 +172,8 @@ test('pin + move persist in claude-sessions.json across a relaunch', async () =>
       .toContain('"isPinned":true');
     const row = (await h.claudeState()).sessions.find((s) => s.id === UA);
     expect(row?.isPinned).toBe(true);
-    expect(row?.folder).toBe('E2E folder');
+    // The workspace folder is derived from cwd — never stored in the registry.
+    expect(row?.folder).toBe('C:\\work\\alpha');
     // Registry saves are debounced ~200 ms — poll until the file lands.
     await expect
       .poll(async () => {
@@ -180,19 +181,22 @@ test('pin + move persist in claude-sessions.json across a relaunch', async () =>
           const stored = JSON.parse(
             readFileSync(join(profile, 'claude-sessions.json'), 'utf8'),
           );
-          return stored.entries[UA] && stored.folders.includes('E2E folder')
-            ? stored.entries[UA]
-            : undefined;
+          return stored.entries[UA];
         } catch {
           return undefined;
         }
       })
-      .toMatchObject({ pinned: true, folder: 'E2E folder' });
+      .toMatchObject({ pinned: true });
+    const stored = JSON.parse(
+      readFileSync(join(profile, 'claude-sessions.json'), 'utf8'),
+    );
+    expect('folders' in stored).toBe(false);
+    expect('folder' in (stored.entries[UA] ?? {})).toBe(false);
   } finally {
     await closeApp(app);
   }
 
-  // Relaunch against the same profile + fixture copy — pin/folder survive.
+  // Relaunch against the same profile + fixture copy — pin + filing survive.
   const app2 = await launchApp(
     profile,
     join(profile, 'events2.jsonl'),
@@ -205,8 +209,8 @@ test('pin + move persist in claude-sessions.json across a relaunch', async () =>
     await expect.poll(async () => (await h2.claudeState()).status).toBe('ready');
     const row = (await h2.claudeState()).sessions.find((s) => s.id === UA);
     expect(row?.isPinned).toBe(true);
-    expect(row?.folder).toBe('E2E folder');
-    expect((await h2.claudeState()).folders).toContain('E2E folder');
+    expect(row?.folder).toBe('C:\\work\\alpha');
+    expect((await h2.claudeState()).folders).toContain('C:\\work\\alpha');
   } finally {
     await app2.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });

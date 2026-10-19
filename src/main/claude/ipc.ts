@@ -11,10 +11,6 @@ import {
   ClaudeAgentStopArg,
   ClaudeCancelArg,
   ClaudeContextMenuArg,
-  ClaudeFolderCreateArg,
-  ClaudeFolderDeleteArg,
-  ClaudeFolderRenameArg,
-  ClaudeFolderReorderArg,
   ClaudeForkArg,
   ClaudeLoadHistoryArg,
   ClaudeNewSessionArg,
@@ -30,8 +26,11 @@ import {
   ClaudeRevealTranscriptArg,
   ClaudeSessionArchiveArg,
   ClaudeSessionDeleteTranscriptArg,
-  ClaudeSessionMoveArg,
+  ClaudeWorkspaceAddArg,
   ClaudeSessionPinArg,
+  LocalWorkspaceArg,
+  WorkspaceRenameSchema,
+  WorkspaceReorderSchema,
   ClaudeSessionRemoveArg,
   ClaudeSetModelArg,
   ClaudeSetPermissionModeArg,
@@ -66,9 +65,6 @@ export function setupClaude(): ClaudeSessions {
     sessions.rename(sessionId, title),
   );
   on(IpcChannels.claudeFork, ClaudeForkArg, ({ sessionId }) => sessions.fork(sessionId));
-  on(IpcChannels.claudeSessionMove, ClaudeSessionMoveArg, ({ sessionId, folder }) =>
-    sessions.sessionMove(sessionId, folder),
-  );
   on(IpcChannels.claudeSessionPin, ClaudeSessionPinArg, ({ sessionId, pinned }) =>
     sessions.sessionPin(sessionId, pinned),
   );
@@ -84,17 +80,18 @@ export function setupClaude(): ClaudeSessions {
   on(IpcChannels.claudeRevealTranscript, ClaudeRevealTranscriptArg, ({ sessionId }) =>
     sessions.revealTranscript(sessionId),
   );
-  on(IpcChannels.claudeFolderCreate, ClaudeFolderCreateArg, ({ name }) =>
-    sessions.folderCreate(name),
+  // Invoke-style: preload uses ipcRenderer.invoke → LocalResult<null>.
+  handleResult(IpcChannels.claudeWorkspaceAdd, ClaudeWorkspaceAddArg, ({ path }) =>
+    sessions.workspaceAdd(path),
   );
-  on(IpcChannels.claudeFolderRename, ClaudeFolderRenameArg, ({ oldName, newName }) =>
-    sessions.folderRename(oldName, newName),
+  handleResult(IpcChannels.claudeWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) =>
+    sessions.workspaceReorder(paths),
   );
-  on(IpcChannels.claudeFolderDelete, ClaudeFolderDeleteArg, ({ name }) =>
-    sessions.folderDelete(name),
+  handleResult(IpcChannels.claudeWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) =>
+    sessions.workspaceRename(path, label),
   );
-  on(IpcChannels.claudeFolderReorder, ClaudeFolderReorderArg, ({ names }) =>
-    sessions.folderReorder(names),
+  handleResult(IpcChannels.claudeWorkspaceRemove, LocalWorkspaceArg, ({ path }) =>
+    sessions.workspaceRemove(path),
   );
   on(IpcChannels.claudeShowArchived, ClaudeShowArchivedArg, ({ value }) =>
     sessions.setShowArchived(value),
