@@ -1,3 +1,5 @@
+import type { Surface } from '../shared/ipc';
+
 export interface Size {
   width: number;
   height: number;
@@ -47,6 +49,15 @@ export const DEFAULT_TERMINAL_HEIGHT = 280;
 export const MIN_TERMINAL_HEIGHT = 120;
 // Minimum px the main column keeps above an open terminal dock (below the title bar).
 export const TERMINAL_RESERVED_MAIN = 200;
+
+// The terminal dock belongs to the work surfaces only: it is laid out (and
+// Ctrl+` / the rail toggle act) on Cloud, Local and Claude, never on Settings or
+// Analytics. `layout.terminalOpen` persists across a visit to an off-surface —
+// this predicate gates visibility, not the stored preference. Single source of
+// truth for main (native view bounds), App (shell DOM) and Rail (button state).
+export function dockSurface(surface: Surface): boolean {
+  return surface === 'cloud' || surface === 'local' || surface === 'claude';
+}
 
 export function clampTerminalHeight(height: number, windowHeight: number): number {
   const max = Math.max(
