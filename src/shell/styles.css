@@ -182,6 +182,53 @@ button:disabled {
   color: #fff;
 }
 
+/* Splitters: the 6 px gutter is the hit area; the visible element is a
+   centred 1 px hairline that swells to the full gutter with the accent colour
+   on hover (enabled only) and during a drag. */
+.splitter {
+  background: transparent;
+}
+
+.splitter-line {
+  position: absolute;
+  pointer-events: none;
+  background: #2c3949;
+  transition:
+    width 120ms,
+    height 120ms,
+    background-color 120ms;
+}
+
+.splitter[data-axis='x'] > .splitter-line,
+.splitter[data-axis='s'] > .splitter-line {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.splitter[data-axis='y'] > .splitter-line {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.splitter[data-enabled='true']:hover > .splitter-line,
+.splitter[data-dragging='true'] > .splitter-line {
+  width: 100%;
+  height: 100%;
+  background: #6e9bd0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splitter-line {
+    transition: none;
+  }
+}
+
 body.dragging,
 body.dragging * {
   cursor: col-resize !important;

@@ -311,6 +311,59 @@ test('splitter drag live-resizes hosted views without raising the shell', async 
   }
 });
 
+test('splitter renders as a hairline and swells on hover/drag', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-thin-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  try {
+    await expect
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .toBe(true);
+    const shell = await shellPage(app);
+    const line = shell.locator('#splitter .splitter-line');
+    await expect(shell.locator('#splitter')).toBeVisible();
+
+    // The gutter keeps the 6 px hit area; the painted line is a hairline.
+    expect((await shell.locator('#splitter').boundingBox())!.width).toBe(6);
+    await expect.poll(async () => (await line.boundingBox())?.width).toBe(1);
+
+    // Hover swells the line to the full gutter.
+    const box = (await shell.locator('#splitter').boundingBox())!;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + 120;
+    await shell.mouse.move(cx, cy);
+    await expect.poll(async () => (await line.boundingBox())?.width).toBe(6);
+
+    // Drag keeps it thick even with the pointer off the gutter.
+    await shell.mouse.down();
+    await expect
+      .poll(async () => shell.locator('#splitter').getAttribute('data-dragging'))
+      .toBe('true');
+    await shell.mouse.move(cx + 120, cy, { steps: 3 });
+    await expect.poll(async () => (await line.boundingBox())?.width).toBe(6);
+
+    await shell.mouse.up();
+    await expect
+      .poll(async () => shell.locator('#splitter').getAttribute('data-dragging'))
+      .toBe('false');
+    await expect.poll(async () => (await line.boundingBox())?.width).toBe(1);
+
+    // The sessions-column splitter shares the styling when the sidebar is open.
+    const sessionsLine = shell.locator('#sessionsSplitter .splitter-line');
+    await expect(shell.locator('#sessionsSplitter')).toBeVisible();
+    await expect.poll(async () => (await sessionsLine.boundingBox())?.width).toBe(1);
+    const sBox = (await shell.locator('#sessionsSplitter').boundingBox())!;
+    await shell.mouse.move(sBox.x + sBox.width / 2, sBox.y + 120);
+    await expect.poll(async () => (await sessionsLine.boundingBox())?.width).toBe(6);
+  } finally {
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('migrates legacy spike-state.json into settings.json', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
   const logFile = join(profile, 'events.jsonl');

@@ -227,6 +227,8 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     // restores it.
     const splitterBox = await page.locator('#terminalSplitter').boundingBox();
     expect(splitterBox).toBeTruthy();
+    // The painted line is a 1 px hairline while idle.
+    expect((await page.locator('#terminalSplitter .splitter-line').boundingBox())?.height).toBe(1);
     const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
     expect(splitterBox!.x + splitterBox!.width).toBeLessThan(clientWidth);
     const splitCx = splitterBox!.x + splitterBox!.width / 2;
