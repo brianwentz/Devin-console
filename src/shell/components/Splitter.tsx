@@ -1,4 +1,4 @@
-import { useEffect, useRef, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import {
   clampPaneWidth,
   leftChrome,
@@ -33,6 +33,7 @@ function currentPos(
 
 export function Splitter({ axis, rect, enabled }: SplitterProps) {
   const dragging = useRef(false);
+  const [draggingState, setDraggingState] = useState(false);
   const state = useShellState();
   const chrome = state
     ? leftChrome(
@@ -49,20 +50,20 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
     : 0;
 
   useEffect(() => {
+    const reset = () => {
+      dragging.current = false;
+      setDraggingState(false);
+      document.body.classList.remove('dragging');
+      document.body.classList.remove('dragging-y');
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && dragging.current) {
         event.preventDefault();
-        dragging.current = false;
-        document.body.classList.remove('dragging');
-        document.body.classList.remove('dragging-y');
+        reset();
         window.devinworkspaces.dragCancel('escape');
       }
     };
-    const offReset = window.devinworkspaces.onDragReset(() => {
-      dragging.current = false;
-      document.body.classList.remove('dragging');
-      document.body.classList.remove('dragging-y');
-    });
+    const offReset = window.devinworkspaces.onDragReset(reset);
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -88,13 +89,16 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
       role="separator"
       aria-orientation={axis === 'y' ? 'horizontal' : 'vertical'}
       aria-label={label}
-      className="shell-chrome absolute bg-[#2c3949] hover:bg-[#6e9bd0]"
+      className="shell-chrome splitter absolute bg-transparent"
+      data-axis={axis}
+      data-enabled={enabled}
+      data-dragging={draggingState}
       style={{
         left: rect.x,
         top: rect.y,
         width: rect.width,
         height: rect.height,
-        cursor: axis === 'y' ? 'row-resize' : 'col-resize',
+        cursor: enabled ? (axis === 'y' ? 'row-resize' : 'col-resize') : 'default',
         touchAction: 'none',
       }}
       onPointerDown={(event) => {
@@ -102,6 +106,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
         dragging.current = true;
+        setDraggingState(true);
         document.body.classList.add(axis === 'y' ? 'dragging-y' : 'dragging');
         window.devinworkspaces.dragStart(axis, currentPos(axis, pointerPos(event), chrome));
       }}
@@ -112,6 +117,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
       onPointerUp={(event) => {
         if (!dragging.current) return;
         dragging.current = false;
+        setDraggingState(false);
         document.body.classList.remove('dragging');
         document.body.classList.remove('dragging-y');
         window.devinworkspaces.dragEnd(currentPos(axis, pointerPos(event), chrome));
@@ -119,10 +125,13 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
       onPointerCancel={() => {
         if (!dragging.current) return;
         dragging.current = false;
+        setDraggingState(false);
         document.body.classList.remove('dragging');
         document.body.classList.remove('dragging-y');
         window.devinworkspaces.dragCancel();
       }}
-    />
+    >
+      <div className="splitter-line" />
+    </div>
   );
 }
