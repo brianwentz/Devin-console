@@ -138,7 +138,7 @@ export function ClaudeTab() {
         />
         <FieldError inputId="claudeMaxLiveAgentsInput" message={errors.claudeMaxLiveAgents} />
         <span className="text-xs text-[#7f8ca0]">
-          Hard cap on concurrently running Claude agents; the session you're looking at is exempt.
+          Cap on warm Claude agents; the oldest idle one is closed to make room. Running agents are never closed.
         </span>
       </label>
       <WslDistroSelect
