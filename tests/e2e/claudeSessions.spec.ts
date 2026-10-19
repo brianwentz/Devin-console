@@ -167,6 +167,8 @@ test('claude sidebar: rows, filter, menus, view, surface round-trip', async () =
 
     // --- Settings fields round-trip into settings.json ----------------------
     await h.setSurface('settings');
+    await shell.locator('#settingsTab-claude').click();
+    await expect(shell.locator('#claudePathInput')).toBeVisible();
     await setInputValue(app, 'claudePathInput', 'C:\\tools\\claude.exe');
     await setInputValue(app, 'claudeAutoArchiveInput', '30');
     // Leaving via the rail commits the dirty draft (requestSurface).

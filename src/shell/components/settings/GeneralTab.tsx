@@ -1,37 +1,8 @@
 import { useState } from 'react';
-import {
-  CLAUDE_PERMISSION_MODES,
-  isClaudePermissionMode,
-  type DraftField,
-} from '../../../core/settingsDraft';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
-import { errorTextClass, inputClass, inputErrorClass } from './styles';
-
-// Non-empty claude.path that didn't resolve — surfaced inline under the
-// field from the live claude state rather than as a commit-blocking error.
-function CliPathHint() {
-  const state = useShellState();
-  if (!state || state.claude.cliPath !== null) return null;
-  return (
-    <span id="claudePathInputError" className={errorTextClass}>
-      Claude CLI not found at this path
-    </span>
-  );
-}
-
-function fieldInputClass(errors: Partial<Record<DraftField, string>>, field: DraftField): string {
-  return errors[field] ? `${inputClass} ${inputErrorClass}` : inputClass;
-}
-
-function FieldError({ inputId, message }: { inputId: string; message: string | undefined }) {
-  if (!message) return null;
-  return (
-    <span id={`${inputId}Error`} className={errorTextClass}>
-      {message}
-    </span>
-  );
-}
+import { FieldError, fieldInputClass } from './fields';
+import { inputClass } from './styles';
 
 function HostsBlock() {
   const state = useShellState();
@@ -284,77 +255,6 @@ export function GeneralTab() {
           onChange={(event) => updateDraft({ sessionsOpen: event.target.checked })}
         />
         <span>Show the sessions column (Cloud and Claude)</span>
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">Claude Code path</span>
-        <input
-          id="claudePathInput"
-          className={fieldInputClass(errors, 'claudePath')}
-          value={draft.claudePath}
-          aria-invalid={errors.claudePath ? 'true' : undefined}
-          onChange={(event) => updateDraft({ claudePath: event.target.value })}
-          placeholder="e.g. C:\Users\me\.local\bin\claude.exe"
-        />
-        <FieldError inputId="claudePathInput" message={errors.claudePath} />
-        {draft.claudePath.trim() !== '' && (
-          <CliPathHint />
-        )}
-        <span className="text-xs text-[#7f8ca0]">
-          Blank = find claude on PATH.
-        </span>
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">
-          Auto-archive Claude sessions idle for (days, 0 = off)
-        </span>
-        <input
-          id="claudeAutoArchiveInput"
-          className={fieldInputClass(errors, 'claudeAutoArchiveDays')}
-          type="number"
-          min={0}
-          max={365}
-          step={1}
-          value={draft.claudeAutoArchiveDays}
-          aria-invalid={errors.claudeAutoArchiveDays ? 'true' : undefined}
-          onChange={(event) =>
-            updateDraft({ claudeAutoArchiveDays: event.target.value })
-          }
-        />
-        <FieldError inputId="claudeAutoArchiveInput" message={errors.claudeAutoArchiveDays} />
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">Default permission mode for new Claude sessions</span>
-        <select
-          id="claudePermissionModeDefault"
-          className={fieldInputClass(errors, 'claudePermissionMode')}
-          value={draft.claudePermissionMode}
-          onChange={(event) => {
-            const mode = event.target.value;
-            if (isClaudePermissionMode(mode)) updateDraft({ claudePermissionMode: mode });
-          }}
-        >
-          {CLAUDE_PERMISSION_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-        <FieldError inputId="claudePermissionModeDefault" message={errors.claudePermissionMode} />
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">Claude model</span>
-        <input
-          id="claudeModelInput"
-          className={fieldInputClass(errors, 'claudeModel')}
-          value={draft.claudeModel}
-          aria-invalid={errors.claudeModel ? 'true' : undefined}
-          onChange={(event) => updateDraft({ claudeModel: event.target.value })}
-          placeholder="e.g. claude-sonnet-4-5"
-        />
-        <FieldError inputId="claudeModelInput" message={errors.claudeModel} />
-        <span className="text-xs text-[#7f8ca0]">
-          Blank = the Claude CLI's default model. Applies to new sessions.
-        </span>
       </label>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">Shell command</span>
