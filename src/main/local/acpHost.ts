@@ -36,8 +36,10 @@ import {
   type StopReason,
 } from '../../core/localModel';
 import { LinkScanner, type PrLinkContext } from '../../core/prLinks';
+import { isWslHost, LOCAL_HOST, type ExecHost } from '../../core/execHost';
 import type { LocalSessionSummary } from '../../shared/ipc';
 import { log } from '../log';
+import { hosts } from '../hosts';
 import { getLocalState, replaceLocalState, update } from './localState';
 
 const INITIALIZE_TIMEOUT_MS = 60_000;
@@ -233,6 +235,19 @@ export class DevinLocalHost {
     return this.command?.file ?? null;
   }
 
+  // ---- exec hosts ----
+
+  /** The exec host a workspace path belongs to (UNC → wsl, else local). */
+  private hostFor(workspace: string): ExecHost {
+    return hosts().hostById(hosts().pathHostId(workspace)) ?? LOCAL_HOST;
+  }
+
+  /** Workspace path in the form the agent expects (linux for wsl hosts). */
+  private agentCwd(workspace: string): string {
+    const host = this.hostFor(workspace);
+    return isWslHost(host) ? hosts().hostPath(host, workspace) : workspace;
+  }
+
   // ---- workspaces ----
 
   listWorkspaces(): string[] {
@@ -284,7 +299,16 @@ export class DevinLocalHost {
 
   async ensureAgent(workspace: string): Promise<AgentHandle> {
     if (this.disposed) throw new Error('local host disposed');
-    if (!this.command) {
+    const execHost = this.hostFor(workspace);
+    if (isWslHost(execHost)) {
+      // Prime probe + env capture before checking devin presence.
+      await hosts().shellEnv(execHost);
+      if (!hosts().status(execHost.id)?.devin.path) {
+        const message = `${execHost.distro}: ${INSTALL_GUIDANCE}`;
+        update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: message }));
+        throw new Error(message);
+      }
+    } else if (!this.command) {
       update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: INSTALL_GUIDANCE }));
       throw new Error(INSTALL_GUIDANCE);
     }
@@ -324,22 +348,35 @@ export class DevinLocalHost {
   }
 
   private async start(handle: AgentHandle): Promise<void> {
-    const command = this.command;
-    if (!command) throw new Error(INSTALL_GUIDANCE);
     const { workspace } = handle;
+    const execHost = this.hostFor(workspace);
+    const command = isWslHost(execHost) ? null : this.command;
+    if (!isWslHost(execHost) && !command) throw new Error(INSTALL_GUIDANCE);
     handle.generation += 1;
     const generation = handle.generation;
     handle.exit = deferred();
     handle.remoteToUi.clear();
     update((state) => upsertAgent(state, workspace, { status: 'starting', error: undefined, retryInMs: undefined }));
-    log('local', 'agent-start', { detail: { workspace, generation, file: command.file } });
+    log('local', 'agent-start', { detail: { workspace, generation, file: command?.file ?? null, host: execHost.id } });
 
-    const child = spawn(command.file, command.args, {
-      cwd: workspace,
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    let child: ChildProcess;
+    if (isWslHost(execHost)) {
+      // Through `wsl.exe -d D --cd <linux ws> -e /usr/bin/env …` so the agent
+      // runs inside the distro with the captured shell env.
+      await hosts().shellEnv(execHost);
+      child = hosts().spawnOn(execHost, {
+        file: hosts().status(execHost.id)?.devin.path ?? 'devin',
+        args: ['acp'],
+        cwd: hosts().hostPath(execHost, workspace),
+      });
+    } else {
+      child = spawn(command!.file, command!.args, {
+        cwd: workspace,
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    }
     handle.child = child;
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
@@ -703,13 +740,17 @@ export class DevinLocalHost {
     return session;
   }
 
-  async newSession(workspace: string, cwd: string = workspace): Promise<string> {
+  async newSession(workspace: string): Promise<string> {
     const normalized = resolve(workspace);
     const handle = await this.ensureAgent(normalized);
     const connection = handle.connection;
     if (!connection) throw new Error('agent not connected');
     const response = await Promise.race([
-      withTimeout(connection.newSession({ cwd, mcpServers: [] }), INITIALIZE_TIMEOUT_MS, 'session/new'),
+      withTimeout(
+        connection.newSession({ cwd: this.agentCwd(normalized), mcpServers: [] }),
+        INITIALIZE_TIMEOUT_MS,
+        'session/new',
+      ),
       handle.exit.promise,
     ]);
     const createdAt = new Date().toISOString();
@@ -744,7 +785,11 @@ export class DevinLocalHost {
       update((state) => resetHistory(state, session.id));
       await Promise.race([
         withTimeout(
-          connection.loadSession({ sessionId: session.id, cwd: session.workspace, mcpServers: [] }),
+          connection.loadSession({
+            sessionId: session.id,
+            cwd: this.agentCwd(session.workspace),
+            mcpServers: [],
+          }),
           INITIALIZE_TIMEOUT_MS,
           'session/load',
         ),
@@ -758,7 +803,11 @@ export class DevinLocalHost {
     if (!existing) throw new Error('history not supported by agent');
     // Crash recovery without loadSession: fresh remote session, UI history kept.
     const response = await Promise.race([
-      withTimeout(connection.newSession({ cwd: session.workspace, mcpServers: [] }), INITIALIZE_TIMEOUT_MS, 'session/new'),
+      withTimeout(
+        connection.newSession({ cwd: this.agentCwd(session.workspace), mcpServers: [] }),
+        INITIALIZE_TIMEOUT_MS,
+        'session/new',
+      ),
       handle.exit.promise,
     ]);
     handle.remoteToUi.set(response.sessionId, session.id);
@@ -918,7 +967,11 @@ export class DevinLocalHost {
     }
     if (handle?.connection && handle.capabilities.sessionList) {
       const response = await Promise.race([
-        withTimeout(handle.connection.listSessions({ cwd: normalized }), INITIALIZE_TIMEOUT_MS, 'session/list'),
+        withTimeout(
+          handle.connection.listSessions({ cwd: this.agentCwd(normalized) }),
+          INITIALIZE_TIMEOUT_MS,
+          'session/list',
+        ),
         handle.exit.promise,
       ]);
       update((state) => {
@@ -993,7 +1046,11 @@ export class DevinLocalHost {
     });
     await Promise.race([
       withTimeout(
-        connection.loadSession({ sessionId, cwd: normalized, mcpServers: [] }),
+        connection.loadSession({
+          sessionId,
+          cwd: this.agentCwd(normalized),
+          mcpServers: [],
+        }),
         INITIALIZE_TIMEOUT_MS,
         'session/load',
       ),

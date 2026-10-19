@@ -107,7 +107,7 @@ await Promise.all([
   // Claude SDK probes (plans/claude-sessions-phase-1.md). The Agent SDK is
   // ESM-only (createRequire(import.meta.url) fails when bundled to cjs), so
   // it stays external and the probes load it with a dynamic import().
-  ...['claude-sdk-probe', 'claude-hooks-probe', 'claude-store-probe'].map((name) =>
+  ...['claude-sdk-probe', 'claude-hooks-probe', 'claude-store-probe', 'hosts-probe'].map((name) =>
     build({
       entryPoints: ['scripts/' + name + '.ts'],
       bundle: true,
@@ -128,6 +128,15 @@ await Promise.all([
     format: 'esm',
     external: ['@anthropic-ai/claude-agent-sdk'],
     outfile: 'out/fixtures/fakeClaudeSdk.mjs',
+  }),
+  // Fake wsl.exe for hosts e2e (DEVIN_WORKSPACES_TEST_WSL_CMD).
+  build({
+    entryPoints: ['tests/fixtures/fakeWsl.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    outfile: 'out/fixtures/fakeWsl.cjs',
   }),
   // Phase 3 fake `claude` CLI for background agents
   // (DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD).

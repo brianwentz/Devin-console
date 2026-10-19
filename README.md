@@ -111,6 +111,17 @@ The **Claude** surface (sparkle icon in the rail) lists the Claude Code sessions
 
 **Known limitation.** One writer at a time — while a session's Terminal tab is open the chat shows its live history but you type in the terminal; the composer re-enables when the terminal closes.
 
+## Running sessions in WSL
+
+On Windows, Devin Workspaces can run Claude and Devin Local sessions *inside* your WSL distros — same machine, Linux environment.
+
+- **Hosts.** The app lists your distros from `wsl.exe -l -v` — running and the default distro are enabled automatically; stopped and other distros can be switched on in **Settings → General → Hosts**. The app never starts a stopped distro implicitly; enabling one launches it on your behalf. Each host shows its state (ready / probing / stopped / disabled / error), whether `claude`/`devin`/`gh`/`inotifywait` were found inside it, and its hook reachability.
+- **Environment.** Sessions run as your distro user with your interactive login-shell environment — the app captures it once via `bash -ilc` (the same env a terminal gets: PATH, ssh-agent socket, tokens, `nvm`/`sdkman` exports) and refreshes it at spawn when it's older than a minute. Per-distro shell, home, CLI paths and a "skip env capture" switch live under the host's **Overrides** in Settings → General. After editing your rc files use **Re-check** (Settings → Hosts or the session's context menu → *Re-check host environment*) to recapture.
+- **Claude sessions.** Each enabled distro's `~/.claude` is listed alongside your Windows sessions; rows carry a distro chip and per-host problems (missing CLI, env-capture failure, version mismatch, hook install issues) surface as a status line at the top of the sidebar. Pick a folder under `\\wsl.localhost\<distro>\…` when creating a session to run it on that host (select the default distro in Settings → Hosts to start the folder picker there); its chat runs `claude` inside the distro and its Terminal tab opens an interactive login shell there.
+- **Devin Local.** A workspace whose path is under the same `\\wsl.localhost\<distro>` root runs `devin acp` inside the distro (the `devin` CLI must be installed there — its row shows `devin found/not found`).
+- **Hooks.** Claude activity hooks POST to the app's loopback listener. Inside WSL the distro can reach `127.0.0.1` when it's running mirrored networking; in NAT mode the app additionally binds the listener on the Windows `vEthernet (WSL)` address and rewrites hook URLs to it — the status is shown as `hooks ok/unreachable` on the host row.
+- **Limitations.** Stopped distros are never started automatically (enable them explicitly); `CLAUDE_CONFIG_DIR` inside the distro is not honoured (sessions always live under `<home>/.claude`); SSH/remote hosts are not supported — local machine and WSL only.
+
 ## Settings reference
 
 Settings is split into five tabs: **General**, **Link Handling**, **Passwords**, **Notifications** and **Updates**. Fields save automatically when you switch tabs, leave Settings or quit; invalid values are flagged inline and block the save. The API token Save/Clear and password Add/Edit buttons are explicit actions.
@@ -129,6 +140,8 @@ Settings is split into five tabs: **General**, **Link Handling**, **Passwords**,
 | Model | General | Claude chat model override; blank = the CLI's default |
 | Claude keep-alive / max live agents | *(settings.json only)* | `claude.keepAliveMinutes` (1–240, default 15) — how long an idle Claude agent stays warm — and `claude.maxLiveAgents` (1–10, default 3) — how many run at once. No control in Settings yet; edit the file while the app is closed |
 | Shell command | General | Blank = Windows Terminal default profile (else PowerShell) on Windows, `$SHELL` on macOS; e.g. `wsl.exe -d Ubuntu` or `/bin/zsh -l` |
+| Hosts | General | Per execution host (`local` + each `wsl:<distro>`): state badge, CLI/env/hooks facts, enable checkbox (wsl rows), **Re-check** and **Overrides** (`claudePath`, `devinPath`, `home`, `shell`, `envCaptureDisabled`) |
+| Default WSL distro for new sessions | General | `hosts.defaultWslDistro` — the folder picker for new Claude sessions/workspaces starts in that distro's home; "none" = current directory picker |
 | Open non-GitHub links in system browser | Link Handling | GitHub, tenant and rule-matched links always stay in the pane |
 | Link rules | Link Handling | Up to 100 prefix or regular-expression rules; matching http(s) links open as pane tabs instead of the system browser (GitHub and your tenant are matched first). *Test a URL* shows where a link would go |
 | Passwords | Passwords | Origin + username + password, encrypted with DPAPI (Windows) / Keychain (macOS); autofill fills a single match on load, offers an account picker when several match, and asks to save/update after a sign-in; rows support show/copy/edit/delete |

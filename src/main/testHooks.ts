@@ -9,6 +9,7 @@ import { cloudViews } from './cloudViews';
 import { fromHostedView, fromShell, guardedHandle } from './ipcGuard';
 import { terminalHost } from './local/terminalHost';
 import type { Surface } from '../shared/ipc';
+import type { HostId } from '../core/execHost';
 import { identityResolver } from './identity';
 import { notificationStore } from './notifications';
 import { notifier, openNotification, openPr, openPrs, openSessionPr } from './notifier';
@@ -32,6 +33,7 @@ import { claudeSessions } from './claude/sessions';
 import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
+import { hosts } from './hosts';
 
 export function registerTestHooks(): void {
   if (!testMode) return;
@@ -108,6 +110,11 @@ export function registerTestHooks(): void {
           state.windowRef?.getContentBounds() ?? { x: 0, y: 0, width: 0, height: 0 },
           layoutState(),
         ).sessions,
+      // Execution hosts (WSL) — enumeration, per-host status, env key names.
+      hosts: () => hosts().statuses(),
+      hostStatus: (id: string) => hosts().status(id as HostId),
+      hostRefresh: (id?: string) => hosts().refresh(id as HostId | undefined),
+      hostShellEnvKeys: (id: string) => hosts().shellEnvKeys(id as HostId),
       saveCredential: (credential: { origin: string; username: string; password: string }) =>
         state.credentials?.add(credential) ?? null,
       listCredentials: () => state.credentials?.list() ?? [],

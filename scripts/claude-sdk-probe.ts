@@ -4,12 +4,13 @@
 //   npx electron out/scripts/sdk-probe.cjs -> docs/evidence/claude-sdk-probe-electron-<ts>.jsonl
 // Every step appends { step, ok, ms, detail }; transcript/tool text is redacted
 // to lengths — never logged.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveClaudePath } from '../src/main/claude/claudePath';
+import { parseShellEnv, spawnSpec, wslHost } from '../src/core/execHost';
 
 type Sdk = typeof import('@anthropic-ai/claude-agent-sdk');
 
@@ -57,9 +58,162 @@ function projectFileList(dir: string): Set<string> {
   return set;
 }
 
+// --host wsl:<distro> / DEVIN_WORKSPACES_PROBE_HOST: run the same new+resume
+// pair against the distro's `claude`, spawned through spawnSpec with the
+// captured -ilc environment (mirrors src/main/hosts.ts spawnOn — the probe
+// must not import Electron state).
+const WSL_ENV_MARKER = '__DW_ENV__';
+
+function runWslArgs(
+  args: string[],
+  opts: { requireSuccess?: boolean } = {},
+): Promise<{ stdout: Buffer; code: number | null; ms: number }> {
+  const t0 = Date.now();
+  return new Promise((resolveP, reject) => {
+    const child = spawn('wsl.exe', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const stdout: Buffer[] = [];
+    const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+    child.stdout.on('data', (c: Buffer) => stdout.push(c));
+    child.once('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      if ((opts.requireSuccess ?? true) && code !== 0) {
+        reject(new Error(`wsl.exe exited ${code}`));
+        return;
+      }
+      resolveP({ stdout: Buffer.concat(stdout), code, ms: Date.now() - t0 });
+    });
+  });
+}
+
+function diffEnv(env: Record<string, string | undefined> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (v !== undefined && v !== process.env[k]) out[k] = v;
+  }
+  return out;
+}
+
+async function runHostProbe(sdk: Sdk, distro: string): Promise<void> {
+  record('wsl-host', true, 0, { distro });
+  const homeRes = await runWslArgs(['-d', distro, '-e', '/bin/sh', '-c', 'echo "$HOME"']);
+  const home = homeRes.stdout.toString('utf8').trim().split('\n')[0] ?? '/root';
+  const shellRes = await runWslArgs([
+    '-d', distro, '-e', '/bin/sh', '-c', 'getent passwd "$(id -un)" | cut -d: -f7',
+  ]);
+  const shell = shellRes.stdout.toString('utf8').trim().split('\n')[0] ?? '/bin/bash';
+  const cap = await runWslArgs(
+    ['-d', distro, '-e', shell, '-ilc', `printf "\\0${WSL_ENV_MARKER}\\0"; env -0`],
+    { requireSuccess: false },
+  );
+  const env = parseShellEnv(cap.stdout, WSL_ENV_MARKER) ?? {};
+  const cliRes = await runWslArgs(
+    ['-d', distro, '-e', shell, '-ilc', 'command -v claude'],
+    { requireSuccess: false },
+  );
+  const claudePath = cliRes.stdout.toString('utf8').trim().split('\n')[0] ?? 'claude';
+  const host = wslHost(distro, home);
+  record('wsl-env', true, cap.ms, {
+    count: Object.keys(env).length,
+    ok: cap.stdout.includes(WSL_ENV_MARKER),
+    shell,
+    claude: cliRes.code === 0 ? 'found' : 'missing',
+  });
+
+  const spawnClaudeCodeProcess = (o: {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+    signal: AbortSignal;
+  }) => {
+    const spec = spawnSpec(
+      host,
+      { file: o.command, args: o.args, cwd: o.cwd || home, env: diffEnv(o.env) },
+      env,
+    );
+    return spawn(spec.file, spec.args, {
+      cwd: homedir(),
+      env: process.env,
+      signal: o.signal,
+      stdio: 'pipe',
+    });
+  };
+
+  const sessionId = randomUUID();
+  let init: Record<string, unknown> | null = null;
+  await step('wsl-new', async () => {
+    const q = sdk.query({
+      prompt: 'Reply with the single word pong',
+      options: {
+        cwd: home,
+        sessionId,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        pathToClaudeCodeExecutable: claudePath || 'claude',
+        spawnClaudeCodeProcess,
+        settingSources: [] as [],
+      } as never,
+    });
+    for await (const msg of q) {
+      const m = msg as Record<string, unknown>;
+      if (m.type === 'system' && m.subtype === 'init') init = m;
+    }
+    const plugins = (init as { plugins?: unknown[] } | null)?.plugins?.length ?? -1;
+    const skills = (init as { skills?: unknown[] } | null)?.skills?.length ?? -1;
+    return { sessionIdMatches: (init as { session_id?: string } | null)?.session_id === sessionId, plugins, skills, initFieldsPresent: plugins > 0 && skills > 0 };
+  });
+
+  await step('wsl-resume-bash', async () => {
+    let toolText = '';
+    const q = sdk.query({
+      prompt: 'Run exactly this and report the output: echo "$SSH_AUTH_SOCK"; which node; pwd',
+      options: {
+        cwd: home,
+        resume: sessionId,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        pathToClaudeCodeExecutable: claudePath || 'claude',
+        spawnClaudeCodeProcess,
+        settingSources: [] as [],
+      } as never,
+    });
+    for await (const msg of q) {
+      const m = msg as Record<string, unknown>;
+      if (m.type === 'user') {
+        const content = (m.message as { content?: unknown[] })?.content ?? [];
+        for (const block of content) {
+          const b = block as { type?: string; content?: string };
+          if (b.type === 'tool_result' && typeof b.content === 'string') toolText += b.content;
+        }
+      }
+    }
+    return {
+      toolTextLen: toolText.length,
+      sawSockPath: toolText.includes('/tmp/'),
+      sawNodePath: toolText.includes('node'),
+      pwdIsHome: toolText.includes(home),
+    };
+  });
+}
+
 async function run(): Promise<void> {
   // Header: SDK version, bundled CLI manifest version, installed CLI version.
   const sdk: Sdk = await import('@anthropic-ai/claude-agent-sdk');
+  const hostFlagIdx = process.argv.findIndex((a) => a === '--host');
+  const probeHost =
+    (hostFlagIdx >= 0 ? process.argv[hostFlagIdx + 1] : undefined) ??
+    process.env.DEVIN_WORKSPACES_PROBE_HOST;
+  if (probeHost?.startsWith('wsl:')) {
+    await runHostProbe(sdk, probeHost.slice(4));
+    return;
+  }
   const sdkPkg = JSON.parse(
     readFileSync(join('node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'), 'utf8'),
   ) as { version: string };

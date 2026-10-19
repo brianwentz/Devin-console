@@ -23,6 +23,7 @@ import { cloudSessions } from './cloudSessions';
 import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { terminalHost } from './local/terminalHost';
+import { hosts } from './hosts';
 import { log } from './log';
 import { notificationsUnread } from './notifications';
 import { allOpenPullRequests, prStore } from './prs';
@@ -176,6 +177,7 @@ export function publicState(): ShellState {
         ? state.activeTerminalId
         : (terminals.at(-1)?.id ?? null);
     })(),
+    hosts: hosts().statuses(),
   };
 }
 

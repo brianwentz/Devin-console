@@ -88,6 +88,7 @@ const FIELD_INPUT: Record<DraftField, string> = {
   sessionsKeepAliveHours: 'sessionsKeepAliveHours',
   terminalAllSurfaces: 'terminalAllSurfacesInput',
   terminalShell: 'terminalShellInput',
+  defaultWslDistro: 'defaultWslDistroSelect',
   claudePath: 'claudePathInput',
   claudeAutoArchiveDays: 'claudeAutoArchiveInput',
   claudePermissionMode: 'claudePermissionModeDefault',

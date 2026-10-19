@@ -14,6 +14,8 @@ import { state } from '../state';
 import { notificationStore } from '../notifications';
 import { allOpenPullRequests, prStore } from '../prs';
 import { prTitles } from '../prTitles';
+import { hosts } from '../hosts';
+import type { HostId } from '../../core/execHost';
 import type { ClaudeSessions } from './sessions';
 
 // Claude PR state refresh: every 10 min while the window is focused, and
@@ -29,6 +31,16 @@ export class ClaudePrTracking {
     // Title/state cache landings feed setPrState; refresh non-final entries
     // every 10 min while focused.
     prTitles.onChange = this.onCacheChange;
+    // Prefer the PR-owning session's host for the `gh` fallback — on this
+    // machine gh is authenticated inside WSL, not on Windows.
+    prTitles.ghResolver = (url: string) => {
+      const entry = Object.values(this.owner.registry.entries).find((e) =>
+        e.prs.some((pr) => pr.url === url),
+      );
+      const hostId = (entry?.host ?? 'local') as HostId;
+      if (hostId === 'local') return null;
+      return hosts().ghSpec(hostId);
+    };
     this.prRefreshTimer = setInterval(() => {
       if (state.windowRef?.isFocused()) this.refreshPrStates('timer');
     }, PR_STATE_REFRESH_MS);
@@ -39,6 +51,7 @@ export class ClaudePrTracking {
     if (this.prRefreshTimer) clearInterval(this.prRefreshTimer);
     this.prRefreshTimer = null;
     if (prTitles.onChange === this.onCacheChange) prTitles.onChange = null;
+    prTitles.ghResolver = null;
   }
 
   private readonly onCacheChange = (): void => {

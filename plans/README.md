@@ -13,6 +13,7 @@ Design history of the Claude Code integration (Phases 0–7). The files are kept
 | `claude-sessions-phase-5.md` | Phase 5 — Claude PRs in the PR panel, sidebar PR badges, final docs | Done (PR #66) |
 | `claude-sessions-phase-6.md` | Phase 6 — limitations and deferrals from Phases 1–5 | Done (PR #68) |
 | `claude-sessions-phase-7-cleanup.md` | Phase 7 — code hygiene, lint, docs consolidation, dependency/installer budget, repository hygiene | 7a done (PR #69); 7b in progress |
+| `exec-hosts-wsl.md` | Phase 8 — execution hosts: Claude Code and Devin Local sessions inside WSL distros | Implemented — PR pending |
 
 ## How we worked
 

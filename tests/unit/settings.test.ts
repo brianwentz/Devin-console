@@ -444,3 +444,55 @@ describe('claude settings', () => {
     ).toBe(false);
   });
 });
+
+describe('hosts settings', () => {
+  it('parse({}) yields the hosts defaults', () => {
+    const settings = SettingsSchema.parse({});
+    expect(settings.hosts).toEqual({
+      wslEnabled: true,
+      wslDistros: null,
+      defaultWslDistro: null,
+      overrides: {},
+    });
+  });
+
+  it('patches hosts fields without resetting the rest', () => {
+    const base = SettingsSchema.parse({});
+    const next = mergeSettings(base, {
+      hosts: { wslEnabled: false, defaultWslDistro: 'Ubuntu-22.04' },
+    });
+    expect(next.hosts.wslEnabled).toBe(false);
+    expect(next.hosts.defaultWslDistro).toBe('Ubuntu-22.04');
+    expect(next.hosts.wslDistros).toBeNull();
+    expect(next.hosts.overrides).toEqual({});
+  });
+
+  it('merges overrides per host and per field', () => {
+    const base = mergeSettings(SettingsSchema.parse({}), {
+      hosts: {
+        overrides: {
+          'wsl:Ubuntu-22.04': { claudePath: '/u/claude', home: '/home/b' },
+          'wsl:Other': { envCaptureDisabled: true },
+        },
+      },
+    });
+    // A second patch to one host keeps its other fields and other hosts.
+    const next = mergeSettings(base, {
+      hosts: { overrides: { 'wsl:Ubuntu-22.04': { shell: '/bin/zsh' } } },
+    });
+    expect(next.hosts.overrides['wsl:Ubuntu-22.04']).toEqual({
+      claudePath: '/u/claude',
+      home: '/home/b',
+      shell: '/bin/zsh',
+    });
+    expect(next.hosts.overrides['wsl:Other']).toEqual({ envCaptureDisabled: true });
+  });
+
+  it('rejects malformed hosts patches', () => {
+    const current = SettingsSchema.parse({});
+    expect(mergeSettings(current, { hosts: { wslEnabled: 'yes' } })).toBe(current);
+    expect(
+      SettingsPatchSchema.safeParse({ hosts: { wslDistros: 'Ubuntu' } }).success,
+    ).toBe(false);
+  });
+});

@@ -18,6 +18,8 @@ import {
 import { IpcChannels, type TerminalSummary } from '../../shared/ipc';
 import { LinkScanner } from '../../core/prLinks';
 import { claudeScope, localScope } from '../../core/tabModel';
+import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
+import { hosts } from '../hosts';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { resolveDevinPath } from './acpHost';
@@ -59,6 +61,7 @@ export type { TerminalSummary };
 
 interface TerminalEntry {
   id: string;
+  host: HostId;
   kind: TerminalKind;
   sessionId: string | null;
   cwd: string;
@@ -124,6 +127,8 @@ export class TerminalHost {
   claudeGate: {
     onOpen: (sessionId: string) => Promise<void>;
     onExit: (sessionId: string) => void;
+    // The exec host a claude session runs on ('local' or 'wsl:<distro>').
+    resolveHost: (sessionId: string) => HostId;
   } | null = null;
 
   constructor(private readonly testMode: boolean) {}
@@ -176,8 +181,15 @@ export class TerminalHost {
   private wslDistrosCache: string[] | null = null;
   private wslDistros(): string[] {
     if (this.wslDistrosCache) return this.wslDistrosCache;
+    const cmd = hosts().wslCmd();
     try {
-      const result = spawnSync('wsl.exe', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true });
+      if (!cmd) {
+        // Don't freeze an unresolved-lookup miss for the process lifetime.
+        if (hosts().wslResolved) this.wslDistrosCache = [];
+        return [];
+      }
+      const [file, ...prefix] = cmd;
+      const result = spawnSync(file!, [...prefix, '-l', '-q'], { encoding: 'utf16le', windowsHide: true });
       const raw = result.stdout ?? '';
       this.wslDistrosCache = raw
         .split(/[\r\n]+/)
@@ -352,23 +364,40 @@ export class TerminalHost {
     rows: number,
   ): Promise<OpenResult> {
     const workspaces = (state.settings?.current.workspaces ?? []).map((w) => resolve(w));
+    const execHost: ExecHost =
+      options.kind === 'claude'
+        ? (hosts().hostById(this.claudeGate?.resolveHost(options.sessionId) ?? 'local') ??
+          LOCAL_HOST)
+        : options.kind === 'devin'
+          ? (hosts().hostById(hosts().pathHostId(options.workspace)) ?? LOCAL_HOST)
+          : LOCAL_HOST;
+    const wslExec = isWslHost(execHost);
     const normalized =
       options.kind === 'devin'
         ? resolve(options.workspace)
         : options.kind === 'claude'
-          ? // A session cwd that no longer exists can't host a pty (ConPTY
-            // error 267) — fall back to home.
-            resolve(options.cwd && existsSync(options.cwd) ? options.cwd : homedir())
+          ? wslExec
+            ? // The linux cwd is used verbatim as `wsl.exe --cd`; a Windows
+              // resolve() would mangle it and wsl.exe rejects UNC cwds.
+              (options.cwd ?? (isWslHost(execHost) ? (execHost.home ?? '/') : '/'))
+            : // A session cwd that no longer exists can't host a pty (ConPTY
+              // error 267) — fall back to home.
+              resolve(options.cwd && existsSync(options.cwd) ? options.cwd : homedir())
           : resolve(options.cwd ?? workspaces[0] ?? homedir());
     // Ptys only run inside configured workspaces (plus the home dir for the
     // generic shell kind) — same rule as acpHost's workspace allow-list.
-    const allowed =
-      options.kind === 'devin'
-        ? workspaces
-        : options.kind === 'claude'
-          ? [...workspaces, resolve(homedir()), normalized]
-          : [...workspaces, resolve(homedir())];
-    if (!allowed.includes(normalized)) {
+    // wsl-host claude ptys are exempt: the linux cwd cannot match a Windows
+    // workspace path, and the session gate already authorizes the session.
+    const allowed = wslExec
+      ? true
+      : (
+          options.kind === 'devin'
+            ? workspaces
+            : options.kind === 'claude'
+              ? [...workspaces, resolve(homedir()), normalized]
+              : [...workspaces, resolve(homedir())]
+        ).includes(normalized);
+    if (!allowed) {
       log('local', 'terminal-open', {
         detail: {
           cwd: normalized,
@@ -388,8 +417,25 @@ export class TerminalHost {
       }
     }
     // Resolve before any handoff work so a broken command never touches the
-    // session's terminalOwned state.
-    const command = this.resolveCommand(options);
+    // session's terminalOwned state. For a wsl-host claude pty the binary is
+    // the distro's `claude` (probed path or login-shell PATH lookup).
+    let command: ResolvedCommand | { error: string };
+    if (wslExec && options.kind !== 'shell') {
+      // The binary lives inside the distro: probed path, else a login-shell
+      // PATH lookup via the `-ilc` wrapper.
+      const status = hosts().status(execHost.id);
+      command = {
+        file:
+          options.kind === 'claude'
+            ? (status?.claude.path ?? 'claude')
+            : (status?.devin.path ?? 'devin'),
+        args: [],
+        label: isWslHost(execHost) ? execHost.distro : null,
+        appendCwd: false,
+      };
+    } else {
+      command = this.resolveCommand(options);
+    }
     if ('error' in command) {
       log('local', 'terminal-open', { detail: { cwd: normalized, ok: false } });
       return { ok: false, error: command.error };
@@ -438,7 +484,7 @@ export class TerminalHost {
       // Lazy: a missing/broken native addon must not break app startup.
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- deliberate lazy require inside try
       const nodePty = require('node-pty') as typeof pty;
-      const args = [
+      let args = [
         ...(command.appendCwd ? [...command.args, '--cd', normalized] : command.args),
         ...(options.kind === 'devin' ? ['-r', options.sessionId] : []),
         ...(options.kind === 'claude'
@@ -452,14 +498,52 @@ export class TerminalHost {
             ]
           : []),
       ];
-      proc = nodePty.spawn(command.file, args, {
-        cwd: normalized,
+      let spawnFile = command.file;
+      let spawnCwd: string = normalized;
+      let spawnEnv: Record<string, string | undefined> = {
+        ...this.ptyEnv(options.kind),
+        ...(options.kind === 'claude' ? options.extraEnv : {}),
+      };
+      if (wslExec) {
+        // Wrap in `wsl.exe -d D --cd <linux cwd> -e <shell> -ilc 'exec …'` so
+        // the pty runs an interactive login shell inside the distro.
+        const spec = hosts().ptySpawnSpec(execHost, {
+          file: command.file,
+          args,
+          // devin's normalized is the UNC workspace — convert to host form.
+          cwd: options.kind === 'devin' ? hosts().hostPath(execHost, normalized) : normalized,
+          env: options.kind === 'claude' ? (options.extraEnv ?? {}) : {},
+        });
+        spawnFile = spec.file;
+        args = spec.args;
+        spawnCwd = spec.cwd ?? homedir();
+        // wsl.exe needs a Windows env; the distro env comes from the shell.
+        spawnEnv = { ...process.env };
+        if (this.testMode && process.env.DEVIN_WORKSPACES_TEST_TERMINAL_CMD) {
+          // Same resolution as resolveCommand's test branch: absolute or
+          // PATH-resolved binary, fixture paths relative to the app dir.
+          const [file, ...testArgs] = process.env.DEVIN_WORKSPACES_TEST_TERMINAL_CMD.trim()
+            .split(/\s+/)
+            .filter(Boolean);
+          const resolvedFile = file && (existsSync(file) ? file : resolveOnPath(file));
+          if (resolvedFile) {
+            spawnFile = resolvedFile;
+            args = [
+              ...testArgs.map((arg) => {
+                if (isAbsolute(arg)) return arg;
+                const candidate = resolve(app.getAppPath(), arg);
+                return existsSync(candidate) ? candidate : arg;
+              }),
+              ...spec.args,
+            ];
+          }
+        }
+      }
+      proc = nodePty.spawn(spawnFile, args, {
+        cwd: spawnCwd,
         cols,
         rows,
-        env: {
-          ...this.ptyEnv(options.kind),
-          ...(options.kind === 'claude' ? options.extraEnv : {}),
-        },
+        env: spawnEnv,
         name: 'xterm-256color',
         useConpty: true,
       });
@@ -474,6 +558,7 @@ export class TerminalHost {
     const spawnedAt = Date.now();
     const entry: TerminalEntry = {
       id: randomUUID(),
+      host: execHost.id,
       kind: options.kind,
       sessionId: options.kind !== 'shell' ? options.sessionId : null,
       cwd: normalized,
@@ -575,6 +660,7 @@ export class TerminalHost {
   list(): TerminalSummary[] {
     return [...this.terminals.values()].map((entry) => ({
       id: entry.id,
+      host: entry.host,
       kind: entry.kind,
       sessionId: entry.sessionId,
       cwd: entry.cwd,

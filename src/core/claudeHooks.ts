@@ -29,27 +29,32 @@ type JsonObject = Record<string, unknown>;
 
 const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** `http://127.0.0.1:<port>/devin-workspaces/hook/<event>` */
-export function hookUrl(port: number, event: string): string {
-  return `http://127.0.0.1:${port}${HOOK_PATH_PREFIX}${event}`;
+/** `http://<addr>:<port>/devin-workspaces/hook/<event>` — addr is the
+ * loopback normally, a vEthernet (WSL) IPv4 in NAT networking mode. */
+export function hookUrl(port: number, event: string, addr = '127.0.0.1'): string {
+  return `http://${addr}:${port}${HOOK_PATH_PREFIX}${event}`;
 }
 
-/** True for an inner hook entry (`{type:'http', url}`) pointing at our listener on any port. */
+/** True for an inner hook entry (`{type:'http', url}`) pointing at our
+ * listener on any port: loopback or any IPv4 (vEthernet in NAT mode). */
 export function isOurHook(entry: unknown): boolean {
   if (!isObject(entry) || entry.type !== 'http' || typeof entry.url !== 'string') return false;
-  return entry.url.startsWith('http://127.0.0.1:') && entry.url.includes(HOOK_PATH_PREFIX);
+  return (
+    (entry.url.startsWith('http://127.0.0.1:') || /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(entry.url)) &&
+    entry.url.includes(HOOK_PATH_PREFIX)
+  );
 }
 
 /**
  * The `{ hooks: { <Event>: [group] } }` block Claude Code expects. One group
  * per event with a single http hook; `PostToolUse` carries `matcher: 'Bash'`.
  */
-export function buildHooksBlock(opts: { port: number; auth: HookAuth }): Record<string, unknown> {
+export function buildHooksBlock(opts: { port: number; auth: HookAuth; addr?: string }): Record<string, unknown> {
   const hooks: JsonObject = {};
   for (const event of HOOK_EVENTS) {
     const hook: JsonObject = {
       type: 'http',
-      url: hookUrl(opts.port, event),
+      url: hookUrl(opts.port, event, opts.addr),
       headers: {
         Authorization: opts.auth.kind === 'env' ? `Bearer $${opts.auth.envVar}` : `Bearer ${opts.auth.token}`,
       },
@@ -63,8 +68,10 @@ export function buildHooksBlock(opts: { port: number; auth: HookAuth }): Record<
 }
 
 /** Compact JSON for `claude --settings <json>` with env-var auth. */
-export function settingsFlagJson(port: number, envVar: string): string {
-  return JSON.stringify(buildHooksBlock({ port, auth: { kind: 'env', envVar } }));
+export function settingsFlagJson(port: number, envVar: string, addr?: string): string {
+  return JSON.stringify(
+    buildHooksBlock({ port, auth: { kind: 'env', envVar }, ...(addr ? { addr } : {}) }),
+  );
 }
 
 const serialise = (obj: unknown): string => `${JSON.stringify(obj, null, 2)}\n`;

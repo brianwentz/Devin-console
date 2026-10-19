@@ -6,6 +6,7 @@ import {
   SurfaceSchema,
   type BadgeRender,
   type ClaudeChatStatePublic,
+  type HostId,
   type ClaudePermissionMode,
   type ClaudeSubagent,
   type IdentityInfo,
@@ -121,6 +122,17 @@ const claudeChatApi = {
     >,
 };
 
+// Execution hosts (WSL): enumerate/probe + enable/disable (handlers land in a
+// later stage; invoking an unregistered channel is a rejected promise).
+const hostsApi = {
+  hostsRefresh: (id?: HostId) =>
+    ipcRenderer.invoke(IpcChannels.hostsRefresh, id === undefined ? {} : { id }),
+  hostsSetEnabled: (id: HostId, enabled: boolean) =>
+    ipcRenderer.invoke(IpcChannels.hostsSetEnabled, { id, enabled }),
+  claudeRecheckEnv: (sessionId: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeRecheckEnv, { sessionId }),
+};
+
 // P4b embedded terminal + F5 dock.
 const terminalApi = {
   terminalOpen: (
@@ -189,6 +201,7 @@ const api = {
   ...localApi,
   ...claudeChatApi,
   ...terminalApi,
+  ...hostsApi,
   getState: () => ipcRenderer.invoke(IpcChannels.stateGet) as Promise<ShellState>,
   onState: (callback: (state: ShellState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {

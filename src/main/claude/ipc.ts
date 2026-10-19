@@ -20,7 +20,10 @@ import {
   ClaudeNewSessionArg,
   ClaudeOpenArg,
   ClaudeOpenSubagentArg,
+  ClaudeRecheckEnvArg,
   ClaudeSubagentsArg,
+  HostsRefreshArg,
+  HostsSetEnabledArg,
   ClaudePermissionArg,
   ClaudePromptArg,
   ClaudeRenameArg,
@@ -38,6 +41,7 @@ import {
 import { setupClaudeSessions, type ClaudeSessions } from './sessions';
 import { claudeHost } from './host';
 import { publicChatState } from './chatState';
+import { hosts } from '../hosts';
 
 export function setupClaude(): ClaudeSessions {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
@@ -137,6 +141,20 @@ export function setupClaude(): ClaudeSessions {
   );
   guardedOn(IpcChannels.claudeAgentsRefresh, () => {
     void sessions.refreshAgents();
+  });
+  // Re-capture the §1.4 shell environment for the session's host.
+  on(IpcChannels.claudeRecheckEnv, ClaudeRecheckEnvArg, ({ sessionId }) =>
+    sessions.recheckEnv(sessionId),
+  );
+
+  // Execution hosts.
+  guardedHandle(IpcChannels.hostsRefresh, (_event, payload: unknown) => {
+    const parsed = HostsRefreshArg.safeParse(payload ?? {});
+    if (parsed.success) void hosts().refresh(parsed.data.id);
+  });
+  guardedHandle(IpcChannels.hostsSetEnabled, (_event, payload: unknown) => {
+    const parsed = HostsSetEnabledArg.safeParse(payload);
+    if (parsed.success) hosts().setEnabled(parsed.data.id, parsed.data.enabled);
   });
 
   return sessions;

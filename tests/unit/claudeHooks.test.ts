@@ -38,6 +38,27 @@ describe('hookUrl / isOurHook', () => {
   });
 });
 
+describe('hookUrl / isOurHook non-loopback addr', () => {
+  it('hookUrl accepts an explicit IPv4 address', () => {
+    expect(hookUrl(1, 'Stop', '172.20.0.1')).toBe(
+      `http://172.20.0.1:1${HOOK_PATH_PREFIX}Stop`,
+    );
+  });
+  it('isOurHook accepts any IPv4 host with our path', () => {
+    expect(isOurHook({ type: 'http', url: hookUrl(9, 'Stop', '172.20.0.1') })).toBe(true);
+    expect(isOurHook({ type: 'http', url: 'http://localhost:5/devin-workspaces/hook/Stop' })).toBe(false);
+    expect(isOurHook({ type: 'http', url: 'http://172.20.0.1:5/other' })).toBe(false);
+  });
+  it('buildHooksBlock threads the addr through every event', () => {
+    const block = buildHooksBlock({ port: 7, auth: { kind: 'token', token: 't' }, addr: '172.20.0.1' });
+    const urls = Object.values(
+      (block as { hooks: Record<string, { hooks: { url: string }[] }[]> }).hooks,
+    ).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.url)));
+    expect(urls.length).toBeGreaterThan(0);
+    for (const url of urls) expect(url).toContain('172.20.0.1:7');
+  });
+});
+
 describe('buildHooksBlock', () => {
   it('has one group per event with a single http hook; matcher only on PostToolUse', () => {
     const hooks = (ENV_BLOCK as Settings).hooks!;

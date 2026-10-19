@@ -12,7 +12,7 @@ import type { CloudViewPool } from './cloudViews';
 import type { DevinSession } from '../core/devinApi';
 import type { SecretStore } from './secrets';
 
-export type ViewName = 'shell' | 'devin' | 'cloud' | 'analytics' | 'local' | 'claude' | `gh:${string}`;
+export type ViewName = 'shell' | 'devin' | 'cloud' | 'analytics' | 'local' | 'claude' | 'host' | `gh:${string}`;
 
 export const testMode = process.env.DEVIN_WORKSPACES_TEST === '1';
 export const fixtureOrigins = (testMode ? process.env.DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS ?? '' : '')

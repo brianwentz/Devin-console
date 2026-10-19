@@ -33,7 +33,7 @@ describe('parseAgentsJson', () => {
   it('keeps an {id}-only item and marks it unknown', () => {
     const { agents } = parseAgentsJson('[{"id":"abc123"}]');
     expect(agents).toEqual([
-      { id: 'abc123', sessionId: null, name: null, status: 'unknown', cwd: null, startedAt: null },
+      { id: 'abc123', host: 'local', sessionId: null, name: null, status: 'unknown', cwd: null, startedAt: null },
     ]);
   });
 

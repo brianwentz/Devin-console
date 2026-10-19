@@ -59,6 +59,7 @@ describe('draftFromSettings', () => {
       sessionsKeepAliveHours: '12',
       terminalAllSurfaces: true,
       terminalShell: 'pwsh.exe',
+      defaultWslDistro: '',
       claudePath: 'C:\\tools\\claude.exe',
       claudeAutoArchiveDays: '30',
       claudePermissionMode: 'plan',
@@ -160,6 +161,7 @@ describe('validateDraft', () => {
       tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
       sessions: { open: true, maxLiveViews: 6, keepAliveHours: 24 },
       terminal: { allSurfaces: false, shell: 'pwsh.exe -l' },
+      hosts: { defaultWslDistro: null },
       claude: { path: null, autoArchiveDays: 0, defaultPermissionMode: 'default', model: null },
       notifications: { userId: 'u1', orgId: 'o1' },
     });

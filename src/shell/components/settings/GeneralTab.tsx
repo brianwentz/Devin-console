@@ -33,6 +33,158 @@ function FieldError({ inputId, message }: { inputId: string; message: string | u
   );
 }
 
+function HostsBlock() {
+  const state = useShellState();
+  const { draft } = useSettingsDraft();
+  const [openOverrides, setOpenOverrides] = useState<string | null>(null);
+  if (!state || !draft) return null;
+  const hosts = state.hosts ?? [];
+  const wslHosts = hosts.filter((host) => host.kind === 'wsl');
+  const overrides = state.settings.hosts?.overrides ?? {};
+
+  const facts = (host: (typeof hosts)[number]): string => {
+    const claude = host.claude.path
+      ? `Claude Code ${host.claude.version ?? 'found'}`
+      : 'Claude Code not found';
+    const devin = host.devin.path ? 'devin found' : 'devin not found';
+    const env = host.shellEnv
+      ? host.shellEnv.ok
+        ? `shell env ${host.shellEnv.count} vars`
+        : 'shell env unavailable'
+      : 'shell env —';
+    return `${claude} · ${devin} · ${env} · hooks ${host.hooks}`;
+  };
+
+  const patchOverride = (
+    id: string,
+    patch: Partial<{
+      claudePath: string | null;
+      devinPath: string | null;
+      home: string | null;
+      shell: string | null;
+      envCaptureDisabled: boolean;
+    }>,
+  ): void => {
+    void window.devinworkspaces.commitSettings({
+      hosts: { overrides: { [id]: patch } },
+    });
+  };
+
+  const overrideField = (
+    host: (typeof hosts)[number],
+    field: 'claudePath' | 'devinPath' | 'home' | 'shell',
+    label: string,
+  ) => {
+    const value = (overrides[host.id]?.[field] as string | null | undefined) ?? '';
+    return (
+      <label className="flex flex-col gap-1 text-xs" key={field}>
+        <span className="text-[#7f8ca0]">{label}</span>
+        <input
+          className={inputClass}
+          defaultValue={value}
+          data-host-override={field}
+          placeholder={field === 'shell' ? 'e.g. /bin/zsh' : ''}
+          onBlur={(event) => {
+            const next = event.target.value.trim();
+            if (next !== value.trim()) patchOverride(host.id, { [field]: next || null });
+          }}
+        />
+      </label>
+    );
+  };
+
+  return (
+    <div id="hostsBlock" className="flex flex-col gap-2">
+      <span className="text-sm text-[#aeb9c8]">Hosts</span>
+      {hosts.map((host) => (
+        <div key={host.id} data-host-id={host.id} className="flex flex-col gap-1 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-[#dfe6ef]">{host.label}</span>
+            <span data-host-state className="text-xs text-[#7f8ca0]">
+              {host.state}
+            </span>
+            {host.kind === 'wsl' && (
+              <label className="flex items-center gap-1 text-xs">
+                <input
+                  type="checkbox"
+                  data-host-enabled
+                  checked={host.state !== 'disabled' && host.state !== 'stopped'}
+                  onChange={(event) => {
+                    void window.devinworkspaces.hostsSetEnabled(
+                      host.id,
+                      event.target.checked,
+                    );
+                  }}
+                />
+                <span>enabled</span>
+              </label>
+            )}
+            <button
+              type="button"
+              className="text-xs text-[#6e9bd0]"
+              data-host-recheck
+              onClick={() => void window.devinworkspaces.hostsRefresh(host.id)}
+            >
+              Re-check
+            </button>
+            <button
+              type="button"
+              className="text-xs text-[#6e9bd0]"
+              data-host-overrides-toggle
+              onClick={() => setOpenOverrides(openOverrides === host.id ? null : host.id)}
+            >
+              Overrides
+            </button>
+          </div>
+          <span data-host-facts className="text-xs text-[#7f8ca0]">
+            {facts(host)}
+          </span>
+          {host.error ? (
+            <span className="text-xs text-[#d08080]">{host.error}</span>
+          ) : null}
+          {openOverrides === host.id ? (
+            <div data-host-overrides className="flex flex-col gap-2 border-l border-[#2c3949] pl-3">
+              {overrideField(host, 'claudePath', 'Claude path')}
+              {overrideField(host, 'devinPath', 'devin path')}
+              {overrideField(host, 'home', 'Home directory')}
+              {overrideField(host, 'shell', 'Shell')}
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  data-host-override="envCaptureDisabled"
+                  checked={overrides[host.id]?.envCaptureDisabled ?? false}
+                  onChange={(event) =>
+                    patchOverride(host.id, { envCaptureDisabled: event.target.checked })
+                  }
+                />
+                <span>Skip shell environment capture</span>
+              </label>
+            </div>
+          ) : null}
+        </div>
+      ))}
+      {wslHosts.length > 0 ? (
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-[#aeb9c8]">Default WSL distro for new sessions</span>
+          <select
+            id="defaultWslDistroSelect"
+            className={inputClass}
+            value={draft.defaultWslDistro}
+            onChange={(event) => updateDraft({ defaultWslDistro: event.target.value })}
+          >
+            <option value="">none</option>
+            {wslHosts.map((host) => (
+              <option key={host.id} value={host.label}>
+                {host.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+    </div>
+  );
+}
+
 export function GeneralTab() {
   const { draft, errors } = useSettingsDraft();
   const [newWorkspace, setNewWorkspace] = useState('');
@@ -296,6 +448,7 @@ export function GeneralTab() {
           Blank = Windows Terminal default profile, else PowerShell.
         </span>
       </label>
+      <HostsBlock />
     </div>
   );
 }

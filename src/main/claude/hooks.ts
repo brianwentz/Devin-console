@@ -18,6 +18,7 @@ import { notificationStore } from '../notifications';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
 import { ClaudeHookServer } from './hookServer';
 import { applyGlobalHooks } from './hooksInstall';
+import { hosts } from '../hosts';
 import type { ClaudeSessions } from './sessions';
 
 export class ClaudeHooks {
@@ -83,8 +84,33 @@ export class ClaudeHooks {
       }
       return;
     }
-    const result = applyGlobalHooks(this.configDir, enabled, info.port, info.token);
-    this.hooks = { ...this.hooks, enabled, installed: result.installed, error: result.error };
+    // The opt-in applies to every enabled host's settings.json — for a wsl
+    // host the file lives under \wsl.localhost\<D>\<home>\.claude and the
+    // URLs point at that host's reachable address (loopback in mirrored
+    // mode, the vEthernet IPv4 in NAT mode).
+    let installed = false;
+    let firstError: string | null = null;
+    for (const host of hosts().allHosts()) {
+      const result = applyGlobalHooks(
+        hosts().configDir(host),
+        enabled,
+        info.port,
+        info.token,
+        hosts().hookAddrFor(host.id) ?? undefined,
+      );
+      if (host.id === 'local') {
+        installed = result.installed;
+        firstError = result.error;
+      }
+      hosts().setError(host.id, 'hooksInstall', result.error);
+      if (result.error && !firstError) firstError = result.error;
+    }
+    this.hooks = { ...this.hooks, enabled, installed, error: firstError };
+  }
+
+  /** Expose the listener on a non-loopback address (NAT-mode WSL reachability). */
+  listenOn(addr: string): void {
+    this.hookServer?.listenOn(addr);
   }
 
   private onEvent(e: ClaudeHookEvent): void {
@@ -159,6 +185,7 @@ export class ClaudeHooks {
   // already runs) and a failed listener means no injection at all.
   injection(
     mode: 'resume' | 'new' | 'attach',
+    addr?: string,
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
     if (mode === 'attach') return null;
     const info = this.hookServer?.info();
@@ -167,7 +194,7 @@ export class ClaudeHooks {
     return {
       extraArgs: [
         '--settings',
-        settingsFlagJson(info.port, envVar),
+        settingsFlagJson(info.port, envVar, addr),
         '--permission-mode',
         state.settings?.current.claude.defaultPermissionMode ?? 'default',
       ],

@@ -65,6 +65,7 @@ export function parseAgentsJson(text: string): ParseAgentsResult {
     }
     agents.push({
       id,
+      host: 'local',
       sessionId: str(item.sessionId) ?? str(item.session_id),
       name: str(item.name) ?? str(item.description),
       status: parseStatus(item),
