@@ -75,6 +75,10 @@ export function setupLocal(): void {
   });
   setupTerminalIpc();
   app.on('before-quit', () => host?.dispose());
+  // Spawn the configured workspaces' agents off the startup path: setupLocal
+  // runs before the window exists, so a macrotask lets createWindow finish its
+  // synchronous view construction first (the agents then list on ready).
+  setTimeout(() => host?.startConfigured(), 0);
 
   const removeWorkspace = (path: string): void => {
     // Forget the lifted selection when its session lived in this workspace —

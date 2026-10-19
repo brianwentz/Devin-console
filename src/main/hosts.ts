@@ -95,6 +95,7 @@ export class HostsRegistry {
   private ready: Promise<void>;
   private distros: { at: number; rows: ReturnType<typeof parseWslList> } | null = null;
   private enumInFlight = false;
+  private enumWaiters: Array<() => void> = [];
   private entries = new Map<HostId, WslEntry>();
   private configMutex: Promise<unknown> = Promise.resolve();
   private errorParts = new Map<string, Partial<Record<HostErrorPart, string>>>();
@@ -197,6 +198,15 @@ export class HostsRegistry {
     return this.distros?.rows ?? [];
   }
 
+  /** Resolves once at least one enumeration has landed (immediately when a
+   * list — even an empty one — is already cached). Lets startup work that
+   * maps UNC workspaces to distros wait without re-probing. */
+  whenEnumerated(): Promise<void> {
+    if (this.distros) return Promise.resolve();
+    if (!this.enumInFlight) void this.enumerateAsync();
+    return new Promise((resolveWait) => this.enumWaiters.push(resolveWait));
+  }
+
   private async enumerateAsync(): Promise<void> {
     this.enumInFlight = true;
     try {
@@ -215,6 +225,9 @@ export class HostsRegistry {
       this.onStatusChange?.();
     } finally {
       this.enumInFlight = false;
+      const waiters = this.enumWaiters;
+      this.enumWaiters = [];
+      for (const wake of waiters) wake();
     }
   }
 

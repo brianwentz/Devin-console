@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -1115,5 +1115,92 @@ test('Local sidebar: sections list at start, reorder/collapse/rename persist, co
     rmSync(wsA, { recursive: true, force: true });
     rmSync(wsB, { recursive: true, force: true });
     rmSync(uncRoot, { recursive: true, force: true });
+  }
+});
+
+// Regression: workspaces already in settings.json must get their agents
+// started at launch — the sidebar lists on the ready transition, and nothing
+// else spawns an agent before the user acts.
+test('Local startup: configured workspaces autostart their agents and list in the sidebar', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-autostart-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
+  const wsB = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsB-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ workspaces: [wsA, wsB] }));
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    FAKE_ACP_LIST: '1',
+  });
+  try {
+    await waitForHooks(app);
+    // No user action: both agents come up on their own.
+    await expect.poll(async () => (await localState(app)).agents[wsA]?.status).toBe('ready');
+    await expect.poll(async () => (await localState(app)).agents[wsB]?.status).toBe('ready');
+    const events = await readEvents(logFile);
+    const autostart = events.find((entry) => entry.event === 'agents-autostart');
+    expect(autostart).toBeDefined();
+    expect((autostart!.detail as any)?.count).toBe(2);
+    expect(events.filter((entry) => entry.event === 'agent-start')).toHaveLength(2);
+    // The ready hook lists each workspace exactly once (no double list).
+    await expect
+      .poll(async () =>
+        (await readEvents(logFile)).filter(
+          (entry) => entry.event === 'session-list' && (entry.detail as any)?.source === 'agent',
+        ).length,
+      )
+      .toBe(2);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+    expect(
+      (await readEvents(logFile)).filter(
+        (entry) => entry.event === 'session-list' && (entry.detail as any)?.source === 'agent',
+      ),
+    ).toHaveLength(2);
+
+    await setSurfaceLocal(app);
+    await expect.poll(() => shellCount(app, '[data-sidebar="local"]')).toBe(1);
+    await expect
+      .poll(() =>
+        evaluateInShell(
+          app,
+          `[...document.querySelectorAll('[data-section-name]')].map((e) => e.getAttribute('data-section-name')).sort()`,
+        ),
+      )
+      .toEqual([wsA, wsB].sort());
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(wsA, { recursive: true, force: true });
+    rmSync(wsB, { recursive: true, force: true });
+  }
+});
+
+// Negative: a configured workspace with no devin binary (local.devinPath
+// points nowhere, no test command) stays missing-cli — nothing is spawned.
+test('Local startup: missing CLI leaves configured workspaces missing-cli without spawning', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-autostart-nocli-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(
+    join(profile, 'settings.json'),
+    JSON.stringify({ workspaces: [wsA], local: { devinPath: join(profile, 'missing', 'devin.exe') } }),
+  );
+  const env: Record<string, string> = { DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' };
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
+  try {
+    await waitForHooks(app);
+    await waitForEvent(logFile, 'agents-autostart');
+    const events = await readEvents(logFile);
+    const autostart = events.find((entry) => entry.event === 'agents-autostart');
+    expect((autostart!.detail as any)?.count).toBe(0);
+    expect((autostart!.detail as any)?.skipped).toBe(1);
+    const local = await localState(app);
+    expect(local.cliPath).toBeNull();
+    expect(local.agents[wsA]?.status).toBe('missing-cli');
+    expect(events.some((entry) => entry.event === 'agent-start')).toBe(false);
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(wsA, { recursive: true, force: true });
   }
 });
