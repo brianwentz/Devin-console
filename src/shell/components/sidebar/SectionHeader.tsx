@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import type { SessionTreeSection } from '../../../core/sessionTree';
 import { sessionFolderHeaderClass } from '../sessionRowStyles';
@@ -19,6 +19,11 @@ export function SectionHeader({
   onMove,
   onReorder,
   onNewInFolder,
+  label,
+  title,
+  leading,
+  dataAttrs,
+  moveDisabled = false,
 }: {
   section: SessionTreeSection;
   userFolderNames: string[];
@@ -30,6 +35,17 @@ export function SectionHeader({
   onMove: (sessionId: string, folder: string | null) => void;
   onReorder: (names: string[]) => void;
   onNewInFolder?: (name: string) => void;
+  // Optional display label rendered instead of section.name (e.g. a workspace
+  // label while the path stays the section key).
+  label?: string;
+  // Optional tooltip on the header button (e.g. the long workspace path).
+  title?: string;
+  // Optional leading node (e.g. an agent status dot) before the label.
+  leading?: ReactNode;
+  // Extra data-* attributes on the header button (e.g. agent status).
+  dataAttrs?: Record<string, string>;
+  // ux2 D7: path-bound workspaces are filing only — no session-move drops.
+  moveDisabled?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
   const [dropBefore, setDropBefore] = useState(false);
@@ -53,6 +69,8 @@ export function SectionHeader({
         type="button"
         data-section-kind={section.kind}
         data-section-name={section.name}
+        {...(title !== undefined ? { title } : {})}
+        {...dataAttrs}
         data-drop-target={dropTarget}
         data-drop-before={dropBefore}
         draggable={section.kind === 'folder' && isEditableFolder(section.name)}
@@ -62,7 +80,7 @@ export function SectionHeader({
         }}
         onDragOver={(e) => {
           const types = e.dataTransfer.types;
-          if (types.includes(SESSION_MIME) && isMoveTarget(section)) {
+          if (types.includes(SESSION_MIME) && !moveDisabled && isMoveTarget(section)) {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             setDropTarget(true);
@@ -82,7 +100,7 @@ export function SectionHeader({
         }}
         onDrop={(e) => {
           const sessionId = e.dataTransfer.getData(SESSION_MIME);
-          const target = isMoveTarget(section)
+          const target = !moveDisabled && isMoveTarget(section)
             ? section.kind === 'recent'
               ? null
               : section.name
@@ -116,8 +134,9 @@ export function SectionHeader({
         onClick={() => onToggle(section.name)}
       >
         {section.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        <span className="flex-1 text-left truncate">
-          {SECTION_LABELS[section.name] ?? section.name}
+        {leading}
+        <span className="flex-1 text-left truncate" data-section-label={label ?? section.name}>
+          {label ?? SECTION_LABELS[section.name] ?? section.name}
         </span>
         <span className="text-[11px] leading-[14px] text-[#5c6b80]">
           {section.total !== null

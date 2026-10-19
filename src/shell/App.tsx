@@ -16,6 +16,7 @@ import { SessionSidebar } from './components/SessionSidebar';
 import { ClaudeSidebar } from './components/ClaudeSidebar';
 import { ClaudeView } from './claude/ClaudeView';
 import { LocalPanel } from './local/LocalPanel';
+import { LocalSidebar } from './local/LocalSidebar';
 
 function useWindowSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
@@ -74,14 +75,16 @@ export function App() {
 
   if (!state) return null;
   const terminalVisible =
-    state.terminalOpen && (state.surface === 'cloud' || state.settings.terminal.allSurfaces);
+    state.terminalOpen &&
+    (state.surface === 'cloud' || state.surface === 'local' || state.surface === 'claude');
   const bounds = computeBounds(size, {
     paneOpen: state.paneOpen,
     paneFraction: state.paneFraction,
     terminalOpen: terminalVisible,
     terminalHeight: state.terminalHeight,
     sessionsOpen:
-      state.sessionsOpen && (state.surface === 'cloud' || state.surface === 'claude'),
+      state.sessionsOpen &&
+      (state.surface === 'cloud' || state.surface === 'claude' || state.surface === 'local'),
     sessionsWidth: state.sessionsWidth,
   });
   const paneVisible = state.paneOpen && !bounds.paneCollapsed;
@@ -94,10 +97,10 @@ export function App() {
         paneOpen={state.paneOpen}
         paneCollapsed={bounds.paneCollapsed}
         terminalOpen={state.terminalOpen}
-        terminalAllSurfaces={state.settings.terminal.allSurfaces}
       />
       {state.surface === 'cloud' && bounds.sessions && <SessionSidebar rect={bounds.sessions} />}
       {state.surface === 'claude' && bounds.sessions && <ClaudeSidebar rect={bounds.sessions} />}
+      {state.surface === 'local' && bounds.sessions && <LocalSidebar rect={bounds.sessions} />}
       {bounds.sessionsSplitter && (
         <Splitter axis="s" rect={bounds.sessionsSplitter} enabled={state.sessionsOpen} />
       )}

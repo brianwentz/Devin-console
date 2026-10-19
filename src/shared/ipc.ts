@@ -105,6 +105,13 @@ export const IpcChannels = {
   localPermission: 'local:permission',
   localOpenLink: 'local:openLink',
   localActiveSession: 'local:activeSession',
+  localWorkspaceReorder: 'local:workspaceReorder',
+  localWorkspaceRename: 'local:workspaceRename',
+  localContextMenu: 'local:contextMenu',
+  claudeWorkspaceAdd: 'claude:workspaceAdd',
+  claudeWorkspaceReorder: 'claude:workspaceReorder',
+  claudeWorkspaceRename: 'claude:workspaceRename',
+  claudeWorkspaceRemove: 'claude:workspaceRemove',
   // P4b: embedded terminal per workspace
   terminalOpen: 'terminal:open',
   terminalInput: 'terminal:input',
@@ -144,6 +151,7 @@ export const IpcChannels = {
   claudeRefresh: 'claude:refresh',
   claudeRename: 'claude:rename',
   claudeFork: 'claude:fork',
+  // Deprecated: free-form Claude folders are replaced by path-bound workspaces in P4b (plans/ux-round-2.md D8); removed then.
   claudeSessionMove: 'claude:sessionMove',
   claudeSessionPin: 'claude:sessionPin',
   claudeSessionArchive: 'claude:sessionArchive',
@@ -250,7 +258,12 @@ const NotificationsFields = {
 };
 // F1: open a background tab (in the session's scope) when the poller sees a new PR.
 const PrsFields = { autoOpenTabs: z.boolean() };
-const LocalFields = { devinPath: z.string().nullable() };
+const LocalFields = {
+  devinPath: z.string().nullable(),
+  defaultWslDistro: z.string().max(128).nullable(),
+  workspaceLabels: z.record(z.string(), z.string().max(128)),
+  collapsedWorkspaces: z.array(z.string().max(1024)).max(200),
+};
 // P8: session-scoped tabs. keepAliveHours=0 discards hidden-scope tabs on switch;
 // maxLiveTabs caps live webContents across all scopes (the visible active tab excluded).
 const TabsFields = {
@@ -287,9 +300,12 @@ const ClaudeFields = {
   // Global opt-in: write our http hooks into <configDir>/settings.json so
   // sessions started from other terminals report activity too.
   hooksEnabled: z.boolean(),
+  // ux2 D8: path-bound workspace list for the Claude session column.
+  workspaces: z.array(z.string().max(1024)).max(200),
+  workspaceLabels: z.record(z.string(), z.string().max(128)),
+  defaultWslDistro: z.string().max(128).nullable(),
 };
 const TerminalFields = {
-  allSurfaces: z.boolean(),
   // Optional command line override for dock shells ('' = Windows Terminal
   // default profile, else PowerShell).
   shell: z.string().max(1024),
@@ -299,7 +315,6 @@ const TerminalFields = {
 const HostsFields = {
   wslEnabled: z.boolean(),
   wslDistros: z.array(z.string().max(128)).max(50).nullable(),
-  defaultWslDistro: z.string().max(128).nullable(),
   overrides: z.record(
     z.string(),
     z.object({
@@ -339,8 +354,13 @@ export const SettingsObject = z.object({
     })
     .default({ open: true, fraction: DEFAULT_PANE_FRACTION }),
   local: z
-    .object({ devinPath: LocalFields.devinPath.default(null) })
-    .default({ devinPath: null }),
+    .object({
+      devinPath: LocalFields.devinPath.default(null),
+      defaultWslDistro: LocalFields.defaultWslDistro.default(null),
+      workspaceLabels: LocalFields.workspaceLabels.default({}),
+      collapsedWorkspaces: LocalFields.collapsedWorkspaces.default([]),
+    })
+    .default({ devinPath: null, defaultWslDistro: null, workspaceLabels: {}, collapsedWorkspaces: [] }),
   surface: SettingsFields.surface.default('cloud'),
   // Tab strip snapshot (v2 shape from core/tabModel.serializeTabs).
   tabSnapshot: SettingsFields.tabSnapshot.optional(),
@@ -392,10 +412,9 @@ export const SettingsObject = z.object({
     }),
   terminal: z
     .object({
-      allSurfaces: TerminalFields.allSurfaces.default(false),
       shell: TerminalFields.shell.default(''),
     })
-    .default({ allSurfaces: false, shell: '' }),
+    .default({ shell: '' }),
   claude: z
     .object({
       path: ClaudeFields.path.default(null),
@@ -408,6 +427,9 @@ export const SettingsObject = z.object({
       maxLiveAgents: ClaudeFields.maxLiveAgents.default(3),
       lastSessionId: ClaudeFields.lastSessionId.default(null),
       hooksEnabled: ClaudeFields.hooksEnabled.default(false),
+      workspaces: ClaudeFields.workspaces.default([]),
+      workspaceLabels: ClaudeFields.workspaceLabels.default({}),
+      defaultWslDistro: ClaudeFields.defaultWslDistro.default(null),
     })
     .default({
       path: null,
@@ -420,15 +442,17 @@ export const SettingsObject = z.object({
       maxLiveAgents: 3,
       lastSessionId: null,
       hooksEnabled: false,
+      workspaces: [],
+      workspaceLabels: {},
+      defaultWslDistro: null,
     }),
   hosts: z
     .object({
       wslEnabled: HostsFields.wslEnabled.default(true),
       wslDistros: HostsFields.wslDistros.default(null),
-      defaultWslDistro: HostsFields.defaultWslDistro.default(null),
       overrides: HostsFields.overrides.default({}),
     })
-    .default({ wslEnabled: true, wslDistros: null, defaultWslDistro: null, overrides: {} }),
+    .default({ wslEnabled: true, wslDistros: null, overrides: {} }),
 });
 
 // Every field has a default or is optional, so parse({}) yields valid Settings.
@@ -967,6 +991,23 @@ export const ClaudeContextMenuArg = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
 });
+
+// Workspace column mutations (ux2 D7/D8); handlers land with the sidebar work.
+export const WorkspaceReorderSchema = z.object({
+  paths: z.array(z.string().max(1024)).max(200),
+});
+export const WorkspaceRenameSchema = z.object({
+  path: z.string().max(1024),
+  label: z.string().min(1).max(128),
+});
+export const LocalContextMenuRequestSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('workspace'), path: z.string().max(1024), x: z.number().finite(), y: z.number().finite() }),
+  z.object({ kind: z.literal('session'), sessionId: z.string(), x: z.number().finite(), y: z.number().finite() }),
+  z.object({ kind: z.literal('header'), x: z.number().finite(), y: z.number().finite() }),
+]);
+export const LocalContextMenuResultSchema = z.object({ action: z.string().nullable() });
+export type LocalContextMenuRequest = z.infer<typeof LocalContextMenuRequestSchema>;
+export type LocalContextMenuResult = z.infer<typeof LocalContextMenuResultSchema>;
 
 // Arg schemas for ipcMain.on channels (safeParse; invalid payloads ignored).
 export const TabIdArg = z.string();

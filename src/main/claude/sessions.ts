@@ -678,7 +678,7 @@ export class ClaudeSessions {
         const win = state.windowRef;
         if (!win) return null;
         // The configured default WSL distro becomes the picker's starting dir.
-        const defaultDistro = state.settings?.current.hosts.defaultWslDistro;
+        const defaultDistro = state.settings?.current.claude.defaultWslDistro;
         const defaultHost = defaultDistro
           ? hosts().hostById(`wsl:${defaultDistro}`)
           : null;

@@ -10,7 +10,6 @@ interface RailProps {
   paneOpen: boolean;
   paneCollapsed: boolean;
   terminalOpen: boolean;
-  terminalAllSurfaces: boolean;
 }
 
 const buttonClass =
@@ -90,9 +89,9 @@ export function Rail({
   paneOpen,
   paneCollapsed,
   terminalOpen,
-  terminalAllSurfaces,
 }: RailProps) {
-  const terminalOffSurface = surface !== 'cloud' && !terminalAllSurfaces;
+  const terminalOffSurface =
+    surface !== 'cloud' && surface !== 'local' && surface !== 'claude';
   return (
     <aside
       id="rail"

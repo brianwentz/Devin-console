@@ -34,7 +34,7 @@ import { updateState } from './updater';
 export function terminalVisible(): boolean {
   return (
     state.terminalOpen &&
-    (state.surface === 'cloud' || (state.settings?.current.terminal.allSurfaces ?? false))
+    (state.surface === 'cloud' || state.surface === 'local' || state.surface === 'claude')
   );
 }
 

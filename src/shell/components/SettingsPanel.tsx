@@ -58,6 +58,12 @@ export function SettingsPanel({ settings, credentials, style }: SettingsPanelPro
       )}
       <section role="tabpanel" id={`settingsPanel-${tab}`}>
         {tab === 'general' && <GeneralTab />}
+        {tab === 'local' && (
+          <p id="settingsPanel-local-placeholder">Devin Local settings move here in P3.</p>
+        )}
+        {tab === 'claude' && (
+          <p id="settingsPanel-claude-placeholder">Claude Code settings move here in P3.</p>
+        )}
         {tab === 'links' && <LinksTab />}
         {tab === 'passwords' && (
           <PasswordsSection credentials={credentials} tenantUrl={settings.tenantUrl} />

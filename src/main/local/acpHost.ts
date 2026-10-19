@@ -254,6 +254,12 @@ export class DevinLocalHost {
     return [...this.workspaces];
   }
 
+  // Settings-driven order (local:workspaceReorder); agent handles are keyed
+  // by path so only the array order matters.
+  syncWorkspaces(workspaces: string[]): void {
+    this.workspaces = [...workspaces];
+  }
+
   addWorkspace(path: string): string {
     const normalized = resolve(path);
     if (!this.workspaces.includes(normalized)) {
@@ -443,6 +449,9 @@ export class DevinLocalHost {
         retryInMs: undefined,
       }),
     );
+    // ux2: the sidebar lists every workspace up front — list once the agent
+    // is ready (capabilities.sessionList may still arrive via a later update).
+    void this.listSessions(workspace).catch(() => undefined);
     log('local', 'agent-ready', {
       detail: {
         workspace,

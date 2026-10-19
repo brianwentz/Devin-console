@@ -3,6 +3,8 @@ import type { AppNotification } from '../core/notificationModel';
 import type { CredentialEntry } from '../core/credentials';
 import {
   IpcChannels,
+  type LocalContextMenuRequest,
+  type LocalContextMenuResult,
   SurfaceSchema,
   type BadgeRender,
   type ClaudeChatStatePublic,
@@ -77,6 +79,17 @@ const localApi = {
       ipcRenderer.send(IpcChannels.localActiveSession, { sessionId });
     }
   },
+  // Test seam only: mirrors main's DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT so the
+  // sidebar's host chip resolves fake-UNC workspace paths.
+  testWslUncRoot: process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT ?? null,
+  localWorkspaceReorder: (paths: string[]) =>
+    ipcRenderer.invoke(IpcChannels.localWorkspaceReorder, { paths }) as Promise<LocalResult<null>>,
+  localWorkspaceRename: (path: string, label: string) =>
+    ipcRenderer.invoke(IpcChannels.localWorkspaceRename, { path, label }) as Promise<
+      LocalResult<null>
+    >,
+  localContextMenu: (arg: LocalContextMenuRequest) =>
+    ipcRenderer.invoke(IpcChannels.localContextMenu, arg) as Promise<LocalContextMenuResult>,
 };
 
 // Claude chat (Agent SDK host in main). Same shapes as the local* methods.

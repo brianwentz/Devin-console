@@ -37,9 +37,20 @@ export class SettingsStore {
     }
     try {
       const raw = JSON.parse(readFileSync(this.file, 'utf8')) as unknown;
+      const hosts = (raw as Record<string, unknown> | null)?.hosts;
+      const migratedHostDistro =
+        hosts !== undefined &&
+        hosts !== null &&
+        typeof hosts === 'object' &&
+        (hosts as Record<string, unknown>).defaultWslDistro !== undefined;
       const { settings, dropped } = parseSettingsFile(raw);
       if (dropped.length > 0) {
         log('shell', 'settings-repaired', { detail: { dropped } });
+      }
+      if (migratedHostDistro) {
+        log('shell', 'settings-migrated', { detail: { from: 'hosts.defaultWslDistro' } });
+        this.value = settings;
+        this.save();
       }
       return settings;
     } catch {

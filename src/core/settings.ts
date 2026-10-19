@@ -51,6 +51,34 @@ export function migrateSettingsRaw(raw: unknown): unknown {
     }
     out.notifications = n;
   }
+  // ux2 P0: hosts.defaultWslDistro split into per-surface keys; copy only where
+  // the new value is absent, then drop it.
+  if (out.hosts && typeof out.hosts === 'object') {
+    const hosts = { ...(out.hosts as Record<string, unknown>) };
+    const distro = hosts.defaultWslDistro;
+    if (distro !== undefined) {
+      if (typeof distro === 'string' && distro !== '') {
+        const local =
+          out.local && typeof out.local === 'object'
+            ? { ...(out.local as Record<string, unknown>) }
+            : {};
+        if (local.defaultWslDistro === undefined) {
+          local.defaultWslDistro = distro;
+          out.local = local;
+        }
+        const claude =
+          out.claude && typeof out.claude === 'object'
+            ? { ...(out.claude as Record<string, unknown>) }
+            : {};
+        if (claude.defaultWslDistro === undefined) {
+          claude.defaultWslDistro = distro;
+          out.claude = claude;
+        }
+      }
+      delete hosts.defaultWslDistro;
+      out.hosts = hosts;
+    }
+  }
   const discardMinutes = out.discardIdleMinutes;
   if (discardMinutes !== undefined) {
     const tabsOut =

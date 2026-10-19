@@ -46,6 +46,22 @@ async function shellCount(app: ElectronApplication, selector: string): Promise<n
   )) as number;
 }
 
+async function rightClick(app: ElectronApplication, selector: string): Promise<void> {
+  const ok = await evaluateInShell(
+    app,
+    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 })); return true; })()`,
+  );
+  expect(ok).toBe(true);
+}
+
+type MenuItem = { id: string; label: string; enabled: boolean };
+async function menuItem(app: ElectronApplication, label: string): Promise<MenuItem | undefined> {
+  const items = (await app.evaluate(() =>
+    (globalThis as any).__devinworkspaces.localMenuItems(),
+  )) as MenuItem[];
+  return items.find((i) => i.label === label);
+}
+
 async function shellClick(app: ElectronApplication, selector: string): Promise<boolean> {
   return (await evaluateInShell(
     app,
@@ -63,7 +79,7 @@ async function typeAndSend(app: ElectronApplication, text: string): Promise<void
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
       setter.call(el, ${JSON.stringify(text)});
       el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
       return true;
     })()`,
   );
@@ -76,6 +92,7 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_DELETE: '1',
@@ -173,7 +190,7 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
     await expect.poll(async () => (await state(app)).localSessionId).toBe(sessionA);
     await expect.poll(async () => (await state(app)).tabs.scope).toBe(`local:${sessionA}`);
     await expect
-      .poll(() => shellCount(app, `.session-item[data-session-id="${sessionA}"].bg-\\[\\#27364a\\]`))
+      .poll(() => shellCount(app, `.session-item[data-session-id="${sessionA}"][data-current="true"]`))
       .toBe(1);
 
     // Terminals: A's Terminal tab opens a devin pty keyed to A.
@@ -226,8 +243,14 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
       )
       .toBe('flex');
 
-    // Delete B via the trash → its pty is closed and its scope is gone.
-    expect(await shellClick(app, `.session-delete[data-session-id="${sessionB}"]`)).toBe(true);
+    // Delete B via the context menu → its pty is closed and its scope is gone.
+    await rightClick(app, `.session-item[data-session-id="${sessionB}"]`);
+    const deleteItem = await menuItem(app, 'Delete');
+    expect(deleteItem?.enabled).toBe(true);
+    await app.evaluate(
+      (_e, id) => (globalThis as any).__devinworkspaces.localMenuClick(id),
+      deleteItem!.id,
+    );
     await expect.poll(async () => (await localState(app)).sessions[sessionB]).toBeUndefined();
     await expect
       .poll(async () =>

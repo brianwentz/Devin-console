@@ -68,6 +68,7 @@ test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphan
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
     DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
   });
   let closed = false;
   try {
@@ -356,22 +357,6 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     await page.click(`[data-terminal-tab="${tabs[0]!.id}"] .closeMark`);
     await expect.poll(async () => (await state(app)).terminals.length).toBe(1);
     await expect.poll(async () => pidAlive(pid!)).toBe(false);
-
-    // Non-Cloud surface hides the dock and restores the devin bounds…
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('local'));
-    await expect(page.locator('#terminalDock')).toBeHidden();
-    await expect
-      .poll(async () => (await app.evaluate(() => (globalThis as G).__devinworkspaces.getDevinBounds()))?.height)
-      .toBe(0); // devin view detached on local surface
-    // …until terminal.allSurfaces is on (same channel the UI uses).
-    await page.evaluate(() =>
-      (
-        window as unknown as {
-          devinworkspaces: { setSettings(p: unknown): Promise<unknown> };
-        }
-      ).devinworkspaces.setSettings({ terminal: { allSurfaces: true } }),
-    );
-    await expect(page.locator('#terminalDock')).toBeVisible();
 
     // Resize + persist across restart.
     await app.evaluate(() => (globalThis as G).__devinworkspaces.setTerminalHeight(400));
