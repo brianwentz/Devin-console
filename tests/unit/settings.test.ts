@@ -252,14 +252,14 @@ describe('terminal dock settings (F5)', () => {
   it('defaults layout/terminal and merges shallowly', () => {
     const base = SettingsSchema.parse({});
     expect(base.layout).toEqual({ terminalOpen: false, terminalHeight: 280 });
-    expect(base.terminal).toEqual({ allSurfaces: false, shell: '' });
+    expect(base.terminal).toEqual({ shell: '' });
 
     const merged = mergeSettings(base, {
       layout: { terminalOpen: true },
-      terminal: { allSurfaces: true, shell: 'pwsh.exe -NoLogo' },
+      terminal: { shell: 'pwsh.exe -NoLogo' },
     });
     expect(merged.layout).toEqual({ terminalOpen: true, terminalHeight: 280 });
-    expect(merged.terminal).toEqual({ allSurfaces: true, shell: 'pwsh.exe -NoLogo' });
+    expect(merged.terminal).toEqual({ shell: 'pwsh.exe -NoLogo' });
     const resized = mergeSettings(merged, { layout: { terminalHeight: 400 } });
     expect(resized.layout).toEqual({ terminalOpen: true, terminalHeight: 400 });
   });
@@ -409,6 +409,9 @@ describe('claude settings', () => {
       maxLiveAgents: 3,
       lastSessionId: null,
       hooksEnabled: false,
+      workspaces: [],
+      workspaceLabels: {},
+      defaultWslDistro: null,
     });
   });
 
@@ -451,7 +454,6 @@ describe('hosts settings', () => {
     expect(settings.hosts).toEqual({
       wslEnabled: true,
       wslDistros: null,
-      defaultWslDistro: null,
       overrides: {},
     });
   });
@@ -459,11 +461,10 @@ describe('hosts settings', () => {
   it('patches hosts fields without resetting the rest', () => {
     const base = SettingsSchema.parse({});
     const next = mergeSettings(base, {
-      hosts: { wslEnabled: false, defaultWslDistro: 'Ubuntu-22.04' },
+      hosts: { wslEnabled: false, wslDistros: ['Ubuntu-22.04'] },
     });
     expect(next.hosts.wslEnabled).toBe(false);
-    expect(next.hosts.defaultWslDistro).toBe('Ubuntu-22.04');
-    expect(next.hosts.wslDistros).toBeNull();
+    expect(next.hosts.wslDistros).toEqual(['Ubuntu-22.04']);
     expect(next.hosts.overrides).toEqual({});
   });
 
@@ -494,5 +495,68 @@ describe('hosts settings', () => {
     expect(
       SettingsPatchSchema.safeParse({ hosts: { wslDistros: 'Ubuntu' } }).success,
     ).toBe(false);
+  });
+});
+
+describe('ux2 P0 — new local/claude workspace keys and removed-key migration', () => {
+  it('defaults the new keys on parse({})', () => {
+    const settings = SettingsSchema.parse({});
+    expect(settings.local).toEqual({
+      devinPath: null,
+      defaultWslDistro: null,
+      workspaceLabels: {},
+      collapsedWorkspaces: [],
+    });
+    expect(settings.claude.workspaces).toEqual([]);
+    expect(settings.claude.workspaceLabels).toEqual({});
+    expect(settings.claude.defaultWslDistro).toBeNull();
+  });
+
+  it('patches the new keys', () => {
+    const base = SettingsSchema.parse({});
+    const next = mergeSettings(base, {
+      local: {
+        defaultWslDistro: 'Ubuntu-22.04',
+        workspaceLabels: { 'C:\\ws': 'main' },
+        collapsedWorkspaces: ['C:\\ws'],
+      },
+      claude: {
+        workspaces: ['/home/u/ws'],
+        workspaceLabels: { '/home/u/ws': 'ws' },
+        defaultWslDistro: 'Ubuntu-24.04',
+      },
+    });
+    expect(next.local.defaultWslDistro).toBe('Ubuntu-22.04');
+    expect(next.local.workspaceLabels).toEqual({ 'C:\\ws': 'main' });
+    expect(next.local.collapsedWorkspaces).toEqual(['C:\\ws']);
+    expect(next.claude.workspaces).toEqual(['/home/u/ws']);
+    expect(next.claude.defaultWslDistro).toBe('Ubuntu-24.04');
+  });
+
+  it('migrates hosts.defaultWslDistro to local + claude where absent', () => {
+    const { settings } = parseSettingsFile({
+      hosts: { defaultWslDistro: 'Ubuntu-22.04' },
+    });
+    expect(settings.local.defaultWslDistro).toBe('Ubuntu-22.04');
+    expect(settings.claude.defaultWslDistro).toBe('Ubuntu-22.04');
+    expect('defaultWslDistro' in settings.hosts).toBe(false);
+  });
+
+  it('keeps an already-set claude.defaultWslDistro during migration', () => {
+    const { settings } = parseSettingsFile({
+      hosts: { defaultWslDistro: 'Ubuntu-22.04' },
+      claude: { defaultWslDistro: 'Ubuntu-24.04' },
+    });
+    expect(settings.claude.defaultWslDistro).toBe('Ubuntu-24.04');
+    expect(settings.local.defaultWslDistro).toBe('Ubuntu-22.04');
+  });
+
+  it('old files with terminal.allSurfaces still parse and drop the key', () => {
+    const { settings, dropped } = parseSettingsFile({
+      terminal: { allSurfaces: true, shell: 'pwsh.exe' },
+    });
+    expect(dropped).toEqual([]);
+    expect(settings.terminal).toEqual({ shell: 'pwsh.exe' });
+    expect('allSurfaces' in settings.terminal).toBe(false);
   });
 });

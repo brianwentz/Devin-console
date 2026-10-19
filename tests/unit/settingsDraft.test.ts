@@ -38,32 +38,38 @@ describe('draftFromSettings', () => {
       },
       tabs: { keepAliveHours: 48, maxLiveTabs: 3 },
       sessions: { maxLiveViews: 4, keepAliveHours: 12 },
-      terminal: { allSurfaces: true, shell: 'pwsh.exe' },
+      terminal: { shell: 'pwsh.exe' },
+      local: { devinPath: 'D:\\bin\\devin.exe', defaultWslDistro: 'Ubuntu-22.04' },
       notifications: { userId: 'user-1', orgId: 'org-2' },
       claude: {
         path: 'C:\\tools\\claude.exe',
         autoArchiveDays: 30,
         defaultPermissionMode: 'plan',
         model: 'claude-opus-4-1',
+        keepAliveMinutes: 30,
+        maxLiveAgents: 2,
+        defaultWslDistro: 'Ubuntu-24.04',
       },
     });
     expect(draftFromSettings(custom)).toEqual({
       tenantUrl: 'https://tenant.example.com',
       apiBase: 'https://api.example.com',
-      workspaces: ['C:\\work'],
       allowExternal: false,
       keepAliveHours: '48',
       maxLiveTabs: '3',
       sessionsOpen: true,
       sessionsMaxLiveViews: '4',
       sessionsKeepAliveHours: '12',
-      terminalAllSurfaces: true,
       terminalShell: 'pwsh.exe',
-      defaultWslDistro: '',
+      devinPath: 'D:\\bin\\devin.exe',
+      localDefaultWslDistro: 'Ubuntu-22.04',
       claudePath: 'C:\\tools\\claude.exe',
       claudeAutoArchiveDays: '30',
       claudePermissionMode: 'plan',
       claudeModel: 'claude-opus-4-1',
+      claudeKeepAliveMinutes: '30',
+      claudeMaxLiveAgents: '2',
+      claudeDefaultWslDistro: 'Ubuntu-24.04',
       userId: 'user-1',
       orgId: 'org-2',
       linkRules: [{ id: 'r1', kind: 'prefix', pattern: 'https://x.example/', enabled: true }],
@@ -78,15 +84,11 @@ describe('isDraftDirty', () => {
 
   it('is dirty when a field changes', () => {
     expect(isDraftDirty(draft({ tenantUrl: 'https://other.example.com' }), defaults)).toBe(true);
-    expect(isDraftDirty(draft({ workspaces: ['C:\\x'] }), defaults)).toBe(true);
-    // Element-wise: joined-equal but differently-split lists are dirty.
-    const joined = mergeSettings(defaults, { workspaces: ['ab'] });
-    expect(
-      isDraftDirty(
-        { ...draftFromSettings(joined), workspaces: ['a', 'b'] },
-        joined,
-      ),
-    ).toBe(true);
+    expect(isDraftDirty(draft({ devinPath: 'C:\\x\\devin.exe' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ localDefaultWslDistro: 'Ubuntu-22.04' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudeKeepAliveMinutes: '30' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudeMaxLiveAgents: '5' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ claudeDefaultWslDistro: 'Ubuntu-22.04' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ allowExternal: false }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ maxLiveTabs: '9' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ userId: 'user-9' }), defaults)).toBe(true);
@@ -109,6 +111,9 @@ describe('isDraftDirty', () => {
       autoArchiveDays: 45,
       defaultPermissionMode: 'default',
       model: null,
+      keepAliveMinutes: 15,
+      maxLiveAgents: 3,
+      defaultWslDistro: null,
     });
     // Blank path clears the override.
     const cleared = validateDraft(draft({ claudePath: '  ' }));
@@ -122,6 +127,9 @@ describe('isDraftDirty', () => {
       autoArchiveDays: 0,
       defaultPermissionMode: 'bypassPermissions',
       model: 'claude-opus-4-1',
+      keepAliveMinutes: 15,
+      maxLiveAgents: 3,
+      defaultWslDistro: null,
     });
     const blankModel = validateDraft(draft({ claudeModel: '   ' }));
     expect(blankModel.ok && blankModel.patch.claude?.model).toBe(null);
@@ -144,6 +152,47 @@ describe('isDraftDirty', () => {
     expect(isDraftDirty(draft({ terminalShell: '   ' }), defaults)).toBe(false);
     expect(isDraftDirty(draft({ userId: '  ', orgId: '\t' }), defaults)).toBe(false);
   });
+
+  it('round-trips the five ux2 fields and routes their errors to the claude tab', () => {
+    const result = validateDraft(
+      draft({
+        devinPath: '  D:\\bin\\devin.exe  ',
+        localDefaultWslDistro: 'Ubuntu-22.04',
+        claudeKeepAliveMinutes: '30',
+        claudeMaxLiveAgents: '5',
+        claudeDefaultWslDistro: 'Ubuntu-24.04',
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.patch.local).toEqual({
+      devinPath: 'D:\\bin\\devin.exe',
+      defaultWslDistro: 'Ubuntu-22.04',
+    });
+    expect(result.patch.claude).toMatchObject({
+      keepAliveMinutes: 30,
+      maxLiveAgents: 5,
+      defaultWslDistro: 'Ubuntu-24.04',
+    });
+    // Blank clears to null.
+    const blank = validateDraft(draft({ devinPath: '  ', claudeDefaultWslDistro: '' }));
+    expect(blank.ok && blank.patch.local?.devinPath).toBe(null);
+    expect(blank.ok && blank.patch.claude?.defaultWslDistro).toBe(null);
+
+    const badKeepAlive = validateDraft(draft({ claudeKeepAliveMinutes: '0' }));
+    expect(badKeepAlive.ok).toBe(false);
+    if (badKeepAlive.ok) return;
+    expect(badKeepAlive.errors.claudeKeepAliveMinutes).toBeTruthy();
+    const keepAliveField = firstErrorField(badKeepAlive.errors);
+    expect(keepAliveField && DRAFT_TAB[keepAliveField]).toBe('claude');
+
+    const badMaxLive = validateDraft(draft({ claudeMaxLiveAgents: '11' }));
+    expect(badMaxLive.ok).toBe(false);
+    if (badMaxLive.ok) return;
+    expect(badMaxLive.errors.claudeMaxLiveAgents).toBeTruthy();
+    const maxLiveField = firstErrorField(badMaxLive.errors);
+    expect(maxLiveField && DRAFT_TAB[maxLiveField]).toBe('claude');
+  });
 });
 
 describe('validateDraft', () => {
@@ -156,13 +205,20 @@ describe('validateDraft', () => {
     expect(result.patch).toEqual({
       tenantUrl: defaults.tenantUrl,
       apiBase: defaults.apiBase,
-      workspaces: [],
       routing: { allowExternal: true, rules: [] },
       tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
       sessions: { open: true, maxLiveViews: 6, keepAliveHours: 24 },
-      terminal: { allSurfaces: false, shell: 'pwsh.exe -l' },
-      hosts: { defaultWslDistro: null },
-      claude: { path: null, autoArchiveDays: 0, defaultPermissionMode: 'default', model: null },
+      terminal: { shell: 'pwsh.exe -l' },
+      local: { devinPath: null, defaultWslDistro: null },
+      claude: {
+        path: null,
+        autoArchiveDays: 0,
+        defaultPermissionMode: 'default',
+        model: null,
+        keepAliveMinutes: 15,
+        maxLiveAgents: 3,
+        defaultWslDistro: null,
+      },
       notifications: { userId: 'u1', orgId: 'o1' },
     });
   });
@@ -253,6 +309,20 @@ describe('DRAFT_TAB / firstErrorField', () => {
     expect(DRAFT_TAB.orgId).toBe('notifications');
     expect(DRAFT_TAB.tenantUrl).toBe('general');
     expect(DRAFT_TAB.allowExternal).toBe('links');
+    // ux2: Devin Local fields route to the 'local' tab, every claude* field to 'claude'.
+    expect(DRAFT_TAB.devinPath).toBe('local');
+    expect(DRAFT_TAB.localDefaultWslDistro).toBe('local');
+    for (const field of [
+      'claudePath',
+      'claudeAutoArchiveDays',
+      'claudePermissionMode',
+      'claudeModel',
+      'claudeKeepAliveMinutes',
+      'claudeMaxLiveAgents',
+      'claudeDefaultWslDistro',
+    ] as const) {
+      expect(DRAFT_TAB[field]).toBe('claude');
+    }
   });
 
   it('returns the first erroring field in SettingsDraft key order', () => {

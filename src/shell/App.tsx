@@ -74,7 +74,8 @@ export function App() {
 
   if (!state) return null;
   const terminalVisible =
-    state.terminalOpen && (state.surface === 'cloud' || state.settings.terminal.allSurfaces);
+    state.terminalOpen &&
+    (state.surface === 'cloud' || state.surface === 'local' || state.surface === 'claude');
   const bounds = computeBounds(size, {
     paneOpen: state.paneOpen,
     paneFraction: state.paneFraction,
@@ -94,7 +95,6 @@ export function App() {
         paneOpen={state.paneOpen}
         paneCollapsed={bounds.paneCollapsed}
         terminalOpen={state.terminalOpen}
-        terminalAllSurfaces={state.settings.terminal.allSurfaces}
       />
       {state.surface === 'cloud' && bounds.sessions && <SessionSidebar rect={bounds.sessions} />}
       {state.surface === 'claude' && bounds.sessions && <ClaudeSidebar rect={bounds.sessions} />}

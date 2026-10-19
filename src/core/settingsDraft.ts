@@ -20,20 +20,22 @@ export function isClaudePermissionMode(value: unknown): value is ClaudePermissio
 export interface SettingsDraft {
   tenantUrl: string;
   apiBase: string;
-  workspaces: string[];
   allowExternal: boolean;
   keepAliveHours: string;
   maxLiveTabs: string;
   sessionsOpen: boolean;
   sessionsMaxLiveViews: string;
   sessionsKeepAliveHours: string;
-  terminalAllSurfaces: boolean;
   terminalShell: string;
-  defaultWslDistro: string;
+  devinPath: string;
+  localDefaultWslDistro: string;
   claudePath: string;
   claudeAutoArchiveDays: string;
   claudePermissionMode: ClaudePermissionMode;
   claudeModel: string;
+  claudeKeepAliveMinutes: string;
+  claudeMaxLiveAgents: string;
+  claudeDefaultWslDistro: string;
   userId: string;
   orgId: string;
   linkRules: LinkRule[];
@@ -41,25 +43,34 @@ export interface SettingsDraft {
 
 export type DraftField = keyof SettingsDraft;
 
-export type SettingsTabId = 'general' | 'links' | 'passwords' | 'notifications' | 'updates';
+export type SettingsTabId =
+  | 'general'
+  | 'local'
+  | 'claude'
+  | 'links'
+  | 'passwords'
+  | 'notifications'
+  | 'updates';
 
 export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   tenantUrl: 'general',
   apiBase: 'general',
-  workspaces: 'general',
   allowExternal: 'links',
   keepAliveHours: 'general',
   maxLiveTabs: 'general',
   sessionsOpen: 'general',
   sessionsMaxLiveViews: 'general',
   sessionsKeepAliveHours: 'general',
-  terminalAllSurfaces: 'general',
   terminalShell: 'general',
-  defaultWslDistro: 'general',
-  claudePath: 'general',
-  claudeAutoArchiveDays: 'general',
-  claudePermissionMode: 'general',
-  claudeModel: 'general',
+  devinPath: 'local',
+  localDefaultWslDistro: 'local',
+  claudePath: 'claude',
+  claudeAutoArchiveDays: 'claude',
+  claudePermissionMode: 'claude',
+  claudeModel: 'claude',
+  claudeKeepAliveMinutes: 'claude',
+  claudeMaxLiveAgents: 'claude',
+  claudeDefaultWslDistro: 'claude',
   userId: 'notifications',
   orgId: 'notifications',
   linkRules: 'links',
@@ -73,20 +84,22 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
   return {
     tenantUrl: settings.tenantUrl,
     apiBase: settings.apiBase,
-    workspaces: [...settings.workspaces],
     allowExternal: settings.routing.allowExternal,
     keepAliveHours: String(settings.tabs.keepAliveHours),
     maxLiveTabs: String(settings.tabs.maxLiveTabs),
     sessionsOpen: settings.sessions.open,
     sessionsMaxLiveViews: String(settings.sessions.maxLiveViews),
     sessionsKeepAliveHours: String(settings.sessions.keepAliveHours),
-    terminalAllSurfaces: settings.terminal.allSurfaces,
     terminalShell: settings.terminal.shell,
-    defaultWslDistro: settings.hosts.defaultWslDistro ?? '',
+    devinPath: settings.local.devinPath ?? '',
+    localDefaultWslDistro: settings.local.defaultWslDistro ?? '',
     claudePath: settings.claude.path ?? '',
     claudeAutoArchiveDays: String(settings.claude.autoArchiveDays),
     claudePermissionMode: settings.claude.defaultPermissionMode,
     claudeModel: settings.claude.model ?? '',
+    claudeKeepAliveMinutes: String(settings.claude.keepAliveMinutes),
+    claudeMaxLiveAgents: String(settings.claude.maxLiveAgents),
+    claudeDefaultWslDistro: settings.claude.defaultWslDistro ?? '',
     userId: settings.notifications.userId,
     orgId: settings.notifications.orgId,
     linkRules: settings.routing.rules.map((rule) => ({ ...rule })),
@@ -107,21 +120,22 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
   return (
     draft.tenantUrl.trim() !== base.tenantUrl ||
     draft.apiBase.trim() !== base.apiBase ||
-    draft.workspaces.length !== base.workspaces.length ||
-    draft.workspaces.some((workspace, index) => workspace !== base.workspaces[index]) ||
     draft.allowExternal !== base.allowExternal ||
     Number(draft.keepAliveHours) !== Number(base.keepAliveHours) ||
     Number(draft.maxLiveTabs) !== Number(base.maxLiveTabs) ||
     draft.sessionsOpen !== base.sessionsOpen ||
     Number(draft.sessionsMaxLiveViews) !== Number(base.sessionsMaxLiveViews) ||
     Number(draft.sessionsKeepAliveHours) !== Number(base.sessionsKeepAliveHours) ||
-    draft.terminalAllSurfaces !== base.terminalAllSurfaces ||
     draft.terminalShell.trim() !== base.terminalShell ||
-    draft.defaultWslDistro !== base.defaultWslDistro ||
+    draft.devinPath.trim() !== base.devinPath ||
+    draft.localDefaultWslDistro !== base.localDefaultWslDistro ||
     draft.claudePath.trim() !== base.claudePath ||
     Number(draft.claudeAutoArchiveDays) !== Number(base.claudeAutoArchiveDays) ||
     draft.claudePermissionMode !== base.claudePermissionMode ||
     draft.claudeModel.trim() !== base.claudeModel ||
+    Number(draft.claudeKeepAliveMinutes) !== Number(base.claudeKeepAliveMinutes) ||
+    Number(draft.claudeMaxLiveAgents) !== Number(base.claudeMaxLiveAgents) ||
+    draft.claudeDefaultWslDistro !== base.claudeDefaultWslDistro ||
     draft.userId.trim() !== base.userId ||
     draft.orgId.trim() !== base.orgId ||
     draft.linkRules.length !== base.linkRules.length ||
@@ -172,6 +186,16 @@ export function validateDraft(
     errors.claudeAutoArchiveDays =
       'Auto-archive Claude sessions must be a whole number between 0 and 365 days';
   }
+  const claudeKeepAlive = Number(draft.claudeKeepAliveMinutes);
+  if (!Number.isInteger(claudeKeepAlive) || claudeKeepAlive < 1 || claudeKeepAlive > 240) {
+    errors.claudeKeepAliveMinutes =
+      'Claude keep-alive must be a whole number between 1 and 240 minutes';
+  }
+  const claudeMaxLive = Number(draft.claudeMaxLiveAgents);
+  if (!Number.isInteger(claudeMaxLive) || claudeMaxLive < 1 || claudeMaxLive > 10) {
+    errors.claudeMaxLiveAgents =
+      'Max live Claude agents must be a whole number between 1 and 10';
+  }
   for (const [index, rule] of draft.linkRules.entries()) {
     const pattern = rule.pattern.trim();
     if (!pattern) {
@@ -190,7 +214,6 @@ export function validateDraft(
     patch: {
       tenantUrl,
       apiBase,
-      workspaces: draft.workspaces,
       routing: {
         allowExternal: draft.allowExternal,
         rules: draft.linkRules.map((rule) => ({ ...rule, pattern: rule.pattern.trim() })),
@@ -201,13 +224,19 @@ export function validateDraft(
         maxLiveViews: sessionsMaxLive,
         keepAliveHours: sessionsKeepAlive,
       },
-      terminal: { allSurfaces: draft.terminalAllSurfaces, shell: draft.terminalShell.trim() },
-      hosts: { defaultWslDistro: draft.defaultWslDistro.trim() || null },
+      terminal: { shell: draft.terminalShell.trim() },
+      local: {
+        devinPath: draft.devinPath.trim() || null,
+        defaultWslDistro: draft.localDefaultWslDistro || null,
+      },
       claude: {
         path: draft.claudePath.trim() || null,
         autoArchiveDays: claudeAutoArchive,
         defaultPermissionMode: draft.claudePermissionMode,
         model: draft.claudeModel.trim() || null,
+        keepAliveMinutes: claudeKeepAlive,
+        maxLiveAgents: claudeMaxLive,
+        defaultWslDistro: draft.claudeDefaultWslDistro || null,
       },
       notifications: { userId: draft.userId.trim(), orgId: draft.orgId.trim() },
     },
@@ -217,7 +246,6 @@ export function validateDraft(
 const PATH_TO_FIELD: Record<string, DraftField> = {
   tenantUrl: 'tenantUrl',
   apiBase: 'apiBase',
-  workspaces: 'workspaces',
   'routing.allowExternal': 'allowExternal',
   'routing.rules': 'linkRules',
   'tabs.keepAliveHours': 'keepAliveHours',
@@ -225,13 +253,16 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'sessions.open': 'sessionsOpen',
   'sessions.maxLiveViews': 'sessionsMaxLiveViews',
   'sessions.keepAliveHours': 'sessionsKeepAliveHours',
-  'terminal.allSurfaces': 'terminalAllSurfaces',
   'terminal.shell': 'terminalShell',
-  'hosts.defaultWslDistro': 'defaultWslDistro',
+  'local.devinPath': 'devinPath',
+  'local.defaultWslDistro': 'localDefaultWslDistro',
   'claude.path': 'claudePath',
   'claude.autoArchiveDays': 'claudeAutoArchiveDays',
   'claude.defaultPermissionMode': 'claudePermissionMode',
   'claude.model': 'claudeModel',
+  'claude.keepAliveMinutes': 'claudeKeepAliveMinutes',
+  'claude.maxLiveAgents': 'claudeMaxLiveAgents',
+  'claude.defaultWslDistro': 'claudeDefaultWslDistro',
   'notifications.userId': 'userId',
   'notifications.orgId': 'orgId',
 };

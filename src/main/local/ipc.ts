@@ -64,7 +64,7 @@ export function setupLocal(): void {
   guardedHandle(IpcChannels.localWorkspacePick, async (): Promise<LocalResult<string | null>> => {
     try {
       // Start the picker in the configured default WSL distro's home.
-      const defaultDistro = state.settings?.current.hosts.defaultWslDistro;
+      const defaultDistro = state.settings?.current.local.defaultWslDistro;
       const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
       const options: Electron.OpenDialogOptions = {
         title: 'Add workspace folder',

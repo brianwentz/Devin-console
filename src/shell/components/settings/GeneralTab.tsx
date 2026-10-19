@@ -6,7 +6,7 @@ import {
 } from '../../../core/settingsDraft';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
-import { errorTextClass, inputClass, inputErrorClass, saveClass } from './styles';
+import { errorTextClass, inputClass, inputErrorClass } from './styles';
 
 // Non-empty claude.path that didn't resolve — surfaced inline under the
 // field from the live claude state rather than as a commit-blocking error.
@@ -39,7 +39,6 @@ function HostsBlock() {
   const [openOverrides, setOpenOverrides] = useState<string | null>(null);
   if (!state || !draft) return null;
   const hosts = state.hosts ?? [];
-  const wslHosts = hosts.filter((host) => host.kind === 'wsl');
   const overrides = state.settings.hosts?.overrides ?? {};
 
   const facts = (host: (typeof hosts)[number]): string => {
@@ -163,33 +162,13 @@ function HostsBlock() {
           ) : null}
         </div>
       ))}
-      {wslHosts.length > 0 ? (
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-[#aeb9c8]">Default WSL distro for new sessions</span>
-          <select
-            id="defaultWslDistroSelect"
-            className={inputClass}
-            value={draft.defaultWslDistro}
-            onChange={(event) => updateDraft({ defaultWslDistro: event.target.value })}
-          >
-            <option value="">none</option>
-            {wslHosts.map((host) => (
-              <option key={host.id} value={host.label}>
-                {host.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
     </div>
   );
 }
 
 export function GeneralTab() {
   const { draft, errors } = useSettingsDraft();
-  const [newWorkspace, setNewWorkspace] = useState('');
   if (!draft) return null;
-  const workspaces = draft.workspaces;
 
   return (
     <div className="flex flex-col gap-5">
@@ -220,49 +199,6 @@ export function GeneralTab() {
         />
         <FieldError inputId="apiBaseInput" message={errors.apiBase} />
       </label>
-      <div className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">Workspaces</span>
-        <ul className="flex flex-col gap-1 max-w-md">
-          {workspaces.map((workspace) => (
-            <li key={workspace} className="flex items-center gap-2">
-              <span className="flex-1 truncate font-mono text-xs">{workspace}</span>
-              <button
-                type="button"
-                className={saveClass}
-                onClick={() =>
-                  updateDraft({ workspaces: workspaces.filter((entry) => entry !== workspace) })
-                }
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="flex gap-2 max-w-md">
-          <input
-            id="workspaceInput"
-            className={fieldInputClass(errors, 'workspaces')}
-            value={newWorkspace}
-            aria-invalid={errors.workspaces ? 'true' : undefined}
-            onChange={(event) => setNewWorkspace(event.target.value)}
-            placeholder="C:\path\to\workspace"
-          />
-          <button
-            type="button"
-            className={saveClass}
-            onClick={() => {
-              const value = newWorkspace.trim();
-              if (value && !workspaces.includes(value)) {
-                updateDraft({ workspaces: [...workspaces, value] });
-              }
-              setNewWorkspace('');
-            }}
-          >
-            Add
-          </button>
-        </div>
-        <FieldError inputId="workspaceInput" message={errors.workspaces} />
-      </div>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">Keep hidden tabs live for (hours, 0 = discard on switch)</span>
         <input
@@ -419,15 +355,6 @@ export function GeneralTab() {
         <span className="text-xs text-[#7f8ca0]">
           Blank = the Claude CLI's default model. Applies to new sessions.
         </span>
-      </label>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          id="terminalAllSurfacesInput"
-          type="checkbox"
-          checked={draft.terminalAllSurfaces}
-          onChange={(event) => updateDraft({ terminalAllSurfaces: event.target.checked })}
-        />
-        <span>Show terminal dock on Local and Settings too</span>
       </label>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">Shell command</span>

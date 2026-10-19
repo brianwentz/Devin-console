@@ -50,7 +50,7 @@ const selectedTab = (app: ElectronApplication) =>
     `document.querySelector('#settingsTabs [role="tab"][aria-selected="true"]')?.dataset.settingsTab`,
   );
 
-test('settings has five tabs and switches panels', async () => {
+test('settings has seven tabs and switches panels', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
@@ -59,7 +59,7 @@ test('settings has five tabs and switches panels', async () => {
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     await expect
       .poll(async () => shell(app, `document.querySelectorAll('#settingsTabs [role="tab"]').length`))
-      .toBe(5);
+      .toBe(7);
     expect(await selectedTab(app)).toBe('general');
     await expect
       .poll(async () => shell(app, `Boolean(document.getElementById('tenantUrlInput'))`))
