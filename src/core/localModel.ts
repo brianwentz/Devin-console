@@ -47,6 +47,12 @@ export type StopReason =
 
 export type HistorySource = 'agent' | 'local-index';
 
+// ACP `SessionModeState` subset — ids/names only, never _meta.
+export type SessionModes = {
+  currentModeId: string;
+  availableModes: Array<{ id: string; name: string }>;
+};
+
 // Cumulative token/context usage for a session — fed by `usage_update` updates
 // and PromptResponse.usage (experimental ACP field). `used`/`size` are context
 // window numbers; the token fields are cumulative across turns.
@@ -109,6 +115,9 @@ export type ChatSession = {
   error?: string;
   historySource: HistorySource;
   loaded: boolean;
+  // ACP session modes advertised by session/new|load; the list is
+  // agent-defined. Absent when the agent doesn't advertise modes.
+  modes?: SessionModes;
 };
 
 export type LocalSession = ChatSession & { workspace: string };
@@ -185,6 +194,7 @@ export type SessionUpdate =
   | (ToolCallUpdateFields & { sessionUpdate: 'tool_call_update' })
   | { sessionUpdate: 'plan'; entries: PlanEntry[] }
   | { sessionUpdate: 'session_info_update'; title?: string | null }
+  | { sessionUpdate: 'current_mode_update'; currentModeId: string }
   | {
       sessionUpdate: 'usage_update';
       used: number;
@@ -368,6 +378,17 @@ export function applyUpdate<S extends ChatStateLike>(
       if (!info.title) return state;
       return replaceSession(state, { ...session, title: info.title });
     }
+    case 'current_mode_update': {
+      const modeUpdate = update as { currentModeId?: unknown };
+      if (typeof modeUpdate.currentModeId !== 'string') return state;
+      return replaceSession(state, {
+        ...session,
+        modes: {
+          currentModeId: modeUpdate.currentModeId,
+          availableModes: session.modes?.availableModes ?? [],
+        },
+      });
+    }
     case 'usage_update': {
       const usageUpdate = update as { used?: unknown; size?: unknown; _meta?: unknown };
       const usage = { ...(session.usage ?? emptyUsage()) };
@@ -455,6 +476,22 @@ export function finishPrompt<S extends ChatStateLike>(
   if (options.error) next.error = options.error;
   else delete next.error;
   return replaceSession(state, next);
+}
+
+export function setModes<S extends ChatStateLike>(
+  state: S,
+  sessionId: string,
+  modes: SessionModes,
+): S {
+  const session = state.sessions[sessionId] as SessionOf<S> | undefined;
+  if (!session) return state;
+  return replaceSession(state, {
+    ...session,
+    modes: {
+      currentModeId: modes.currentModeId,
+      availableModes: modes.availableModes.map((mode) => ({ ...mode })),
+    },
+  });
 }
 
 export function setPermission<S extends ChatStateLike>(

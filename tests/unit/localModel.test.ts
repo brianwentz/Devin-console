@@ -10,6 +10,7 @@ import {
   removeWorkspace,
   resetHistory,
   sessionsFor,
+  setModes,
   setPermission,
   setTerminalOwned,
   startPrompt,
@@ -538,5 +539,44 @@ describe('generic reducers over extended session types', () => {
     const upserted = upsertSession(reset, { ...newChatSession({ id: 'n', title: 'New' }), cwd: 'E:\\other', live: 'live' });
     expect(upserted.sessions.n!.cwd).toBe('E:\\other');
     expect(Object.keys(removeSession(upserted, SID).sessions)).toEqual(['n']);
+  });
+});
+
+describe('session modes', () => {
+  const MODES = {
+    currentModeId: 'accept-edits',
+    availableModes: [
+      { id: 'accept-edits', name: 'Code' },
+      { id: 'plan', name: 'Plan' },
+    ],
+  };
+
+  it('setModes records advertised modes; unknown session is a no-op', () => {
+    const state = withSession();
+    expect(setModes(state, 'nope', MODES).sessions.nope).toBeUndefined();
+    const next = setModes(state, SID, MODES);
+    expect(next.sessions[SID]!.modes).toEqual(MODES);
+    expect(next.sessions[SID]!.modes!.availableModes).not.toBe(MODES.availableModes);
+  });
+
+  it('current_mode_update sets the id on a session that has modes', () => {
+    const state = setModes(withSession(), SID, MODES);
+    const next = applyUpdate(state, SID, {
+      sessionUpdate: 'current_mode_update',
+      currentModeId: 'plan',
+    });
+    expect(next.sessions[SID]!.modes).toEqual({
+      currentModeId: 'plan',
+      availableModes: MODES.availableModes,
+    });
+  });
+
+  it('current_mode_update creates modes with an empty list when none were advertised', () => {
+    const state = withSession();
+    const next = applyUpdate(state, SID, {
+      sessionUpdate: 'current_mode_update',
+      currentModeId: 'smart',
+    });
+    expect(next.sessions[SID]!.modes).toEqual({ currentModeId: 'smart', availableModes: [] });
   });
 });

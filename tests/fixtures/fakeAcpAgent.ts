@@ -4,6 +4,7 @@
 // Capabilities: FAKE_ACP_LIST=1 advertises session/list, FAKE_ACP_LOAD=1 advertises
 // session/load, FAKE_ACP_DELETE=1 advertises sessionCapabilities.delete +
 // session/delete. FAKE_ACP_LINK_URL is embedded as a markdown link in every reply.
+import { appendFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
 import {
   AgentSideConnection,
@@ -21,8 +22,21 @@ const linkUrl = process.env.FAKE_ACP_LINK_URL ?? 'https://github.com/cognition-a
 // thinking indicator is observable.
 const emitUsage = process.env.FAKE_ACP_USAGE === '1';
 const promptDelayMs = Number(process.env.FAKE_ACP_PROMPT_DELAY_MS ?? 0) || 0;
+// FAKE_ACP_MODES=1 makes newSession/loadSession advertise the devin-mode list
+// and enables session/set_mode; FAKE_ACP_MODE_LOG appends `<sessionId> <modeId>`
+// lines so specs can assert which mode the app selected.
+const supportsModes = process.env.FAKE_ACP_MODES === '1';
+const modeLogFile = process.env.FAKE_ACP_MODE_LOG || null;
 
 const USAGE = { totalTokens: 1234, inputTokens: 1000, outputTokens: 234 };
+
+const AVAILABLE_MODES = [
+  { id: 'accept-edits', name: 'Code' },
+  { id: 'smart', name: 'Smart' },
+  { id: 'ask', name: 'Ask' },
+  { id: 'plan', name: 'Plan' },
+  { id: 'bypass', name: 'Bypass Permissions' },
+];
 
 type Session = {
   id: string;
@@ -31,6 +45,7 @@ type Session = {
   createdAt: string;
   history: SessionNotification['update'][];
   cancelled: boolean;
+  modeId: string;
 };
 
 const sessions = new Map<string, Session>();
@@ -82,8 +97,16 @@ function createAgent(connection: AgentSideConnection): Agent {
         createdAt: new Date().toISOString(),
         history: [],
         cancelled: false,
+        modeId: 'accept-edits',
       });
-      return { sessionId: id };
+      if (!supportsModes) return { sessionId: id };
+      return {
+        sessionId: id,
+        modes: {
+          currentModeId: 'accept-edits',
+          availableModes: AVAILABLE_MODES.map((mode) => ({ ...mode })),
+        },
+      };
     },
     async listSessions(params) {
       if (!supportsList) throw new Error('session/list not supported');
@@ -110,12 +133,37 @@ function createAgent(connection: AgentSideConnection): Agent {
           createdAt: new Date().toISOString(),
           history: [],
           cancelled: false,
+          modeId: 'accept-edits',
         };
         sessions.set(session.id, session);
       }
       for (const update of session.history) {
         await connection.sessionUpdate({ sessionId: session.id, update });
       }
+      if (!supportsModes) return {};
+      return {
+        modes: {
+          currentModeId: session.modeId,
+          availableModes: AVAILABLE_MODES.map((mode) => ({ ...mode })),
+        },
+      };
+    },
+    async setSessionMode(params) {
+      if (!supportsModes) throw new Error('session/set_mode not supported');
+      const session = sessions.get(params.sessionId);
+      if (!session) throw new Error(`unknown session ${params.sessionId}`);
+      if (!AVAILABLE_MODES.some((mode) => mode.id === params.modeId)) {
+        throw new Error(`unknown mode ${params.modeId}`);
+      }
+      if (modeLogFile) appendFileSync(modeLogFile, `${params.sessionId} ${params.modeId}\n`);
+      session.modeId = params.modeId;
+      await connection.sessionUpdate({
+        sessionId: session.id,
+        update: {
+          sessionUpdate: 'current_mode_update',
+          currentModeId: params.modeId,
+        } as SessionNotification['update'],
+      });
       return {};
     },
     async deleteSession(params) {
