@@ -39,6 +39,7 @@ import { loadSdk } from './claude/sdk';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
 import { claudeUsage } from './claude/usage';
+import { devinUsage } from './devinUsage';
 import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
@@ -297,6 +298,8 @@ export function registerTestHooks(): void {
       claudeState: () => claudeSessions().snapshot(),
       claudeUsageState: () => claudeUsage().state,
       claudeUsageRefresh: () => claudeUsage().refresh(),
+      devinUsageState: () => devinUsage().state,
+      devinUsageRefresh: () => devinUsage().refresh(),
       claudeRefresh: () => claudeSessions().refresh('test'),
       claudeSelect: (id: string | null) => {
         if (id === null) {

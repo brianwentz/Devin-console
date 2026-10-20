@@ -84,6 +84,37 @@ function ClaudeButton({ surface, buttonClass }: { surface: Surface; buttonClass:
   );
 }
 
+// Usage alerts: a dot while any tracked metric is ≥50% of its limit — amber
+// for warn, red for critical; the tooltip lists the hot metrics.
+function AnalyticsButton({ surface, buttonClass }: { surface: Surface; buttonClass: string }) {
+  const state = useShellState();
+  const level = state?.usage.level ?? 'none';
+  const hot = (state?.usage.items ?? []).filter((item) => item.percent >= 50);
+  return (
+    <button
+      id="analyticsButton"
+      type="button"
+      aria-label="Analytics"
+      aria-pressed={surface === 'analytics'}
+      title="Analytics"
+      className={`${buttonClass} relative flex items-center justify-center`}
+      onClick={() => void requestSurface('analytics')}
+    >
+      <BarChart3 size={18} strokeWidth={1.8} />
+      {level !== 'none' && (
+        <span
+          id="usageBadge"
+          data-usage-level={level}
+          className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${
+            level === 'critical' ? 'bg-[#d93a2f]' : 'bg-[#e0a03c]'
+          }`}
+          title={hot.map((item) => `${item.label} ${Math.round(item.percent)}%`).join(' · ')}
+        />
+      )}
+    </button>
+  );
+}
+
 export function Rail({
   surface,
   paneOpen,
@@ -122,17 +153,7 @@ export function Rail({
         ⌘
       </button>
       <ClaudeButton surface={surface} buttonClass={buttonClass} />
-      <button
-        id="analyticsButton"
-        type="button"
-        aria-label="Analytics"
-        aria-pressed={surface === 'analytics'}
-        title="Analytics"
-        className={`${buttonClass} flex items-center justify-center`}
-        onClick={() => void requestSurface('analytics')}
-      >
-        <BarChart3 size={18} strokeWidth={1.8} />
-      </button>
+      <AnalyticsButton surface={surface} buttonClass={buttonClass} />
       <PrQuickOpen buttonClass={buttonClass} />
       <NotificationsButton buttonClass={buttonClass} />
       <span className="flex-1" />

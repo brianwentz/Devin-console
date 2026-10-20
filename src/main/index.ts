@@ -27,6 +27,8 @@ import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';
 import { identityResolver } from './identity';
 import { notificationStore, notificationsFlush } from './notifications';
+import { usageAlertStore } from './usageAlerts';
+import { devinUsage } from './devinUsage';
 import { prStore, prsFlush } from './prs';
 import { prLedger } from './prLedger';
 import {
@@ -186,6 +188,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       });
     }
     try {
+      devinUsage().dispose();
       claudeUsage().dispose();
       claudeSessions().dispose();
     } catch (error) {
@@ -282,6 +285,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
 async function createWindow(): Promise<void> {
   state.settings = new SettingsStore(userData);
   notificationStore(userData);
+  usageAlertStore(userData);
   prStore(userData);
   prLedger(userData);
   identityResolver(userData, testMode);
@@ -401,6 +405,10 @@ async function createWindow(): Promise<void> {
     keepAliveMs: cloudKeepAliveMs(saved.sessions.keepAliveHours),
   });
   cloudSessions().start();
+  devinUsage().start();
+  // Eager start so usage alerts don't depend on visiting the Analytics tab
+  // (the hidden cadence is already 10 min).
+  claudeUsage().start();
 
   state.tabManager = new TabManager({
     parent: state.windowRef.contentView,

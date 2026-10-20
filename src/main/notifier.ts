@@ -27,6 +27,7 @@ import { claudeSessions } from './claude/sessions';
 import { claudeScope } from '../core/tabModel';
 import { state, testMode } from './state';
 import { installUpdate } from './updater';
+import { refreshAnalyticsView } from './analytics';
 import {
   activateWindow,
   applyLayout,
@@ -50,6 +51,7 @@ function kindEnabled() {
     update: k?.update ?? true,
     identity: true,
     auth: true,
+    usage: k?.usage ?? true,
   };
 }
 
@@ -573,6 +575,16 @@ export function openNotification(id: string): void {
   if (entry.kind === 'identity' || entry.kind === 'auth') {
     state.surface = 'settings';
     applyLayout();
+    return;
+  }
+  if (entry.kind === 'usage') {
+    state.settings?.merge({
+      analytics: { tab: entry.source === 'claude' ? 'claude' : 'devin' },
+    });
+    state.surface = 'analytics';
+    refreshAnalyticsView();
+    applyLayout();
+    activateWindow('notification-open');
     return;
   }
   // Claude entries select the session on the Claude surface; a PR opens in

@@ -113,6 +113,8 @@ export const IpcChannels = {
   // Analytics Claude tab: usage state (invoke), refresh (invoke), visibility
   // (send) and the pushed state channel.
   analyticsRefresh: 'analytics:refresh',
+  // Devin Cloud usage metric: pull-refresh (send, no payload).
+  devinUsageRefresh: 'devin:usageRefresh',
   claudeUsageState: 'claude:usageState',
   claudeUsageRefresh: 'claude:usageRefresh',
   claudeUsageVisible: 'claude:usageVisible',
@@ -244,6 +246,7 @@ const NotificationKindFields = {
   prOpened: z.boolean(),
   prCompleted: z.boolean(),
   update: z.boolean(),
+  usage: z.boolean(),
 };
 const NotificationsFields = {
   orgId: z.string().max(128),
@@ -259,8 +262,11 @@ const NotificationsFields = {
     prOpened: NotificationKindFields.prOpened.default(true),
     prCompleted: NotificationKindFields.prCompleted.default(true),
     update: NotificationKindFields.update.default(true),
+    usage: NotificationKindFields.usage.default(true),
   }),
 };
+// Usage alerts (Devin Cloud monthly ACUs + Claude limits): poll cadence.
+const UsageFields = { devinPollMinutes: z.number().int().min(5).max(240) };
 // F1: open a background tab (in the session's scope) when the poller sees a new PR.
 const PrsFields = { autoOpenTabs: z.boolean() };
 // ux3 S0: manual session order per section (path/folder key -> session ids).
@@ -394,6 +400,23 @@ export const ClaudeUsageStateSchema = z.object({
 export type ClaudeUsageState = z.infer<typeof ClaudeUsageStateSchema>;
 // Send arg for claude:usageVisible — the shell reports Claude-tab visibility.
 export const ClaudeUsageVisibleArg = z.object({ visible: z.boolean() });
+
+// Devin Cloud usage metric — rides ShellState.usage.devin (no pushed store).
+export const DevinUsageStateSchema = z.object({
+  status: z.enum(['idle', 'ready', 'login-required', 'error']),
+  tierName: z.string().nullable(),
+  cycleUsage: z.number().nullable(),
+  cycleLimit: z.number().nullable(),
+  estimatedCycleUsage: z.number().nullable(),
+  cycleStart: z.string().nullable(),
+  cycleEnd: z.string().nullable(),
+  percent: z.number().nullable(),
+  fetchedAt: z.string().nullable(), // ISO of the body shown (cached body's time when stale)
+  stale: z.boolean(),
+  error: z.string().nullable(),
+  nextPollAt: z.string().nullable(),
+});
+export type DevinUsageState = z.infer<typeof DevinUsageStateSchema>;
 // Execution hosts (WSL). wslDistros: null = auto (running + default);
 // overrides: per-host path/shell/env-capture settings keyed by HostId.
 const HostsFields = {
@@ -472,12 +495,12 @@ export const SettingsObject = z.object({
       banner: NotificationsFields.banner.default(true),
       kinds: NotificationsFields.kinds.default({
         waiting: true, approval: true, blocked: true, finished: false,
-        prOpened: true, prCompleted: true, update: true,
+        prOpened: true, prCompleted: true, update: true, usage: true,
       }),
     })
     .default({
       orgId: '', userId: '', collect: true, banner: true,
-      kinds: { waiting: true, approval: true, blocked: true, finished: false, prOpened: true, prCompleted: true, update: true },
+      kinds: { waiting: true, approval: true, blocked: true, finished: false, prOpened: true, prCompleted: true, update: true, usage: true },
     }),
   prs: z
     .object({ autoOpenTabs: PrsFields.autoOpenTabs.default(true) })
@@ -513,6 +536,9 @@ export const SettingsObject = z.object({
   analytics: z
     .object({ tab: AnalyticsFields.tab.default('devin') })
     .default({ tab: 'devin' }),
+  usage: z
+    .object({ devinPollMinutes: UsageFields.devinPollMinutes.default(15) })
+    .default({ devinPollMinutes: 15 }),
   claude: z
     .object({
       path: ClaudeFields.path.default(null),
@@ -576,6 +602,7 @@ export const SettingsPatchSchema = z.object({
   layout: z.object(LayoutFields).partial().optional(),
   terminal: z.object(TerminalFields).partial().optional(),
   analytics: z.object(AnalyticsFields).partial().optional(),
+  usage: z.object(UsageFields).partial().optional(),
   sessions: z.object(SessionsFields).partial().optional(),
   claude: z.object(ClaudeFields).partial().optional(),
   hosts: z.object(HostsFields).partial().optional(),
@@ -895,6 +922,18 @@ export const ShellStateSchema = z.object({
       .nullable(),
   }),
   notifications: NotificationsStateSchema,
+  usage: z.object({
+    level: z.enum(['none', 'warn', 'critical']),
+    items: z.array(
+      z.object({
+        metric: z.string(),
+        accountKey: z.string(),
+        label: z.string(),
+        percent: z.number(),
+      }),
+    ),
+    devin: DevinUsageStateSchema,
+  }),
   cloud: CloudStateSchema,
   claude: ClaudeStateSchema,
   claudeSessionId: z.string().nullable(),

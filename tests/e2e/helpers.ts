@@ -111,6 +111,11 @@ export type PublicState = {
     error: string | null;
   };
   cloud: import('../../src/shared/ipc').CloudState;
+  usage: {
+    level: 'none' | 'warn' | 'critical';
+    items: Array<{ metric: string; accountKey: string; label: string; percent: number }>;
+    devin: import('../../src/shared/ipc').DevinUsageState;
+  };
 };
 
 const profileWslRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsl-'));
@@ -144,6 +149,10 @@ export async function launchApp(
       // Analytics Claude tab (A2): the usage fixture + account file live under
       // tests/fixtures; nothing reads them until the service lands.
       DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL: fixtures.claudeUsageUrl,
+      // Devin usage metric: fixture endpoint; slow default cadence — specs
+      // opt into faster polling.
+      DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL: fixtures.devinUsageUrl,
+      DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS: '600000',
       DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE: join(
         process.cwd(),
         'tests/fixtures/claude-account.json',

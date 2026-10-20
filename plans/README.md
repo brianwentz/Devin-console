@@ -18,6 +18,7 @@ Design history of the Claude Code integration (Phases 0–7). The files are kept
 | `quiet-tests.md` | Quiet e2e runs — invisible, never-activated test window | Implemented — PR pending |
 | `analytics-claude.md` | Analytics Claude tab — plan-limit gauges + monthly token totals | Implemented — PR pending |
 | `ux-round-3.md` | UX round 3 — session/folder reorder, Devin Cloud tab, picker start folder, store passthrough, local configDir fix | Implemented — PR pending |
+| `usage-alerts.md` | Usage alerts — Devin Cloud monthly ACUs + Claude plan limits, 50%/80% notifications, rail badge, strip summary | Implemented — PR pending |
 
 ## How we worked
 

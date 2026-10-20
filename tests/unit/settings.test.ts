@@ -195,6 +195,7 @@ describe('notifications settings (P5/P6)', () => {
     prOpened: true,
     prCompleted: true,
     update: true,
+    usage: true,
   };
   it('defaults collect/banner on, org/user blank, kinds with finished off', () => {
     const base = SettingsSchema.parse({});

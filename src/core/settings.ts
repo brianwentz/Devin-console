@@ -31,6 +31,7 @@ export const SETTINGS_PRESERVE_SPEC: PreserveSpec = structural({
   sessions: structural(),
   terminal: structural(),
   analytics: structural(),
+  usage: structural(),
   claude: structural(),
   hosts: structural(),
 });

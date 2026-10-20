@@ -56,7 +56,12 @@ const ORG_SYNC_DEBOUNCE_MS = 2_000;
 // folder — beyond that the navigation is treated as unrelated.
 const NEW_SESSION_FILE_WINDOW_MS = 15 * 60_000;
 
-type TokenFailReason = 'view-not-ready' | 'no-devindebug' | 'login-required' | 'timeout' | 'error';
+export type TokenFailReason =
+  | 'view-not-ready'
+  | 'no-devindebug'
+  | 'login-required'
+  | 'timeout'
+  | 'error';
 
 const FixtureSchema = z.object({
   sessions: z.array(CloudSessionSchema),
@@ -819,6 +824,18 @@ class CloudSessions {
     log('cloud', 'cloud-token', { detail: { ok: true } });
     this.emit();
     this.connect();
+  }
+
+  // Public identity read for sibling services (devinUsage) — no socket side
+  // effects; the fixed failure reason travels back with a null identity.
+  readIdentity(): Promise<{
+    identity: { token: string; orgId: string } | null;
+    reason: TokenFailReason | null;
+  }> {
+    let reason: TokenFailReason | null = null;
+    return this.readPageIdentity((r) => {
+      reason = r;
+    }).then((identity) => ({ identity, reason }));
   }
 
   // Reads the page's CURRENT token + org — devinDebug.getOrgId() reports

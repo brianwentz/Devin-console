@@ -41,8 +41,10 @@ export const RAIL_WIDTH = 56;
 export const SPLITTER_WIDTH = 6;
 export const TITLE_BAR_HEIGHT = 36;
 // Analytics surface: height of the shell-rendered Devin/Claude tab strip
-// directly under the title bar (plans/analytics-claude.md D5).
-export const ANALYTICS_TABS_HEIGHT = 36;
+// directly under the title bar (plans/analytics-claude.md D5). The Devin tab's
+// one-line usage summary row rides inside the same strip region.
+export const ANALYTICS_USAGE_ROW_HEIGHT = 24;
+export const ANALYTICS_TABS_HEIGHT = 36 + ANALYTICS_USAGE_ROW_HEIGHT;
 export const MIN_PANE_WIDTH = 320;
 // Cloud session sidebar column (left of the devin view, right of the rail).
 export const SESSIONS_MIN_WIDTH = 200;

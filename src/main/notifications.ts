@@ -30,11 +30,13 @@ import { notifyShell } from './window';
 
 const AppNotificationSchema = z.object({
   id: z.string(),
-  kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth']),
+  kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth', 'usage']),
   sessionId: z.string().nullable(),
   ownerUserId: z.string().nullable().optional(),
   source: z.enum(['devin', 'claude']).optional(),
   sessionTitle: z.string(),
+  metric: z.enum(['devin-monthly', 'claude-session', 'claude-weekly']).optional(),
+  accountKey: z.string().optional(),
   prUrl: z.string().optional(),
   prState: z.string().optional(),
   version: z.string().optional(),
@@ -108,7 +110,7 @@ export class NotificationStore {
     this.persist();
     this.changed();
     this.updateBadge();
-    if (state.settings?.current.notifications.banner) {
+    if (entry.kind !== 'usage' && state.settings?.current.notifications.banner) {
       state.shellView?.webContents.send(IpcChannels.notificationBanner, entry);
     }
     log('shell', 'notification-added', {

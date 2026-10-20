@@ -82,6 +82,7 @@ const FIELD_INPUT: Record<DraftField, string> = {
   allowExternal: 'allowExternalInput',
   keepAliveHours: 'keepAliveInput',
   maxLiveTabs: 'maxLiveTabsInput',
+  usageDevinPollMinutes: 'usageDevinPollMinutes',
   sessionsOpen: 'sessionsColumnToggle',
   sessionsMaxLiveViews: 'sessionsMaxLiveViews',
   sessionsKeepAliveHours: 'sessionsKeepAliveHours',

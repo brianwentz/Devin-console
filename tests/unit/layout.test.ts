@@ -368,7 +368,7 @@ describe('dockSurface', () => {
 describe('analytics tab strip', () => {
   it('is absent by default and leaves every rect untouched', () => {
     const base = computeBounds({ width: 1400, height: 900 }, layout());
-    expect(ANALYTICS_TABS_HEIGHT).toBe(36);
+    expect(ANALYTICS_TABS_HEIGHT).toBe(60);
     expect(base.analyticsTabs).toBeNull();
     const explicit = computeBounds({ width: 1400, height: 900 }, layout({ analyticsTabs: false }));
     expect(explicit).toEqual(base);
@@ -380,8 +380,8 @@ describe('analytics tab strip', () => {
       { width: 1400, height: 900 },
       layout({ paneFraction: F560, analyticsTabs: true }),
     );
-    expect(bounds.analyticsTabs).toEqual({ x: 56, y: TITLE_BAR_HEIGHT, width: 778, height: 36 });
-    expect(bounds.devin).toEqual({ x: 56, y: TITLE_BAR_HEIGHT + 36, width: 778, height: 864 - 36 });
+    expect(bounds.analyticsTabs).toEqual({ x: 56, y: TITLE_BAR_HEIGHT, width: 778, height: 60 });
+    expect(bounds.devin).toEqual({ x: 56, y: TITLE_BAR_HEIGHT + 60, width: 778, height: 864 - 60 });
     // Pane, splitter, rail and title bar are unaffected.
     expect(bounds.ghTab).toEqual(base.ghTab);
     expect(bounds.splitter).toEqual(base.splitter);
@@ -396,8 +396,8 @@ describe('analytics tab strip', () => {
       layout({ paneOpen: false, sessionsOpen: true, analyticsTabs: true }),
     );
     const chrome = RAIL_WIDTH + DEFAULT_SESSIONS_WIDTH + SPLITTER_WIDTH;
-    expect(bounds.analyticsTabs).toEqual({ x: chrome, y: 36, width: 1400 - chrome, height: 36 });
-    expect(bounds.devin).toEqual({ x: chrome, y: 72, width: 1400 - chrome, height: 828 });
+    expect(bounds.analyticsTabs).toEqual({ x: chrome, y: 36, width: 1400 - chrome, height: 60 });
+    expect(bounds.devin).toEqual({ x: chrome, y: 96, width: 1400 - chrome, height: 804 });
     expect(bounds.sessions?.height).toBe(864);
   });
 
@@ -407,8 +407,8 @@ describe('analytics tab strip', () => {
       layout({ paneOpen: false, terminalOpen: true, terminalHeight: 280, analyticsTabs: true }),
     );
     expect(bounds.analyticsTabs?.y).toBe(36);
-    expect(bounds.devin.y).toBe(72);
-    expect(bounds.devin.height).toBe(900 - 36 - 36 - 280 - SPLITTER_WIDTH);
+    expect(bounds.devin.y).toBe(96);
+    expect(bounds.devin.height).toBe(900 - 36 - 60 - 280 - SPLITTER_WIDTH);
     expect(bounds.terminal?.y).toBe(900 - 280);
 
     const tiny = computeBounds({ width: 1400, height: 50 }, layout({ paneOpen: false, analyticsTabs: true }));
@@ -419,7 +419,7 @@ describe('analytics tab strip', () => {
   it('survives the pane auto-collapse path', () => {
     const bounds = computeBounds({ width: 900, height: 900 }, layout({ analyticsTabs: true }));
     expect(bounds.paneCollapsed).toBe(true);
-    expect(bounds.analyticsTabs).toEqual({ x: 56, y: 36, width: 844, height: 36 });
-    expect(bounds.devin).toEqual({ x: 56, y: 72, width: 844, height: 828 });
+    expect(bounds.analyticsTabs).toEqual({ x: 56, y: 36, width: 844, height: 60 });
+    expect(bounds.devin).toEqual({ x: 56, y: 96, width: 844, height: 804 });
   });
 });
