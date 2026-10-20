@@ -24,7 +24,14 @@ import { handleLink } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { state, testMode } from './state';
-import { applyLayout, layoutState, publicState, setPaneOpen, setSessionsOpen } from './window';
+import {
+  applyLayout,
+  focusContents,
+  layoutState,
+  publicState,
+  setPaneOpen,
+  setSessionsOpen,
+} from './window';
 import { shutdown } from './index';
 import { localContextMenuClick, localContextMenuItems, localHost } from './local/ipc';
 import { loadSdk } from './claude/sdk';
@@ -57,7 +64,7 @@ export function registerTestHooks(): void {
         const contents = state.tabManager?.getView(id)?.webContents;
         if (!contents) return;
         state.lastFocused = contents;
-        contents.focus();
+        focusContents(contents, 'test-focus');
       },
       setPaneOpen: (value: boolean) => setPaneOpen(value, 'test'),
       // Mirrors settings:set — stores the raw preference, layout applies the px guards.

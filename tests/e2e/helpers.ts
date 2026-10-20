@@ -115,6 +115,9 @@ export type PublicState = {
 
 const profileWslRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsl-'));
 
+// Quiet mode is the default for every test-mode launch (window invisible,
+// never takes the desktop foreground); DEVIN_WORKSPACES_TEST_QUIET=0 shows it
+// — that is what  sets for watching a run.
 export async function launchApp(
   userData: string,
   logFile: string,

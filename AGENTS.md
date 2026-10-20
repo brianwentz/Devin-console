@@ -93,6 +93,7 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
 | `DEVIN_WORKSPACES_TEST_WSL_CMD` | test mode | Full command line replacing `wsl.exe` for *every* invocation (enumeration, probe, spawn, pty, inotify). `launchApp` defaults it to `node out/fixtures/fakeWsl.cjs` with `FAKE_WSL_DISTROS=''` so specs stay local-only; the fake reads `FAKE_WSL_DISTROS` (`"Fake:Running:default,Other:Stopped"`), `FAKE_WSL_HOME` (default `/home/u`), `FAKE_WSL_ROOT` (`--cd` map root), `FAKE_WSL_ENV_MARKER`, `FAKE_WSL_NO_CLAUDE`, `FAKE_WSL_NO_GH`, `FAKE_WSL_INOTIFY`, `FAKE_WSL_HOOKS`, `FAKE_WSL_CLAUDE_CMD`, `FAKE_WSL_DEVIN_CMD`, `FAKE_WSL_SPAWN_LOG`. |
 | `DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`configDir`, `toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro. |
+| `DEVIN_WORKSPACES_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
 | `DEVIN_WORKSPACES_PROBE_HOST` / `DEVIN_WORKSPACES_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `DEVIN_WORKSPACES_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
 | `DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN` | always (set by the app) | Bearer token placed in claude-kind pty `extraEnv` and referenced from the injected `--settings` hooks block. |
@@ -596,6 +597,8 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `terminal-open` | carries `sessionId`/`resume`. |
 | `pane-toggle` | `{ paneOpen, source, resized, fromWidth, toWidth, maximized }`. |
 | `window-placement` | Window bounds persisted per display config. |
+| `window-quiet` | `{ opacity: 0, skipTaskbar: true }` — test-mode quiet launch applied. |
+| `window-activate` | `{ reason, quiet }` — window-bring-forward request via `activateWindow`; `quiet: true` means it showed without activating. |
 | `tabs-preload` | Visible scope's discarded tabs background-loaded. |
 | `rule-tab` / `rule-tab-background` | `{ruleId, ruleKind}` — never the pattern. |
 | `cloud-token` | fixed `reason` ('view-not-ready'\|'no-devindebug'\|'login-required'\|'timeout'\|'error'). |

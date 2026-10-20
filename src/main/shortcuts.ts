@@ -6,7 +6,7 @@ import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
-import { applyLayout, cancelDrag, setPaneOpen, setSessionsOpen } from './window';
+import { applyLayout, cancelDrag, focusContents, setPaneOpen, setSessionsOpen } from './window';
 
 export function historyAction(
   action: 'back' | 'forward' | 'reload',
@@ -44,7 +44,7 @@ export function focusVisibleContents(contents: Electron.WebContents | null): voi
     (state.surface === 'analytics' && contents === state.analyticsView?.webContents) ||
     visibleTab
   ) {
-    contents.focus();
+    focusContents(contents, 'focus-visible');
   }
 }
 
@@ -56,8 +56,7 @@ export function openNewSession(): void {
   cloudViews().show(HOME_KEY, url, { reload: true });
   applyLayout();
   log('devin', 'new-session', { url });
-  const contents = state.devinView?.webContents;
-  if (contents && !contents.isDestroyed()) contents.focus();
+  focusContents(state.devinView?.webContents, 'new-session');
 }
 
 export function handleShortcut(

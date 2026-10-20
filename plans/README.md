@@ -15,6 +15,7 @@ Design history of the Claude Code integration (Phases 0–7). The files are kept
 | `claude-sessions-phase-7-cleanup.md` | Phase 7 — code hygiene, lint, docs consolidation, dependency/installer budget, repository hygiene | 7a done (PR #69); 7b in progress |
 | `exec-hosts-wsl.md` | Phase 8 — execution hosts: Claude Code and Devin Local sessions inside WSL distros | Implemented — PR pending |
 | `ux-round-2.md` | UX round 2 — composer keys, dock rule, Settings tabs, workspaces in the session column | In progress — P0/P4a merged (#77); P1–P3, P4b, P5 open |
+| `quiet-tests.md` | Quiet e2e runs — invisible, never-activated test window | Implemented — PR pending |
 
 ## How we worked
 

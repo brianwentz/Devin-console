@@ -1,6 +1,6 @@
 # Quiet test runs — the e2e window must not take over the desktop
 
-Status: Approved (quiet on for CI too; Dock icon untouched); implementing
+Status: Implemented — PR pending
 
 ## 0. The ask
 

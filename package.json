@@ -27,7 +27,8 @@
     "claude:store-probe": "npm run build && node out/scripts/claude-store-probe.cjs",
     "hosts:probe": "npm run build && node out/scripts/hosts-probe.cjs",
     "dist:win:smoke": "npm run build && electron-builder --win nsis --x64 --publish never -c.appId=ai.devin.workspaces.smoke -c.productName=\"Devin Workspaces Smoke\" -c.nsis.shortcutName=\"Devin Workspaces Smoke\" -c.nsis.artifactName=\"DevinWorkspaces-Smoke-Setup-${version}.${ext}\" -c.directories.output=dist/smoke",
-    "smoke:install:real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1"
+    "smoke:install:real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1",
+    "test:e2e:headed": "node scripts/e2e-headed.mjs"
   },
   "workspaces": [
     "tools/lint"

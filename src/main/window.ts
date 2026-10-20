@@ -28,7 +28,7 @@ import { hosts } from './hosts';
 import { log } from './log';
 import { notificationsUnread } from './notifications';
 import { allOpenPullRequests, prStore } from './prs';
-import { state } from './state';
+import { quiet, state } from './state';
 import { updateState } from './updater';
 
 // Dock visibility = persisted toggle ∧ a dock surface (core/layout dockSurface).
@@ -177,6 +177,40 @@ export function publicState(): ShellState {
     })(),
     hosts: hosts().statuses(),
   };
+}
+
+/**
+ * Bring the app window forward — show() + focus() in normal runs. In quiet
+ * test mode the window stays invisible and is shown without activation so a
+ * spec can't steal the desktop foreground.
+ */
+export function activateWindow(reason: string): void {
+  const windowRef = state.windowRef;
+  if (!windowRef || windowRef.isDestroyed()) return;
+  if (windowRef.isMinimized()) windowRef.restore();
+  if (quiet) windowRef.showInactive();
+  else {
+    windowRef.show();
+    windowRef.focus();
+  }
+  log('shell', 'window-activate', { detail: { reason, quiet } });
+}
+
+/**
+ * Focus a webContents. In quiet mode webContents.focus() can activate the
+ * HWND, so we only pin `state.lastFocused` (the convention the test hooks
+ * already use for focus-targeted features).
+ */
+export function focusContents(
+  contents: Electron.WebContents | null | undefined,
+  _reason: string,
+): void {
+  if (!contents || contents.isDestroyed()) return;
+  if (quiet) {
+    state.lastFocused = contents;
+    return;
+  }
+  contents.focus();
 }
 
 export function notifyShell(): void {
