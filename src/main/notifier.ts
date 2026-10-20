@@ -27,7 +27,14 @@ import { claudeSessions } from './claude/sessions';
 import { claudeScope } from '../core/tabModel';
 import { state, testMode } from './state';
 import { installUpdate } from './updater';
-import { applyLayout, notifyShell, setNotificationsPanel, setPrsPanel } from './window';
+import {
+  activateWindow,
+  applyLayout,
+  focusContents,
+  notifyShell,
+  setNotificationsPanel,
+  setPrsPanel,
+} from './window';
 
 const PAGE_SIZE = 100;
 
@@ -529,12 +536,7 @@ function openClaudeSessionPr(sessionId: string, prUrl?: string): void {
   if (prUrl) {
     state.tabManager?.open(prUrl, { originSessionId: claudeScope(sessionId) });
   }
-  const windowRef = state.windowRef;
-  if (windowRef && !windowRef.isDestroyed()) {
-    if (windowRef.isMinimized()) windowRef.restore();
-    windowRef.show();
-    windowRef.focus();
-  }
+  activateWindow('claude-session-pr');
 }
 
 // Open a PR for a specific session: navigate the devin view to that session
@@ -548,13 +550,8 @@ export function openSessionPr(sessionId: string, prUrl: string): void {
   state.surface = 'cloud';
   applyLayout();
   state.tabManager?.open(prUrl, { originSessionId: sessionId });
-  const windowRef = state.windowRef;
-  if (windowRef && !windowRef.isDestroyed()) {
-    if (windowRef.isMinimized()) windowRef.restore();
-    windowRef.show();
-    windowRef.focus();
-  }
-  state.devinView?.webContents.focus();
+  activateWindow('session-pr');
+  focusContents(state.devinView?.webContents, 'session-pr');
 }
 
 // P6: opening a notification marks it read, navigates the devin view to the
@@ -594,11 +591,6 @@ export function openNotification(id: string): void {
   if (entry.prUrl) {
     handleLink(entry.prUrl, 'shell');
   }
-  const windowRef = state.windowRef;
-  if (windowRef && !windowRef.isDestroyed()) {
-    if (windowRef.isMinimized()) windowRef.restore();
-    windowRef.show();
-    windowRef.focus();
-  }
-  state.devinView?.webContents.focus();
+  activateWindow('notification-open');
+  focusContents(state.devinView?.webContents, 'notification-open');
 }

@@ -22,7 +22,7 @@ import { cloudSessions } from './cloudSessions';
 import { cloudKeepAliveMs, cloudViews } from './cloudViews';
 import { SettingsStore } from './settings';
 import { CLAUDE_SCOPE_PREFIX } from '../core/tabModel';
-import { fixtureOrigins, state, testMode } from './state';
+import { fixtureOrigins, quiet, state, testMode } from './state';
 import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';
 import { identityResolver } from './identity';
@@ -61,6 +61,12 @@ if (process.platform === 'win32') app.setAppUserModelId('ai.devin.workspaces');
 
 if (process.env.DEVIN_WORKSPACES_SCALE) {
   app.commandLine.appendSwitch('force-device-scale-factor', process.env.DEVIN_WORKSPACES_SCALE);
+}
+if (quiet) {
+  // Keep rendering + timers at full speed for a window the OS treats as
+  // occluded (opacity 0). appendSwitch merges into disable-features.
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
 }
 app.enableSandbox();
 
@@ -335,7 +341,7 @@ async function createWindow(): Promise<void> {
     minWidth: saved.pane.open ? MIN_WINDOW_WIDTH_OPEN : MIN_WINDOW_WIDTH_CLOSED,
     minHeight: MIN_WINDOW_HEIGHT,
     title: 'Devin Workspaces',
-    show: true,
+    show: !quiet,
     titleBarStyle: 'hidden',
     backgroundColor: '#111827',
     titleBarOverlay: { color: '#101722', symbolColor: '#e8edf5', height: 36 },
@@ -357,6 +363,14 @@ async function createWindow(): Promise<void> {
       const [w, h] = [Number(match[1]), Number(match[2])];
       state.windowRef.setContentSize(w, h);
       state.windowRef.center();
+      if (quiet) {
+        // Invisible + unactivated: nothing in the suite needs the window seen
+        // or focused — screenshots and input go through CDP.
+        state.windowRef.setOpacity(0);
+        state.windowRef.setSkipTaskbar(true);
+        state.windowRef.showInactive();
+        log('shell', 'window-quiet', { detail: { opacity: 0, skipTaskbar: true } });
+      }
       log('shell', 'window-size', {
         detail: {
           requested: { w, h },

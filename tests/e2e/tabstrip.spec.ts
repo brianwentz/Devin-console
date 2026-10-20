@@ -52,7 +52,11 @@ async function domOrder(shell: Page): Promise<string[]> {
 test('pointer and keyboard reorder, keyboard activate/close, titles', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-strip-'));
   const logFile = join(profile, 'events.jsonl');
-  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
+  // Headed: dnd-kit's click-vs-drag distinction on the sub-activation-distance
+  // move needs a real activated window — the pointerup is otherwise swallowed.
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_TEST_QUIET: '0',
+  });
   try {
     await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
     await setPaneFraction(app, WIDE_PANE);

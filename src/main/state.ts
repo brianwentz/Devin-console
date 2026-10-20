@@ -15,6 +15,12 @@ import type { SecretStore } from './secrets';
 export type ViewName = 'shell' | 'devin' | 'cloud' | 'analytics' | 'local' | 'claude' | 'host' | `gh:${string}`;
 
 export const testMode = process.env.DEVIN_WORKSPACES_TEST === '1';
+/**
+ * Quiet test mode (plans/quiet-tests.md): every test-mode launch keeps the
+ * window invisible (opacity 0, skip-taskbar, never activated) so a full e2e
+ * run doesn't take over the desktop. `DEVIN_WORKSPACES_TEST_QUIET=0` shows it.
+ */
+export const quiet = testMode && process.env.DEVIN_WORKSPACES_TEST_QUIET !== '0';
 export const fixtureOrigins = (testMode ? process.env.DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS ?? '' : '')
   .split(',')
   .map((value) => value.trim())
