@@ -207,6 +207,9 @@ npm run typecheck      # tsc
 npm run lint           # eslint (typescript-eslint + react-hooks, recommended sets)
 npm run test:unit      # vitest (pure core logic)
 npm run test:e2e       # build + Playwright against local fixture servers
+npm run test:e2e:headed # same, with the app window visible
+
+By default every e2e launch runs **quiet**: the app window is invisible (opacity 0, hidden from the taskbar) and never activated, so a full run doesn't take over your desktop or keyboard focus — specs drive the app through CDP and test hooks, so nothing they assert needs the window seen. `npm run test:e2e:headed` (`DEVIN_WORKSPACES_TEST_QUIET=0`) shows the window for debugging.
 npm start              # build + run
 npm run dist:win       # NSIS installer -> dist/
 npm run dist:mac       # arm64 dmg + zip (ad-hoc signed) -> dist/, macOS only
