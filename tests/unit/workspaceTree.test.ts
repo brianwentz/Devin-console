@@ -5,6 +5,8 @@ import {
   migrateLegacyFolders,
   renameWorkspace,
   reorderWorkspaces,
+  relativeToWorkspace,
+  workspaceDepth,
   workspaceEntries,
   workspaceFor,
   workspaceListData,
@@ -99,9 +101,21 @@ describe('workspaceMatches / workspaceFor (P4b host-aware cwd match)', () => {
     expect(workspaceMatches('C:\\ws\\one\\', { ...sess, cwd: 'C:\\ws\\one' })).toBe(true);
   });
 
-  it('local: sub-folder is NOT a match (exact only)', () => {
-    expect(workspaceMatches('C:\\ws\\one', { host: 'local', cwd: 'C:\\ws\\one\\sub' })).toBe(false);
+  it('local: a sub-folder matches on a path-segment boundary, case-insensitively', () => {
+    expect(workspaceMatches('C:\\ws\\one', { host: 'local', cwd: 'C:\\ws\\one\\sub' })).toBe(true);
+    expect(
+      workspaceMatches('C:\\ws\\one', { host: 'local', cwd: 'C:/WS/ONE/sub/deeper/' }),
+    ).toBe(true);
+  });
+
+  it('local: a shared prefix that is not a segment boundary does NOT match, nor a parent dir', () => {
+    expect(workspaceMatches('C:\\ws\\one', { host: 'local', cwd: 'C:\\ws\\onetwo' })).toBe(false);
     expect(workspaceMatches('C:\\ws\\one', { host: 'local', cwd: 'C:\\ws' })).toBe(false);
+  });
+
+  it('local: a drive-root workspace matches every cwd on that drive', () => {
+    expect(workspaceMatches('C:\\', { host: 'local', cwd: 'C:\\anything\\x' })).toBe(true);
+    expect(workspaceMatches('C:\\', { host: 'local', cwd: 'D:\\anything\\x' })).toBe(false);
   });
 
   it('UNC workspace matches a wsl session by linux cwd; the wsl$ spelling works', () => {
@@ -111,6 +125,20 @@ describe('workspaceMatches / workspaceFor (P4b host-aware cwd match)', () => {
     expect(workspaceMatches(`${unc}\\`, sess)).toBe(true);
     // Case-sensitive on the linux side.
     expect(workspaceMatches(unc, { ...sess, cwd: '/home/u/PROJ' })).toBe(false);
+  });
+
+  it('UNC workspace matches a wsl session in a sub-folder; not a prefix sibling or a parent', () => {
+    const host = 'wsl:Ubuntu-22.04' as const;
+    expect(workspaceMatches(unc, { host, cwd: '/home/u/proj/svc' })).toBe(true);
+    expect(workspaceMatches(unc, { host, cwd: '/home/u/project' })).toBe(false);
+    expect(workspaceMatches(unc, { host, cwd: '/home/u' })).toBe(false);
+  });
+
+  it('UNC distro-root workspace matches every cwd on that distro', () => {
+    const host = 'wsl:Ubuntu-22.04' as const;
+    expect(workspaceMatches('\\\\wsl.localhost\\Ubuntu-22.04\\', { host, cwd: '/home/u' })).toBe(
+      true,
+    );
   });
 
   it('host mismatch: a local workspace never matches a wsl session with the same-looking path', () => {
@@ -134,12 +162,43 @@ describe('workspaceMatches / workspaceFor (P4b host-aware cwd match)', () => {
     expect(workspaceMatches(ws, { host: 'local', cwd: ws })).toBe(true);
   });
 
-  it('workspaceFor returns the FIRST matching workspace (array order), null on no match', () => {
+  it('workspaceFor returns the deepest matching workspace, null on no match', () => {
     const sess = { host: 'local' as const, cwd: 'C:\\ws\\one' };
     expect(workspaceFor([ws2, ws1], sess)).toBe(ws1);
     expect(workspaceFor([ws1, 'C:\\WS\\ONE\\'], sess)).toBe(ws1);
     expect(workspaceFor([ws2], sess)).toBeNull();
     expect(workspaceFor([ws1], { host: 'local', cwd: null })).toBeNull();
+  });
+
+  it('workspaceFor: a nested workspace wins over its ancestor regardless of array order', () => {
+    const sess = { host: 'local' as const, cwd: 'C:\\ws\\one\\x' };
+    expect(workspaceFor(['C:\\ws', 'C:\\ws\\one'], sess)).toBe('C:\\ws\\one');
+    expect(workspaceFor(['C:\\ws\\one', 'C:\\ws'], sess)).toBe('C:\\ws\\one');
+  });
+
+  it('workspaceFor: duplicate-path ties keep array order (first wins)', () => {
+    const sess = { host: 'local' as const, cwd: 'C:\\ws\\one' };
+    expect(workspaceFor(['C:\\ws\\one', 'c:\\WS\\ONE\\'], sess)).toBe('C:\\ws\\one');
+  });
+
+  it('workspaceDepth counts host-side path segments', () => {
+    expect(workspaceDepth('C:\\ws')).toBe(2);
+    expect(workspaceDepth('C:\\ws\\one')).toBe(3);
+    expect(workspaceDepth('C:\\')).toBe(1);
+    expect(workspaceDepth(unc)).toBe(3);
+    expect(workspaceDepth('\\\\wsl.localhost\\Ubuntu-22.04\\')).toBe(0);
+  });
+
+  it('relativeToWorkspace: null without a match, "" on exact match, the remainder otherwise', () => {
+    const local = 'local' as const;
+    const wsl = 'wsl:Ubuntu-22.04' as const;
+    expect(relativeToWorkspace(ws1, { host: local, cwd: 'C:\\ws\\two' })).toBeNull();
+    expect(relativeToWorkspace(ws1, { host: local, cwd: null })).toBeNull();
+    expect(relativeToWorkspace(ws1, { host: local, cwd: 'C:\\ws\\one' })).toBe('');
+    expect(relativeToWorkspace('C:\\ws\\one\\', { host: local, cwd: 'C:\\ws\\one' })).toBe('');
+    expect(relativeToWorkspace(ws1, { host: local, cwd: 'C:\\ws\\one\\a\\b' })).toBe('a\\b');
+    expect(relativeToWorkspace(unc, { host: wsl, cwd: '/home/u/proj/svc' })).toBe('svc');
+    expect(relativeToWorkspace(unc, { host: wsl, cwd: '/home/u/proj/svc/' })).toBe('svc');
   });
 });
 

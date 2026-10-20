@@ -225,7 +225,8 @@ export function reconcile(
     now: number;
     autoArchiveDays: number;
     /** Path-bound workspaces (settings.claude.workspaces) — a session's folder
-     * is derived by exact (host,cwd) match, never stored (ux2 D8). */
+     * is derived by ancestor (host,cwd) match, deepest wins, never stored
+     * (ux2 D8). */
     workspaces: string[];
     uncRoot?: string | undefined;
     uncHostId?: ExecHostId | undefined;

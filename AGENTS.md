@@ -428,7 +428,9 @@ variable that selects it.
 - Workspaces (ux2 P4b, plan D8 — landed): Claude folders became path-bound workspaces on the shared `WorkspaceSidebar` (`ClaudeSidebar` is the adapter;
   subagent rows, the background-agents section, host chip and activity dots survive through `renderRow`/`extraSections`/`rowOpts`). A session's folder is
   *derived* — the workspace whose path matches its `cwd`, host-aware via `workspaceFor` in `core/workspaceTree.ts` (local paths compare
-  case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, exact match — a sub-folder is Recent). IPC
+  case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, ancestor match on
+  segment boundaries — nested workspaces resolve deepest-wins via `workspaceDepth`, and the row meta shows the cwd relative to the workspace, '' on an
+  exact match). Sub-folder sessions are workspace members, so they're auto-archive exempt like exact matches. IPC
   `claude:workspaceAdd|Reorder|Rename|Remove`; `newSession(cwd)` from a header passes the path through without the picker; `fork` files itself from the
   same cwd. The free-form folder registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`, the `folders` list) is
   deleted — the loader still tolerates the legacy fields and `registryFileObject` deletes them by name once the migration has consumed them (while
