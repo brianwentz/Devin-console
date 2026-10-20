@@ -138,6 +138,13 @@ export async function launchApp(
       // Legacy specs assume the sessions column is closed (devin.x === RAIL).
       DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '0',
       DEVIN_WORKSPACES_TEST_RELEASES_URL: fixtures.apiUrl,
+      // Analytics Claude tab (A2): the usage fixture + account file live under
+      // tests/fixtures; nothing reads them until the service lands.
+      DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL: fixtures.claudeUsageUrl,
+      DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE: join(
+        process.cwd(),
+        'tests/fixtures/claude-account.json',
+      ),
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       // Route every wsl.exe call through the fake; with no distros the app
       // stays local-only. Specs opt into distros via FAKE_WSL_DISTROS.

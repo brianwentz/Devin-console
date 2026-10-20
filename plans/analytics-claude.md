@@ -78,6 +78,8 @@ export const ClaudeUsageStateSchema = z.object({
 // channels: claudeUsageState 'claude:usageState' (invoke), claudeUsageRefresh 'claude:usageRefresh', push 'claude:usage'
 // settings: analytics: { tab: z.enum(['devin','claude']).default('devin') }
 // test env: DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL (fixture replacing api.anthropic.com), FAKE_USAGE_JSON / FAKE_USAGE_STATUS read by the fixture route
+//            DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE (account file — real location is <dirname(configDir)>/.claude.json
+//            i.e. ~/.claude.json), DEVIN_WORKSPACES_TEST_NOW (ISO instant standing in for "now"/the current month in tests)
 // log events (channel 'claude'): usage-fetch {ok,status,ms,stale,accounts}, usage-scan {files,changed,ms,months}, usage-cache-load {files}
 // test hooks: claudeUsageState(), claudeUsageRefresh()
 ```
