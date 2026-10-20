@@ -150,6 +150,12 @@ variable that selects it.
 - `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
   `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
   needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), labels/collapse keyed by workspace path.
+- `local.pickerFolder` / `claude.pickerFolder` (`string | null`, ux3 S3) — "Folder pickers start in" (`#localPickerFolderInput` + `#localPickerFolderBrowse`,
+  `#claudePickerFolderInput` + `#claudePickerFolderBrowse`; shared `PickerFolderField` in `settings/fields.tsx`, Browse… = `dialogPickFolder`). Draft
+  validation: blank or `isAbsolutePickerPath` (drive, UNC or POSIX-absolute). Precedence is the pure `pickerStartPath(configured, distroHome, exists)`
+  in `src/core/pickerFolder.ts`: configured folder if it `existsSync` → default WSL distro home → undefined; a missing configured folder logs
+  `picker-folder-missing {surface}` and is skipped, never cleared. Wired at `localWorkspacePick` (`src/main/local/ipc.ts`) and Claude
+  `pickerDefaultPath()` (`sessions.ts`, used by `newSession(null)` and `pickWorkspaceDir`); `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` still short-circuits before it.
 - `claude.{workspaces: string[], workspaceLabels, defaultWslDistro}` — the Claude workspace list (separate from `workspaces`), labels by path,
   `defaultWslDistro` (`#claudeDefaultWslDistroSelect`; read by Claude `newSession(null)`); collapse state reuses `claude.collapsedFolders` keyed by path.
 - `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
@@ -656,6 +662,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `active-session` | Local selected session lifted to state. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |
+| `picker-folder-missing` | `{ surface: 'local' \| 'claude' }` — `*.pickerFolder` is set but no longer exists; the picker fell back to the distro home / OS default (the path is never logged, the setting is kept). |
 | `local-workspace-reorder` | `{ count }`. |
 | `agents-autostart` | `{ count, skipped }` — configured workspaces autostart after window creation (fix/ux2-local-startup); UNC workspaces whose distro isn't enabled count as `skipped`; a missing CLI keeps `missing-cli`. |
 | `local-workspace-rename` / `local-session-copy-id` | No detail (label and id are never logged). |

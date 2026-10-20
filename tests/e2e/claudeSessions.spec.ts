@@ -493,3 +493,80 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
     rmSync(uncRoot, { recursive: true, force: true });
   }
 });
+
+// ux3 S3 — Settings → Claude Code "Folder pickers start in": the header's
+// New session picker opens there (DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD unset
+// so the dialog seam is reached); a relative path is refused on the tab.
+test('claude picker start folder: New session dialog starts in the configured folder; relative paths are rejected', async () => {
+  const startDir = mkdtempSync(join(tmpdir(), 'devin-workspaces-picker-start-'));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    DEVIN_WORKSPACES_TEST_PICKER_CANCEL: '1',
+  });
+  const h = hooks(app);
+  const lastDialog = () =>
+    app.evaluate(
+      () =>
+        (globalThis as any).__devinworkspaces.lastOpenDialogOptions() as {
+          title?: string;
+          defaultPath?: string;
+        } | null,
+    );
+  const pickerFolder = async () =>
+    ((await h.state()) as unknown as { settings: { claude: { pickerFolder: string | null } } })
+      .settings.claude.pickerFolder;
+  const el = (expr: string) => evaluateInShell(app, expr);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+
+    await h.setSurface('settings');
+    await el(`document.querySelector('[data-settings-tab="claude"]').click()`);
+    await expect
+      .poll(async () => el(`Boolean(document.getElementById('claudePickerFolderInput'))`))
+      .toBe(true);
+    expect(await el(`Boolean(document.getElementById('claudePickerFolderBrowse'))`)).toBe(true);
+
+    // Relative path → inline error, tab switch refused.
+    expect(await setInputValue(app, 'claudePickerFolderInput', 'relative\\x')).toBe(true);
+    await el(`document.querySelector('[data-settings-tab="general"]').click()`);
+    await expect
+      .poll(async () =>
+        el(`document.getElementById('claudePickerFolderInput')?.getAttribute('aria-invalid')`),
+      )
+      .toBe('true');
+    expect(await el(`document.getElementById('claudePickerFolderInputError')?.textContent`)).toBe(
+      'Enter an absolute folder path',
+    );
+    expect(
+      await el(
+        `document.querySelector('#settingsTabs [role="tab"][aria-selected="true"]')?.dataset.settingsTab`,
+      ),
+    ).toBe('claude');
+
+    // Absolute path → the tab switch now commits.
+    expect(await setInputValue(app, 'claudePickerFolderInput', startDir)).toBe(true);
+    await el(`document.querySelector('[data-settings-tab="general"]').click()`);
+    await expect.poll(pickerFolder).toBe(startDir);
+    await h.setSurface('claude');
+
+    const shell = await shellPage(app);
+    await expect(shell.locator('#claudeNewSession')).toBeVisible();
+    await shell.locator('#claudeNewSession').click();
+    await expect.poll(async () => (await lastDialog())?.defaultPath).toBe(startDir);
+    expect((await lastDialog())?.title).toBe(
+      'Choose the working directory for the new Claude session',
+    );
+    // Cancelled → no session was created.
+    expect((await h.claudeState()).sessions).toHaveLength(3);
+
+    // The Add workspace picker shares the start folder.
+    await shell.locator('#workspaceAdd').click();
+    await expect.poll(async () => (await lastDialog())?.title).toBe('Add Claude workspace folder');
+    expect((await lastDialog())?.defaultPath).toBe(startDir);
+    expect((await readEvents(join(profile, 'events.jsonl'))).some((e) => e.event === 'picker-folder-missing')).toBe(false);
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(startDir, { recursive: true, force: true });
+  }
+});
