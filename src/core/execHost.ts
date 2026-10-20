@@ -22,6 +22,11 @@ export function isWslHost(host: ExecHost): host is Extract<ExecHost, { kind: 'ws
   return host.kind === 'wsl';
 }
 
+/** Whether a host's config dir may be touched from the main process: local always; a wsl host only once its probe is `ready` (an unresponsive distro makes every UNC call block the loop for the SMB timeout). */
+export function isFsReady(host: ExecHost, state: string | null | undefined): boolean {
+  return host.kind === 'local' || state === 'ready';
+}
+
 export function wslHost(distro: string, home: string | null, mount = '/mnt'): ExecHost {
   return { id: `wsl:${distro}`, kind: 'wsl', distro, home, mount };
 }

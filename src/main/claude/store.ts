@@ -3,7 +3,8 @@
 // The SDK is loaded lazily on the first list() via loadSdk() — a load failure
 // surfaces as an error status on the controller, never as a thrown require.
 
-import { existsSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, watch, type FSWatcher } from 'node:fs';
+import { access, readdir, stat as statFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { basename, join, relative } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
@@ -32,6 +33,7 @@ export class ClaudeStore {
   private inotify: ChildProcess | null = null;
   // abs path → last known mtime, recomputed on the 30 s full-scan tick
   private hotPaths = new Map<string, number>();
+  private hotTickInFlight = false;
   private started = false;
   private watchRestarts = 0;
   private watchFailed = false;
@@ -114,9 +116,14 @@ export class ClaudeStore {
   // <id>.jsonl — find it by scanning project dirs for the id-named file.
   async transcriptPath(id: string): Promise<string | null> {
     try {
-      for (const project of readdirSync(this.projectsDir)) {
+      for (const project of await readdir(this.projectsDir)) {
         const candidate = join(this.projectsDir, project, `${id}.jsonl`);
-        if (existsSync(candidate)) return candidate;
+        try {
+          await access(candidate);
+          return candidate;
+        } catch {
+          /* not in this project dir */
+        }
       }
     } catch {
       // No projects dir.
@@ -126,8 +133,11 @@ export class ClaudeStore {
 
   start(): void {
     if (this.started) return;
-    this.started = true;
     if (isWslHost(this.host)) {
+      // Probe not ready: touching the UNC root could block — refuse without
+      // marking started so refresh() retries once the probe lands.
+      if (!hosts().fsReady(this.host)) return;
+      this.started = true;
       // fs.watch fails over the wsl UNC (EISDIR) — inotifywait inside the
       // distro when the probe found it, else tiered polling.
       const status = hosts().status(this.host.id);
@@ -135,6 +145,7 @@ export class ClaudeStore {
       else this.startTieredPoll();
       return;
     }
+    this.started = true;
     this.startWatch();
   }
 
@@ -217,44 +228,53 @@ export class ClaudeStore {
       void this.recomputeHotPaths();
     });
     this.hotTimer = setInterval(() => {
-      if (!this.visible()) return;
-      try {
-        // Hot ids whose transcript appeared since the last recompute get
-        // resolved lazily — a new file counts as changed immediately.
-        const known = new Set([...this.hotPaths.keys()].map((p) => basename(p, '.jsonl')));
-        for (const id of this.hotIds()) {
-          if (known.has(id)) continue;
-          const path = this.transcriptFor(id);
-          if (!path) continue;
-          try {
-            this.hotPaths.set(path, statSync(path).mtimeMs - 1);
-          } catch {
-            /* gone already */
-          }
-        }
-        const changed: string[] = [];
-        for (const [path, prev] of this.hotPaths) {
-          let mtime: number | null = null;
-          try {
-            mtime = statSync(path).mtimeMs;
-          } catch {
-            /* gone between ticks */
-          }
-          if (mtime === null || mtime === prev) continue;
-          this.hotPaths.set(path, mtime);
-          changed.push(relative(this.projectsDir, path));
-        }
-        if (changed.length > 0) {
-          log('claude', 'claude-watch', {
-            detail: { mode: 'poll-tiered', host: this.host.id, events: changed.length },
-          });
-          this.onChange(changed);
-        }
-      } catch {
-        /* transient stat failures — next tick retries */
-      }
+      void this.hotTick();
     }, HOT_POLL_MS);
     this.hotTimer.unref?.();
+  }
+
+  // The 2 s hot tick is async (UNC stats don't block the loop); a slow tick
+  // never overlaps the next one.
+  private async hotTick(): Promise<void> {
+    if (this.hotTickInFlight || !this.visible()) return;
+    this.hotTickInFlight = true;
+    try {
+      // Hot ids whose transcript appeared since the last recompute get
+      // resolved lazily — a new file counts as changed immediately.
+      const known = new Set([...this.hotPaths.keys()].map((p) => basename(p, '.jsonl')));
+      for (const id of this.hotIds()) {
+        if (known.has(id)) continue;
+        const path = await this.transcriptFor(id);
+        if (!path) continue;
+        try {
+          this.hotPaths.set(path, (await statFile(path)).mtimeMs - 1);
+        } catch {
+          /* gone already */
+        }
+      }
+      const changed: string[] = [];
+      for (const [path, prev] of this.hotPaths) {
+        let mtime: number | null = null;
+        try {
+          mtime = (await statFile(path)).mtimeMs;
+        } catch {
+          /* gone between ticks */
+        }
+        if (mtime === null || mtime === prev) continue;
+        this.hotPaths.set(path, mtime);
+        changed.push(relative(this.projectsDir, path));
+      }
+      if (changed.length > 0) {
+        log('claude', 'claude-watch', {
+          detail: { mode: 'poll-tiered', host: this.host.id, events: changed.length },
+        });
+        this.onChange(changed);
+      }
+    } catch {
+      /* transient stat failures — next tick retries */
+    } finally {
+      this.hotTickInFlight = false;
+    }
   }
 
   // Full readdir scan: the 20 most recent transcripts plus any hot (e.g.
@@ -264,13 +284,13 @@ export class ClaudeStore {
     await this.run(async () => {
       try {
         const files: { path: string; mtime: number }[] = [];
-        for (const project of readdirSync(this.projectsDir)) {
+        for (const project of await readdir(this.projectsDir)) {
           const dir = join(this.projectsDir, project);
-          for (const name of readdirSync(dir)) {
+          for (const name of await readdir(dir)) {
             if (!name.endsWith('.jsonl')) continue;
             const path = join(dir, name);
             try {
-              files.push({ path, mtime: statSync(path).mtimeMs });
+              files.push({ path, mtime: (await statFile(path)).mtimeMs });
             } catch {
               /* transient */
             }
@@ -293,11 +313,16 @@ export class ClaudeStore {
     });
   }
 
-  private transcriptFor(id: string): string | null {
+  private async transcriptFor(id: string): Promise<string | null> {
     try {
-      for (const project of readdirSync(this.projectsDir)) {
+      for (const project of await readdir(this.projectsDir)) {
         const candidate = join(this.projectsDir, project, `${id}.jsonl`);
-        if (existsSync(candidate)) return candidate;
+        try {
+          await access(candidate);
+          return candidate;
+        } catch {
+          /* not in this project dir */
+        }
       }
     } catch {
       /* no projects dir */
@@ -348,18 +373,23 @@ export class ClaudeStore {
   private startPoll(onTick?: () => void): void {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(() => {
-      const dirExists = existsSync(this.projectsDir);
-      if (!this.watcher && !this.watchFailed && dirExists) {
-        // The dir appeared after the waiting phase — try watching again.
-        clearInterval(this.pollTimer!);
-        this.pollTimer = null;
-        this.startWatch();
-        return;
-      }
-      if (dirExists) {
-        onTick?.();
-        this.onChange([]);
-      }
+      void (async () => {
+        const dirExists = await access(this.projectsDir).then(
+          () => true,
+          () => false,
+        );
+        if (!this.watcher && !this.watchFailed && dirExists) {
+          // The dir appeared after the waiting phase — try watching again.
+          clearInterval(this.pollTimer!);
+          this.pollTimer = null;
+          this.startWatch();
+          return;
+        }
+        if (dirExists) {
+          onTick?.();
+          this.onChange([]);
+        }
+      })();
     }, POLL_MS);
     this.pollTimer.unref?.();
   }

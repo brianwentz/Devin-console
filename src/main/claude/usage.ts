@@ -1,10 +1,11 @@
 // ClaudeUsageService (plan D1–D4, D7): one service owns both Claude-analytics
 // data sources — plan limits fetched from the OAuth /usage endpoint, and token
-// totals from an incremental transcript aggregator over every enabled host's
-// store. Publishes one pushed state on IpcChannels.claudeUsage; started lazily
-// on first usage (state invoke / visible / refresh), never at app start.
+// totals from an incremental transcript aggregator over every fs-ready host's
+// store. Publishes one pushed state on IpcChannels.claudeUsage; started once
+// the shell has loaded (host fs waits for probe-ready) and lazily on first use.
 
-import { closeSync, createReadStream, existsSync, openSync, readSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { open as openFile, readdir, readFile, stat as statFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { app } from 'electron';
 import { dirname, join } from 'node:path';
@@ -40,6 +41,7 @@ import { createPushedStore } from '../pushedStore';
 import { testMode } from '../state';
 
 const FETCH_TIMEOUT_MS = 10_000;
+const HOST_FS_BUDGET_MS = 10_000;
 const VISIBLE_MS = 60_000;
 const IDLE_FETCH_MS = 10 * 60_000;
 const POKE_DEBOUNCE_MS = 5_000;
@@ -195,12 +197,35 @@ export class ClaudeUsageService {
 
   // --- credentials + accounts --------------------------------------------------
 
-  private credsForHost(host: ExecHost): Omit<HostCreds, 'email' | 'organization'> | null {
-    const configDir = hosts().configDir(host);
-    const file = join(configDir, '.credentials.json');
-    if (!existsSync(file)) return null;
+  /** Races host fs work against HOST_FS_BUDGET_MS — a wedged UNC path must
+   * never hold a fetch/scan pass hostage (the loser keeps running detached). */
+  private async fsRace<T>(work: Promise<T>): Promise<{ ok: boolean; timedOut: boolean; value?: T }> {
+    let timer: NodeJS.Timeout | null = null;
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      // The rejection branch keeps a loser that rejects after the timeout
+      // from surfacing as an unhandledRejection.
+      const result = await Promise.race([
+        work.then(
+          (value) => ({ kind: 'value' as const, value }),
+          () => ({ kind: 'error' as const }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) => {
+          timer = setTimeout(() => resolve({ kind: 'timeout' }), HOST_FS_BUDGET_MS);
+          timer.unref?.();
+        }),
+      ]);
+      return result.kind === 'value'
+        ? { ok: true, timedOut: false, value: result.value }
+        : { ok: false, timedOut: result.kind === 'timeout' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async credsForHost(host: ExecHost): Promise<Omit<HostCreds, 'email' | 'organization'> | null> {
+    const file = join(hosts().configDir(host), '.credentials.json');
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as {
         claudeAiOauth?: { accessToken?: string; expiresAt?: number; subscriptionType?: string };
       };
       const oauth = parsed.claudeAiOauth;
@@ -235,11 +260,11 @@ export class ClaudeUsageService {
     return fallback ?? join(dirname(hosts().configDir(host)), '.claude.json');
   }
 
-  private accountForHost(host: ExecHost): { email: string | null; organization: string | null } {
+  private async accountForHost(host: ExecHost): Promise<{ email: string | null; organization: string | null }> {
     const file = this.accountFileFor(host);
-    if (!file || !existsSync(file)) return { email: null, organization: null };
+    if (!file) return { email: null, organization: null };
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as {
         oauthAccount?: { emailAddress?: string; organizationName?: string };
       };
       return {
@@ -251,41 +276,71 @@ export class ClaudeUsageService {
     }
   }
 
-  // Group hosts by account email (no email → one group per host).
-  private readAccounts(): { key: string; email: string | null; organization: string | null; plan: string | null; hosts: HostCreds[] }[] {
+  // Group hosts by account email (no email → one group per host). Wsl hosts
+  // whose probe isn't ready are never touched; a ready host whose fs stalls
+  // past the budget is skipped the same way.
+  private async readAccounts(): Promise<{
+    groups: { key: string; email: string | null; organization: string | null; plan: string | null; hosts: HostCreds[] }[];
+    skippedHosts: HostId[];
+  }> {
+    const skippedHosts = hosts()
+      .list()
+      .filter((h) => !hosts().fsReady(h))
+      .map((h) => h.id);
+    const members = await Promise.all(
+      hosts().readyList().map(async (host) => {
+        const result = await this.fsRace(
+          (async () => {
+            const creds = await this.credsForHost(host);
+            if (!creds) return null;
+            const account = await this.accountForHost(host);
+            return { creds, account };
+          })(),
+        );
+        if (!result.ok) {
+          if (result.timedOut) skippedHosts.push(host.id);
+          return null;
+        }
+        if (!result.value) return null;
+        const { creds, account } = result.value;
+        return {
+          member: { ...creds, email: account.email, organization: account.organization } as HostCreds,
+          summary: { hostId: host.id, ...account, plan: creds.plan },
+        };
+      }),
+    );
     const byHost = new Map<string, HostCreds>();
     const summaries: { hostId: HostId; email: string | null; organization: string | null; plan: string | null }[] = [];
-    for (const host of hosts().list()) {
-      const creds = this.credsForHost(host);
-      if (!creds) continue;
-      const account = this.accountForHost(host);
-      const member: HostCreds = { ...creds, email: account.email, organization: account.organization };
-      byHost.set(host.id, member);
-      summaries.push({ hostId: host.id, ...account, plan: creds.plan });
+    for (const entry of members) {
+      if (!entry) continue;
+      byHost.set(entry.member.host.id, entry.member);
+      summaries.push(entry.summary);
     }
-    return groupAccounts(summaries).map((group) => ({
-      ...group,
-      hosts: group.hostIds.map((id) => byHost.get(id)!),
-    }));
+    return {
+      groups: groupAccounts(summaries).map((group) => ({
+        ...group,
+        hosts: group.hostIds.map((id) => byHost.get(id)!),
+      })),
+      skippedHosts,
+    };
   }
 
   // --- fetch (limits) ----------------------------------------------------------
 
-  private staleBody(
+  private async staleBody(
     accountKey: string,
     members: HostCreds[],
-  ): { body: unknown; at: number | null } | null {
+  ): Promise<{ body: unknown; at: number | null } | null> {
     const cached = this.cache.accounts[accountKey];
     if (cached) return { body: cached.lastBody, at: cached.at };
     // Fall back to the newest .usage-cache the CLI left on the account's hosts.
     let best: { at: number; body: unknown } | null = null;
     for (const member of members) {
       const file = join(hosts().configDir(member.host), '.usage-cache');
-      if (!existsSync(file)) continue;
       try {
-        const stat = statSync(file);
+        const stat = await statFile(file);
         if (!best || stat.mtimeMs > best.at) {
-          best = { at: stat.mtimeMs, body: JSON.parse(readFileSync(file, 'utf8')) };
+          best = { at: stat.mtimeMs, body: JSON.parse(await readFile(file, 'utf8')) };
         }
       } catch {
         /* unreadable cache — skip */
@@ -302,7 +357,7 @@ export class ClaudeUsageService {
 
   private async runFetch(): Promise<void> {
     try {
-      const groups = this.readAccounts();
+      const { groups, skippedHosts } = await this.readAccounts();
       const url = testMode
         ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL ?? USAGE_URL)
         : USAGE_URL;
@@ -320,7 +375,7 @@ export class ClaudeUsageService {
         if (expired) {
           stale = true;
           error = 'Sign-in expired — run claude to refresh';
-          const last = this.staleBody(group.key, group.hosts);
+          const last = await this.staleBody(group.key, group.hosts);
           body = last?.body ?? null;
           bodyAt = last?.at ?? null;
         } else {
@@ -342,14 +397,14 @@ export class ClaudeUsageService {
             } else if (status === 401 || status === 403) {
               stale = true;
               error = 'Sign-in expired — run claude to refresh';
-              const last = this.staleBody(group.key, group.hosts);
+              const last = await this.staleBody(group.key, group.hosts);
               body = last?.body ?? null;
               bodyAt = last?.at ?? null;
             } else {
               // Non-auth failure — keep last good instead of dropping gauges.
               ok = false;
               error = `Fetch failed (HTTP ${status})`;
-              const last = this.staleBody(group.key, group.hosts);
+              const last = await this.staleBody(group.key, group.hosts);
               if (last) {
                 stale = true;
                 body = last.body;
@@ -359,7 +414,7 @@ export class ClaudeUsageService {
           } catch {
             ok = false;
             error = 'Fetch failed (network)';
-            const last = this.staleBody(group.key, group.hosts);
+            const last = await this.staleBody(group.key, group.hosts);
             if (last) {
               stale = true;
               body = last.body;
@@ -390,7 +445,7 @@ export class ClaudeUsageService {
         });
       }
       log('claude', 'usage-fetch', {
-        detail: { ok, status: ok ? 200 : -1, ms: Date.now() - start, stale: accounts.some((a) => a.stale), accounts: accounts.length },
+        detail: { ok, status: ok ? 200 : -1, ms: Date.now() - start, stale: accounts.some((a) => a.stale), accounts: accounts.length, skippedHosts },
       });
       this.store.update((state) => ({
         ...state,
@@ -460,12 +515,17 @@ export class ClaudeUsageService {
     }
   }
 
-  private *walkJsonl(dir: string): Generator<string> {
-    if (!existsSync(dir)) return;
+  private async *walkJsonl(dir: string): AsyncGenerator<string> {
     const stack = [dir];
     while (stack.length > 0) {
       const current = stack.pop()!;
-      for (const entry of readdirSync(current, { withFileTypes: true })) {
+      let entries;
+      try {
+        entries = await readdir(current, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
         const path = join(current, entry.name);
         if (entry.isDirectory()) stack.push(path);
         else if (entry.name.endsWith('.jsonl')) yield path;
@@ -473,14 +533,15 @@ export class ClaudeUsageService {
     }
   }
 
-  private byteAt(path: string, pos: number): number {
+  private async byteAt(path: string, pos: number): Promise<number> {
     try {
-      const fd = openSync(path, 'r');
+      const handle = await openFile(path, 'r');
       try {
         const buf = Buffer.alloc(1);
-        return readSync(fd, buf, 0, 1, pos) === 1 ? buf[0]! : -1;
+        const { bytesRead } = await handle.read(buf, 0, 1, pos);
+        return bytesRead === 1 ? buf[0]! : -1;
       } finally {
-        closeSync(fd);
+        await handle.close();
       }
     } catch {
       return -1;
@@ -513,17 +574,39 @@ export class ClaudeUsageService {
     let files = 0;
     let skipped = 0;
     try {
-      // Every host's store root is resolved here, synchronously, before the
-      // first await: configDir() answers from the captured local value, so a
-      // concurrent withConfigDir swap (SDK store call) can't be observed.
+      // configDir() answers from the captured local value, so a concurrent
+      // withConfigDir swap (SDK store call) can't be observed. Wsl hosts
+      // whose probe isn't ready are never touched; each ready host's walk is
+      // raced against HOST_FS_BUDGET_MS and lands in skippedHosts on timeout.
       const tasks: { host: ExecHost; path: string; key: string }[] = [];
-      const scannedHosts = hosts().list();
-      for (const host of scannedHosts) {
+      const skippedHosts = hosts()
+        .list()
+        .filter((h) => !hosts().fsReady(h))
+        .map((h) => h.id);
+      const scannedHosts = hosts().readyList();
+      const collect = async (host: ExecHost): Promise<{ host: ExecHost; path: string; key: string }[]> => {
         const dir = join(hosts().configDir(host), 'projects');
-        for (const path of this.walkJsonl(dir)) {
-          tasks.push({ host, path, key: `${host.id}:${path.slice(dir.length)}` });
+        const found: { host: ExecHost; path: string; key: string }[] = [];
+        for await (const path of this.walkJsonl(dir)) {
+          found.push({ host, path, key: `${host.id}:${path.slice(dir.length)}` });
         }
-      }
+        return found;
+      };
+      const collected = await Promise.all(
+        scannedHosts.map(async (host) => {
+          const t0 = Date.now();
+          const result = await this.fsRace(collect(host));
+          if (result.timedOut) {
+            log('claude', 'usage-scan-host-timeout', {
+              detail: { host: host.id, ms: Date.now() - t0 },
+            });
+            skippedHosts.push(host.id);
+            return [];
+          }
+          return result.ok ? (result.value ?? []) : [];
+        }),
+      );
+      for (const batch of collected) tasks.push(...batch);
       files = tasks.length;
       const perHost: Record<string, ClaudeTokenTotals> = {};
       let globalBuckets: UsageBuckets = {};
@@ -537,7 +620,7 @@ export class ClaudeUsageService {
         while (index < tasks.length) {
           const task = tasks[index++]!;
           const cached = this.cache.files[task.key];
-          const stat = statSync(task.path);
+          const stat = await statFile(task.path);
           const plan = fileScanPlan(cached, stat.size, stat.mtimeMs);
           let buckets: UsageBuckets = cached?.buckets ?? {};
           if (plan !== 'reuse' && !fileMayContainMonths(stat.mtimeMs, months)) {
@@ -555,7 +638,7 @@ export class ClaudeUsageService {
             let offset = plan === 'append' && cached ? cached.offset : 0;
             // Line-aligned append: if the byte before the offset isn't a line
             // break the cached offset is mid-line → re-read the whole file.
-            if (offset > 0 && this.byteAt(task.path, offset - 1) !== 0x0a) offset = 0;
+            if (offset > 0 && (await this.byteAt(task.path, offset - 1)) !== 0x0a) offset = 0;
             const lines = await this.readLines(task.path, offset);
             const fresh = aggregateUsageLines(lines, { months });
             buckets = offset > 0 ? mergeBuckets(cached!.buckets, fresh) : fresh;
@@ -622,7 +705,7 @@ export class ClaudeUsageService {
       }
       this.saveCache();
       log('claude', 'usage-scan', {
-        detail: { files, changed, skipped, ms: Date.now() - start },
+        detail: { files, changed, skipped, skippedHosts, ms: Date.now() - start },
       });
     } catch {
       /* stat failures mid-scan are non-fatal */

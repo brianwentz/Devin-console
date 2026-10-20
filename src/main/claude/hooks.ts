@@ -92,6 +92,9 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
+      // A wsl host whose probe isn't ready gets skipped — touching its
+      // settings.json over UNC could block the loop for the SMB timeout.
+      if (!hosts().fsReady(host)) continue;
       const result = applyGlobalHooks(
         hosts().configDir(host),
         enabled,
