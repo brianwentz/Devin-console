@@ -519,6 +519,10 @@ variable that selects it.
 ### Execution hosts (WSL) (landed Phase 8)
 - `src/core/execHost.ts` (pure): `HostId` `'local' | \`wsl:<distro>\``, `hostIdForPath`/`toHostPath`/`toWindowsPath` (UNC forms `\\wsl.localhost`/`\\wsl$`/`//wsl.localhost`), `spawnSpec`/`ptySpec` (`wsl.exe -d D --cd <linux cwd> -e /usr/bin/env …` / `-ilc 'exec "$0" "$@"'`; fish → `exec $argv`), `parseShellEnv`/`mergeShellEnv` (`WSL_ENV_DENYLIST`), `parseWslList`, `shellFamily`, `displayPath`/`workspaceLabel`.
 - `src/main/hosts.ts` singleton: async enumeration (`-l -v` utf16le, running+default or explicit `settings.hosts.wslDistros`; a stopped distro is never started implicitly — only explicit listing enables it), per-host probe (`home`/`shell`/CLI paths/`gh`/`inotifywait`/hook reachability — loopback then `vEthernet (WSL)` IPv4 with a second `hookServer.listenOn`), `-ilc` env capture (spawn `stdio:['ignore',…]`, marker-parsed, 60 s cache refreshed at next spawn — `shellEnv()` primes, `spawnOn`/`execOn`/`ptySpawnSpec` read the cache), `withConfigDir` (per-process mutex swapping `CLAUDE_CONFIG_DIR`), `errorParts` joined into `hostErrors`.
+- The local `CLAUDE_CONFIG_DIR` is captured once at `HostsRegistry` construction (`resolveLocalConfigDir` in `src/core/execHost.ts`; `localConfigDir()` /
+  `configDir(LOCAL_HOST)`); a `withConfigDir` swap is only ever visible to the SDK through `process.env` and must never be observed through
+  `configDir()` — never read `process.env.CLAUDE_CONFIG_DIR` from app code (ux3 S7: the usage scanner raced a swap and cached a whole WSL store as
+  `local:`; `runScan` now also prunes cache keys of scanned hosts that no longer map to a file → `usage-cache-pruned {count}`).
 - The *path form selects the host* — a UNC `\\wsl.localhost\<D>` cwd/workspace means wsl everywhere (session rows, agent spawn, pty, store, gh). `hosts.errors()` feeds `claude.hostErrors`; `hooks.ts` applies the hooks block per `allHosts()`; `store.ts` watches per host (inotifywait → tiered poll: 30 s scan computes the recent-20 ∪ hot set, 2 s tick stats it and emits `<proj>/<id>.jsonl` relative paths).
 - Never log env values or filesystem paths under hosts — `host-list`/`host-probe`/`host-env`/`host-spawn` carry ids, counts, ms only. Test hooks: `hosts`, `hostStatus(id)`, `hostRefresh(id?)`, `hostShellEnvKeys(id)`.
 - Settings: `hosts.{wslEnabled,wslDistros:null|auto,overrides[id].{claudePath,devinPath,home,shell,envCaptureDisabled}}`; the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`). The default-distro select moved to the per-surface keys `local.defaultWslDistro` / `claude.defaultWslDistro` (see Settings keys) — `hosts.defaultWslDistro` is migrated away on load.
@@ -653,6 +657,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `usage-fetch` | `{ ok, status, ms, stale, accounts }` — OAuth `/usage` fetch per account group (the bearer token is never logged). |
 | `usage-scan` | `{ files, changed, ms }` — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
 | `usage-cache-load` | `{ files }` — `userData/claude-usage-cache.json` loaded. |
+| `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. pre-S7 `local:` keys from a WSL store). |
 | `active-session` | Local selected session lifted to state. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |

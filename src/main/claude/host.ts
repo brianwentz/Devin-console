@@ -754,7 +754,7 @@ let instance: ClaudeHost | null = null;
 export function claudeHost(): ClaudeHost {
   instance ??= new ClaudeHost({
     cliPath: () => resolveClaudePath(state.settings?.current.claude.path ?? null),
-    configDir: process.env.CLAUDE_CONFIG_DIR?.trim() || '',
+    configDir: hosts().localConfigDir(),
     isOnDisk: () => false,
     onPullRequestUrl: () => undefined,
   });

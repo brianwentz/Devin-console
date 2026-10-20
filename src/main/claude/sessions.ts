@@ -7,8 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
 import { openFolderDialog } from '../dialogs';
-import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
   ClaudeStoreSession,
@@ -1105,8 +1104,9 @@ export function setupClaudeSessions(opts: {
 }
 
 function create(opts?: { configDir: string; userData: string }): ClaudeSessions {
-  const configDir =
-    opts?.configDir ?? (process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude'));
+  // The un-started fallback can be created at any time (publicState() before
+  // setupClaude()), so it must not read the live env var either.
+  const configDir = opts?.configDir ?? hosts().localConfigDir();
   const userData = opts?.userData ?? app.getPath('userData');
   return new ClaudeSessions({
     configDir,
