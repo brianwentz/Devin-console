@@ -12,6 +12,7 @@ import { setupLocal, localHost } from './local/ipc';
 import { setupClaude } from './claude/ipc';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
+import { claudeUsage } from './claude/usage';
 import { autoOpenLocalPr } from './local/prAutoOpen';
 import { terminalHost } from './local/terminalHost';
 import { log, logFile } from './log';
@@ -179,6 +180,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
       });
     }
     try {
+      claudeUsage().dispose();
       claudeSessions().dispose();
     } catch (error) {
       log('shell', 'claude-dispose-error', {

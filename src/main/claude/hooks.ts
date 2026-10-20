@@ -17,6 +17,7 @@ import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
 import { ClaudeHookServer } from './hookServer';
+import { claudeUsage } from './usage';
 import { applyGlobalHooks } from './hooksInstall';
 import { hosts } from '../hosts';
 import type { ClaudeSessions } from './sessions';
@@ -114,6 +115,8 @@ export class ClaudeHooks {
   }
 
   private onEvent(e: ClaudeHookEvent): void {
+    // A turn just ended — utilization moved (Q4: terminal sessions too).
+    if (e.event === 'Stop') claudeUsage().poke('hook');
     const next = applyHookEvent(this.activity, e);
     if (next !== this.activity) {
       this.activity = next;

@@ -93,6 +93,9 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
 | `DEVIN_WORKSPACES_TEST_WSL_CMD` | test mode | Full command line replacing `wsl.exe` for *every* invocation (enumeration, probe, spawn, pty, inotify). `launchApp` defaults it to `node out/fixtures/fakeWsl.cjs` with `FAKE_WSL_DISTROS=''` so specs stay local-only; the fake reads `FAKE_WSL_DISTROS` (`"Fake:Running:default,Other:Stopped"`), `FAKE_WSL_HOME` (default `/home/u`), `FAKE_WSL_ROOT` (`--cd` map root), `FAKE_WSL_ENV_MARKER`, `FAKE_WSL_NO_CLAUDE`, `FAKE_WSL_NO_GH`, `FAKE_WSL_INOTIFY`, `FAKE_WSL_HOOKS`, `FAKE_WSL_CLAUDE_CMD`, `FAKE_WSL_DEVIN_CMD`, `FAKE_WSL_SPAWN_LOG`. |
 | `DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`configDir`, `toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro. |
+| `DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
+| `DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Value may be a `;`-separated list of `hostId=path` pairs for multi-account staging (bare path = default for hosts without a pair). |
+| `DEVIN_WORKSPACES_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
 | `DEVIN_WORKSPACES_PROBE_HOST` / `DEVIN_WORKSPACES_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `DEVIN_WORKSPACES_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
 | `DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN` | always (set by the app) | Bearer token placed in claude-kind pty `extraEnv` and referenced from the injected `--settings` hooks block. |
@@ -141,6 +144,7 @@ variable that selects it.
 - `workspaces` (root array) is **Local-only** storage: the Devin Local agent roster and the pty cwd allow-list (`terminalHost.ts`/`terminalIpc.ts`); its
   array order is the display order of the Local sidebar (reorder = rewrite the array via `local:workspaceReorder`). No Settings UI — managed from the
   session column.
+- `analytics.tab` (`'devin'|'claude'`, default `'devin'`) — the last-selected Analytics tab strip tab; no Settings UI.
 - `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
   `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
   needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), labels/collapse keyed by workspace path.
@@ -313,6 +317,20 @@ variable that selects it.
   `applyLayout`/`lowerShell` and stays alive after switching away and reloads in place on each re-entry (`refreshAnalyticsView`, `analytics-refresh` log
   event with `mode: reload|navigate`). Router: same-tab navigations from `analytics` to GitHub open a foreground gh-tab, to other tenant pages route to
   the Cloud view (`devin`), everything else stays in place. Log events `analytics-view-created` / `analytics` `load-error`. Test hook `getAnalyticsBounds`.
+- **Two tabs** (shell `AnalyticsTabs` strip, `analytics.tab` setting `'devin'|'claude'` — default `devin`): the Devin tab keeps the hosted view (Refresh
+  button → `analytics:refresh` IPC → `refreshAnalyticsView()`); the Claude tab is shell-rendered `ClaudeAnalyticsPanel` and zeroes/detaches the hosted
+  view (`getAnalyticsBounds` returns null; re-entering on the Claude tab logs `analytics-refresh-skipped {tab:'claude'}` — the hosted page is created
+  lazily when the Devin tab is shown). `#analyticsRefresh` → `claudeUsageRefresh` on Claude / `analytics:refresh` on Devin.
+- **Claude usage service** (`src/main/claude/usage.ts`, singleton `claudeUsage()`): pushes `ClaudeUsageState` on `claude:usage` (`createPushedStore`;
+  invoke `claudeUsageState`, `claudeUsageRefresh`, send `claudeUsageVisible`). Lazy start on first use; visible → fetch+scan every 60 s, hidden → fetch
+  every 10 min; `poke('turn'|'hook')` (debounced 5 s) fires on chat `end_turn` and `Stop` hook events. Accounts: per-host `.credentials.json`
+  (`claudeAiOauth.accessToken` — never logged/stored in state) + `oauthAccount` email grouping (same email across hosts → one account, fetch via the
+  host with the latest `expiresAt`). 401/403/expired → stale fallback (cache `lastBody`, else newest `<configDir>/.usage-cache`); 429/5xx/network →
+  keep last good, 1→16 min exponential backoff; `fetchedAt` = the cached body's timestamp when stale. Scanner: incremental per-file cache
+  (`{size,mtime,offset,buckets}` → `fileScanPlan` reuse/append/full with a newline line-boundary check), `aggregateUsageLines` for the current + previous
+  month, chunked with `setImmediate` yields. Cache: `userData/claude-usage-cache.json` (`{version,files,accounts}`) — never written into the CLI's
+  configDir. Pure helpers in `src/core/claudeUsage.ts` (`parseUsageResponse`, `aggregateUsageLines`, `fileScanPlan`, `groupAccounts`, `gaugeArc`,
+  `resetsIn`, …).
 
 ### Devin Local
 - `src/main/local/`, `src/shell/local/`, reducers in `src/core/localModel.ts`: spawn the external `devin` binary (`acp`), never fork Node (RunAsNode fuse
@@ -578,6 +596,7 @@ All are `__devinworkspaces` hooks (test mode only; reachable from the installed 
 | `claudeHookInfo` ({port,token}) / `claudeActivity` / `claudePostHook(event,body)` / `claudePostHookRaw(...,auth)` / `claudeHooksSettingsPath` | Hook listener info, activity overlay, post a hook event (authenticated / raw), path of the merged `settings.json`. |
 | `claudeRecordPr` / `claudePrs(id)` / `claudeRefreshPrStates` / `prTitlesSeed(url,{title,state})` | Record a Claude PR, read a session's PRs, re-ensure states, seed the title+state cache. |
 | `claudeSubagents` / `claudeOpenSubagent` / `claudeChatMessageIds` | Subagent list / open read-only / per-session current message ids. |
+| `claudeUsageState` / `claudeUsageRefresh` | Claude usage state snapshot / force fetch+scan (resolves when both finish). |
 | `shutdownState` | Reads `state.shutdownComplete`. |
 
 ## Log events
@@ -626,6 +645,10 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `settings-commit` / `settings-flush` | field names and counts only. |
 | `settings-repaired` / `settings-migrated` | `{ dropped }` key names / `{ from: 'hosts.defaultWslDistro' \| 'spike-state.json' }` — one-shot load-time migrations. |
 | `analytics-refresh` / `analytics-view-created` / `analytics` | `mode: reload\|navigate`; `load-error`. |
+| `analytics-refresh-skipped` | `{ tab }` — surface re-entered on the Claude tab (nothing hosted to reload). |
+| `usage-fetch` | `{ ok, status, ms, stale, accounts }` — OAuth `/usage` fetch per account group (the bearer token is never logged). |
+| `usage-scan` | `{ files, changed, ms }` — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
+| `usage-cache-load` | `{ files }` — `userData/claude-usage-cache.json` loaded. |
 | `active-session` | Local selected session lifted to state. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |

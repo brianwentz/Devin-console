@@ -11,6 +11,7 @@ import {
   ClaudeAgentStopArg,
   ClaudeCancelArg,
   ClaudeContextMenuArg,
+  ClaudeUsageVisibleArg,
   ClaudeForkArg,
   ClaudeLoadHistoryArg,
   ClaudeNewSessionArg,
@@ -38,6 +39,7 @@ import {
   IpcChannels,
 } from '../../shared/ipc';
 import { setupClaudeSessions, type ClaudeSessions } from './sessions';
+import { claudeUsage } from './usage';
 import { claudeHost } from './host';
 import { publicChatState } from './chatState';
 import { hosts } from '../hosts';
@@ -104,6 +106,16 @@ export function setupClaude(): ClaudeSessions {
 
   // Chat channels — invoke → LocalResult via handleResult.
   guardedHandle(IpcChannels.claudeChatState, () => publicChatState());
+
+  // Analytics Claude tab: lazy-started usage service.
+  guardedHandle(IpcChannels.claudeUsageState, () => claudeUsage().state);
+  guardedHandle(IpcChannels.claudeUsageRefresh, async () => {
+    await claudeUsage().refresh();
+    return null;
+  });
+  on(IpcChannels.claudeUsageVisible, ClaudeUsageVisibleArg, ({ visible }) =>
+    claudeUsage().setVisible(visible),
+  );
   handleResult(IpcChannels.claudeNewSession, ClaudeNewSessionArg, ({ cwd }) =>
     sessions.newSession(cwd),
   );
