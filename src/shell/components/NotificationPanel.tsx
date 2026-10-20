@@ -29,7 +29,7 @@ export function NotificationPanel() {
   const open = state?.notifications.panelOpen ?? false;
 
   const refresh = useCallback(async () => {
-    setEntries(await window.devinworkspaces.notificationsList());
+    setEntries(await window.agentworkspace.notificationsList());
     setNow(Date.now());
   }, []);
 
@@ -42,7 +42,7 @@ export function NotificationPanel() {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') window.devinworkspaces.notificationsPanel(false);
+      if (event.key === 'Escape') window.agentworkspace.notificationsPanel(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -50,7 +50,7 @@ export function NotificationPanel() {
 
   if (!open) return null;
 
-  const close = () => window.devinworkspaces.notificationsPanel(false);
+  const close = () => window.agentworkspace.notificationsPanel(false);
 
   return (
     <div
@@ -80,7 +80,7 @@ export function NotificationPanel() {
             title="Mark all read"
             disabled={entries.length === 0}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#7d8a99] hover:bg-[#2a394d] disabled:opacity-40"
-            onClick={() => window.devinworkspaces.notificationsMarkAllRead()}
+            onClick={() => window.agentworkspace.notificationsMarkAllRead()}
           >
             <CheckCheck size={13} /> Mark all read
           </button>
@@ -91,7 +91,7 @@ export function NotificationPanel() {
             title="Clear all"
             disabled={entries.length === 0}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#7d8a99] hover:bg-[#2a394d] disabled:opacity-40"
-            onClick={() => window.devinworkspaces.notificationsClear()}
+            onClick={() => window.agentworkspace.notificationsClear()}
           >
             <Trash2 size={13} /> Clear all
           </button>
@@ -113,7 +113,7 @@ export function NotificationPanel() {
               <button
                 type="button"
                 className="min-w-0 flex-1 text-left"
-                onClick={() => window.devinworkspaces.notificationsOpen(entry.id)}
+                onClick={() => window.agentworkspace.notificationsOpen(entry.id)}
               >
                 <div
                   className={`text-[12px] leading-tight ${
@@ -137,14 +137,14 @@ export function NotificationPanel() {
                   title="Mark as read"
                   checked={entry.readAt !== null}
                   disabled={entry.readAt !== null}
-                  onChange={() => window.devinworkspaces.notificationsMarkRead(entry.id)}
+                  onChange={() => window.agentworkspace.notificationsMarkRead(entry.id)}
                 />
                 <button
                   type="button"
                   aria-label="Delete"
                   title="Delete"
                   className="text-[#7d8a99] hover:text-[#e8edf3]"
-                  onClick={() => window.devinworkspaces.notificationsRemove(entry.id)}
+                  onClick={() => window.agentworkspace.notificationsRemove(entry.id)}
                 >
                   <Trash2 size={13} />
                 </button>

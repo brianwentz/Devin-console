@@ -8,7 +8,7 @@
 // runs inside app.evaluate and the result is redacted before it returns.
 //
 // Requires: npm run build (out/main.cjs). Persistent login profile lives in
-// os.tmpdir()/devin-workspaces-spike (survives across runs — do not delete).
+// os.tmpdir()/agent-workspace-spike (survives across runs — do not delete).
 
 import { _electron } from 'playwright';
 import os from 'node:os';
@@ -16,7 +16,7 @@ import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 const TENANT = 'https://cloudbeds.devinenterprise.com';
-const USER_DATA = path.join(os.tmpdir(), 'devin-workspaces-spike');
+const USER_DATA = path.join(os.tmpdir(), 'agent-workspace-spike');
 const LOG_FILE = path.join(USER_DATA, 'events.jsonl');
 const VARIANTS = process.argv.includes('--variants');
 const CAPTURE = process.argv.includes('--capture');
@@ -298,7 +298,7 @@ const PROBE_FN = async ({ webContents }, args) => {
         // id 1: initialize
         const init = await request(1, 'initialize', {
           protocolVersion: 1,
-          clientInfo: { name: 'devin-workspaces-spike', version: '0.0.0' },
+          clientInfo: { name: 'agent-workspace-spike', version: '0.0.0' },
           clientCapabilities: variantsMode
             ? { _meta: { 'cognition.ai/sessionListFolders': true } }
             : {},
@@ -862,9 +862,9 @@ async function main() {
     timeout: 30_000,
     env: {
       ...process.env,
-      DEVIN_WORKSPACES_TEST: '1',
-      DEVIN_WORKSPACES_USER_DATA: USER_DATA,
-      DEVIN_WORKSPACES_LOG: LOG_FILE,
+      AGENT_WORKSPACE_TEST: '1',
+      AGENT_WORKSPACE_USER_DATA: USER_DATA,
+      AGENT_WORKSPACE_LOG: LOG_FILE,
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
     },
   });

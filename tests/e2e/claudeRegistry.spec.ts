@@ -39,38 +39,38 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
-    claudeRefresh: () => evaluate(() => (globalThis as any).__devinworkspaces.claudeRefresh()),
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
+    claudeRefresh: () => evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh()),
     claudeSelect: (id: string | null) =>
       app.evaluate(
-        (_e, v: string | null) => (globalThis as any).__devinworkspaces.claudeSelect(v),
+        (_e, v: string | null) => (globalThis as any).__agentworkspace.claudeSelect(v),
         id,
       ),
     claudeMenuItems: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeMenuItems()) as Promise<
+      evaluate(() => (globalThis as any).__agentworkspace.claudeMenuItems()) as Promise<
         MenuItem[]
       >,
     claudeMenuClick: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeMenuClick(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeMenuClick(v),
         id,
       ) as Promise<{ action: string | null }>,
     claudeMutations: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeMutations()) as Promise<
+      evaluate(() => (globalThis as any).__agentworkspace.claudeMutations()) as Promise<
         { op: string; payload: Record<string, unknown> }[]
       >,
     claudeConfigDir: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeConfigDir()) as Promise<string>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeConfigDir()) as Promise<string>,
     currentScope: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.currentScope()) as Promise<string>,
+      evaluate(() => (globalThis as any).__agentworkspace.currentScope()) as Promise<string>,
     setSurface: (surface: 'cloud' | 'local' | 'claude' | 'settings' | 'analytics') =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v as never),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v as never),
         surface,
       ),
     setSettings: async (patch: unknown) => {
       const shell = await shellPage(app);
-      await shell.evaluate((v: unknown) => (window as any).devinworkspaces.setSettings(v), patch);
+      await shell.evaluate((v: unknown) => (window as any).agentworkspace.setSettings(v), patch);
     },
   };
 }
@@ -94,7 +94,7 @@ async function openClaudeMenu(
   // The invoke stays open until a claudeMenuClick resolves it — don't await.
   void shell.evaluate(
     (a) =>
-      (window as any).devinworkspaces.claudeContextMenu({ ...a, x: 10, y: 10 }),
+      (window as any).agentworkspace.claudeContextMenu({ ...a, x: 10, y: 10 }),
     arg,
   );
   const h = hooks(app);
@@ -152,7 +152,7 @@ test('pin + workspace persist across a relaunch (ux2 D8)', async () => {
     // Add the workspace covering the alpha cwd via the same IPC the sidebar uses.
     const shell = await shellPage(app);
     await shell.evaluate(() =>
-      (window as any).devinworkspaces.claudeWorkspaceAdd('C:\\work\\alpha'),
+      (window as any).agentworkspace.claudeWorkspaceAdd('C:\\work\\alpha'),
     );
     await expect
       .poll(async () => (await h.claudeState()).folders)

@@ -1,5 +1,5 @@
 // Fake `claude` CLI for the background-agents e2e —
-// DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD=`node out/fixtures/fakeClaudeAgents.cjs`.
+// AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD=`node out/fixtures/fakeClaudeAgents.cjs`.
 //   `agents --json --all` → prints the JSON file at FAKE_CLAUDE_AGENTS
 //   `stop <id>`            → appends `stop <id>` to FAKE_CLAUDE_AGENTS_LOG
 // Any other argv exits 0 silently.

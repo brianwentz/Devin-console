@@ -11,5 +11,5 @@ export async function requestSurface(next: Surface): Promise<void> {
     const ok = await commitDraft('surface', settings);
     if (!ok) return;
   }
-  window.devinworkspaces.setSurface(next);
+  window.agentworkspace.setSurface(next);
 }

@@ -9,7 +9,7 @@ type NotesState = 'loading' | 'ok' | 'missing' | 'error';
 function openExternal(event: MouseEvent<HTMLAnchorElement>): void {
   event.preventDefault();
   const href = event.currentTarget.getAttribute('href');
-  if (href) window.devinworkspaces.openLink(href);
+  if (href) window.agentworkspace.openLink(href);
 }
 
 function NotesCard({
@@ -61,14 +61,14 @@ export function UpdatesTab({ update }: { update: ShellState['update'] | null }) 
 
   // On-demand check when the tab opens (throttled main-side to 60 s).
   useEffect(() => {
-    window.devinworkspaces.updateCheck('settings');
+    window.agentworkspace.updateCheck('settings');
   }, []);
 
   useEffect(() => {
     let alive = true;
     setReply(null);
     setFailed(false);
-    window.devinworkspaces
+    window.agentworkspace
       .releaseNotes()
       .then((result) => {
         if (alive) setReply(result);
@@ -105,7 +105,7 @@ export function UpdatesTab({ update }: { update: ShellState['update'] | null }) 
               id="updateNow"
               type="button"
               className={saveClass}
-              onClick={() => window.devinworkspaces.updateInstall()}
+              onClick={() => window.agentworkspace.updateInstall()}
             >
               Update now
             </button>
@@ -127,7 +127,7 @@ export function UpdatesTab({ update }: { update: ShellState['update'] | null }) 
                 type="button"
                 className={saveClass}
                 disabled={update.checking}
-                onClick={() => window.devinworkspaces.updateCheck('manual')}
+                onClick={() => window.agentworkspace.updateCheck('manual')}
               >
                 {update.checking ? 'Checking…' : 'Check now'}
               </button>

@@ -94,7 +94,7 @@ export class ClaudeUsageService {
   });
 
   private now(): number {
-    const raw = testMode ? process.env.DEVIN_WORKSPACES_TEST_NOW : undefined;
+    const raw = testMode ? process.env.AGENT_WORKSPACE_TEST_NOW : undefined;
     const t = raw ? Date.parse(raw) : NaN;
     return Number.isFinite(t) ? t : Date.now();
   }
@@ -219,7 +219,7 @@ export class ClaudeUsageService {
   /** Test-mode account file seam: a bare path is the default for all hosts;
    * `;`-separated `hostId=path` entries override per host (multi-account). */
   private accountFileFor(host: ExecHost): string {
-    const env = testMode ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE?.trim() ?? '') : '';
+    const env = testMode ? (process.env.AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE?.trim() ?? '') : '';
     if (!testMode || !env) return join(dirname(hosts().configDir(host)), '.claude.json');
     let fallback: string | null = null;
     for (const entry of env.split(';')) {
@@ -304,7 +304,7 @@ export class ClaudeUsageService {
     try {
       const groups = this.readAccounts();
       const url = testMode
-        ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL ?? USAGE_URL)
+        ? (process.env.AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL ?? USAGE_URL)
         : USAGE_URL;
       const start = Date.now();
       const accounts: ClaudeUsageAccount[] = [];

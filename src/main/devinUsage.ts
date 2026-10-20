@@ -84,8 +84,8 @@ export class DevinUsageService {
   // --- cadence ---------------------------------------------------------------
 
   private intervalMs(): number {
-    if (testMode && process.env.DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS) {
-      return Math.max(50, Number(process.env.DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS) || 0);
+    if (testMode && process.env.AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS) {
+      return Math.max(50, Number(process.env.AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS) || 0);
     }
     return (state.settings?.current.usage.devinPollMinutes ?? 15) * 60_000;
   }
@@ -114,7 +114,7 @@ export class DevinUsageService {
   // --- identity + fetch --------------------------------------------------------
 
   private usageUrl(): string | null {
-    if (testMode) return process.env.DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL ?? null;
+    if (testMode) return process.env.AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL ?? null;
     return `${state.tenantUrl.replace(/\/+$/, '')}/api/personal-analytics/usage-limit`;
   }
 
@@ -124,7 +124,7 @@ export class DevinUsageService {
   }> {
     if (testMode) {
       return {
-        identity: process.env.DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL
+        identity: process.env.AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL
           ? { token: 'test', orgId: 'test' }
           : null,
         reason: null,

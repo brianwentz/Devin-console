@@ -8,7 +8,7 @@ import { closeApp, launchApp, launchWithClaudeFixture, shellPage } from './helpe
 import type { ClaudeChatStatePublic, ClaudeState } from '../../src/shared/ipc';
 
 // §3.5: the Claude chat view end-to-end over the fake SDK
-// (DEVIN_WORKSPACES_TEST_CLAUDE_SDK → out/fixtures/fakeClaudeSdk.mjs).
+// (AGENT_WORKSPACE_TEST_CLAUDE_SDK → out/fixtures/fakeClaudeSdk.mjs).
 
 let fixtures: FixtureServers;
 
@@ -27,34 +27,34 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeChatState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeChatState()) as Promise<ClaudeChatStatePublic>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeChatState()) as Promise<ClaudeChatStatePublic>,
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
     claudeNewSession: (cwd: string | null) =>
       app.evaluate(
-        (_e, v: string | null) => (globalThis as any).__devinworkspaces.claudeNewSession(v),
+        (_e, v: string | null) => (globalThis as any).__agentworkspace.claudeNewSession(v),
         cwd,
       ) as Promise<string | null>,
     claudePrompt: (id: string, text: string) =>
       app.evaluate(
         (_e, a: { id: string; text: string }) =>
-          (globalThis as any).__devinworkspaces.claudePrompt(a.id, a.text),
+          (globalThis as any).__agentworkspace.claudePrompt(a.id, a.text),
         { id, text },
       ) as Promise<void>,
     claudeCancel: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeCancel(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeCancel(v),
         id,
       ) as Promise<void>,
     claudeLiveCount: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeLiveCount()) as Promise<number>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeLiveCount()) as Promise<number>,
     setSurface: (surface: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v as never),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v as never),
         surface,
       ),
     state: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.state()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.state()) as Promise<{
         claudeSessionId: string | null;
       }>,
   };
@@ -63,9 +63,9 @@ function hooks(app: ElectronApplication) {
 test('new session: prompt → Echo, turn summary, sidebar lists the transcript', async () => {
   const newCwd = mkdtempSync(join(tmpdir(), 'claude-chat-cwd-'));
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: newCwd,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: newCwd,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -117,8 +117,8 @@ test('new session: prompt → Echo, turn summary, sidebar lists the transcript',
 test('relaunch restores claude.lastSessionId and loads the transcript history', async () => {
   const newCwd = mkdtempSync(join(tmpdir(), 'claude-chat-cwd-'));
   const env = {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: newCwd,
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: newCwd,
   };
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, env);
   const h = hooks(app);
@@ -163,10 +163,10 @@ test('relaunch restores claude.lastSessionId and loads the transcript history', 
 test('tool permission: card with 3 options, Allow completes the turn', async () => {
   const newCwd = mkdtempSync(join(tmpdir(), 'claude-chat-cwd-'));
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: newCwd,
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: newCwd,
     FAKE_CLAUDE_TOOL: '1',
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -202,10 +202,10 @@ test('tool permission: card with 3 options, Allow completes the turn', async () 
 test('cancel mid-turn finishes as cancelled and re-enables the composer', async () => {
   const newCwd = mkdtempSync(join(tmpdir(), 'claude-chat-cwd-'));
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: newCwd,
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: newCwd,
     FAKE_CLAUDE_DELAY_MS: '5000',
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -231,8 +231,8 @@ test('cancel mid-turn finishes as cancelled and re-enables the composer', async 
 
 test('opening a fixture session renders history; live stays 0 until a prompt', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -257,8 +257,8 @@ test('opening a fixture session renders history; live stays 0 until a prompt', a
 test('setPermissionMode updates the session and the header select', async () => {
   const newCwd = mkdtempSync(join(tmpdir(), 'claude-chat-cwd-'));
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: newCwd,
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: newCwd,
   });
   const h = hooks(app);
   try {
@@ -267,7 +267,7 @@ test('setPermissionMode updates the session and the header select', async () => 
     const shell = await shellPage(app);
     const id = (await h.claudeNewSession(null))!;
     await shell.evaluate((sid: string) =>
-      (window as any).devinworkspaces.claudeSetPermissionMode(sid, 'plan'),
+      (window as any).agentworkspace.claudeSetPermissionMode(sid, 'plan'),
     id);
     await expect(shell.locator('#claudePermissionMode')).toHaveValue('plan');
     await expect

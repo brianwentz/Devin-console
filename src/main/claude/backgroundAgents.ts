@@ -18,8 +18,8 @@ const FOCUSED_MS = 15_000;
 const UNFOCUSED_MS = 60_000;
 
 function pollMs(): number {
-  if (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS) {
-    const ms = Math.max(50, Number(process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS) || 0);
+  if (testMode && process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS) {
+    const ms = Math.max(50, Number(process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS) || 0);
     return ms;
   }
   return state.windowRef?.isFocused() ? FOCUSED_MS : UNFOCUSED_MS;
@@ -99,7 +99,7 @@ export class ClaudeBackgroundAgents {
         stdout = await this.execList();
       } else {
         const cli =
-          (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
+          (testMode && process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
           this.cliPath() ||
           resolveClaudePath(state.settings?.current.claude.path ?? null);
         if (!cli) {
@@ -110,8 +110,8 @@ export class ClaudeBackgroundAgents {
           return;
         }
         const [file, ...prefixArgs] = testMode &&
-          process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD
-            ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
+          process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD
+            ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
             : [cli];
         ({ stdout } = await execFileAsync(
           file!,
@@ -162,13 +162,13 @@ export class ClaudeBackgroundAgents {
       }
     } else {
       const cli =
-        (testMode && process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
+        (testMode && process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD?.trim()) ||
         this.cliPath() ||
         resolveClaudePath(state.settings?.current.claude.path ?? null);
       if (!cli) return;
       const [file, ...prefixArgs] = testMode &&
-        process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD
-          ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
+        process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD
+          ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD.split(/\s+/).filter(Boolean)
           : [cli];
       try {
         await execFileAsync(file!, [...prefixArgs, 'stop', agentId], {

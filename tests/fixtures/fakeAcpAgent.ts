@@ -1,6 +1,6 @@
 // Fake ACP v1 agent speaking newline-delimited JSON-RPC over stdio.
 // Built to out/fixtures/fakeAcpAgent.cjs and selected by the app in test mode via
-//   DEVIN_WORKSPACES_TEST=1 DEVIN_WORKSPACES_LOCAL_AGENT_CMD="node out/fixtures/fakeAcpAgent.cjs"
+//   AGENT_WORKSPACE_TEST=1 AGENT_WORKSPACE_LOCAL_AGENT_CMD="node out/fixtures/fakeAcpAgent.cjs"
 // Capabilities: FAKE_ACP_LIST=1 advertises session/list, FAKE_ACP_LOAD=1 advertises
 // session/load, FAKE_ACP_DELETE=1 advertises sessionCapabilities.delete +
 // session/delete. FAKE_ACP_LINK_URL is embedded as a markdown link in every reply.
@@ -16,7 +16,7 @@ import {
 const supportsList = process.env.FAKE_ACP_LIST === '1';
 const supportsLoad = process.env.FAKE_ACP_LOAD === '1';
 const supportsDelete = process.env.FAKE_ACP_DELETE === '1';
-const linkUrl = process.env.FAKE_ACP_LINK_URL ?? 'https://github.com/cognition-ai/devin-workspaces/pull/1';
+const linkUrl = process.env.FAKE_ACP_LINK_URL ?? 'https://github.com/cognition-ai/agent-workspace/pull/1';
 // FAKE_ACP_USAGE=1 emits a usage_update mid-prompt and a `usage` field on the
 // prompt response; FAKE_ACP_PROMPT_DELAY_MS stalls mid-prompt so the UI's
 // thinking indicator is observable.

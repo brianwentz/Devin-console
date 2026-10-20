@@ -16,23 +16,23 @@ test.afterAll(async () => {
 });
 
 test('tracks current session id from devin view navigation', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     await app.evaluate((_electron, url: string) => {
       (globalThis as typeof globalThis & {
-        __devinworkspaces: { loadDevinUrl(url: string): void };
-      }).__devinworkspaces.loadDevinUrl(url);
+        __agentworkspace: { loadDevinUrl(url: string): void };
+      }).__agentworkspace.loadDevinUrl(url);
     }, `${fixtures.devinUrl}/sessions/abc123`);
     await expect.poll(async () => (await state(app)).currentSessionId).toBe('abc123');
     await app.evaluate((_electron, url: string) => {
       (globalThis as typeof globalThis & {
-        __devinworkspaces: { loadDevinUrl(url: string): void };
-      }).__devinworkspaces.loadDevinUrl(url);
+        __agentworkspace: { loadDevinUrl(url: string): void };
+      }).__agentworkspace.loadDevinUrl(url);
     }, `${fixtures.devinUrl}/`);
     await expect.poll(async () => (await state(app)).currentSessionId).toBe(null);
   } finally {
@@ -43,40 +43,40 @@ test('tracks current session id from devin view navigation', async () => {
 });
 
 test('auto-collapses the pane below the minimum devin width', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const tabId = await app.evaluate((_electron, url: string) => {
       return (
-        globalThis as typeof globalThis & { __devinworkspaces: { open(url: string): string } }
-      ).__devinworkspaces.open(url);
+        globalThis as typeof globalThis & { __agentworkspace: { open(url: string): string } }
+      ).__agentworkspace.open(url);
     }, `${fixtures.githubUrl}/page/collapse`);
     expect((await state(app)).paneCollapsed).toBe(false);
 
     await app.evaluate((_electron) => {
       (globalThis as typeof globalThis & {
-        __devinworkspaces: { setWindowSize(w: number, h: number): void };
-      }).__devinworkspaces.setWindowSize(1000, 800);
+        __agentworkspace: { setWindowSize(w: number, h: number): void };
+      }).__agentworkspace.setWindowSize(1000, 800);
     });
     await expect.poll(async () => (await state(app)).paneCollapsed).toBe(true);
     expect((await state(app)).paneOpen).toBe(true);
     const collapsedBounds = await app.evaluate((_electron, id: string) => {
       return (
         globalThis as typeof globalThis & {
-          __devinworkspaces: { getTabBounds(id: string): { width: number } | null };
+          __agentworkspace: { getTabBounds(id: string): { width: number } | null };
         }
-      ).__devinworkspaces.getTabBounds(id);
+      ).__agentworkspace.getTabBounds(id);
     }, tabId);
     expect(collapsedBounds?.width).toBe(0);
 
     await app.evaluate((_electron) => {
       (globalThis as typeof globalThis & {
-        __devinworkspaces: { setWindowSize(w: number, h: number): void };
-      }).__devinworkspaces.setWindowSize(1400, 900);
+        __agentworkspace: { setWindowSize(w: number, h: number): void };
+      }).__agentworkspace.setWindowSize(1400, 900);
     });
     await expect.poll(async () => (await state(app)).paneCollapsed).toBe(false);
   } finally {
@@ -87,7 +87,7 @@ test('auto-collapses the pane below the minimum devin width', async () => {
 });
 
 test('pane toggle resizes the window and keeps the devin column width', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-pane-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-pane-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   type PaneHooks = {
@@ -96,15 +96,15 @@ test('pane toggle resizes the window and keeps the devin column width', async ()
     layoutRects(): { devin: { width: number }; paneCollapsed: boolean };
     setPaneOpen(value: boolean): void;
   };
-  type G = typeof globalThis & { __devinworkspaces: PaneHooks };
+  type G = typeof globalThis & { __agentworkspace: PaneHooks };
   const contentWidth = (): Promise<number> =>
-    app.evaluate(() => (globalThis as G).__devinworkspaces.getContentBounds()!.width);
+    app.evaluate(() => (globalThis as G).__agentworkspace.getContentBounds()!.width);
   const devinWidth = (): Promise<number> =>
-    app.evaluate(() => (globalThis as G).__devinworkspaces.layoutRects().devin.width);
+    app.evaluate(() => (globalThis as G).__agentworkspace.layoutRects().devin.width);
   const setPane = (value: boolean): Promise<void> =>
-    app.evaluate((_e, v: boolean) => (globalThis as G).__devinworkspaces.setPaneOpen(v), value);
+    app.evaluate((_e, v: boolean) => (globalThis as G).__agentworkspace.setPaneOpen(v), value);
   try {
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setWindowSize(1400, 900));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setWindowSize(1400, 900));
     await expect.poll(contentWidth).toBe(1400);
     const devin = await devinWidth();
 
@@ -157,7 +157,7 @@ test('pane toggle resizes the window and keeps the devin column width', async ()
 });
 
 test('renders a custom title bar with the tab strip inside', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
@@ -166,26 +166,26 @@ test('renders a custom title bar with the tab strip inside', async () => {
     await expect(shell.locator('#navBar')).toHaveCount(0);
     const devinBounds = await app.evaluate(() =>
       (globalThis as typeof globalThis & {
-        __devinworkspaces: { getDevinBounds(): { y: number; height: number } | null };
-      }).__devinworkspaces.getDevinBounds(),
+        __agentworkspace: { getDevinBounds(): { y: number; height: number } | null };
+      }).__agentworkspace.getDevinBounds(),
     );
     expect(devinBounds?.y).toBe(36);
 
     const tabId = await app.evaluate((_electron, url: string) => {
       return (
-        globalThis as typeof globalThis & { __devinworkspaces: { open(url: string): string } }
-      ).__devinworkspaces.open(url);
+        globalThis as typeof globalThis & { __agentworkspace: { open(url: string): string } }
+      ).__agentworkspace.open(url);
     }, `${fixtures.githubUrl}/page/titlebar`);
     await expect.poll(async () => (await state(app)).tabs.activeId).toBe(tabId);
     const tabBounds = await app.evaluate((_electron, id: string) => {
       return (
         globalThis as typeof globalThis & {
-          __devinworkspaces: {
+          __agentworkspace: {
             getTabBounds(id: string): { y: number; height: number } | null;
             getDevinBounds(): { y: number; height: number } | null;
           };
         }
-      ).__devinworkspaces.getTabBounds(id);
+      ).__agentworkspace.getTabBounds(id);
     }, tabId);
     expect(tabBounds?.y).toBe(36);
     expect(tabBounds?.height).toBe(devinBounds?.height);
@@ -197,19 +197,19 @@ test('renders a custom title bar with the tab strip inside', async () => {
 });
 
 test('persists settings across relaunch', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   let app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     // 0.9 of the 1338 px available at 1400 px would be 1204 px — more than the
     // MIN_DEVIN_WIDTH guard allows (698 px). The layout clamps what it renders, but
     // the stored preference must stay exactly what was set, across a restart.
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ pane: { fraction: 0.9 } })`,
+      `window.agentworkspace.setSettings({ pane: { fraction: 0.9 } })`,
     );
     await expect.poll(async () => (await state(app)).paneFraction).toBe(0.9);
     expect((await state(app)).paneCollapsed).toBe(false);
@@ -224,7 +224,7 @@ test('persists settings across relaunch', async () => {
 
     app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     expect((await state(app)).paneFraction).toBe(0.9);
     // Still unclamped after the first syncFromState of the new run.
@@ -241,17 +241,17 @@ test('persists settings across relaunch', async () => {
 });
 
 test('splitter drag live-resizes hosted views without raising the shell', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-drag-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-drag-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     await app.evaluate((_electron, url: string) => {
       return (
-        globalThis as typeof globalThis & { __devinworkspaces: { open(url: string): string } }
-      ).__devinworkspaces.open(url);
+        globalThis as typeof globalThis & { __agentworkspace: { open(url: string): string } }
+      ).__agentworkspace.open(url);
     }, `${fixtures.githubUrl}/page/drag`);
     const shell = await shellPage(app);
     await expect(shell.locator('#splitter')).toBeVisible();
@@ -260,11 +260,11 @@ test('splitter drag live-resizes hosted views without raising the shell', async 
       getDevinBounds(): { width: number; height: number } | null;
     };
     const orderBefore = (await app.evaluate(() =>
-      (globalThis as typeof globalThis & { __devinworkspaces: H }).__devinworkspaces.childViews()
+      (globalThis as typeof globalThis & { __agentworkspace: H }).__agentworkspace.childViews()
         .map((v) => v.url?.startsWith('app://shell') ? 'shell' : 'hosted'),
     ));
     const devinBefore = await app.evaluate(() =>
-      (globalThis as typeof globalThis & { __devinworkspaces: H }).__devinworkspaces.getDevinBounds(),
+      (globalThis as typeof globalThis & { __agentworkspace: H }).__agentworkspace.getDevinBounds(),
     );
     expect(devinBefore).toBeTruthy();
 
@@ -277,7 +277,7 @@ test('splitter drag live-resizes hosted views without raising the shell', async 
 
     // Mid-drag (button still down): no restack, but the devin view resizes.
     const orderMid = await app.evaluate(() =>
-      (globalThis as typeof globalThis & { __devinworkspaces: H }).__devinworkspaces.childViews()
+      (globalThis as typeof globalThis & { __agentworkspace: H }).__agentworkspace.childViews()
         .map((v) => (v.url?.startsWith('app://shell') ? 'shell' : 'hosted')),
     );
     expect(orderMid).toEqual(orderBefore);
@@ -286,8 +286,8 @@ test('splitter drag live-resizes hosted views without raising the shell', async 
         (
           await app.evaluate(() =>
             (
-              globalThis as typeof globalThis & { __devinworkspaces: H }
-            ).__devinworkspaces.getDevinBounds(),
+              globalThis as typeof globalThis & { __agentworkspace: H }
+            ).__agentworkspace.getDevinBounds(),
           )
         )?.width,
       )
@@ -300,7 +300,7 @@ test('splitter drag live-resizes hosted views without raising the shell', async 
       )
       .toBe(true);
     const orderAfter = await app.evaluate(() =>
-      (globalThis as typeof globalThis & { __devinworkspaces: H }).__devinworkspaces.childViews()
+      (globalThis as typeof globalThis & { __agentworkspace: H }).__agentworkspace.childViews()
         .map((v) => (v.url?.startsWith('app://shell') ? 'shell' : 'hosted')),
     );
     expect(orderAfter).toEqual(orderBefore);
@@ -312,14 +312,14 @@ test('splitter drag live-resizes hosted views without raising the shell', async 
 });
 
 test('splitter renders as a hairline and swells on hover/drag', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-thin-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-thin-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const shell = await shellPage(app);
     const line = shell.locator('#splitter .splitter-line');
@@ -365,7 +365,7 @@ test('splitter renders as a hairline and swells on hover/drag', async () => {
 });
 
 test('migrates legacy spike-state.json into settings.json', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(
     join(profile, 'spike-state.json'),
@@ -374,7 +374,7 @@ test('migrates legacy spike-state.json into settings.json', async () => {
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const current = await state(app);
     // Legacy paneWidth 500 px → fraction 500 / (1400 - 56 - 6).
@@ -389,18 +389,18 @@ test('migrates legacy spike-state.json into settings.json', async () => {
 });
 
 test('window placement restores content bounds exactly once, then stays stable', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-place-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-place-'));
   const logFile = join(profile, 'events.jsonl');
   const env = {
-    DEVIN_WORKSPACES_TEST_PLACEMENT: '1',
-    DEVIN_WORKSPACES_TEST_WINDOW_SIZE: '1410x910',
+    AGENT_WORKSPACE_TEST_PLACEMENT: '1',
+    AGENT_WORKSPACE_TEST_WINDOW_SIZE: '1410x910',
   };
   const bounds = async (app: Parameters<typeof state>[0]) =>
     app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.getContentBounds());
   try {
     let app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     // The launch-0 forced setContentSize emits a resize; the debounced save
     // writes the content bounds under this display key.
@@ -415,7 +415,7 @@ test('window placement restores content bounds exactly once, then stays stable',
 
     app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const restored = await bounds(app);
     await app.evaluate(({ app: electronApp }) => electronApp.quit());
@@ -423,7 +423,7 @@ test('window placement restores content bounds exactly once, then stays stable',
 
     app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const again = await bounds(app);
     // No compounding growth: launch 3's content equals launch 2's exactly.

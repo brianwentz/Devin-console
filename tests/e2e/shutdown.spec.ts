@@ -26,21 +26,21 @@ test.afterAll(async () => {
 });
 
 test('window close with an unsaved tab vetoes quit once, then exits on confirm', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-quit-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-quit-'));
   const logFile = join(profile, 'events.jsonl');
   let app: ElectronApplication | undefined;
   try {
     app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
-    await expect.poll(async () => app!.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app!.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
 
     const guardedId = await openTab(app, `${fixtures.githubUrl}/beforeunload`);
     await waitForTabTitle(app, 'Before unload');
 
     // Cancel path: user answers "stay" — app keeps running, tab survives.
     await app.evaluate(
-      () => (globalThis as any).__devinworkspaces.setBeforeUnloadDecision('stay'),
+      () => (globalThis as any).__agentworkspace.setBeforeUnloadDecision('stay'),
     );
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.closeWindow());
+    await app.evaluate(() => (globalThis as any).__agentworkspace.closeWindow());
     await waitForEvent(logFile, 'shutdown-vetoed');
     expect(
       (await readEvents(logFile)).some((e) => e.event === 'shutdown-probe'),
@@ -58,13 +58,13 @@ test('window close with an unsaved tab vetoes quit once, then exits on confirm',
 
     // Quit path: same close now tears down cleanly.
     await app.evaluate(
-      () => (globalThis as any).__devinworkspaces.setBeforeUnloadDecision('leave'),
+      () => (globalThis as any).__agentworkspace.setBeforeUnloadDecision('leave'),
     );
     const exitStatus = new Promise<'exited' | 'timeout'>((resolve) => {
       app!.process().once('exit', () => resolve('exited'));
       setTimeout(() => resolve('timeout'), 30_000);
     });
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.closeWindow());
+    await app.evaluate(() => (globalThis as any).__agentworkspace.closeWindow());
     expect(await exitStatus).toBe('exited');
     await waitForEvent(logFile, 'window-close-complete');
     app = undefined;
@@ -84,8 +84,8 @@ test('quit while a Claude turn is mid-stream exits within 10 s', async () => {
   const { resolve } = await import('node:path');
   const FAKE_SDK = resolve(__dirname, '../../out/fixtures/fakeClaudeSdk.mjs');
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     FAKE_CLAUDE_DELAY_MS: '20000',
   });
   const logFile = join(profile, 'events.jsonl');
@@ -94,15 +94,15 @@ test('quit while a Claude turn is mid-stream exits within 10 s', async () => {
       .poll(
         async () =>
           (await app.evaluate(
-            () => (globalThis as any).__devinworkspaces.claudeState(),
+            () => (globalThis as any).__agentworkspace.claudeState(),
           )).status,
       )
       .toBe('ready');
     const id = (await app.evaluate(() =>
-      (globalThis as any).__devinworkspaces.claudeNewSession(),
+      (globalThis as any).__agentworkspace.claudeNewSession(),
     )) as string;
     await app.evaluate(
-      (_e, v: string) => (globalThis as any).__devinworkspaces.claudePrompt(v, 'hi'),
+      (_e, v: string) => (globalThis as any).__agentworkspace.claudePrompt(v, 'hi'),
       id,
     );
     // Turn is mid-stream (20 s delta delay) — close must still exit.
@@ -111,7 +111,7 @@ test('quit while a Claude turn is mid-stream exits within 10 s', async () => {
       app.process().once('exit', () => resolve('exited'));
       setTimeout(() => resolve('timeout'), 10_000);
     });
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.closeWindow());
+    await app.evaluate(() => (globalThis as any).__agentworkspace.closeWindow());
     expect(await exitStatus).toBe('exited');
     await waitForEvent(logFile, 'window-close-complete');
   } finally {

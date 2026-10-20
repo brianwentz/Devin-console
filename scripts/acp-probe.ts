@@ -13,7 +13,7 @@ import {
 
 const timeoutMs = 30_000;
 const cloudOnly = process.argv.includes('--cloud');
-const evidenceDir = resolve(process.env.DEVIN_WORKSPACES_EVIDENCE_DIR ?? 'docs/evidence');
+const evidenceDir = resolve(process.env.AGENT_WORKSPACE_EVIDENCE_DIR ?? 'docs/evidence');
 const initializePath = join(evidenceDir, cloudOnly ? 'acp-initialize-cloud.json' : 'acp-initialize.json');
 const roundtripPath = join(evidenceDir, 'acp-roundtrip.jsonl');
 const executable = process.env.DEVIN_CLI ?? join(process.env.HOME ?? '', '.local', 'bin', 'devin');
@@ -134,7 +134,7 @@ async function settleProcessOutput(processRef: ChildProcessWithoutNullStreams): 
 
 async function run(): Promise<void> {
   await mkdir(evidenceDir, { recursive: true });
-  workspace = await mkdtemp(join(tmpdir(), 'devin-workspaces-acp-'));
+  workspace = await mkdtemp(join(tmpdir(), 'agent-workspace-acp-'));
   logStream = await openLog();
   let processRef: ChildProcessWithoutNullStreams | null = null;
   let status = 'error';
@@ -161,7 +161,7 @@ async function run(): Promise<void> {
     initializeRequest = {
       protocolVersion: 1,
       clientInfo: {
-        name: 'devin-workspaces-p0-probe',
+        name: 'agent-workspace-p0-probe',
         version: '0.1.0',
       },
       clientCapabilities: {},

@@ -38,7 +38,7 @@ const NARROW_PANE = 0.314; // ≈420 px
 
 async function setPaneFraction(app: ElectronApplication, fraction: number): Promise<void> {
   await app.evaluate(
-    (_e, value: number) => (globalThis as any).__devinworkspaces.setPaneFraction(value),
+    (_e, value: number) => (globalThis as any).__agentworkspace.setPaneFraction(value),
     fraction,
   );
 }
@@ -50,15 +50,15 @@ async function domOrder(shell: Page): Promise<string[]> {
 }
 
 test('pointer and keyboard reorder, keyboard activate/close, titles', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-strip-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-'));
   const logFile = join(profile, 'events.jsonl');
   // Headed: dnd-kit's click-vs-drag distinction on the sub-activation-distance
   // move needs a real activated window — the pointerup is otherwise swallowed.
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_QUIET: '0',
+    AGENT_WORKSPACE_TEST_QUIET: '0',
   });
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await setPaneFraction(app, WIDE_PANE);
     const a = await openTab(app, `${fixtures.githubUrl}/page/strip-a`);
     const b = await openTab(app, `${fixtures.githubUrl}/page/strip-b`);
@@ -142,11 +142,11 @@ test('pointer and keyboard reorder, keyboard activate/close, titles', async () =
 });
 
 test('overflowing strip scrolls the active tab into view', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-strip-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await setPaneFraction(app, NARROW_PANE);
     const ids: string[] = [];
     for (let i = 0; i < 8; i += 1) {
@@ -173,13 +173,13 @@ test('overflowing strip scrolls the active tab into view', async () => {
     expect((await metrics()).scrollLeft).toBeGreaterThan(0);
 
     // Activate the first tab -> strip scrolls back.
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), ids[0]!);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), ids[0]!);
     await expect.poll(() => visible(ids[0]!)).toBe(true);
     expect((await metrics()).scrollLeft).toBe(0);
 
     // Ctrl+Tab cycles; the newly active tab is always visible.
     for (let i = 0; i < 5; i += 1) {
-      await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), ids[i + 1]!);
+      await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), ids[i + 1]!);
       await expect.poll(() => visible(ids[i + 1]!)).toBe(true);
     }
     // Middle-click close on a visible tab in the overflowed strip.

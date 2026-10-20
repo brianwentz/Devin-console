@@ -24,10 +24,10 @@ import {
 
 import { parseShellEnv, spawnSpec, wslHost } from '../src/core/execHost';
 
-const evidenceDir = resolve(process.env.DEVIN_WORKSPACES_EVIDENCE_DIR ?? 'docs/evidence');
-// DEVIN_WORKSPACES_HOST=wsl:<distro> runs the agent through wsl.exe with the
+const evidenceDir = resolve(process.env.AGENT_WORKSPACE_EVIDENCE_DIR ?? 'docs/evidence');
+// AGENT_WORKSPACE_HOST=wsl:<distro> runs the agent through wsl.exe with the
 // distro's captured -ilc environment; cwd becomes the distro home.
-const probeHost = process.env.DEVIN_WORKSPACES_HOST;
+const probeHost = process.env.AGENT_WORKSPACE_HOST;
 const outputPath = join(
   evidenceDir,
   probeHost ? 'p4-acp-contract-wsl.jsonl' : 'p4-acp-contract.jsonl',
@@ -162,7 +162,7 @@ async function run(): Promise<void> {
   const devin = resolveDevin();
   let status = 'error';
   let child: ChildProcessWithoutNullStreams | null = null;
-  const workspace = await mkdtemp(join(tmpdir(), 'devin-workspaces-p4-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-workspace-p4-'));
   const updates: SessionNotification[] = [];
 
   try {
@@ -218,7 +218,7 @@ async function run(): Promise<void> {
     const init = await withTimeout(
       connection.initialize({
         protocolVersion: 1,
-        clientInfo: { name: 'devin-workspaces-p4-contract', version: '0.1.0' },
+        clientInfo: { name: 'agent-workspace-p4-contract', version: '0.1.0' },
         clientCapabilities: {},
       }),
       'initialize',

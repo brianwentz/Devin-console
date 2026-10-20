@@ -58,7 +58,7 @@ function projectFileList(dir: string): Set<string> {
   return set;
 }
 
-// --host wsl:<distro> / DEVIN_WORKSPACES_PROBE_HOST: run the same new+resume
+// --host wsl:<distro> / AGENT_WORKSPACE_PROBE_HOST: run the same new+resume
 // pair against the distro's `claude`, spawned through spawnSpec with the
 // captured -ilc environment (mirrors src/main/hosts.ts spawnOn — the probe
 // must not import Electron state).
@@ -209,7 +209,7 @@ async function run(): Promise<void> {
   const hostFlagIdx = process.argv.findIndex((a) => a === '--host');
   const probeHost =
     (hostFlagIdx >= 0 ? process.argv[hostFlagIdx + 1] : undefined) ??
-    process.env.DEVIN_WORKSPACES_PROBE_HOST;
+    process.env.AGENT_WORKSPACE_PROBE_HOST;
   if (probeHost?.startsWith('wsl:')) {
     await runHostProbe(sdk, probeHost.slice(4));
     return;

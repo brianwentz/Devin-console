@@ -25,7 +25,7 @@ const ENV_MARKER = '__DW_ENV__';
 const out: Record<string, unknown> = {
   at: new Date().toISOString(),
   platform: process.platform,
-  note: 'real WSL — no fake (DEVIN_WORKSPACES_TEST_WSL_* must not be set)',
+  note: 'real WSL — no fake (AGENT_WORKSPACE_TEST_WSL_* must not be set)',
 };
 
 function wslExists(): boolean {
@@ -293,9 +293,9 @@ async function main(): Promise<void> {
           { requireSuccess: false },
         );
         entry.inotify = ino.code === 0 && ino.stdout.toString('utf8').trim().length > 0;
-        const loop = await curl(name, `http://127.0.0.1:${hookPort}/devin-workspaces/hook/health`);
+        const loop = await curl(name, `http://127.0.0.1:${hookPort}/agent-workspace/hook/health`);
         const veth = vethAddr
-          ? await curl(name, `http://${vethAddr}:${hookPort}/devin-workspaces/hook/health`)
+          ? await curl(name, `http://${vethAddr}:${hookPort}/agent-workspace/hook/health`)
           : null;
         entry.hookReachability = {
           loopback: loop.stdout === '200' ? 'ok' : `unreachable(${loop.stdout})`,

@@ -28,7 +28,7 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     usage: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeUsageState()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.claudeUsageState()) as Promise<{
         status: string;
         accounts: {
           email: string | null;
@@ -50,7 +50,7 @@ function hooks(app: ElectronApplication) {
         };
       }>,
     refresh: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeUsageRefresh()) as Promise<void>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeUsageRefresh()) as Promise<void>,
   };
 }
 
@@ -66,7 +66,7 @@ test.beforeEach(async ({}, testInfo) => {
 test('usage: refresh fetches the fixture account + three limits', async () => {
   const fixtures = await startFixtureServers();
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const h = hooks(app);
   try {
@@ -96,7 +96,7 @@ test('usage: refresh fetches the fixture account + three limits', async () => {
 test('usage: tokens match the fixture transcript totals (Oct 2026)', async () => {
   const fixtures = await startFixtureServers();
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const h = hooks(app);
   try {
@@ -118,7 +118,7 @@ test('usage: tokens match the fixture transcript totals (Oct 2026)', async () =>
 
 test('usage: 401 → stale true from the seeded .usage-cache', async () => {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   // Seed the CLI-side stale cache (the service falls back to it on 401).
@@ -126,7 +126,7 @@ test('usage: 401 → stale true from the seeded .usage-cache', async () => {
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const h = hooks(app);
   // The fixture route reads FAKE_* env in the test process, not the app's.
@@ -152,13 +152,13 @@ test('usage: 401 → stale true from the seeded .usage-cache', async () => {
 
 test('usage: incremental scan — unchanged files reuse, appended lines count', async () => {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const h = hooks(app);
   const usageFile = join(
@@ -207,7 +207,7 @@ test('usage: incremental scan — unchanged files reuse, appended lines count', 
 test('usage: TEST_NOW in November → empty month, previousMonthTotal = October', async () => {
   const fixtures = await startFixtureServers();
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_NOW: '2026-11-03T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-11-03T12:00:00.000Z',
   });
   const h = hooks(app);
   try {
@@ -231,10 +231,10 @@ test('usage: TEST_NOW in November → empty month, previousMonthTotal = October'
 
 test('usage: fake WSL host contributes byHost + joins the same account', async () => {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   // Fake distro home: <uncRoot>\home\u — its claude dir gets credentials + a
   // transcript with usage so byHost['wsl:Fake'] is populated.
   const wslClaude = join(uncRoot, 'home', 'u', '.claude');
@@ -263,9 +263,9 @@ test('usage: fake WSL host contributes byHost + joins the same account', async (
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const h = hooks(app);
   try {
@@ -291,10 +291,10 @@ test('usage: fake WSL host contributes byHost + joins the same account', async (
 // to the distro's).
 test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart', async () => {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const wslClaude = join(uncRoot, 'home', 'u', '.claude');
   const WSL_PROJECT = '-home-u-race';
   mkdirSync(join(wslClaude, 'projects', WSL_PROJECT), { recursive: true });
@@ -322,9 +322,9 @@ test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart',
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const h = hooks(app);
   try {
@@ -333,7 +333,7 @@ test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart',
     // Hold the distro's CLAUDE_CONFIG_DIR swap open, then scan while it is
     // active. The hold resolves after the scan has finished.
     const hold = app.evaluate(
-      (_electron, ms) => (globalThis as any).__devinworkspaces.withConfigDirHold('wsl:Fake', ms),
+      (_electron, ms) => (globalThis as any).__agentworkspace.withConfigDirHold('wsl:Fake', ms),
       8_000,
     ) as Promise<{ envDuring: string | null; localDuring: string }>;
     await expect
@@ -379,7 +379,7 @@ test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart',
 
 test('usage: a poisoned local: cache key is pruned on the next scan', async () => {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   // A pre-fix cache: a local: key carrying a Linux-home project path.
@@ -397,7 +397,7 @@ test('usage: a poisoned local: cache key is pruned on the next scan', async () =
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const h = hooks(app);
   try {
@@ -419,10 +419,10 @@ test('usage: a poisoned local: cache key is pruned on the next scan', async () =
 
 test('usage: two accounts render as two gauge blocks (per-host account files)', async () => {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const wslClaude = join(uncRoot, 'home', 'u', '.claude');
   mkdirSync(join(wslClaude, 'projects'), { recursive: true });
   cpSync(join(CLAUDE_FIXTURE_HOME, '.credentials.json'), join(wslClaude, '.credentials.json'));
@@ -437,10 +437,10 @@ test('usage: two accounts render as two gauge blocks (per-host account files)', 
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
-    DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE: `tests/fixtures/claude-account.json;wsl:Fake=${wslAccountFile}`,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE: `tests/fixtures/claude-account.json;wsl:Fake=${wslAccountFile}`,
   });
   const h = hooks(app);
   try {

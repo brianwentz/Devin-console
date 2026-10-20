@@ -675,11 +675,11 @@ export class ClaudeSessions {
 
   // New chat session: cwd comes from the arg (the empty-state button) or a
   // directory picker (sidebar header / Ctrl+N). null cwd → dialog; in test
-  // mode DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD stands in for the picker.
+  // mode AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD stands in for the picker.
   async newSession(cwd: string | null): Promise<string | null> {
     let dir = cwd;
     if (!dir) {
-      const envCwd = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD?.trim() : '';
+      const envCwd = testMode ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD?.trim() : '';
       if (envCwd) dir = envCwd;
       else {
         const win = state.windowRef;
@@ -773,10 +773,10 @@ export class ClaudeSessions {
   }
 
   // Picks a directory (same seam as newSession(null): test mode reads
-  // DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD, else the folder dialog starting in
+  // AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD, else the folder dialog starting in
   // pickerDefaultPath()).
   private async pickWorkspaceDir(title: string): Promise<string | null> {
-    const envCwd = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD?.trim() : '';
+    const envCwd = testMode ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD?.trim() : '';
     if (envCwd) return envCwd;
     const win = state.windowRef;
     if (!win) return null;
@@ -957,9 +957,9 @@ export class ClaudeSessions {
   private workspaceOpts(): { workspaces: string[]; uncRoot?: string | undefined; uncHostId?: HostId | undefined } {
     return {
       workspaces: state.settings?.current.claude.workspaces ?? [],
-      ...(testMode && process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT
+      ...(testMode && process.env.AGENT_WORKSPACE_TEST_WSL_UNC_ROOT
         ? {
-            uncRoot: process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT,
+            uncRoot: process.env.AGENT_WORKSPACE_TEST_WSL_UNC_ROOT,
             uncHostId: hosts().list().find((h) => h.kind === 'wsl')?.id,
           }
         : {}),

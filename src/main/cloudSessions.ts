@@ -155,8 +155,8 @@ class CloudSessions {
     if (this.started) return;
     this.started = true;
     if (testMode) {
-      this.fixtureFile = process.env.DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS ?? null;
-      const cacheFile = process.env.DEVIN_WORKSPACES_TEST_CLOUD_CACHE ?? null;
+      this.fixtureFile = process.env.AGENT_WORKSPACE_TEST_CLOUD_SESSIONS ?? null;
+      const cacheFile = process.env.AGENT_WORKSPACE_TEST_CLOUD_CACHE ?? null;
       if (this.fixtureFile) {
         this.loadFixture('start');
       } else if (cacheFile) {

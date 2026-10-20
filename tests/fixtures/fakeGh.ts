@@ -1,5 +1,5 @@
 // Fake `gh` CLI for the Phase 6 pr-title fallback e2e
-// (DEVIN_WORKSPACES_TEST_GH_CMD → `node out/fixtures/fakeGh.cjs`).
+// (AGENT_WORKSPACE_TEST_GH_CMD → `node out/fixtures/fakeGh.cjs`).
 // `pr view <url> --json state,isDraft,title` → prints FAKE_GH_JSON verbatim;
 // anything else exits 1.
 const argv = process.argv.slice(2);

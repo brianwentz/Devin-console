@@ -23,7 +23,7 @@ import {
 function hostIdForWorkspace(path: string, hosts: HostStatus[]): string | null {
   const id = hostIdForPath(path);
   if (id !== 'local') return id;
-  const root = window.devinworkspaces.testWslUncRoot;
+  const root = window.agentworkspace.testWslUncRoot;
   if (root && path.startsWith(root)) {
     return hosts.find((h) => h.kind === 'wsl')?.id ?? 'wsl';
   }
@@ -115,15 +115,15 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
     const next = collapsed.includes(path)
       ? collapsed.filter((p) => p !== path)
       : [...collapsed, path];
-    void window.devinworkspaces.setSettings({ local: { collapsedWorkspaces: next } });
+    void window.agentworkspace.setSettings({ local: { collapsedWorkspaces: next } });
   };
 
   const selectSession = async (id: string) => {
     setError(null);
     const session = local?.sessions[id];
-    window.devinworkspaces.localActiveSession(id);
+    window.agentworkspace.localActiveSession(id);
     if (session && !session.loaded) {
-      const result = await window.devinworkspaces.localLoadSession(session.workspace, id);
+      const result = await window.agentworkspace.localLoadSession(session.workspace, id);
       if (!result.ok) setError(result.error);
     }
   };
@@ -135,28 +135,28 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
       return;
     }
     selectWorkspace(workspace);
-    const result = await window.devinworkspaces.localNewSession(workspace);
+    const result = await window.agentworkspace.localNewSession(workspace);
     if (!result.ok) setError(result.error);
-    else window.devinworkspaces.localActiveSession(result.value);
+    else window.agentworkspace.localActiveSession(result.value);
   };
 
   const addWorkspace = async () => {
-    const picked = await window.devinworkspaces.localPickWorkspace();
+    const picked = await window.agentworkspace.localPickWorkspace();
     if (picked.ok && picked.value) selectWorkspace(picked.value);
     else if (!picked.ok) setError(picked.error);
   };
 
   const refreshAll = () => {
-    for (const ws of workspaces) void window.devinworkspaces.localListSessions(ws);
+    for (const ws of workspaces) void window.agentworkspace.localListSessions(ws);
   };
 
   const openTerminalHere = (path: string) => {
-    if (!state!.terminalOpen) window.devinworkspaces.terminalToggle();
-    void window.devinworkspaces.terminalOpen({ kind: 'shell', cwd: path });
+    if (!state!.terminalOpen) window.agentworkspace.terminalToggle();
+    void window.agentworkspace.terminalOpen({ kind: 'shell', cwd: path });
   };
 
   const workspaceMenu = async (path: string, x: number, y: number) => {
-    const { action } = await window.devinworkspaces.localContextMenu({
+    const { action } = await window.agentworkspace.localContextMenu({
       kind: 'workspace',
       path,
       x,
@@ -170,7 +170,7 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
 
   const sessionMenu = async (id: string, x: number, y: number) => {
     const session = local?.sessions[id];
-    const { action } = await window.devinworkspaces.localContextMenu({
+    const { action } = await window.agentworkspace.localContextMenu({
       kind: 'session',
       sessionId: id,
       x,
@@ -179,7 +179,7 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
     if (action === 'open-terminal' && session) {
       void selectSession(id).then(() => requestTerminal(id));
     } else if (action === 'delete' && session) {
-      void window.devinworkspaces.localSessionDelete(id).then((result) => {
+      void window.agentworkspace.localSessionDelete(id).then((result) => {
         if (!result.ok) setError(result.error);
       });
     }
@@ -187,7 +187,7 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
   };
 
   const headerMenu = async (x: number, y: number) => {
-    const { action } = await window.devinworkspaces.localContextMenu({ kind: 'header', x, y });
+    const { action } = await window.agentworkspace.localContextMenu({ kind: 'header', x, y });
     if (action === 'add') await addWorkspace();
     return action;
   };
@@ -195,16 +195,16 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
   const deleteAllSessions = async (path: string) => {
     const ids = sessionsIn(path).map((s) => s.id);
     setConfirmDeleteAll(null);
-    const result = await window.devinworkspaces.localSessionDeleteAll(path);
+    const result = await window.agentworkspace.localSessionDeleteAll(path);
     if (!result.ok) {
       setError(result.error);
       return;
     }
-    const remaining = await window.devinworkspaces.getLocalState();
+    const remaining = await window.agentworkspace.getLocalState();
     const gone = new Set(ids.filter((id) => !(id in remaining.sessions)));
     for (const id of gone) clearDraft(id);
     if (selectedSessionId && gone.has(selectedSessionId)) {
-      window.devinworkspaces.localActiveSession(null);
+      window.agentworkspace.localActiveSession(null);
     }
   };
 
@@ -289,11 +289,11 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
           'data-status': local?.agents[path]?.status ?? 'stopped',
         })}
         onToggle={toggleWorkspace}
-        onReorder={(paths) => void window.devinworkspaces.localWorkspaceReorder(paths)}
+        onReorder={(paths) => void window.agentworkspace.localWorkspaceReorder(paths)}
         onReorderSessions={(section, ids) =>
-          void window.devinworkspaces.localSessionReorder(section, ids)
+          void window.agentworkspace.localSessionReorder(section, ids)
         }
-        onRename={(path, label) => void window.devinworkspaces.localWorkspaceRename(path, label)}
+        onRename={(path, label) => void window.agentworkspace.localWorkspaceRename(path, label)}
         onNewSession={(path) => void newSession(path)}
         onAdd={() => void addWorkspace()}
         onRefresh={refreshAll}

@@ -5,7 +5,15 @@
 // change still finds the old ones.
 
 /** Path prefix of every hook URL we register; the event name follows it. */
-export const HOOK_PATH_PREFIX = '/devin-workspaces/hook/';
+export const HOOK_PATH_PREFIX = '/agent-workspace/hook/';
+
+/**
+ * Prefixes written by pre-rename releases. Still recognised by isOurHook (so
+ * a legacy settings.json block is stripped and rewritten) and by the hook
+ * server (so terminals started before the upgrade keep reporting). Drop in a
+ * later release.
+ */
+export const LEGACY_HOOK_PATH_PREFIXES = ['/devin-workspaces/hook/'] as const;
 
 /**
  * Events we inject. `SessionStart` is first: older CLIs never fired it via
@@ -39,9 +47,11 @@ export function hookUrl(port: number, event: string, addr = '127.0.0.1'): string
  * listener on any port: loopback or any IPv4 (vEthernet in NAT mode). */
 export function isOurHook(entry: unknown): boolean {
   if (!isObject(entry) || entry.type !== 'http' || typeof entry.url !== 'string') return false;
+  const url = entry.url;
+  const prefixes: readonly string[] = [HOOK_PATH_PREFIX, ...LEGACY_HOOK_PATH_PREFIXES];
   return (
-    (entry.url.startsWith('http://127.0.0.1:') || /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(entry.url)) &&
-    entry.url.includes(HOOK_PATH_PREFIX)
+    (url.startsWith('http://127.0.0.1:') || /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(url)) &&
+    prefixes.some((prefix) => url.includes(prefix))
   );
 }
 

@@ -37,12 +37,12 @@ const windowInfo = (app: ElectronApplication) =>
   }>;
 
 test('quiet (default): invisible + never activated; screenshot still renders; geometry round-trips', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-quiet-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-quiet-'));
   const logFile = join(profile, 'events.jsonl');
   // Pin '1' so the case is quiet even when the whole suite runs headed
-  // (test:e2e:headed exports DEVIN_WORKSPACES_TEST_QUIET=0 process-wide).
+  // (test:e2e:headed exports AGENT_WORKSPACE_TEST_QUIET=0 process-wide).
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_QUIET: '1',
+    AGENT_WORKSPACE_TEST_QUIET: '1',
   });
   try {
     const shell = await shellPage(app);
@@ -58,7 +58,7 @@ test('quiet (default): invisible + never activated; screenshot still renders; ge
     const shot = await shell.screenshot();
     expect(shot.length).toBeGreaterThan(0);
     const render = await app.evaluate(async () => {
-      const contents = (globalThis as any).__devinworkspaces.getShellWebContents() as
+      const contents = (globalThis as any).__agentworkspace.getShellWebContents() as
         Electron.WebContents;
       const image = await contents.capturePage();
       const { width, height } = image.getSize();
@@ -77,7 +77,7 @@ test('quiet (default): invisible + never activated; screenshot still renders; ge
     // Geometry still round-trips (the parked-window approach broke this).
     await app.evaluate(
       (_e, size) =>
-        (globalThis as any).__devinworkspaces.setWindowSize(size.w, size.h),
+        (globalThis as any).__agentworkspace.setWindowSize(size.w, size.h),
       { w: 1000, h: 800 },
     );
     const small = (await windowInfo(app)).bounds!;
@@ -85,7 +85,7 @@ test('quiet (default): invisible + never activated; screenshot still renders; ge
     expect(small.height).toBe(800);
     await app.evaluate(
       (_e, size) =>
-        (globalThis as any).__devinworkspaces.setWindowSize(size.w, size.h),
+        (globalThis as any).__agentworkspace.setWindowSize(size.w, size.h),
       { w: 1400, h: 900 },
     );
     const full = (await windowInfo(app)).bounds!;
@@ -97,11 +97,11 @@ test('quiet (default): invisible + never activated; screenshot still renders; ge
   }
 });
 
-test('DEVIN_WORKSPACES_TEST_QUIET=0: headed run keeps the window visible', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-headed-'));
+test('AGENT_WORKSPACE_TEST_QUIET=0: headed run keeps the window visible', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-headed-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_QUIET: '0',
+    AGENT_WORKSPACE_TEST_QUIET: '0',
   });
   try {
     await shellPage(app);

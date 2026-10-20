@@ -35,7 +35,7 @@ function HostsBlock() {
       envCaptureDisabled: boolean;
     }>,
   ): void => {
-    void window.devinworkspaces.commitSettings({
+    void window.agentworkspace.commitSettings({
       hosts: { overrides: { [id]: patch } },
     });
   };
@@ -80,7 +80,7 @@ function HostsBlock() {
                   data-host-enabled
                   checked={host.state !== 'disabled' && host.state !== 'stopped'}
                   onChange={(event) => {
-                    void window.devinworkspaces.hostsSetEnabled(
+                    void window.agentworkspace.hostsSetEnabled(
                       host.id,
                       event.target.checked,
                     );
@@ -93,7 +93,7 @@ function HostsBlock() {
               type="button"
               className="text-xs text-[#6e9bd0]"
               data-host-recheck
-              onClick={() => void window.devinworkspaces.hostsRefresh(host.id)}
+              onClick={() => void window.agentworkspace.hostsRefresh(host.id)}
             >
               Re-check
             </button>
@@ -219,7 +219,7 @@ export function GeneralTab() {
           aria-invalid={errors.terminalShell ? 'true' : undefined}
           onChange={(event) => updateDraft({ terminalShell: event.target.value })}
           placeholder={
-            window.devinworkspaces.platform === 'darwin'
+            window.agentworkspace.platform === 'darwin'
               ? 'e.g. /bin/zsh -l'
               : 'e.g. pwsh.exe or wsl.exe -d Ubuntu'
           }

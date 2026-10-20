@@ -230,7 +230,7 @@ export class DevinLocalHost {
     log('local', 'host-created', {
       detail: {
         cli: this.command?.file ?? null,
-        testCommand: Boolean(this.options.testMode && process.env.DEVIN_WORKSPACES_LOCAL_AGENT_CMD),
+        testCommand: Boolean(this.options.testMode && process.env.AGENT_WORKSPACE_LOCAL_AGENT_CMD),
         workspaces: this.workspaces.length,
       },
     });
@@ -239,7 +239,7 @@ export class DevinLocalHost {
   // The production path spawns the external `devin` binary (RunAsNode is fused
   // off, so we never fork Node). A full command override exists only in test mode.
   private resolveCommand(): HostCommand | null {
-    const testCommand = this.options.testMode ? process.env.DEVIN_WORKSPACES_LOCAL_AGENT_CMD : undefined;
+    const testCommand = this.options.testMode ? process.env.AGENT_WORKSPACE_LOCAL_AGENT_CMD : undefined;
     if (testCommand) {
       const [file, ...args] = testCommand.split(/\s+/).filter(Boolean);
       if (!file) return null;
@@ -476,7 +476,7 @@ export class DevinLocalHost {
         withTimeout(
           connection.initialize({
             protocolVersion: 1,
-            clientInfo: { name: 'devin-workspaces', version: '0.1.0' },
+            clientInfo: { name: 'agent-workspace', version: '0.1.0' },
             clientCapabilities: {},
           }),
           INITIALIZE_TIMEOUT_MS,

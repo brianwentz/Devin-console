@@ -36,62 +36,62 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
     state: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.state()) as Promise<any>,
+      evaluate(() => (globalThis as any).__agentworkspace.state()) as Promise<any>,
     listPrs: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.listPrs()) as Promise<SessionPr[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.listPrs()) as Promise<SessionPr[]>,
     prsOpen: (sessionId: string, url: string) =>
       app.evaluate(
         (_e, a: { sessionId: string; url: string }) =>
-          (globalThis as any).__devinworkspaces.prsOpen(a.sessionId, a.url),
+          (globalThis as any).__agentworkspace.prsOpen(a.sessionId, a.url),
         { sessionId, url },
       ) as Promise<void>,
     claudeRecordPr: (sessionId: string, url: string) =>
       app.evaluate(
         (_e, a: { sessionId: string; url: string }) =>
-          (globalThis as any).__devinworkspaces.claudeRecordPr(a.sessionId, a.url),
+          (globalThis as any).__agentworkspace.claudeRecordPr(a.sessionId, a.url),
         { sessionId, url },
       ) as Promise<void>,
     claudePrs: (sessionId: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudePrs(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudePrs(v),
         sessionId,
       ) as Promise<{ url: string; state: string | null }[]>,
     claudeRefreshPrStates: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeRefreshPrStates()) as Promise<void>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeRefreshPrStates()) as Promise<void>,
     prTitlesSeed: (url: string, info: { title: string | null; state: string | null }) =>
       app.evaluate(
         (_e, a: { url: string; info: { title: string | null; state: string | null } }) =>
-          (globalThis as any).__devinworkspaces.prTitlesSeed(a.url, a.info),
+          (globalThis as any).__agentworkspace.prTitlesSeed(a.url, a.info),
         { url, info },
       ) as Promise<void>,
     notifications: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.notifications()) as Promise<any[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.notifications()) as Promise<any[]>,
     setSurface: (s: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v),
         s,
       ) as Promise<void>,
     claudeSelect: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeSelect(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeSelect(v),
         id,
       ) as Promise<void>,
     claudeNewSession: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeNewSession()) as Promise<string>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeNewSession()) as Promise<string>,
     claudePrompt: (id: string, text: string) =>
       app.evaluate(
         (_e, a: { id: string; text: string }) =>
-          (globalThis as any).__devinworkspaces.claudePrompt(a.id, a.text),
+          (globalThis as any).__agentworkspace.claudePrompt(a.id, a.text),
         { id, text },
       ) as Promise<void>,
   };
 }
 
 const LAUNCH_ENV = {
-  DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-  DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+  AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
 };
 
 test('recordPr lands in the PR panel + sidebar badge', async () => {
@@ -116,7 +116,7 @@ test('recordPr lands in the PR panel + sidebar badge', async () => {
     expect(row?.prs.open).toBe(1);
     // Panel row carries source + session title.
     const shell = await shellPage(app);
-    await evaluateInShell(app, 'window.devinworkspaces.prsPanel(true)');
+    await evaluateInShell(app, 'window.agentworkspace.prsPanel(true)');
     await expect(
       shell.locator(`[data-pr-url="${url}"][data-source="claude"]`),
     ).toBeVisible({ timeout: 10_000 });
@@ -265,7 +265,7 @@ test('chat echo with a PR link records + auto-opens the tab', async () => {
   const url = `${fixtures.githubUrl}/cloudbeds/testrepo/pull/46`;
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     ...LAUNCH_ENV,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     FAKE_CLAUDE_PR_URL: url,
   });
   const h = hooks(app);
@@ -288,7 +288,7 @@ test('chat echo with a PR link records + auto-opens the tab', async () => {
 });
 
 test('legacy prUrls registry migrates to prs entries on load', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const url = `${fixtures.githubUrl}/cloudbeds/testrepo/pull/47`;
@@ -343,7 +343,7 @@ test('gh fallback fills state when the page fetch cannot', async () => {
   const url = `${fixtures.githubUrl}/cloudbeds/testrepo/pull/48`;
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     ...LAUNCH_ENV,
-    DEVIN_WORKSPACES_TEST_GH_CMD: `node ${FAKE_GH}`,
+    AGENT_WORKSPACE_TEST_GH_CMD: `node ${FAKE_GH}`,
     FAKE_GH_JSON: JSON.stringify({ state: 'MERGED', isDraft: false, title: 'Via gh' }),
   });
   const h = hooks(app);

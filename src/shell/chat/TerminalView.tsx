@@ -51,7 +51,7 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
     term.loadAddon(
       new WebLinksAddon((event, uri) => {
         event.preventDefault();
-        window.devinworkspaces.localOpenLink(uri);
+        window.agentworkspace.localOpenLink(uri);
       }),
     );
     term.open(container);
@@ -59,18 +59,18 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
     // (bracketed-paste wrapped) text through onData → terminalInput.
     const copySelection = () => {
       if (term.hasSelection()) {
-        window.devinworkspaces.clipboardWriteText(term.getSelection());
+        window.agentworkspace.clipboardWriteText(term.getSelection());
         term.clearSelection();
       }
     };
     const pasteClipboard = () => {
-      void window.devinworkspaces.clipboardReadText().then((text) => {
+      void window.agentworkspace.clipboardReadText().then((text) => {
         if (text) term.paste(text);
       });
     };
     term.attachCustomKeyEventHandler((event) => {
       const action = resolveTerminalKey(event, {
-        platform: window.devinworkspaces.platform,
+        platform: window.agentworkspace.platform,
         hasSelection: term.hasSelection(),
       });
       if (action === 'copy') {
@@ -89,11 +89,11 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
     });
     termRef.current = term;
     term.onData((data) => {
-      window.devinworkspaces.terminalInput(idRef.current, data);
+      window.agentworkspace.terminalInput(idRef.current, data);
     });
     // OSC 0/2 titles become dock tab labels; never logged.
     term.onTitleChange((title) => {
-      window.devinworkspaces.terminalTitle(idRef.current, title);
+      window.agentworkspace.terminalTitle(idRef.current, title);
     });
     try {
       fit.fit();
@@ -107,18 +107,18 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
       } catch {
         return;
       }
-      window.devinworkspaces.terminalResize(idRef.current, term.cols, term.rows);
+      window.agentworkspace.terminalResize(idRef.current, term.cols, term.rows);
     });
     observer.observe(container);
 
-    const offData = window.devinworkspaces.onTerminalData((payload) => {
+    const offData = window.agentworkspace.onTerminalData((payload) => {
       if (payload.id === idRef.current) term.write(payload.data);
     });
-    const offExit = window.devinworkspaces.onTerminalExit((payload) => {
+    const offExit = window.agentworkspace.onTerminalExit((payload) => {
       if (payload.id === idRef.current) setExitCode(payload.exitCode);
     });
 
-    window.devinworkspaces.terminalResize(id, term.cols, term.rows);
+    window.agentworkspace.terminalResize(id, term.cols, term.rows);
 
     return () => {
       offData();
@@ -163,10 +163,10 @@ export function TerminalView({ id, active = false, onRestart }: TerminalViewProp
           const term = termRef.current;
           if (!term) return;
           if (term.hasSelection()) {
-            window.devinworkspaces.clipboardWriteText(term.getSelection());
+            window.agentworkspace.clipboardWriteText(term.getSelection());
             term.clearSelection();
           } else {
-            void window.devinworkspaces.clipboardReadText().then((text) => {
+            void window.agentworkspace.clipboardReadText().then((text) => {
               if (text) term.paste(text);
             });
           }

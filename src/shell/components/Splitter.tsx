@@ -60,10 +60,10 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
       if (event.key === 'Escape' && dragging.current) {
         event.preventDefault();
         reset();
-        window.devinworkspaces.dragCancel('escape');
+        window.agentworkspace.dragCancel('escape');
       }
     };
-    const offReset = window.devinworkspaces.onDragReset(reset);
+    const offReset = window.agentworkspace.onDragReset(reset);
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -108,11 +108,11 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
         dragging.current = true;
         setDraggingState(true);
         document.body.classList.add(axis === 'y' ? 'dragging-y' : 'dragging');
-        window.devinworkspaces.dragStart(axis, currentPos(axis, pointerPos(event), chrome));
+        window.agentworkspace.dragStart(axis, currentPos(axis, pointerPos(event), chrome));
       }}
       onPointerMove={(event) => {
         if (!dragging.current) return;
-        window.devinworkspaces.dragMove(currentPos(axis, pointerPos(event), chrome));
+        window.agentworkspace.dragMove(currentPos(axis, pointerPos(event), chrome));
       }}
       onPointerUp={(event) => {
         if (!dragging.current) return;
@@ -120,7 +120,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
         setDraggingState(false);
         document.body.classList.remove('dragging');
         document.body.classList.remove('dragging-y');
-        window.devinworkspaces.dragEnd(currentPos(axis, pointerPos(event), chrome));
+        window.agentworkspace.dragEnd(currentPos(axis, pointerPos(event), chrome));
       }}
       onPointerCancel={() => {
         if (!dragging.current) return;
@@ -128,7 +128,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
         setDraggingState(false);
         document.body.classList.remove('dragging');
         document.body.classList.remove('dragging-y');
-        window.devinworkspaces.dragCancel();
+        window.agentworkspace.dragCancel();
       }}
     >
       <div className="splitter-line" />

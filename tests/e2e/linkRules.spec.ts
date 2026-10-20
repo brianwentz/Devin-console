@@ -25,7 +25,7 @@ test.afterAll(async () => {
 async function launch(profile: string, logFile: string) {
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
   return app;
 }
@@ -71,11 +71,11 @@ function setRuleControl(
 }
 
 test('a prefix rule routes matching links to a pane tab and logs rule-tab', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-linkrules-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-linkrules-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'links');
     await expect
       .poll(async () => shell(app, `Boolean(document.getElementById('linkRuleAdd'))`))
@@ -98,7 +98,7 @@ test('a prefix rule routes matching links to a pane tab and logs rule-tab', asyn
 
     // A matching link opens a pane tab and logs rule-tab (never the pattern).
     await app.evaluate(
-      (_e, url: string) => (globalThis as any).__devinworkspaces.routeLink(url),
+      (_e, url: string) => (globalThis as any).__agentworkspace.routeLink(url),
       `${fixtures.idpUrl}/away`,
     );
     const entry = await waitForDecision(logFile, 'rule-tab', '/away');
@@ -107,7 +107,7 @@ test('a prefix rule routes matching links to a pane tab and logs rule-tab', asyn
     await waitForTabCount(app, 1);
 
     // Disabling the rule sends the link back to the system browser.
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'links');
     await expect
       .poll(async () => shell(app, `Boolean(document.querySelector('#linkRulesList [data-rule-enabled]'))`))
@@ -119,7 +119,7 @@ test('a prefix rule routes matching links to a pane tab and logs rule-tab', asyn
       .toBe(false);
 
     await app.evaluate(
-      (_e, url: string) => (globalThis as any).__devinworkspaces.routeLink(url),
+      (_e, url: string) => (globalThis as any).__agentworkspace.routeLink(url),
       `${fixtures.idpUrl}/elsewhere`,
     );
     await waitForDecision(logFile, 'external', 'elsewhere');

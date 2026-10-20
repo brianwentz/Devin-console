@@ -44,7 +44,7 @@ function PasswordRow({ entry }: { entry: CredentialEntry }) {
   }, []);
 
   const show = async () => {
-    const value = await window.devinworkspaces.revealCredential(entry.id);
+    const value = await window.agentworkspace.revealCredential(entry.id);
     if (value === null) {
       setError('Could not decrypt this password');
       return;
@@ -61,7 +61,7 @@ function PasswordRow({ entry }: { entry: CredentialEntry }) {
   };
 
   const copy = async () => {
-    const value = revealed ?? (await window.devinworkspaces.revealCredential(entry.id));
+    const value = revealed ?? (await window.agentworkspace.revealCredential(entry.id));
     if (value === null) {
       setError('Could not decrypt this password');
       return;
@@ -76,7 +76,7 @@ function PasswordRow({ entry }: { entry: CredentialEntry }) {
     const patch: { username?: string; password?: string } = {};
     if (editUsername && editUsername !== entry.username) patch.username = editUsername;
     if (editPassword) patch.password = editPassword;
-    const result = await window.devinworkspaces.updateCredential(entry.id, patch);
+    const result = await window.agentworkspace.updateCredential(entry.id, patch);
     if (!result.ok) {
       setError(result.error);
       return;
@@ -93,7 +93,7 @@ function PasswordRow({ entry }: { entry: CredentialEntry }) {
       return;
     }
     if (deleteTimer.current) clearTimeout(deleteTimer.current);
-    void window.devinworkspaces.deleteCredential(entry.id);
+    void window.agentworkspace.deleteCredential(entry.id);
   };
 
   return (
@@ -244,7 +244,7 @@ export function PasswordsSection({
       return;
     }
     setError(null);
-    void window.devinworkspaces
+    void window.agentworkspace
       .saveCredential({ origin, username, password })
       .then((result) => {
         if (!result.ok) setError(result.error);

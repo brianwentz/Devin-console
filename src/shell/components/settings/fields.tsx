@@ -86,7 +86,7 @@ export function PickerFolderField({
   onChange: (next: string) => void;
 }) {
   const browse = async () => {
-    const picked = await window.devinworkspaces.dialogPickFolder(
+    const picked = await window.agentworkspace.dialogPickFolder(
       'Choose where folder pickers start',
       value.trim() || undefined,
     );

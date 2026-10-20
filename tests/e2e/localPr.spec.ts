@@ -20,7 +20,7 @@ type Hooks = {
   terminalInput(id: string, data: string): boolean;
 };
 
-type G = typeof globalThis & { __devinworkspaces: Hooks };
+type G = typeof globalThis & { __agentworkspace: Hooks };
 
 let fixtures: FixtureServers;
 
@@ -33,7 +33,7 @@ test.afterAll(async () => {
 });
 
 async function localState(app: ElectronApplication): Promise<LocalState> {
-  return app.evaluate(() => (globalThis as G).__devinworkspaces.localState());
+  return app.evaluate(() => (globalThis as G).__agentworkspace.localState());
 }
 
 async function shellClick(app: ElectronApplication, selector: string): Promise<boolean> {
@@ -64,35 +64,35 @@ async function autoOpenEvents(app: ElectronApplication, logFile: string) {
 }
 
 test('local PR urls auto-open lazy tabs from chat and the devin pty', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-lpr-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-lpr-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const chatPrUrl = `${fixtures.githubUrl}/acme/widgets/pull/7`;
   const termPrUrl = `${fixtures.githubUrl}/acme/widgets/pull/8`;
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_LINK_URL: chatPrUrl,
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
   });
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('local'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('local'));
     const page = await shellPage(app);
     await page.waitForSelector('#localPanel', { timeout: 10_000 });
 
     const ws = await app.evaluate(
-      (_e, p) => (globalThis as G).__devinworkspaces.localAddWorkspace(p as string),
+      (_e, p) => (globalThis as G).__agentworkspace.localAddWorkspace(p as string),
       workspace,
     );
     await expect.poll(async () => (await localState(app)).agents[ws!]?.status).toBe('ready');
     const sessionA = await app.evaluate(
-      (_e, w) => (globalThis as G).__devinworkspaces.localNewSession(w as string),
+      (_e, w) => (globalThis as G).__agentworkspace.localNewSession(w as string),
       ws,
     );
     await page.waitForSelector(`.session-item[data-session-id="${sessionA}"]`);
@@ -138,7 +138,7 @@ test('local PR urls auto-open lazy tabs from chat and the devin pty', async () =
       (t) => t.kind === 'devin' && t.sessionId === sessionA,
     )!.id;
     await app.evaluate(
-      (_e, args) => (globalThis as G).__devinworkspaces.terminalInput(args.id, args.data),
+      (_e, args) => (globalThis as G).__agentworkspace.terminalInput(args.id, args.data),
       { id: ptyA, data: `${termPrUrl}\r` },
     );
     await expect.poll(async () => (await state(app)).tabs.tabs.length).toBe(2);
@@ -150,12 +150,12 @@ test('local PR urls auto-open lazy tabs from chat and the devin pty', async () =
     // Settings off → nothing auto-opens.
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ prs: { autoOpenTabs: false } })`,
+      `window.agentworkspace.setSettings({ prs: { autoOpenTabs: false } })`,
     );
     const mark = (await readEvents(logFile)).length;
     const offPrUrl = `${fixtures.githubUrl}/acme/widgets/pull/9`;
     await app.evaluate(
-      (_e, args) => (globalThis as G).__devinworkspaces.terminalInput(args.id, args.data),
+      (_e, args) => (globalThis as G).__agentworkspace.terminalInput(args.id, args.data),
       { id: ptyA, data: `${offPrUrl}\r` },
     );
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -169,7 +169,7 @@ test('local PR urls auto-open lazy tabs from chat and the devin pty', async () =
     // Restore the setting for the next part.
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ prs: { autoOpenTabs: true } })`,
+      `window.agentworkspace.setSettings({ prs: { autoOpenTabs: true } })`,
     );
 
     void app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
@@ -201,17 +201,17 @@ test('local PR urls auto-open lazy tabs from chat and the devin pty', async () =
 });
 
 test('xterm web links: clicking a PR url in the dock terminal routes like a chat link', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-lxlink-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-lxlink-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const prUrl = `${fixtures.githubUrl}/acme/widgets/pull/11`;
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
   });
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
     const page = await shellPage(app);
 
@@ -228,7 +228,7 @@ test('xterm web links: clicking a PR url in the dock terminal routes like a chat
 
     // Echo a PR URL into the dock so xterm renders it as a link row.
     await app.evaluate(
-      (_e, args) => (globalThis as G).__devinworkspaces.terminalInput(args.id, args.data),
+      (_e, args) => (globalThis as G).__agentworkspace.terminalInput(args.id, args.data),
       { id: dock, data: `${prUrl}\r` },
     );
     const mark = (await readEvents(logFile)).length;

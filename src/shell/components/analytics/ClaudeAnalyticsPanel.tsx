@@ -23,10 +23,10 @@ const hostChip = (host: string) => (
 );
 
 // Tick once a minute so "resets in …" / "Updated … ago" stay current. In
-// test mode DEVIN_WORKSPACES_TEST_NOW pins the clock so e2e/screenshots are
+// test mode AGENT_WORKSPACE_TEST_NOW pins the clock so e2e/screenshots are
 // deterministic (mirrors the main-process service's now()).
 function useMinuteNow(): number {
-  const testNow = (window.devinworkspaces as unknown as { testNow?: string | null }).testNow;
+  const testNow = (window.agentworkspace as unknown as { testNow?: string | null }).testNow;
   const pinned = testNow ? Date.parse(testNow) : NaN;
   const [now, setNow] = useState(() => (Number.isFinite(pinned) ? pinned : Date.now()));
   useEffect(() => {

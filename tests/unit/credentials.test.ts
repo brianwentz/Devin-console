@@ -154,7 +154,7 @@ describe('CredentialStore', () => {
     decrypt: async (value) => value.toString().replace(/^enc:/, ''),
   });
   const makeDir = () => {
-    const dir = mkdtempSync(join(tmpdir(), 'devin-workspaces-creds-'));
+    const dir = mkdtempSync(join(tmpdir(), 'agent-workspace-creds-'));
     dirs.push(dir);
     return dir;
   };

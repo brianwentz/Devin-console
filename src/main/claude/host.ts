@@ -391,7 +391,7 @@ export class ClaudeHost {
     } else if (optionId === 'allow_always') {
       pending.resolve({ behavior: 'allow', allowAlways: true });
     } else {
-      pending.resolve({ behavior: 'deny', message: 'Denied in Devin Workspaces' });
+      pending.resolve({ behavior: 'deny', message: 'Denied in Agent Workspace' });
     }
     log('claude', 'claude-permission', {
       detail: { sessionId: id, tool: pending.tool, decision: optionId },
@@ -704,7 +704,7 @@ export class ClaudeHost {
           resolve({ behavior: 'allow', updatedInput: input });
           return;
         }
-        resolve(result ?? { behavior: 'deny', message: 'Denied in Devin Workspaces' });
+        resolve(result ?? { behavior: 'deny', message: 'Denied in Agent Workspace' });
       };
       const onAbort = () => {
         this.pendingPermissions.delete(`${sessionId}:${requestId}`);

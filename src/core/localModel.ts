@@ -155,7 +155,7 @@ export type LocalState = {
 };
 
 export const INSTALL_GUIDANCE =
-  'The Devin CLI was not found on PATH. Install it from https://docs.devin.ai/desktop and restart Devin Workspaces, or set local.devinPath in settings.json.';
+  'The Devin CLI was not found on PATH. Install it from https://docs.devin.ai/desktop and restart Agent Workspace, or set local.devinPath in settings.json.';
 
 export function emptyLocalState(cliPath: string | null = null): LocalState {
   return { cliPath, installGuidance: cliPath ? '' : INSTALL_GUIDANCE, agents: {}, sessions: {} };

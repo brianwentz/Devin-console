@@ -44,7 +44,7 @@ type Hooks = {
   clipboardRead(): string;
 };
 
-type G = typeof globalThis & { __devinworkspaces: Hooks };
+type G = typeof globalThis & { __agentworkspace: Hooks };
 
 const TERMINAL_CMD = 'node out/fixtures/fakePty.cjs';
 
@@ -74,34 +74,34 @@ function pidAlive(pid: number): boolean {
 }
 
 test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphans on quit', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-term-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-term-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
 
     // A path outside the configured workspaces must be rejected.
     const denied = await app.evaluate(
-      (_e, path) => (globalThis as G).__devinworkspaces.terminalOpen({ kind: 'devin', workspace: path as string, sessionId: 'deny-session' }),
+      (_e, path) => (globalThis as G).__agentworkspace.terminalOpen({ kind: 'devin', workspace: path as string, sessionId: 'deny-session' }),
       tmpdir(),
     );
     expect(denied.ok).toBe(false);
     const added = await app.evaluate(
-      (_e, path) => (globalThis as G).__devinworkspaces.localAddWorkspace(path),
+      (_e, path) => (globalThis as G).__agentworkspace.localAddWorkspace(path),
       workspace,
     );
     expect(added).toBeTruthy();
     const opened = await app.evaluate(
-      (_e, ws) => (globalThis as G).__devinworkspaces.terminalOpen({ kind: 'devin', workspace: ws as string, sessionId: 'sess-term' }),
+      (_e, ws) => (globalThis as G).__agentworkspace.terminalOpen({ kind: 'devin', workspace: ws as string, sessionId: 'sess-term' }),
       added,
     );
     expect(opened.ok).toBe(true);
@@ -111,30 +111,30 @@ test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphan
     // Fake pty announces readiness.
     await expect
       .poll(async () =>
-        app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id),
+        app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), id),
       )
       .toContain('ready');
 
     // Input echoes back through the pty.
     await app.evaluate(
-      (_e, args) => (globalThis as G).__devinworkspaces.terminalInput(args.id, args.data),
+      (_e, args) => (globalThis as G).__agentworkspace.terminalInput(args.id, args.data),
       { id, data: 'ping\r' },
     );
     await expect
       .poll(async () =>
-        app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id),
+        app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), id),
       )
       .toContain('echo:ping');
 
     expect(
       await app.evaluate(
-        (_e, args) => (globalThis as G).__devinworkspaces.terminalResize(args.id, args.c, args.r),
+        (_e, args) => (globalThis as G).__agentworkspace.terminalResize(args.id, args.c, args.r),
         { id, c: 80, r: 24 },
       ),
     ).toBe(true);
 
     const pid = await app.evaluate(
-      (_e, tid) => (globalThis as G).__devinworkspaces.terminalPid(tid as string),
+      (_e, tid) => (globalThis as G).__agentworkspace.terminalPid(tid as string),
       id,
     );
     expect(pid).toBeTruthy();
@@ -142,13 +142,13 @@ test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphan
     // Shell DOM: Terminal tab shows an xterm surface (per-session pty — the
     // hook-opened one belongs to 'sess-term', the session gets its own).
     await expect
-      .poll(async () => (await app.evaluate(() => (globalThis as G).__devinworkspaces.localState())).agents[added!]?.status)
+      .poll(async () => (await app.evaluate(() => (globalThis as G).__agentworkspace.localState())).agents[added!]?.status)
       .toBe('ready');
     const uiSessionId = await app.evaluate(
-      (_e, w) => (globalThis as G).__devinworkspaces.localNewSession(w as string),
+      (_e, w) => (globalThis as G).__agentworkspace.localNewSession(w as string),
       added,
     );
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('local'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('local'));
     const page = await shellPage(app);
     await page.waitForSelector(`.session-item[data-session-id="${uiSessionId}"]`, { timeout: 10000 });
     await page.click(`.session-item[data-session-id="${uiSessionId}"]`);
@@ -157,18 +157,18 @@ test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphan
     await page.waitForSelector('.xterm', { timeout: 10000 });
 
     // Close kills the child process.
-    await app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalClose(tid as string), id);
+    await app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalClose(tid as string), id);
     await expect.poll(async () => pidAlive(pid!)).toBe(false);
 
     // A second terminal left open is disposed on quit — no orphan conhost/node.
     const opened2 = await app.evaluate(
-      (_e, ws) => (globalThis as G).__devinworkspaces.terminalOpen({ kind: 'devin', workspace: ws as string, sessionId: 'sess-term' }),
+      (_e, ws) => (globalThis as G).__agentworkspace.terminalOpen({ kind: 'devin', workspace: ws as string, sessionId: 'sess-term' }),
       added,
     );
     expect(opened2.ok).toBe(true);
     const pid2 = opened2.ok
       ? await app.evaluate(
-          (_e, tid) => (globalThis as G).__devinworkspaces.terminalPid(tid as string),
+          (_e, tid) => (globalThis as G).__agentworkspace.terminalPid(tid as string),
           opened2.id,
         )
       : null;
@@ -210,23 +210,23 @@ test('terminal: opens a pty, echoes input, resizes, closes, and leaves no orphan
 });
 
 test('terminal dock: rail toggle, shell tabs, surface gating, persisted height', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-dock-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-dock-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
   });
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
     const page = await shellPage(app);
     await page.waitForSelector('#terminalToggle', { timeout: 10_000 });
 
     // Closed by default; devin view fills the height.
-    const before = await app.evaluate(() => (globalThis as G).__devinworkspaces.getDevinBounds());
+    const before = await app.evaluate(() => (globalThis as G).__agentworkspace.getDevinBounds());
     expect(before?.height).toBeGreaterThan(600);
     await expect(page.locator('#terminalDock')).toBeHidden();
 
@@ -234,7 +234,7 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     await page.click('#terminalToggle');
     await expect.poll(async () => (await state(app)).terminalOpen).toBe(true);
     await expect(page.locator('#terminalDock')).toBeVisible();
-    const after = await app.evaluate(() => (globalThis as G).__devinworkspaces.getDevinBounds());
+    const after = await app.evaluate(() => (globalThis as G).__agentworkspace.getDevinBounds());
     expect(after?.height).toBe(before!.height - 280 - 6);
 
     // Live resize: the dock height follows the pointer mid-drag; Escape
@@ -259,8 +259,8 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     // native view over the strip swallows real clicks before they reach the
     // shell DOM (CDP input bypasses native hit-testing, so DOM assertions miss it).
     const [rects, views] = await app.evaluate(() => [
-      (globalThis as G).__devinworkspaces.layoutRects(),
-      (globalThis as G).__devinworkspaces.childViews(),
+      (globalThis as G).__agentworkspace.layoutRects(),
+      (globalThis as G).__agentworkspace.childViews(),
     ]);
     const term = rects.terminal!;
     expect(term).toBeTruthy();
@@ -296,7 +296,7 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     await page.keyboard.type('ping\r');
     await expect
       .poll(async () =>
-        app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), firstId),
+        app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), firstId),
       )
       .toContain('ping');
     await page.keyboard.press('Space');
@@ -310,7 +310,7 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
 
     // The chevron opens the cwd menu — it must be a real, unclipped overlay:
     // rect inside the dock and the first item hit-tests to itself.
-    const profiles = (await evaluateInShell(app, `window.devinworkspaces.terminalProfiles()`)) as unknown[];
+    const profiles = (await evaluateInShell(app, `window.agentworkspace.terminalProfiles()`)) as unknown[];
     expect(Array.isArray(profiles)).toBe(true);
     await page.click('#terminalNewCwd');
     await page.waitForSelector('#terminalNewMenu button');
@@ -342,19 +342,19 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     await expect
       .poll(async () =>
         app.evaluate(
-          (_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string),
+          (_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string),
           activeId,
         ),
       )
       .toContain('ready');
     await app.evaluate(
-      (_e, tid) => (globalThis as G).__devinworkspaces.terminalInput(tid as string, 'hi\r'),
+      (_e, tid) => (globalThis as G).__agentworkspace.terminalInput(tid as string, 'hi\r'),
       activeId,
     );
     await expect
       .poll(async () =>
         app.evaluate(
-          (_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string),
+          (_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string),
           activeId,
         ),
       )
@@ -364,7 +364,7 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     await page.click(`[data-terminal-tab="${tabs[0]!.id}"]`);
     await expect.poll(async () => (await state(app)).activeTerminalId).toBe(tabs[0]!.id);
     const pid = await app.evaluate(
-      (_e, tid) => (globalThis as G).__devinworkspaces.terminalPid(tid as string),
+      (_e, tid) => (globalThis as G).__agentworkspace.terminalPid(tid as string),
       tabs[0]!.id,
     );
     expect(pid).toBeTruthy();
@@ -373,20 +373,20 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
     await expect.poll(async () => pidAlive(pid!)).toBe(false);
 
     // Resize + persist across restart.
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setTerminalHeight(400));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setTerminalHeight(400));
     await expect.poll(async () => (await state(app)).terminalHeight).toBe(400);
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('cloud'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('cloud'));
     await expect.poll(async () => (await state(app)).surface).toBe('cloud');
 
     await app.evaluate(({ app: electronApp }) => electronApp.quit());
     await app.close();
 
     const app2 = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-      DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
+      AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
     });
     try {
       await expect
-        .poll(async () => app2.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+        .poll(async () => app2.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
         .toBe(true);
       const s = await state(app2);
       expect(s.terminalOpen).toBe(true);
@@ -417,16 +417,16 @@ test('terminal dock: rail toggle, shell tabs, surface gating, persisted height',
 });
 
 test('terminal clipboard: Ctrl+V pastes, Ctrl+C copies selection, right-click copy/paste', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-termclip-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-termclip-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
   });
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
     const page = await shellPage(app);
     await page.waitForSelector('#terminalToggle', { timeout: 10_000 });
@@ -443,11 +443,11 @@ test('terminal clipboard: Ctrl+V pastes, Ctrl+C copies selection, right-click co
     await page.waitForSelector(`[data-terminal-id="${id}"] .xterm`, { timeout: 10_000 });
     await expect
       .poll(async () =>
-        app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id),
+        app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), id),
       )
       .toContain('ready');
     const read = () =>
-      app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id);
+      app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), id);
     await page.locator(`[data-terminal-id="${id}"]`).click();
 
     // Plain Ctrl+V pastes via term.paste. The fake pty enabled bracketed
@@ -455,7 +455,7 @@ test('terminal clipboard: Ctrl+V pastes, Ctrl+C copies selection, right-click co
     // 200~/201~ input markers, so the pty observes the raw text. Measured
     // because the pre-fix path let PSReadLine handle the paste (~500ms).
     // The child's stdin is line-buffered, so the trailing \r flushes it.
-    await app.evaluate((_e, text) => (globalThis as G).__devinworkspaces.clipboardWrite(text as string), 'clip-text');
+    await app.evaluate((_e, text) => (globalThis as G).__agentworkspace.clipboardWrite(text as string), 'clip-text');
     const t0 = Date.now();
     await page.keyboard.press('Control+v');
     await expect.poll(read).toContain('clip-text');
@@ -468,7 +468,7 @@ test('terminal clipboard: Ctrl+V pastes, Ctrl+C copies selection, right-click co
     expect(await read()).not.toContain('\\x16'); // ^V never reached the pty
 
     // Right-click with no xterm selection pastes (Windows Terminal convention).
-    await app.evaluate((_e, text) => (globalThis as G).__devinworkspaces.clipboardWrite(text as string), 'right-click-paste');
+    await app.evaluate((_e, text) => (globalThis as G).__agentworkspace.clipboardWrite(text as string), 'right-click-paste');
     await page.locator(`[data-terminal-id="${id}"]`).click({ button: 'right' });
     await expect.poll(read).toContain('right-click-paste');
     await page.keyboard.press('Enter'); // flush the pasted line to the child
@@ -486,18 +486,18 @@ test('terminal clipboard: Ctrl+V pastes, Ctrl+C copies selection, right-click co
     await selectRow();
 
     // Right-click with a selection copies it to the OS clipboard.
-    await app.evaluate((_e, text) => (globalThis as G).__devinworkspaces.clipboardWrite(text as string), '__cleared__');
+    await app.evaluate((_e, text) => (globalThis as G).__agentworkspace.clipboardWrite(text as string), '__cleared__');
     await page.locator(`[data-terminal-id="${id}"]`).click({ button: 'right' });
     await expect
-      .poll(async () => app.evaluate(() => (globalThis as G).__devinworkspaces.clipboardRead()))
+      .poll(async () => app.evaluate(() => (globalThis as G).__agentworkspace.clipboardRead()))
       .toContain('ready');
 
     // Ctrl+C with an xterm selection copies it instead of sending ^C.
     await selectRow();
-    await app.evaluate((_e, text) => (globalThis as G).__devinworkspaces.clipboardWrite(text as string), '');
+    await app.evaluate((_e, text) => (globalThis as G).__agentworkspace.clipboardWrite(text as string), '');
     await page.keyboard.press('Control+c');
     await expect
-      .poll(async () => app.evaluate(() => (globalThis as G).__devinworkspaces.clipboardRead()))
+      .poll(async () => app.evaluate(() => (globalThis as G).__agentworkspace.clipboardRead()))
       .toContain('ready');
     await page.keyboard.type('z');
     await page.keyboard.press('Enter');
@@ -535,20 +535,20 @@ test('terminal clipboard: Ctrl+V pastes, Ctrl+C copies selection, right-click co
 });
 
 test('terminal: quit disposes several live devin ptys and the process exits', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-termquit-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-termquit-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
   });
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
     const added = await app.evaluate(
-      (_e, path) => (globalThis as G).__devinworkspaces.localAddWorkspace(path),
+      (_e, path) => (globalThis as G).__agentworkspace.localAddWorkspace(path),
       workspace,
     );
     expect(added).toBeTruthy();
@@ -556,7 +556,7 @@ test('terminal: quit disposes several live devin ptys and the process exits', as
     for (let i = 0; i < 3; i += 1) {
       const opened = await app.evaluate(
         (_e, args) =>
-          (globalThis as G).__devinworkspaces.terminalOpen({
+          (globalThis as G).__agentworkspace.terminalOpen({
             kind: 'devin',
             workspace: args.ws as string,
             sessionId: args.sid as string,
@@ -566,7 +566,7 @@ test('terminal: quit disposes several live devin ptys and the process exits', as
       expect(opened.ok).toBe(true);
     }
     expect(
-      (await app.evaluate(() => (globalThis as G).__devinworkspaces.terminalList())).length,
+      (await app.evaluate(() => (globalThis as G).__agentworkspace.terminalList())).length,
     ).toBe(3);
 
     // quit + wait on the process 'exit' — the evaluate reply can be lost when
@@ -604,29 +604,29 @@ test('terminal: quit disposes several live devin ptys and the process exits', as
 });
 
 test('terminal: devin pty resumes with -r, reuses the live pty per session', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-term-resume-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-term-resume-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
   });
   let closed = false;
   const read = (id: string) =>
-    app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id);
+    app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), id);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const ws = await app.evaluate(
-      (_e, path) => (globalThis as G).__devinworkspaces.localAddWorkspace(path as string),
+      (_e, path) => (globalThis as G).__agentworkspace.localAddWorkspace(path as string),
       workspace,
     );
     expect(ws).toBeTruthy();
 
     const a1 = await app.evaluate(
       (_e, o) =>
-        (globalThis as G).__devinworkspaces.terminalOpen({
+        (globalThis as G).__agentworkspace.terminalOpen({
           kind: 'devin',
           workspace: (o as { ws: string }).ws,
           sessionId: (o as { ws: string; sid: string }).sid,
@@ -640,7 +640,7 @@ test('terminal: devin pty resumes with -r, reuses the live pty per session', asy
     // Same session reuses the live pty.
     const a2 = await app.evaluate(
       (_e, o) =>
-        (globalThis as G).__devinworkspaces.terminalOpen({
+        (globalThis as G).__agentworkspace.terminalOpen({
           kind: 'devin',
           workspace: (o as { ws: string }).ws,
           sessionId: (o as { ws: string; sid: string }).sid,
@@ -651,7 +651,7 @@ test('terminal: devin pty resumes with -r, reuses the live pty per session', asy
 
     const b = await app.evaluate(
       (_e, o) =>
-        (globalThis as G).__devinworkspaces.terminalOpen({
+        (globalThis as G).__agentworkspace.terminalOpen({
           kind: 'devin',
           workspace: (o as { ws: string }).ws,
           sessionId: (o as { ws: string; sid: string }).sid,
@@ -663,7 +663,7 @@ test('terminal: devin pty resumes with -r, reuses the live pty per session', asy
     expect(idB).not.toBe(idA);
     await expect.poll(async () => read(idB)).toContain('args:-r sess-b');
 
-    const list = await app.evaluate(() => (globalThis as G).__devinworkspaces.terminalList());
+    const list = await app.evaluate(() => (globalThis as G).__agentworkspace.terminalList());
     expect(
       list
         .filter((t) => t.kind === 'devin' && t.cwd === ws)
@@ -707,32 +707,32 @@ test.describe('dock surfaces', () => {
   type TRect = { x: number; y: number; width: number; height: number };
 
   const terminalRect = (app: ElectronApplication): Promise<TRect | null> =>
-    app.evaluate(() => (globalThis as G).__devinworkspaces.layoutRects().terminal);
+    app.evaluate(() => (globalThis as G).__agentworkspace.layoutRects().terminal);
   const setSurface = (app: ElectronApplication, surface: Parameters<Hooks['setSurface']>[0]) =>
-    app.evaluate((_e, v) => (globalThis as G).__devinworkspaces.setSurface(v), surface);
+    app.evaluate((_e, v) => (globalThis as G).__agentworkspace.setSurface(v), surface);
   const read = (app: ElectronApplication, id: string) =>
-    app.evaluate((_e, tid) => (globalThis as G).__devinworkspaces.terminalRead(tid as string), id);
+    app.evaluate((_e, tid) => (globalThis as G).__agentworkspace.terminalRead(tid as string), id);
   const toggleEvents = async (logFile: string) =>
     (await readEvents(logFile)).filter((e) => e.event === 'terminal-toggle');
   // CDP-dispatched keys (page.keyboard) bypass Electron's before-input-event;
   // sendInputEvent takes the native path the shortcut handler listens on.
   const ctrlBacktick = (app: ElectronApplication) =>
     app.evaluate(() => {
-      const contents = (globalThis as G).__devinworkspaces.getShellWebContents();
+      const contents = (globalThis as G).__agentworkspace.getShellWebContents();
       contents.sendInputEvent({ type: 'keyDown', keyCode: '`', modifiers: ['control'] });
       contents.sendInputEvent({ type: 'keyUp', keyCode: '`', modifiers: ['control'] });
     });
 
   test('visible on cloud/local/claude, hidden + inert on settings/analytics, preference survives the visit', async () => {
     const { app, profile } = await launchWithClaudeFixture(fixtures, {
-      DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-      DEVIN_WORKSPACES_TEST_TERMINAL_CMD: TERMINAL_CMD,
-      DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+      AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+      AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
+      AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     });
     const logFile = join(profile, 'events.jsonl');
     try {
       await expect
-        .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+        .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
         .toBe(true);
       const page = await shellPage(app);
       const dock = page.locator('#terminalDock');
@@ -807,13 +807,13 @@ test.describe('dock surfaces', () => {
 
       // Claude: the dock and the per-session Terminal tab coexist.
       await expect
-        .poll(async () => (await app.evaluate(() => (globalThis as G).__devinworkspaces.claudeState())).status)
+        .poll(async () => (await app.evaluate(() => (globalThis as G).__agentworkspace.claudeState())).status)
         .toBe('ready');
       await setSurface(app, 'claude');
       await expect.poll(async () => (await state(app)).surface).toBe('claude');
       await expect(dock).toBeVisible();
       await expect(toggle).toBeEnabled();
-      await app.evaluate((_e, id) => (globalThis as G).__devinworkspaces.claudeSelect(id as string), CLAUDE_UA);
+      await app.evaluate((_e, id) => (globalThis as G).__agentworkspace.claudeSelect(id as string), CLAUDE_UA);
       await page.locator('#view-terminal').click();
       const claudePane = page.locator(`[data-session-terminal="${CLAUDE_UA}"]`);
       await expect(claudePane).toBeAttached({ timeout: 10_000 });
@@ -842,10 +842,10 @@ test.describe('dock surfaces', () => {
 
       // Focus does not fight: re-show the dock while the Claude Terminal tab is
       // active — focus lands in the dock xterm and typed input reaches ITS pty only.
-      await app.evaluate(() => (globalThis as G).__devinworkspaces.setTerminalOpen(false));
+      await app.evaluate(() => (globalThis as G).__agentworkspace.setTerminalOpen(false));
       await expect(dock).toBeHidden();
       await expect(claudePane.locator('.xterm')).toBeVisible();
-      await app.evaluate(() => (globalThis as G).__devinworkspaces.setTerminalOpen(true));
+      await app.evaluate(() => (globalThis as G).__agentworkspace.setTerminalOpen(true));
       await expect(dock).toBeVisible();
       await expect
         .poll(async () =>

@@ -64,7 +64,7 @@ export function TabStrip({ tabs, activeId, scope }: TabStripProps) {
     if (!over || active.id === over.id) return;
     const toIndex = tabs.findIndex((tab) => tab.id === over.id);
     if (toIndex < 0) return;
-    window.devinworkspaces.reorderTab(String(active.id), toIndex);
+    window.agentworkspace.reorderTab(String(active.id), toIndex);
   };
 
   return (
@@ -113,18 +113,18 @@ function SortableTab({ tab, active }: { tab: Tab; active: boolean }) {
   const onClick = (event: MouseEvent) => {
     const target = event.target;
     if (target instanceof HTMLElement && target.closest('.closeMark')) {
-      window.devinworkspaces.closeTab(tab.id);
+      window.agentworkspace.closeTab(tab.id);
     } else if (target instanceof HTMLElement && target.closest('.dragHandle')) {
       // keyboard handle: no-op on click
     } else {
-      window.devinworkspaces.activateTab(tab.id);
+      window.agentworkspace.activateTab(tab.id);
     }
   };
 
   const onAuxClick = (event: MouseEvent) => {
     if (event.button === 1) {
       event.preventDefault();
-      window.devinworkspaces.closeTab(tab.id);
+      window.agentworkspace.closeTab(tab.id);
     }
   };
 
@@ -138,10 +138,10 @@ function SortableTab({ tab, active }: { tab: Tab; active: boolean }) {
     if (event.target !== event.currentTarget) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      window.devinworkspaces.activateTab(tab.id);
+      window.agentworkspace.activateTab(tab.id);
     } else if (event.key === 'Delete') {
       event.preventDefault();
-      window.devinworkspaces.closeTab(tab.id);
+      window.agentworkspace.closeTab(tab.id);
     }
   };
 
@@ -169,7 +169,7 @@ function SortableTab({ tab, active }: { tab: Tab; active: boolean }) {
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
         event.preventDefault();
-        window.devinworkspaces.openTabMenu(tab.id, event.clientX, event.clientY);
+        window.agentworkspace.openTabMenu(tab.id, event.clientX, event.clientY);
       }}
       {...pointerListeners}
     >

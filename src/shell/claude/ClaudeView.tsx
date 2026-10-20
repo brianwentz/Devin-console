@@ -116,7 +116,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
     const targetId = id;
     const agentId = attachAgent.current[targetId];
     let cancelled = false;
-    void window.devinworkspaces
+    void window.agentworkspace
       .terminalOpen(
         agentId
           ? { kind: 'claude', sessionId: targetId, mode: 'attach', agentId }
@@ -142,7 +142,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
   useEffect(() => {
     if (!session || session.loaded || session.running || loadRequested.current.has(session.id)) return;
     loadRequested.current.add(session.id);
-    void window.devinworkspaces.claudeLoadHistory(session.id).then((result) => {
+    void window.agentworkspace.claudeLoadHistory(session.id).then((result) => {
       if (!result.ok) {
         loadRequested.current.delete(session.id);
         setError(result.error);
@@ -158,7 +158,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
 
   const newSession = () => {
     setError(null);
-    run(window.devinworkspaces.claudeNewSession(null));
+    run(window.agentworkspace.claudeNewSession(null));
   };
 
   if (!id) {
@@ -207,7 +207,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
             type="button"
             className={`${buttonClass} flex items-center gap-1`}
             title={`Back to ${title}`}
-            onClick={() => window.devinworkspaces.claudeOpen(id)}
+            onClick={() => window.agentworkspace.claudeOpen(id)}
           >
             <ArrowLeft size={12} />
             Back
@@ -249,7 +249,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
                 id="claudeCopyId"
                 className="flex-none rounded px-1 hover:bg-[#1a2735] hover:text-[#c9d4e3]"
                 title={`Copy session id ${id}`}
-                onClick={() => window.devinworkspaces.clipboardWriteText(id)}
+                onClick={() => window.agentworkspace.clipboardWriteText(id)}
               >
                 copy id
               </button>
@@ -263,7 +263,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
             title="Fork session"
             aria-label="Fork session"
             disabled={!session || session.running}
-            onClick={() => window.devinworkspaces.claudeFork(id)}
+            onClick={() => window.agentworkspace.claudeFork(id)}
           >
             <GitFork size={12} />
             Fork
@@ -306,7 +306,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
             disabled={!session}
             onChange={(event) => {
               const mode = event.target.value;
-              if (isClaudePermissionMode(mode)) run(window.devinworkspaces.claudeSetPermissionMode(id, mode));
+              if (isClaudePermissionMode(mode)) run(window.agentworkspace.claudeSetPermissionMode(id, mode));
             }}
           >
             {CLAUDE_PERMISSION_MODES.map((mode) => (
@@ -318,7 +318,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
           {session ? (
             <ModelInput
               value={session.model}
-              onCommit={(model) => run(window.devinworkspaces.claudeSetModel(id, model))}
+              onCommit={(model) => run(window.agentworkspace.claudeSetModel(id, model))}
             />
           ) : (
             <input id="claudeModel" type="text" className={`${selectClass} w-36`} placeholder="default model" disabled />
@@ -342,7 +342,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
                 id={ptyId}
                 active={!subagentId && view === 'terminal' && sid === id}
                 onRestart={() => {
-                  window.devinworkspaces.terminalClose(ptyId);
+                  window.agentworkspace.terminalClose(ptyId);
                   forgetTerminal(sid);
                 }}
               />
@@ -381,11 +381,11 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
             disabledReason={session?.terminalOwned ? 'Close the terminal to chat here' : null}
             onSend={(text) => {
               setError(null);
-              run(window.devinworkspaces.claudePrompt(id, text));
+              run(window.agentworkspace.claudePrompt(id, text));
             }}
-            onCancel={() => run(window.devinworkspaces.claudeCancel(id))}
+            onCancel={() => run(window.agentworkspace.claudeCancel(id))}
             onPermission={(requestId, optionId) =>
-              run(window.devinworkspaces.claudePermission(id, requestId, optionId))
+              run(window.agentworkspace.claudePermission(id, requestId, optionId))
             }
             banner={
               session?.terminalOwned ? (
@@ -400,7 +400,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
                     className={buttonClass}
                     onClick={() => {
                       const ptyId = terminalIds[session.id];
-                      if (ptyId) void window.devinworkspaces.terminalClose(ptyId);
+                      if (ptyId) void window.agentworkspace.terminalClose(ptyId);
                       else setView('terminal');
                     }}
                   >

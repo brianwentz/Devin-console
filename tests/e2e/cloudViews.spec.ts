@@ -28,39 +28,39 @@ type ViewInfo = { key: string; url: string; active: boolean; loads: number; load
 function hooks(app: ElectronApplication) {
   return {
     views: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.cloudViewsInfo()) as Promise<
+      app.evaluate(() => (globalThis as any).__agentworkspace.cloudViewsInfo()) as Promise<
         ViewInfo[]
       >,
     cloudShow: (id: string) =>
       app.evaluate(
-        (_e, value: string) => (globalThis as any).__devinworkspaces.cloudShow(value),
+        (_e, value: string) => (globalThis as any).__agentworkspace.cloudShow(value),
         id,
       ),
     prefetch: (id: string) =>
       app.evaluate(
-        (_e, value: string) => (globalThis as any).__devinworkspaces.cloudPrefetchHook(value),
+        (_e, value: string) => (globalThis as any).__agentworkspace.cloudPrefetchHook(value),
         id,
       ),
     idleSweep: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.cloudIdleSweep()),
+      app.evaluate(() => (globalThis as any).__agentworkspace.cloudIdleSweep()),
     setKeepAlive: (ms: number) =>
       app.evaluate(
-        (_e, value: number) => (globalThis as any).__devinworkspaces.setCloudKeepAliveMs(value),
+        (_e, value: number) => (globalThis as any).__agentworkspace.setCloudKeepAliveMs(value),
         ms,
       ),
     loadDevinUrl: (url: string) =>
       app.evaluate(
-        (_e, value: string) => (globalThis as any).__devinworkspaces.loadDevinUrl(value),
+        (_e, value: string) => (globalThis as any).__agentworkspace.loadDevinUrl(value),
         url,
       ),
     loadPooled: (key: string, url: string) =>
       app.evaluate(
         (_e, args: { key: string; url: string }) =>
-          (globalThis as any).__devinworkspaces.cloudViewLoadUrl(args.key, args.url),
+          (globalThis as any).__agentworkspace.cloudViewLoadUrl(args.key, args.url),
         { key, url },
       ),
     ipcProbe: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.ipcProbe()) as Promise<{
+      app.evaluate(() => (globalThis as any).__agentworkspace.ipcProbe()) as Promise<{
         pooled: boolean | null;
       }>,
   };
@@ -72,7 +72,7 @@ const C = '22220000000000000000000000000000';
 const D = '33330000000000000000000000000000';
 
 test('cloud view pool: cache, eviction, rekey, prefetch, guards, shutdown', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-cloudviews-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-cloudviews-'));
   const logFile = join(profile, 'events.jsonl');
   const fixturePath = join(profile, 'cloudSessions.json');
   const raw = JSON.parse(
@@ -84,8 +84,8 @@ test('cloud view pool: cache, eviction, rekey, prefetch, guards, shutdown', asyn
   writeFileSync(fixturePath, JSON.stringify(raw));
 
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS: fixturePath,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLOUD_SESSIONS: fixturePath,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -148,7 +148,7 @@ test('cloud view pool: cache, eviction, rekey, prefetch, guards, shutdown', asyn
     // --- (3) cap eviction -----------------------------------------------------
     // maxLiveViews = 2 via the settings path.
     await page.evaluate(() =>
-      (window as any).devinworkspaces.setSettings({ sessions: { maxLiveViews: 2 } }),
+      (window as any).agentworkspace.setSettings({ sessions: { maxLiveViews: 2 } }),
     );
     await row(A).click();
     await expect.poll(async () => (await state(app)).currentSessionId).toBe(A);

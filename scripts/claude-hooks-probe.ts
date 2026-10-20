@@ -37,8 +37,8 @@ function settingsJson(events_: string[], urlFor: (e: string) => string): string 
         {
           type: 'http',
           url: urlFor(event),
-          headers: { Authorization: 'Bearer $DEVIN_WORKSPACES_HOOK_TOKEN' },
-          allowedEnvVars: ['DEVIN_WORKSPACES_HOOK_TOKEN'],
+          headers: { Authorization: 'Bearer $AGENT_WORKSPACE_HOOK_TOKEN' },
+          allowedEnvVars: ['AGENT_WORKSPACE_HOOK_TOKEN'],
           timeout: 5,
         },
       ],
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
     nodeVersion: process.version,
   });
 
-  const env = { ...process.env, DEVIN_WORKSPACES_HOOK_TOKEN: token };
+  const env = { ...process.env, AGENT_WORKSPACE_HOOK_TOKEN: token };
 
   // Part 1: headless `claude -p "say hi" --settings <json>`
   await (async () => {

@@ -3,6 +3,7 @@ import {
   buildHooksBlock,
   HOOK_EVENTS,
   HOOK_PATH_PREFIX,
+  LEGACY_HOOK_PATH_PREFIXES,
   hookUrl,
   isOurHook,
   mergeHooksIntoSettings,
@@ -14,15 +15,15 @@ type Group = { matcher?: string; hooks: Record<string, unknown>[] };
 type Settings = { hooks?: Record<string, Group[]>; [k: string]: unknown };
 
 const parse = (json: string): Settings => JSON.parse(json);
-const ENV_BLOCK = buildHooksBlock({ port: 51234, auth: { kind: 'env', envVar: 'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN' } });
+const ENV_BLOCK = buildHooksBlock({ port: 51234, auth: { kind: 'env', envVar: 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN' } });
 const TOKEN_BLOCK = buildHooksBlock({ port: 51234, auth: { kind: 'token', token: 'abc123' } });
 const FOREIGN = { type: 'command', command: 'echo hi' };
 const FOREIGN_HTTP = { type: 'http', url: 'http://127.0.0.1:9999/other/path' };
 
 describe('hookUrl / isOurHook', () => {
   it('builds loopback URLs under the hook prefix', () => {
-    expect(hookUrl(51234, 'Stop')).toBe('http://127.0.0.1:51234/devin-workspaces/hook/Stop');
-    expect(HOOK_PATH_PREFIX).toBe('/devin-workspaces/hook/');
+    expect(hookUrl(51234, 'Stop')).toBe('http://127.0.0.1:51234/agent-workspace/hook/Stop');
+    expect(HOOK_PATH_PREFIX).toBe('/agent-workspace/hook/');
   });
   it.each([
     ['ours (any port)', { type: 'http', url: hookUrl(1, 'Stop') }, true],
@@ -46,7 +47,7 @@ describe('hookUrl / isOurHook non-loopback addr', () => {
   });
   it('isOurHook accepts any IPv4 host with our path', () => {
     expect(isOurHook({ type: 'http', url: hookUrl(9, 'Stop', '172.20.0.1') })).toBe(true);
-    expect(isOurHook({ type: 'http', url: 'http://localhost:5/devin-workspaces/hook/Stop' })).toBe(false);
+    expect(isOurHook({ type: 'http', url: 'http://localhost:5/agent-workspace/hook/Stop' })).toBe(false);
     expect(isOurHook({ type: 'http', url: 'http://172.20.0.1:5/other' })).toBe(false);
   });
   it('buildHooksBlock threads the addr through every event', () => {
@@ -80,8 +81,8 @@ describe('buildHooksBlock', () => {
   });
   it('env auth uses a $VAR header plus allowedEnvVars', () => {
     const hook = (ENV_BLOCK as Settings).hooks!.Stop![0]!.hooks[0]!;
-    expect(hook.headers).toEqual({ Authorization: 'Bearer $DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN' });
-    expect(hook.allowedEnvVars).toEqual(['DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN']);
+    expect(hook.headers).toEqual({ Authorization: 'Bearer $AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN' });
+    expect(hook.allowedEnvVars).toEqual(['AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN']);
   });
   it('token auth embeds the literal token and no allowedEnvVars', () => {
     const hook = (TOKEN_BLOCK as Settings).hooks!.Stop![0]!.hooks[0]!;
@@ -89,7 +90,7 @@ describe('buildHooksBlock', () => {
     expect('allowedEnvVars' in hook).toBe(false);
   });
   it('settingsFlagJson is the compact env block', () => {
-    const json = settingsFlagJson(51234, 'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN');
+    const json = settingsFlagJson(51234, 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN');
     expect(json).not.toContain('\n');
     expect(JSON.parse(json)).toEqual(ENV_BLOCK);
   });
@@ -221,5 +222,39 @@ describe('removeHooksFromSettings', () => {
   it('invalid JSON → error', () => {
     expect(removeHooksFromSettings('{')).toHaveProperty('error');
     expect(removeHooksFromSettings('42')).toHaveProperty('error');
+  });
+});
+
+describe('legacy hook prefix (pre-rename)', () => {
+  const legacyUrl = (event: string) => `http://127.0.0.1:51234${LEGACY_HOOK_PATH_PREFIXES[0]}${event}`;
+
+  it('isOurHook recognises a legacy /devin-workspaces/hook/ URL', () => {
+    expect(isOurHook({ type: 'http', url: legacyUrl('Stop') })).toBe(true);
+    expect(isOurHook({ type: 'http', url: `http://172.20.0.1:9/devin-workspaces/hook/Stop` })).toBe(true);
+  });
+
+  it('mergeHooksIntoSettings replaces a legacy block with the new URLs', () => {
+    const legacyBlock = buildHooksBlock({ port: 51234, auth: { kind: 'token', token: 'old' } });
+    // Rewrite the current block's URLs onto the legacy prefix, as a 1.x
+    // install would have written them.
+    const legacyJson = JSON.stringify(legacyBlock).replaceAll(HOOK_PATH_PREFIX, LEGACY_HOOK_PATH_PREFIXES[0]);
+    const merged = mergeHooksIntoSettings(legacyJson, TOKEN_BLOCK);
+    expect(merged).toHaveProperty('json');
+    if ('error' in merged) throw new Error(merged.error);
+    expect(merged.json).toContain(HOOK_PATH_PREFIX);
+    expect(merged.json).not.toContain('/devin-workspaces/hook/');
+    // One group per event — the legacy groups were replaced, not appended.
+    const settings = parse(merged.json);
+    for (const event of HOOK_EVENTS) {
+      expect(settings.hooks?.[event]).toHaveLength(1);
+    }
+  });
+
+  it('removeHooksFromSettings strips a legacy block', () => {
+    const legacyJson = JSON.stringify(TOKEN_BLOCK).replaceAll(HOOK_PATH_PREFIX, LEGACY_HOOK_PATH_PREFIXES[0]);
+    const removed = removeHooksFromSettings(legacyJson);
+    if ('error' in removed) throw new Error(removed.error);
+    expect(removed.json).not.toContain('/devin-workspaces/hook/');
+    expect(removed.json).not.toContain('"hooks"');
   });
 });

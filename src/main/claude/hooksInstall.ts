@@ -1,6 +1,6 @@
 // Global opt-in: merge our loopback hook block into
 // <configDir>/settings.json (literal token — external terminals have no env
-// var) or remove it on disable. One-time backup `settings.json.devin-workspaces.bak`
+// var) or remove it on disable. One-time backup `settings.json.agent-workspace.bak`
 // before the first write; atomic tmp+rename; never throws.
 
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -16,7 +16,17 @@ export function applyGlobalHooks(
   addr?: string,
 ): { installed: boolean; error: string | null } {
   const file = join(configDir, 'settings.json');
-  const backup = `${file}.devin-workspaces.bak`;
+  const backup = `${file}.agent-workspace.bak`;
+  // Carry over the pre-rename one-time backup so it is never taken twice.
+  const legacyBackup = `${file}.devin-workspaces.bak`;
+  try {
+    if (existsSync(legacyBackup) && !existsSync(backup)) {
+      renameSync(legacyBackup, backup);
+      log('claude', 'claude-hooks-backup-migrated', { detail: { file } });
+    }
+  } catch {
+    // best-effort; a second backup is harmless
+  }
   let current: string | null = null;
   try {
     if (existsSync(file)) current = readFileSync(file, 'utf8');

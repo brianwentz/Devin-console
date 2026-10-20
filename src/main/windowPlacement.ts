@@ -11,7 +11,7 @@ import { state, testMode } from './state';
 
 // Disabled under test mode unless a test explicitly opts in.
 function placementEnabled(): boolean {
-  return !testMode || process.env.DEVIN_WORKSPACES_TEST_PLACEMENT === '1';
+  return !testMode || process.env.AGENT_WORKSPACE_TEST_PLACEMENT === '1';
 }
 
 // F2: remember window bounds per display configuration. The whole module is a

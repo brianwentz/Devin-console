@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           $ver = '${{ needs.prepare.outputs.version }}'
-          foreach ($f in "dist/DevinWorkspaces-Setup-$ver.exe", "dist/DevinWorkspaces-Setup-$ver.exe.blockmap", "dist/latest.yml") {
+          foreach ($f in "dist/AgentWorkspace-Setup-$ver.exe", "dist/AgentWorkspace-Setup-$ver.exe.blockmap", "dist/latest.yml") {
             if (-not (Test-Path $f)) { throw "missing $f" }
           }
           $yml = Get-Content dist/latest.yml -Raw
@@ -100,12 +100,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
-        run: gh release upload $env:TAG dist/DevinWorkspaces-Setup-*.exe dist/DevinWorkspaces-Setup-*.exe.blockmap dist/latest.yml --clobber
+        run: gh release upload $env:TAG dist/AgentWorkspace-Setup-*.exe dist/AgentWorkspace-Setup-*.exe.blockmap dist/latest.yml --clobber
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: devin-workspaces-${{ github.event.release.tag_name }}
+          name: agent-workspace-${{ github.event.release.tag_name }}
           if-no-files-found: error
           path: |
             dist/*.exe
@@ -161,21 +161,21 @@ jobs:
       - name: Check artifacts
         run: |
           ver='${{ needs.prepare.outputs.version }}'
-          for f in "dist/DevinWorkspaces-$ver-arm64.dmg" "dist/DevinWorkspaces-$ver-arm64.zip" "dist/DevinWorkspaces-$ver-arm64.zip.blockmap" "dist/latest-mac.yml"; do
+          for f in "dist/AgentWorkspace-$ver-arm64.dmg" "dist/AgentWorkspace-$ver-arm64.zip" "dist/AgentWorkspace-$ver-arm64.zip.blockmap" "dist/latest-mac.yml"; do
             [ -f "$f" ] || { echo "missing $f"; exit 1; }
           done
           grep -Eq "^version:[[:space:]]*$ver[[:space:]]*$" dist/latest-mac.yml || { echo "dist/latest-mac.yml does not declare version $ver"; cat dist/latest-mac.yml; exit 1; }
-          codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Devin Workspaces.app"
+          codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Agent Workspace.app"
 
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$TAG" "dist/DevinWorkspaces-${{ needs.prepare.outputs.version }}-arm64.dmg" "dist/DevinWorkspaces-${{ needs.prepare.outputs.version }}-arm64.zip" "dist/DevinWorkspaces-${{ needs.prepare.outputs.version }}-arm64.zip.blockmap" dist/latest-mac.yml --clobber
+        run: gh release upload "$TAG" "dist/AgentWorkspace-${{ needs.prepare.outputs.version }}-arm64.dmg" "dist/AgentWorkspace-${{ needs.prepare.outputs.version }}-arm64.zip" "dist/AgentWorkspace-${{ needs.prepare.outputs.version }}-arm64.zip.blockmap" dist/latest-mac.yml --clobber
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: devin-workspaces-macos-${{ github.event.release.tag_name }}
+          name: agent-workspace-macos-${{ github.event.release.tag_name }}
           if-no-files-found: error
           path: |
             dist/*-arm64.dmg

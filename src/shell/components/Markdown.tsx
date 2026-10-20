@@ -8,7 +8,7 @@ function onLinkClick(event: MouseEvent<HTMLAnchorElement>): void {
   event.preventDefault();
   event.stopPropagation();
   const href = event.currentTarget.getAttribute('href');
-  if (href) window.devinworkspaces.localOpenLink(href);
+  if (href) window.agentworkspace.localOpenLink(href);
 }
 
 const components = {

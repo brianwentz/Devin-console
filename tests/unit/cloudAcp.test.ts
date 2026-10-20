@@ -17,7 +17,7 @@ describe('buildInitializeParams', () => {
   it('includes the sessionListFolders capability', () => {
     expect(buildInitializeParams('1.2.3')).toEqual({
       protocolVersion: 1,
-      clientInfo: { name: 'devin-workspaces', version: '1.2.3' },
+      clientInfo: { name: 'agent-workspace', version: '1.2.3' },
       clientCapabilities: { _meta: { 'cognition.ai/sessionListFolders': true } },
     });
   });

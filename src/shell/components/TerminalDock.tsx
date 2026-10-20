@@ -70,20 +70,20 @@ export function TerminalDock({ rect, terminals, activeTerminalId }: TerminalDock
       setMenuLeft(chevronRect.left - sectionRect.left);
     }
     setMenuOpen(true);
-    void window.devinworkspaces.terminalCwdOptions().then(setCwdOptions);
-    void window.devinworkspaces.terminalProfiles().then(setProfiles);
+    void window.agentworkspace.terminalCwdOptions().then(setCwdOptions);
+    void window.agentworkspace.terminalProfiles().then(setProfiles);
   };
 
   const openShell = (cwd: string | undefined, profile?: string) => {
     setMenuOpen(false);
-    void window.devinworkspaces
+    void window.agentworkspace
       .terminalOpen({
         kind: 'shell',
         ...(cwd === undefined ? {} : { cwd }),
         ...(profile === undefined ? {} : { profile }),
       })
       .then((result) => {
-        if (result.ok) window.devinworkspaces.terminalActivate(result.id);
+        if (result.ok) window.agentworkspace.terminalActivate(result.id);
       });
   };
 
@@ -119,12 +119,12 @@ export function TerminalDock({ rect, terminals, activeTerminalId }: TerminalDock
             data-terminal-tab={entry.id}
             onClick={(event) => {
               event.currentTarget.blur();
-              window.devinworkspaces.terminalActivate(entry.id);
+              window.agentworkspace.terminalActivate(entry.id);
             }}
             onAuxClick={(event) => {
               if (event.button === 1) {
                 event.preventDefault();
-                window.devinworkspaces.terminalClose(entry.id);
+                window.agentworkspace.terminalClose(entry.id);
               }
             }}
           >
@@ -139,7 +139,7 @@ export function TerminalDock({ rect, terminals, activeTerminalId }: TerminalDock
               tabIndex={-1}
               onClick={(event) => {
                 event.stopPropagation();
-                window.devinworkspaces.terminalClose(entry.id);
+                window.agentworkspace.terminalClose(entry.id);
               }}
             >
               ×

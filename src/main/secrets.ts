@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { safeStorage } from 'electron';
 import { z } from 'zod';
 import { log } from './log';
+import { migrationRan } from './migrate';
 
 // Encrypted-at-rest secret store. Values are encrypted with Electron
 // safeStorage (DPAPI on Windows) and written base64-encoded to
@@ -113,6 +114,21 @@ export class SecretStore {
       if (shouldReEncrypt) await this.persist();
     } catch (error) {
       log('shell', 'secrets-decrypt-failed', { detail: { message: String(error) } });
+      // §3.3: on darwin the safeStorage key is keyed by app name, so a
+      // migrated profile's secrets.json can never decrypt — drop it. Gated on
+      // the migration having run this launch so an ordinary Keychain hiccup
+      // deletes nothing.
+      if (process.platform === 'darwin' && migrationRan()) {
+        try {
+          rmSync(this.file, { force: true });
+        } catch {
+          // best-effort
+        }
+        log('shell', 'profile-migrated-secrets-reset', { detail: { file: this.file } });
+        // Lazy: keeps this store importable without the window/notifications
+        // graph (unit tests, early startup).
+        void import('./notifications.js').then((m) => m.notifyMigratedSecretsReset());
+      }
     }
   }
 

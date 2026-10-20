@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from 'react';
 import type { SettingsTabId } from '../core/settingsDraft';
 import type { ShellState } from '../shared/ipc';
-import type { DevinWorkspacesApi } from './preload';
+import type { AgentWorkspaceApi } from './preload';
 
 declare global {
   interface Window {
-    devinworkspaces: DevinWorkspacesApi;
+    agentworkspace: AgentWorkspaceApi;
   }
 }
 
@@ -17,11 +17,11 @@ function subscribe(callback: () => void): () => void {
   listeners.add(callback);
   if (!subscribed) {
     subscribed = true;
-    window.devinworkspaces.onState((next) => {
+    window.agentworkspace.onState((next) => {
       current = next;
       listeners.forEach((listener) => listener());
     });
-    void window.devinworkspaces.getState().then((next) => {
+    void window.agentworkspace.getState().then((next) => {
       current = next;
       listeners.forEach((listener) => listener());
     });

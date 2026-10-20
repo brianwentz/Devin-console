@@ -34,14 +34,14 @@ async function quit(app: ElectronApplication, profile: string): Promise<void> {
 }
 
 test('gh tab clipboard-write granted, notifications denied; devin view keeps clipboard', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-perm-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-perm-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     const tabId = await openTab(app, `${fixtures.githubUrl}/page/copy-test`);
     await waitForTabTitle(app, 'copy-test');
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.focus(id), tabId);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.focus(id), tabId);
 
     // clipboard-write granted in a GitHub-origin tab (pre-F1: denied).
     await expect

@@ -23,7 +23,7 @@ export function PrQuickOpen({ buttonClass }: PrQuickOpenProps) {
           title={label}
           aria-pressed={open}
           className={`${buttonClass} relative text-sm`}
-          onClick={() => window.devinworkspaces.prsPanel(!open)}
+          onClick={() => window.agentworkspace.prsPanel(!open)}
         >
           PR
           {unread > 0 && (

@@ -1,6 +1,6 @@
-# Devin Workspaces — project rules
+# Agent Workspace — project rules
 
-Electron desktop client for Devin (BaseWindow + WebContentsViews; the React shell is the only view exposing a window API via preload).
+Agent Workspace — Electron desktop client (BaseWindow + WebContentsViews; the React shell is the only view exposing a window API via preload).
 
 ## Commands
 - `npm run typecheck` — `tsc --noEmit`
@@ -10,33 +10,36 @@ Electron desktop client for Devin (BaseWindow + WebContentsViews; the React shel
   (`src/core/depPreflight.ts` → `out/scripts/dep-preflight.cjs`) and exits 1 with a `run npm install` message when a package.json dependency is
   missing from node_modules
 - `npm run test:e2e` — build + Playwright `_electron` (`tests/e2e`, fixture servers in `tests/fixtures/http.ts`)
-- `npm run dist:win` — build + electron-builder NSIS per-user x64 installer → `dist/DevinWorkspaces-Setup-<version>.exe` (unsigned, fuses flipped by
+- `npm run dist:win` — build + electron-builder NSIS per-user x64 installer → `dist/AgentWorkspace-Setup-<version>.exe` (unsigned, fuses flipped by
   electron-builder from `build.electronFuses`; `scripts/after-pack.cjs` only writes `resources/signing.json`; icon from `build/icon.ico` via `npm run icon`)
-- `npm run dist:mac` — build + electron-builder arm64 dmg+zip → `dist/DevinWorkspaces-<version>-arm64.*` + `latest-mac.yml`; ad-hoc signed
+- `npm run dist:mac` — build + electron-builder arm64 dmg+zip → `dist/AgentWorkspace-<version>-arm64.*` + `latest-mac.yml`; ad-hoc signed
   (`-c.mac.identity=- -c.mac.hardenedRuntime=false` — hardened runtime off because ad-hoc signatures have no team ID), so Gatekeeper requires
   right-click → Open on first launch (icon from `build/icon.png`, entitlements `build/entitlements.mac.plist`). Never reintroduce fuse-flipping in
   afterPack — it invalidates the Electron ad-hoc signature → "application is damaged".
-- `npm run smoke:install` — `npm run dist:win:smoke` (same build packaged as "Devin Workspaces Smoke", appId `ai.devin.workspaces.smoke`,
-  `dist/smoke/DevinWorkspaces-Smoke-Setup-*.exe`) then `scripts/smoke-install.ps1 -Isolated`:
+- `npm run smoke:install` — `npm run dist:win:smoke` (same build packaged as "Agent Workspace Smoke", appId `io.github.brianwentz.agent-workspace.smoke`,
+  `dist/smoke/AgentWorkspace-Smoke-Setup-*.exe`) then `scripts/smoke-install.ps1 -Isolated`:
   - silent install → `tests/smoke/installed.spec.ts` (CDP-driven, `playwright.smoke.config.ts`) → upgrade-in-place → uninstall; evidence in
     `docs/evidence/p3-smoke*` (docs/ is git-ignored - local output only).
   - Run before pushing when packaging or the settings schema changes (it reads `settings.json` directly).
-  - `npm run smoke:install:real` smokes `dist/DevinWorkspaces-Setup-*.exe` and is CI-only (`windows.yml`); the script refuses to run when a non-smoke
+  - `npm run smoke:install:real` smokes `dist/AgentWorkspace-Setup-*.exe` and is CI-only (`windows.yml`); the script refuses to run when a non-smoke
     install of the product is registered or running (`-Force` bypasses; never set from package.json), and only ever kills processes under its own
     `-InstallDir`.
   - Why the isolated identity exists and how the spec reaches main-process hooks (`test:hook` IPC): see Conventions.
   - The script fails the installer over a 180 MB size budget (see Versions).
+  - `npm run smoke:install:rename` — cross-rename smoke: installs the pre-rename `dist/smoke-before/DevinWorkspaces-Smoke-Setup-*.exe`
+    (captured before the rename; git-ignored), launches it once, then runs the new installer with `/S --updated` and asserts the new
+    identity (install dir, the pinned GUID's registry entry, shortcuts) plus the profile migration; evidence `docs/evidence/p3-smoke-rename.log`.
 - `npm run rebuild:native` — electron-builder install-app-deps; exists if node-pty ever needs a rebuild (requires MSVC) — see "Terminal (P4b)" below.
 - `npm start` / `npm run acp:probe`
 - `npm run acp:contract` — P4 contract run against the real `devin acp` (initialize/new/prompt/cancel/list/load); writes
   `docs/evidence/p4-acp-contract.jsonl` (git-ignored); exit 0 also when the CLI is missing/unauthenticated (reported in the file)
 `- `npm run claude:sdk-probe` / `claude:hooks-probe` / `claude:store-probe` — build then run `scripts/claude-*-probe.ts` → `out/scripts/*.cjs`; evidence
   under `docs/evidence/claude-*` (git-ignored); exit 0 when the claude CLI is missing (reported in the file). `claude:sdk-probe --host wsl:<distro>`
-  (or `DEVIN_WORKSPACES_PROBE_HOST`) runs new+resume + a Bash turn inside the distro through `spawnSpec`.
+  (or `AGENT_WORKSPACE_PROBE_HOST`) runs new+resume + a Bash turn inside the distro through `spawnSpec`.
 - `npm run hosts:probe` — build then run `scripts/hosts-probe.ts` → `out/scripts/hosts-probe.cjs` → `docs/evidence/hosts-probe.json`; real-WSL
   measurements (enumeration/probe/env-capture vs plain env/argv round-trip/UNC timings/fs.watch EISDIR/inotify/hook reachability); exit 0 when
   `wsl.exe` or distros are absent.
-- `acp:contract` honours `DEVIN_WORKSPACES_HOST=wsl:<distro>` — spawns `devin acp` through `spawnSpec` + captured env with cwd = distro home; evidence
+- `acp:contract` honours `AGENT_WORKSPACE_HOST=wsl:<distro>` — spawns `devin acp` through `spawnSpec` + captured env with cwd = distro home; evidence
   `docs/evidence/p4-acp-contract-wsl.jsonl`.
 - CI:
   - `.github/workflows/windows.yml` — push/PR: typecheck, lint, unit, build, e2e, dist:win, smoke:install, plus a `macos` job running
@@ -49,60 +52,61 @@ Electron desktop client for Devin (BaseWindow + WebContentsViews; the React shel
 
 ## Env vars
 
-Scope: *always* = honoured in every build; *test mode* = only with `DEVIN_WORKSPACES_TEST=1`; *smoke* = read by `scripts/smoke-install.ps1` / the smoke spec.
+Scope: *always* = honoured in every build; *test mode* = only with `AGENT_WORKSPACE_TEST=1`; *smoke* = read by `scripts/smoke-install.ps1` / the smoke spec.
 Fakes live in `tests/fixtures/` and build to `out/fixtures/*.cjs` (`fakeClaudeSdk` → `.mjs`); the `FAKE_*` variables each fake reads are listed with the
 variable that selects it.
 
 | Variable | Scope | Effect |
 |---|---|---|
-| `DEVIN_WORKSPACES_TEST=1` | always | Enables the `__devinworkspaces` hooks (and the `test:hook` IPC); also disables the auto-updater (in testMode update checks are simulated — see Updates). |
-| `DEVIN_WORKSPACES_TENANT_URL` | always | Overrides settings.tenantUrl (localhost http is allowed only in tests through this variable). |
-| `DEVIN_WORKSPACES_USER_DATA` | always | Overrides userData (default is `%APPDATA%\devin-workspaces`, from package.json `name`). |
-| `DEVIN_WORKSPACES_LOG` | always | Event-log path. |
-| `DEVIN_WORKSPACES_DOWNLOAD_DIR` | always | Download directory. |
-| `DEVIN_WORKSPACES_SCALE` | always | Display scale override. |
-| `DEVIN_WORKSPACES_ALLOW_EXTERNAL` | test mode | Test override for `settings.routing.allowExternal`. |
-| `DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS` | test mode | Comma-separated extra GitHub origins (fixture servers). |
-| `DEVIN_WORKSPACES_TEST_BEFOREUNLOAD` | test mode | beforeunload fixture switch. |
-| `DEVIN_WORKSPACES_TEST_WINDOW_SIZE` | test mode | `WxH`, default `1400x900` — CI runners with small displays get a fail-fast error instead of pane timeouts. |
-| `DEVIN_WORKSPACES_TEST_KEEPALIVE_MS` | test mode | Override for `settings.tabs.keepAliveHours`; 0 = discard hidden-scope tabs on switch. |
-| `DEVIN_WORKSPACES_LOG_MAX_BYTES` | test mode | Event-log rotation cap (test-only), default 10 MB. |
-| `DEVIN_WORKSPACES_EVIDENCE=1` | test mode | Makes the routing e2e write its event log to `docs/evidence/e2e-fixture-events.jsonl` (default: temp profile; docs/ is git-ignored). |
-| `DEVIN_WORKSPACES_INSTALLED_EXE` | smoke | Path of the installed exe under test. |
-| `DEVIN_WORKSPACES_SMOKE_PROFILE` | smoke | Profile (userData) used by the smoke run. |
-| `DEVIN_WORKSPACES_SMOKE_PHASE` | smoke | `fresh`\|`upgrade`. |
-| `DEVIN_WORKSPACES_SMOKE_EVIDENCE` | smoke | Evidence output path. |
-| `DEVIN_WORKSPACES_API_BASE` | test mode (P5) | Overrides `settings.apiBase` for the v3 poller. |
-| `DEVIN_WORKSPACES_POLL_MS` | test mode (P5) | Poll interval for active and idle. |
-| `DEVIN_WORKSPACES_TEST_BANNER_MS` | test mode (P5) | Shortens the notification banner's 8 s auto-hide. |
-| `DEVIN_WORKSPACES_TEST_AUTOFILL_PROMPT_MS` | test mode (P5) | Shortens the save-password prompt's 1.5 s show-delay fallback. |
-| `DEVIN_WORKSPACES_TEST_AUTOFILL_DISMISS_MS` | test mode (P5) | Shortens its 10 s auto-dismiss. |
-| `DEVIN_WORKSPACES_TEST_RELEASES_URL` | test mode | Overrides the GitHub API base used by the release-notes fetcher (`src/main/releases.ts`). |
-| `DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD` | test mode | e.g. `node out/fixtures/fakeAuthStatus.cjs` — replaces the `devin auth status` spawn used for service-user identity resolution; the fake reads `FAKE_AUTH_STATUS_EXIT` / `FAKE_AUTH_STATUS_USER_ID` / `FAKE_AUTH_STATUS_ORG_ID`. |
-| `DEVIN_WORKSPACES_LOCAL_AGENT_CMD` | test mode | e.g. `node out/fixtures/fakeAcpAgent.cjs` — replaces the `devin acp` spawn with a full command; the fake agent reads `FAKE_ACP_LIST=1` / `FAKE_ACP_LOAD=1` / `FAKE_ACP_DELETE=1` / `FAKE_ACP_LINK_URL` / `FAKE_ACP_USAGE=1` (emits a `usage_update` mid-prompt and `usage` on the prompt response) / `FAKE_ACP_PROMPT_DELAY_MS` (stalls the prompt so the thinking indicator is observable) / `FAKE_ACP_MODES=1` (advertises `modes` on session/new+load and implements `session/set_mode` → `current_mode_update`) / `FAKE_ACP_MODE_LOG` (file the fake appends `<sessionId> <modeId>` to per set_mode call). |
+| `AGENT_WORKSPACE_TEST=1` | always | Enables the `__agentworkspace` hooks (and the `test:hook` IPC); also disables the auto-updater (in testMode update checks are simulated — see Updates). |
+| `AGENT_WORKSPACE_TENANT_URL` | always | Overrides settings.tenantUrl (localhost http is allowed only in tests through this variable). |
+| `AGENT_WORKSPACE_USER_DATA` | always | Overrides userData (default is `%APPDATA%\agent-workspace`, from package.json `name`). |
+| `AGENT_WORKSPACE_TEST_MIGRATE_FROM` | test mode | Stand-in for the legacy `devin-workspaces` profile dir — lets the migration run even though the test profile is explicit (`tests/e2e/migration.spec.ts`, cross-rename smoke). |
+| `AGENT_WORKSPACE_LOG` | always | Event-log path. |
+| `AGENT_WORKSPACE_DOWNLOAD_DIR` | always | Download directory. |
+| `AGENT_WORKSPACE_SCALE` | always | Display scale override. |
+| `AGENT_WORKSPACE_ALLOW_EXTERNAL` | test mode | Test override for `settings.routing.allowExternal`. |
+| `AGENT_WORKSPACE_TEST_GITHUB_ORIGINS` | test mode | Comma-separated extra GitHub origins (fixture servers). |
+| `AGENT_WORKSPACE_TEST_BEFOREUNLOAD` | test mode | beforeunload fixture switch. |
+| `AGENT_WORKSPACE_TEST_WINDOW_SIZE` | test mode | `WxH`, default `1400x900` — CI runners with small displays get a fail-fast error instead of pane timeouts. |
+| `AGENT_WORKSPACE_TEST_KEEPALIVE_MS` | test mode | Override for `settings.tabs.keepAliveHours`; 0 = discard hidden-scope tabs on switch. |
+| `AGENT_WORKSPACE_LOG_MAX_BYTES` | test mode | Event-log rotation cap (test-only), default 10 MB. |
+| `AGENT_WORKSPACE_EVIDENCE=1` | test mode | Makes the routing e2e write its event log to `docs/evidence/e2e-fixture-events.jsonl` (default: temp profile; docs/ is git-ignored). |
+| `AGENT_WORKSPACE_INSTALLED_EXE` | smoke | Path of the installed exe under test. |
+| `AGENT_WORKSPACE_SMOKE_PROFILE` | smoke | Profile (userData) used by the smoke run. |
+| `AGENT_WORKSPACE_SMOKE_PHASE` | smoke | `fresh`\|`upgrade`. |
+| `AGENT_WORKSPACE_SMOKE_EVIDENCE` | smoke | Evidence output path. |
+| `AGENT_WORKSPACE_API_BASE` | test mode (P5) | Overrides `settings.apiBase` for the v3 poller. |
+| `AGENT_WORKSPACE_POLL_MS` | test mode (P5) | Poll interval for active and idle. |
+| `AGENT_WORKSPACE_TEST_BANNER_MS` | test mode (P5) | Shortens the notification banner's 8 s auto-hide. |
+| `AGENT_WORKSPACE_TEST_AUTOFILL_PROMPT_MS` | test mode (P5) | Shortens the save-password prompt's 1.5 s show-delay fallback. |
+| `AGENT_WORKSPACE_TEST_AUTOFILL_DISMISS_MS` | test mode (P5) | Shortens its 10 s auto-dismiss. |
+| `AGENT_WORKSPACE_TEST_RELEASES_URL` | test mode | Overrides the GitHub API base used by the release-notes fetcher (`src/main/releases.ts`). |
+| `AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD` | test mode | e.g. `node out/fixtures/fakeAuthStatus.cjs` — replaces the `devin auth status` spawn used for service-user identity resolution; the fake reads `FAKE_AUTH_STATUS_EXIT` / `FAKE_AUTH_STATUS_USER_ID` / `FAKE_AUTH_STATUS_ORG_ID`. |
+| `AGENT_WORKSPACE_LOCAL_AGENT_CMD` | test mode | e.g. `node out/fixtures/fakeAcpAgent.cjs` — replaces the `devin acp` spawn with a full command; the fake agent reads `FAKE_ACP_LIST=1` / `FAKE_ACP_LOAD=1` / `FAKE_ACP_DELETE=1` / `FAKE_ACP_LINK_URL` / `FAKE_ACP_USAGE=1` (emits a `usage_update` mid-prompt and `usage` on the prompt response) / `FAKE_ACP_PROMPT_DELAY_MS` (stalls the prompt so the thinking indicator is observable) / `FAKE_ACP_MODES=1` (advertises `modes` on session/new+load and implements `session/set_mode` → `current_mode_update`) / `FAKE_ACP_MODE_LOG` (file the fake appends `<sessionId> <modeId>` to per set_mode call). |
 | `DEVIN_CLI` | always (scripts) | Overrides the binary for `acp:probe` / `acp:contract`. |
-| `DEVIN_WORKSPACES_TEST_TERMINAL_CMD` | test mode | e.g. `node out/fixtures/fakePty.cjs` — replaces the command the embedded terminal spawns — for `devin`-kind (Local panel), `shell`-kind (dock) and claude-kind ptys (the fake pty echoes argv → `-r <id>` assertable, and `env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=set`; `tests/fixtures/fakePty.ts` echoes stdin with control bytes escaped as `\xNN`). |
-| `DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS` | test mode | Path to a JSON file shaped like `CloudListResult` — `{ sessions: CloudSession[], folders: string[], folderTotals: {}, nextCursor }` — makes the cloud sidebar data layer (`src/main/cloudSessions.ts`) skip the network and load the file at start and on every `cloudRefresh()`; unset in test mode → `cloud.status` is `'disabled'`. |
-| `DEVIN_WORKSPACES_TEST_CLOUD_CACHE` | test mode | Path to a JSON file in `CloudCache` shape — `{version:1, tenantUrl, savedAt, sessions, folders, folderTotals}` — loaded as the cached list when no fixture file is set, leaving `cloud.status` `'connecting'` with `cached: true`. |
-| `DEVIN_WORKSPACES_TEST_SESSIONS_OPEN` | test mode | `'1'`/`'0'` overrides `settings.sessions.open` at startup; `launchApp` sets `'0'` by default so legacy specs keep `devin.x === RAIL_WIDTH` — sidebar specs pass `'1'`. |
-| `DEVIN_WORKSPACES_TEST_CLOUD_KEEPALIVE_MS` | test mode | Overrides `settings.sessions.keepAliveHours` for the pooled Cloud views — mirrors `DEVIN_WORKSPACES_TEST_KEEPALIVE_MS` (tabs). |
-| `DEVIN_WORKSPACES_TEST_CLAUDE_SDK` | test mode | An ESM module `loadSdk()` imports instead of the real SDK — `tests/fixtures/fakeClaudeSdk.ts` → `out/fixtures/fakeClaudeSdk.mjs` (`export *` real SDK + fake `query`; writes real-shaped jsonl into `CLAUDE_CONFIG_DIR/projects/<encoded cwd>/`; emits `message_start` per group). The fake reads `FAKE_CLAUDE_TOOL=1` (parks on `canUseTool`), `FAKE_CLAUDE_DELAY_MS` (stalls the deltas), `FAKE_CLAUDE_TWO_MESSAGES=1` (splits a turn into two API messages), `FAKE_CLAUDE_COST_USD` (`result.total_cost_usd`). |
-| `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` | test mode | Replaces the folder `showOpenDialog` in `newSession(cwd|null)`. |
-| `DEVIN_WORKSPACES_TEST_PICKER_CANCEL` | test mode | Every folder dialog routed through `src/main/dialogs.ts openFolderDialog` returns canceled immediately; the options are recorded for the `lastOpenDialogOptions()` test hook. |
-| `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD` | test mode | Whole command, e.g. `node out/fixtures/fakeClaudeAgents.cjs` — replaces the `claude` binary for background agents; the fake prints `FAKE_CLAUDE_AGENTS` for `agents --json --all` and appends `stop <id>` to `FAKE_CLAUDE_AGENTS_LOG`. |
-| `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS` | test mode | Background-agent poll interval. |
-| `DEVIN_WORKSPACES_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
-| `DEVIN_WORKSPACES_TEST_WSL_CMD` | test mode | Full command line replacing `wsl.exe` for *every* invocation (enumeration, probe, spawn, pty, inotify). `launchApp` defaults it to `node out/fixtures/fakeWsl.cjs` with `FAKE_WSL_DISTROS=''` so specs stay local-only; the fake reads `FAKE_WSL_DISTROS` (`"Fake:Running:default,Other:Stopped"`), `FAKE_WSL_HOME` (default `/home/u`), `FAKE_WSL_ROOT` (`--cd` map root), `FAKE_WSL_ENV_MARKER`, `FAKE_WSL_NO_CLAUDE`, `FAKE_WSL_NO_GH`, `FAKE_WSL_INOTIFY`, `FAKE_WSL_HOOKS`, `FAKE_WSL_CLAUDE_CMD`, `FAKE_WSL_DEVIN_CMD`, `FAKE_WSL_SPAWN_LOG`. |
-| `DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`configDir`, `toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro. |
-| `DEVIN_WORKSPACES_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
-| `DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
-| `DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
-| `DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
-| `DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Value may be a `;`-separated list of `hostId=path` pairs for multi-account staging (bare path = default for hosts without a pair). |
-| `DEVIN_WORKSPACES_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
-| `DEVIN_WORKSPACES_PROBE_HOST` / `DEVIN_WORKSPACES_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `DEVIN_WORKSPACES_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
+| `AGENT_WORKSPACE_TEST_TERMINAL_CMD` | test mode | e.g. `node out/fixtures/fakePty.cjs` — replaces the command the embedded terminal spawns — for `devin`-kind (Local panel), `shell`-kind (dock) and claude-kind ptys (the fake pty echoes argv → `-r <id>` assertable, and `env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set`; `tests/fixtures/fakePty.ts` echoes stdin with control bytes escaped as `\xNN`). |
+| `AGENT_WORKSPACE_TEST_CLOUD_SESSIONS` | test mode | Path to a JSON file shaped like `CloudListResult` — `{ sessions: CloudSession[], folders: string[], folderTotals: {}, nextCursor }` — makes the cloud sidebar data layer (`src/main/cloudSessions.ts`) skip the network and load the file at start and on every `cloudRefresh()`; unset in test mode → `cloud.status` is `'disabled'`. |
+| `AGENT_WORKSPACE_TEST_CLOUD_CACHE` | test mode | Path to a JSON file in `CloudCache` shape — `{version:1, tenantUrl, savedAt, sessions, folders, folderTotals}` — loaded as the cached list when no fixture file is set, leaving `cloud.status` `'connecting'` with `cached: true`. |
+| `AGENT_WORKSPACE_TEST_SESSIONS_OPEN` | test mode | `'1'`/`'0'` overrides `settings.sessions.open` at startup; `launchApp` sets `'0'` by default so legacy specs keep `devin.x === RAIL_WIDTH` — sidebar specs pass `'1'`. |
+| `AGENT_WORKSPACE_TEST_CLOUD_KEEPALIVE_MS` | test mode | Overrides `settings.sessions.keepAliveHours` for the pooled Cloud views — mirrors `AGENT_WORKSPACE_TEST_KEEPALIVE_MS` (tabs). |
+| `AGENT_WORKSPACE_TEST_CLAUDE_SDK` | test mode | An ESM module `loadSdk()` imports instead of the real SDK — `tests/fixtures/fakeClaudeSdk.ts` → `out/fixtures/fakeClaudeSdk.mjs` (`export *` real SDK + fake `query`; writes real-shaped jsonl into `CLAUDE_CONFIG_DIR/projects/<encoded cwd>/`; emits `message_start` per group). The fake reads `FAKE_CLAUDE_TOOL=1` (parks on `canUseTool`), `FAKE_CLAUDE_DELAY_MS` (stalls the deltas), `FAKE_CLAUDE_TWO_MESSAGES=1` (splits a turn into two API messages), `FAKE_CLAUDE_COST_USD` (`result.total_cost_usd`). |
+| `AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD` | test mode | Replaces the folder `showOpenDialog` in `newSession(cwd|null)`. |
+| `AGENT_WORKSPACE_TEST_PICKER_CANCEL` | test mode | Every folder dialog routed through `src/main/dialogs.ts openFolderDialog` returns canceled immediately; the options are recorded for the `lastOpenDialogOptions()` test hook. |
+| `AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD` | test mode | Whole command, e.g. `node out/fixtures/fakeClaudeAgents.cjs` — replaces the `claude` binary for background agents; the fake prints `FAKE_CLAUDE_AGENTS` for `agents --json --all` and appends `stop <id>` to `FAKE_CLAUDE_AGENTS_LOG`. |
+| `AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS` | test mode | Background-agent poll interval. |
+| `AGENT_WORKSPACE_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
+| `AGENT_WORKSPACE_TEST_WSL_CMD` | test mode | Full command line replacing `wsl.exe` for *every* invocation (enumeration, probe, spawn, pty, inotify). `launchApp` defaults it to `node out/fixtures/fakeWsl.cjs` with `FAKE_WSL_DISTROS=''` so specs stay local-only; the fake reads `FAKE_WSL_DISTROS` (`"Fake:Running:default,Other:Stopped"`), `FAKE_WSL_HOME` (default `/home/u`), `FAKE_WSL_ROOT` (`--cd` map root), `FAKE_WSL_ENV_MARKER`, `FAKE_WSL_NO_CLAUDE`, `FAKE_WSL_NO_GH`, `FAKE_WSL_INOTIFY`, `FAKE_WSL_HOOKS`, `FAKE_WSL_CLAUDE_CMD`, `FAKE_WSL_DEVIN_CMD`, `FAKE_WSL_SPAWN_LOG`. |
+| `AGENT_WORKSPACE_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`configDir`, `toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro. |
+| `AGENT_WORKSPACE_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
+| `AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
+| `AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
+| `AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
+| `AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Value may be a `;`-separated list of `hostId=path` pairs for multi-account staging (bare path = default for hosts without a pair). |
+| `AGENT_WORKSPACE_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
+| `AGENT_WORKSPACE_PROBE_HOST` / `AGENT_WORKSPACE_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `AGENT_WORKSPACE_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
-| `DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN` | always (set by the app) | Bearer token placed in claude-kind pty `extraEnv` and referenced from the injected `--settings` hooks block. |
+| `AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN` | always (set by the app) | Bearer token placed in claude-kind pty `extraEnv` and referenced from the injected `--settings` hooks block. |
 | `WT_SESSION` / `TERM_PROGRAM` | always (set by the app) | Set on devin-kind ptys when unset so the `devin` CLI doesn't detect conhost (`terminal-env` carries `added: [...]`). |
 
 ## Versions
@@ -132,10 +136,10 @@ variable that selects it.
   surface the shortcut is a no-op and `layout.terminalOpen` keeps its value; a shortcut toggle logs `terminal-toggle {open, source:'shortcut'}`.
 - e2e: Playwright's `page.keyboard.press` does NOT reach Electron's `before-input-event`, so main-process shortcuts must be driven with
   `webContents.sendInputEvent` from `app.evaluate` (see `ctrlBacktick` in `tests/e2e/terminal.spec.ts`: `keyDown`+`keyUp` with `modifiers:['control']`
-  on `__devinworkspaces.getShellWebContents()`).
+  on `__agentworkspace.getShellWebContents()`).
 - Composer (`src/shell/chat/ChatView.tsx`, shared by Local and Claude): Enter with `ctrlKey || metaKey` sends; plain Enter and Shift+Enter insert a
-  newline. `sendShortcutLabel()` (`⌘+Enter` on darwin via `window.devinworkspaces.platform`, else `Ctrl+Enter`) feeds both footer hints.
-- `window.devinworkspaces.platform` (a static `process.platform` string exposed by the preload) is the only platform signal in the shell — no IPC needed.
+  newline. `sendShortcutLabel()` (`⌘+Enter` on darwin via `window.agentworkspace.platform`, else `Ctrl+Enter`) feeds both footer hints.
+- `window.agentworkspace.platform` (a static `process.platform` string exposed by the preload) is the only platform signal in the shell — no IPC needed.
 
 ### Settings keys
 - `pane.open` + `pane.fraction` (0..1 share of the available width — px guards are derived in `computeBounds`, never persisted; `pane.width` migrates to
@@ -162,7 +166,7 @@ variable that selects it.
   validation: blank or `isAbsolutePickerPath` (drive, UNC or POSIX-absolute). Precedence is the pure `pickerStartPath(configured, distroHome, exists)`
   in `src/core/pickerFolder.ts`: configured folder if it `existsSync` → default WSL distro home → undefined; a missing configured folder logs
   `picker-folder-missing {surface}` and is skipped, never cleared. Wired at `localWorkspacePick` (`src/main/local/ipc.ts`) and Claude
-  `pickerDefaultPath()` (`sessions.ts`, used by `newSession(null)` and `pickWorkspaceDir`); `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` still short-circuits before it.
+  `pickerDefaultPath()` (`sessions.ts`, used by `newSession(null)` and `pickWorkspaceDir`); `AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD` still short-circuits before it.
 - `claude.{workspaces: string[], workspaceLabels, defaultWslDistro}` — the Claude workspace list (separate from `workspaces`), labels by path,
   `defaultWslDistro` (`#claudeDefaultWslDistroSelect`; read by Claude `newSession(null)`); collapse state reuses `claude.collapsedFolders` keyed by path.
 - `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
@@ -347,7 +351,7 @@ variable that selects it.
   names and counts only. The Devin token Save/Clear and password Add/Edit buttons stay explicit actions — only settings fields are implicit-save.
 
 ### Analytics surface
-- A 4th rail button `#analyticsButton` swaps the main column to a lazily created `analyticsView` (`src/main/analytics.ts`, `persist:devin`, no preload)
+- A 4th rail button `#analyticsButton` swaps the main column to a lazily created `analyticsView` (`src/main/analytics.ts`, `persist:cloud`, no preload)
   loaded with `ANALYTICS_PATH` (`/settings/my-analytics`, `analyticsUrl`/`isAnalyticsUrl` in `src/core/sessions.ts`). It mirrors the devinView branch in
   `applyLayout`/`lowerShell` and stays alive after switching away and reloads in place on each re-entry (`refreshAnalyticsView`, `analytics-refresh` log
   event with `mode: reload|navigate`). Router: same-tab navigations from `analytics` to GitHub open a foreground gh-tab, to other tenant pages route to
@@ -483,10 +487,10 @@ variable that selects it.
 - `options`: `cwd`, `pathToClaudeCodeExecutable`, `permissionMode`, `model?`, `includePartialMessages:true`, `settingSources:['user','project','local']`,
   `canUseTool`, `abortController`.
 - Channels `claude:chatState` (invoke), `claude:chatUpdate` (push), `claude:newSession|prompt|cancel|permission|setPermissionMode|setModel|loadHistory`
-  (invoke → `LocalResult` via `handleResult`). `sessions.ts` `newSession(cwd|null)` → `openFolderDialog` (`src/main/dialogs.ts` — records options for `lastOpenDialogOptions()`, honours `DEVIN_WORKSPACES_TEST_PICKER_CANCEL`) / `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` →
+  (invoke → `LocalResult` via `handleResult`). `sessions.ts` `newSession(cwd|null)` → `openFolderDialog` (`src/main/dialogs.ts` — records options for `lastOpenDialogOptions()`, honours `AGENT_WORKSPACE_TEST_PICKER_CANCEL`) / `AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD` →
   `host.newSession` → `open`; `claude.lastSessionId` persists on open and restores on the first list; `versions` = `claude --version` (execFile, 3 s) vs
   the SDK `manifest.json` (`sdkTargetCliVersion()`), re-checked on `claude.path` change. Ctrl+N on the claude surface → `newSession(null)`.
-- Fake SDK for tests: `DEVIN_WORKSPACES_TEST_CLAUDE_SDK` + `FAKE_CLAUDE_*` (see Env vars).
+- Fake SDK for tests: `AGENT_WORKSPACE_TEST_CLAUDE_SDK` + `FAKE_CLAUDE_*` (see Env vars).
 - Shell: `src/shell/chat/ChatView.tsx` (+ `Cards.tsx`, extracted from `src/shell/local/` — Local e2e ids
   `#messageList`/`#turnSummary`/`#stopReason`/`#composer`/`#sendButton`/`#cancelButton` are the shared DOM contract) inside `ClaudeView`
   (`#claudePermissionMode`, `#claudeModel`, `#claudeVersionWarning`, `data-live`, `#claudeNewSession`/`#claudeNewSessionEmpty`, `#claudeError`).
@@ -509,8 +513,8 @@ variable that selects it.
   `claude rm`). `snapshot().agents` is the raw list; `agentStatus` is overlaid per sessionId on each row (claudeRegistry untouched).
 - Menus: session menu gains `open-terminal` after Fork; `kind:'agent'` menus get Attach (`action:'attach-agent'` — the shell maps it to
   `terminalOpen({mode:'attach'})`) + Stop (`sessions.agentStop` → `claude stop <id>` 3 s then a mutate refresh). Channels `claude:agentStop`
-  (invoke→LocalResult), `claude:agentsRefresh` (send). Env: `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD`, `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS`,
-  `DEVIN_WORKSPACES_TEST_TERMINAL_CMD` (see Env vars).
+  (invoke→LocalResult), `claude:agentsRefresh` (send). Env: `AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD`, `AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS`,
+  `AGENT_WORKSPACE_TEST_TERMINAL_CMD` (see Env vars).
 - Hooks: `claudeAgents()`, `claudeAgentsRefresh()`, `claudeTerminalOpen(id)`. Log events: `claude-terminal`, `claude-agents`, `claude-agents-parse`,
   `claude-agents-error`, `claude-agent-stop`.
 - Gotcha: on Windows/Electron 44, when the close that started cleanup was itself a vetoed `app.quit()`, a later `app.exit(0)` can return WITHOUT exiting
@@ -518,7 +522,7 @@ variable that selects it.
   e2e specs cancel a running Claude turn before `app.close()`. `expect.poll` does not retry a throwing readFileSync (poll `existsSync` instead).
 
 ### Hooks, activity & notifications (landed Phase 4)
-- `src/main/claude/hookServer.ts` is a loopback `127.0.0.1` http listener (`Authorization: Bearer <token>`; `/devin-workspaces/hook/<event>`; body ≤256KB;
+- `src/main/claude/hookServer.ts` is a loopback `127.0.0.1` http listener (`Authorization: Bearer <token>`; `/agent-workspace/hook/<event>`; body ≤256KB;
   immediate `{}` reply; never logs cwd/tool input/response) — `{version:1,port,token}` persists in `userData/claude-hooks.json` (0600 where supported;
   port = sha256(userData) → 49152–65535, +1 probing up to 20 on EADDRINUSE). Log events: `claude-hooks-listen`, `claude-hook`, `claude-hook-rejected`,
   `claude-hook-ignored`, `claude-hooks-error`.
@@ -527,7 +531,7 @@ variable that selects it.
   `PostToolUse` carries `matcher:'Bash'`, and the `gh pr` filter runs server-side in `notificationsForHookEvent` (`src/core/claudeNotify.ts`), not the
   CLI's `if`.
 - `src/main/claude/hooksInstall.ts#applyGlobalHooks` merges/removes the block in `<configDir>/settings.json` on `claude.hooksEnabled` (one-time
-  `.devin-workspaces.bak` backup, tmp+rename, unparseable → no write + `hooks.error`; `claude-hooks-install {enabled,changed,ok}`).
+  `.agent-workspace.bak` backup, tmp+rename, unparseable → no write + `hooks.error`; `claude-hooks-install {enabled,changed,ok}`).
 - `hooks.ts` owns an `ActivityState` (`src/core/claudeActivity.ts`: applyHookEvent → running|waiting; `activityFor(activity, chat|null, id)` — chat
   running/pendingPermission wins; entries expire after 2 h without an event, swept every 10 min + each refresh) overlaid on snapshot rows + a
   `hooks {port,enabled,installed,error}` block.
@@ -540,8 +544,8 @@ variable that selects it.
   toggles. Claude entries are `source:'claude'`/`ownerUserId:null` keyed `session:claude:<id>` (`pruneForeign` keeps them); `openNotification` on a
   claude entry → `surface='claude'` + `claudeSessions().open(id)`, prUrl → tab in `claude:<id>` scope.
 - Pty injection: `sessions.hookInjection(id,mode)` → `hooks.ts#injection` (null on attach or when the listener failed) → `TerminalOpenOptions` claude variant
-  `extraArgs=['--settings', settingsFlagJson(port,'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN')]` + `extraEnv` token, filled in `terminalIpc.ts` (fake pty echoes
-  `env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=set`); it also adds `--permission-mode <claude.defaultPermissionMode>` (resume/new).
+  `extraArgs=['--settings', settingsFlagJson(port,'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN')]` + `extraEnv` token, filled in `terminalIpc.ts` (fake pty echoes
+  `env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set`); it also adds `--permission-mode <claude.defaultPermissionMode>` (resume/new).
 - Settings `claude.hooksEnabled` (default false; Settings → Notifications `#claudeHooksToggle`/`#claudeHooksStatus`/`#claudeHooksError`). Test hooks:
   `claudeHookInfo` ({port,token}), `claudeActivity`, `claudePostHook(event,body)`/`claudePostHookRaw(...,auth)`, `claudeHooksSettingsPath`.
 
@@ -556,7 +560,7 @@ variable that selects it.
   non-final default or caller maxAge), `parsePrState` on the same HTML, `seed()` for tests, debounced `onChange` + notifyShell; a fetch that fails or
   can't parse a state keeps the previous one (never regresses known state to null) and `pr-title` logs `state`. It falls back to
   `gh pr view <url> --json state,isDraft,title` when the page fetch yields no state (`resolveGhCmd` via where/which cached 10 min;
-  `pr-title {via:'page'|'gh'}`; test `DEVIN_WORKSPACES_TEST_GH_CMD`).
+  `pr-title {via:'page'|'gh'}`; test `AGENT_WORKSPACE_TEST_GH_CMD`).
 - `prTracking.ts#refreshPrStates(reason)` (10 min timer while focused + `setPrsPanel` open seam + `claudeRefreshPrStates` hook) re-ensures non-final
   urls; the `onChange` subscription writes `setPrState` for changed states → first final flip →
   `notificationStore().add({kind:'pr-completed', source:'claude', prUrl, prState})` (collect + `kinds.prCompleted`).
@@ -586,7 +590,7 @@ variable that selects it.
 - Host tracks `currentMessageIds` per session (`messageIdFromStreamEvent` → `translateSdkMessage { streaming:true, messageId }`, reset at `result`) so
   consecutive API messages render separately — fake SDK emits `message_start` per group, `FAKE_CLAUDE_TWO_MESSAGES=1` splits a turn into two API messages.
 - claude-kind `hookInjection` adds `--permission-mode <claude.defaultPermissionMode>` (see Hooks); `prTitles` gained the `gh pr view` state fallback
-  (see Pull requests; test `DEVIN_WORKSPACES_TEST_GH_CMD` full command line + `FAKE_GH_JSON` via `out/fixtures/fakeGh.cjs`).
+  (see Pull requests; test `AGENT_WORKSPACE_TEST_GH_CMD` full command line + `FAKE_GH_JSON` via `out/fixtures/fakeGh.cjs`).
 - The store watcher now passes changed filenames — `<id>.jsonl` on a `terminalOwned` session → debounced 1 s `host.loadHistory` (live terminal turns in
   chat; `inFlight` guard); any `<id>`/`subagents` change invalidates the subagent list. `usage.costUsd` reaches the pill from `result.total_cost_usd`
   (`FAKE_CLAUDE_COST_USD`).
@@ -602,7 +606,7 @@ variable that selects it.
 - Log URLs/ids/lengths only — never page or process output text (terminal output, ACP stderr, credential usernames/passwords are all excluded).
   Claude log details are ids/counts/durations only — never `configDir`, cwd, tool input/response or terminal output. Prompt/message lengths and ids,
   never content.
-- `tenantUrl`/`apiBase` must be https (localhost http only in tests via `DEVIN_WORKSPACES_TENANT_URL`).
+- `tenantUrl`/`apiBase` must be https (localhost http only in tests via `AGENT_WORKSPACE_TENANT_URL`).
 - Remote views (devin + `gh:*` tabs) get only `out/autofill-preload.cjs` (`src/autofill/preload.ts`): sandbox + contextIsolation stay on, it exposes
   nothing via contextBridge, and it talks to main only over `autofill:*` channels guarded by `hostedHandle`/`hostedOn` (`fromHostedView`: sender is a
   hosted view, frame origin == top-frame origin). Partitions stay separate.
@@ -617,8 +621,19 @@ variable that selects it.
 - `preload.setSurface` guards on `SurfaceSchema` — new surfaces must be added to the schema.
 - Smoke isolation: The isolated identity exists because electron-builder's NSIS always uninstalls the registered install of the same appId
   (`HKCU\Software\<GUID>\InstallLocation`, regardless of `/D=`) — smoking the real artifact on a dev machine removes the user's installed app.
+- Rename / migration (Devin Workspaces → Agent Workspace, v2.0): `build.nsis.guid` is pinned to `1f69b7bc-532a-5b53-bb75-cfe47a155a29` — the
+  *pre-rename* product's GUID — so NSIS treats the new installer as an upgrade of the existing install (smoke pins `8bc73818-…` the same way); the
+  GUID is the one deliberate carry-over, do not change it. `build/installer.nsh` (`!macro customInit`, runs in `.onInit` AFTER `initMultiUser` seeds
+  `$INSTDIR` from the registry `InstallLocation`) redirects only the old default-named folder (`...\Devin Workspaces` / smoke equivalents) to the new
+  `Programs\${APP_FILENAME}` — custom folders are kept. `src/main/bootstrap.ts` applies `AGENT_WORKSPACE_USER_DATA` and runs
+  `src/main/migrate.ts#runProfileMigration` (rename `devin-workspaces` → `agent-workspace` profile dir + `Partitions\devin` → `Partitions\cloud` +
+  updater-cache cleanup, never throws); it must stay the FIRST import of `index.ts` and `log.ts` because `log.ts` mkdirs userData at import.
+  `src/core/claudeHooks.ts#LEGACY_HOOK_PATH_PREFIXES` (`/devin-workspaces/hook/`) is accepted by `isOurHook` and the hook server until a later
+  release; `hooksInstall.ts` renames the one-time `settings.json.devin-workspaces.bak` backup. On darwin only, when the migration ran this launch
+  and a safeStorage decrypt fails (`secrets.ts` / `credentials.ts`), the undecryptable file is reset (Keychain keys are per app name) — that gate is
+  what keeps an ordinary Keychain hiccup from deleting anything.
 - `test:hook` IPC bridge (test mode only): the smoke spec reaches main-process test hooks through the test-mode-only `test:hook` IPC
-  (`devinworkspaces.testHook(name, ...args)`, registered in `registerTestHooks`) because Electron's browser CDP target does not implement
+  (`agentworkspace.testHook(name, ...args)`, registered in `registerTestHooks`) because Electron's browser CDP target does not implement
   `Runtime.evaluate`. Keep it — the installed smoke depends on it.
 - Test fixtures never point at the committed `tests/fixtures/claude-home` tree — copy it (the SDK writes into its config dir).
 - e2e: cancel a running Claude turn before `app.close()`; `expect.poll` does not retry a throwing readFileSync (poll `existsSync` instead).
@@ -630,7 +645,7 @@ variable that selects it.
 
 ## Test hooks
 
-All are `__devinworkspaces` hooks (test mode only; reachable from the installed smoke via the `test:hook` IPC).
+All are `__agentworkspace` hooks (test mode only; reachable from the installed smoke via the `test:hook` IPC).
 
 | Hook | Purpose |
 |---|---|

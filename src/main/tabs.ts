@@ -90,10 +90,10 @@ export const DEFAULT_MAX_LIVE_TABS = 8;
 const SCOPE_PRUNE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Effective keep-alive: settings hours, overridable in test mode via
-// DEVIN_WORKSPACES_TEST_KEEPALIVE_MS so the e2e can exercise discard with a short window.
+// AGENT_WORKSPACE_TEST_KEEPALIVE_MS so the e2e can exercise discard with a short window.
 export function keepAliveMs(settingHours: number): number {
   const override =
-    process.env.DEVIN_WORKSPACES_TEST === '1' ? process.env.DEVIN_WORKSPACES_TEST_KEEPALIVE_MS : undefined;
+    process.env.AGENT_WORKSPACE_TEST === '1' ? process.env.AGENT_WORKSPACE_TEST_KEEPALIVE_MS : undefined;
   if (override !== undefined && override !== '') {
     const parsed = Number(override);
     if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);

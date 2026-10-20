@@ -9,28 +9,28 @@ import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import { readEvents, waitForEventCount } from '../e2e/helpers';
 import type { PublicState } from '../e2e/helpers';
 
-// Installed-artifact smoke (plan §5 P3). Requires DEVIN_WORKSPACES_INSTALLED_EXE to
-// point at the NSIS-installed "Devin Workspaces.exe"; scripts/smoke-install.ps1
+// Installed-artifact smoke (plan §5 P3). Requires AGENT_WORKSPACE_INSTALLED_EXE to
+// point at the NSIS-installed "Agent Workspace.exe"; scripts/smoke-install.ps1
 // installs, runs this, and uninstalls.
 //
 // Why not `_electron.launch`? Playwright drives Electron through `--inspect=0`,
 // which the shipped exe ignores because the EnableNodeCliInspectArguments fuse
 // is off (by design). So the installed app is launched directly with
 // `--remote-debugging-port=0` and driven over CDP through the shell page's
-// contextBridge API (`window.devinworkspaces`), i.e. the same surface the UI uses.
+// contextBridge API (`window.agentworkspace`), i.e. the same surface the UI uses.
 // Main-process facts (isPackaged, webContents teardown) come from events.jsonl.
-const executablePath = process.env.DEVIN_WORKSPACES_INSTALLED_EXE ?? '';
-const evidenceDir = process.env.DEVIN_WORKSPACES_SMOKE_EVIDENCE ?? join(process.cwd(), 'docs', 'evidence');
-const phase = process.env.DEVIN_WORKSPACES_SMOKE_PHASE ?? 'fresh'; // 'fresh' | 'upgrade'
+const executablePath = process.env.AGENT_WORKSPACE_INSTALLED_EXE ?? '';
+const evidenceDir = process.env.AGENT_WORKSPACE_SMOKE_EVIDENCE ?? join(process.cwd(), 'docs', 'evidence');
+const phase = process.env.AGENT_WORKSPACE_SMOKE_PHASE ?? 'fresh'; // 'fresh' | 'upgrade'
 
-test.skip(!executablePath, 'DEVIN_WORKSPACES_INSTALLED_EXE not set — run via scripts/smoke-install.ps1');
+test.skip(!executablePath, 'AGENT_WORKSPACE_INSTALLED_EXE not set — run via scripts/smoke-install.ps1');
 
 let fixtures: FixtureServers;
 const evidence: Record<string, unknown> = {
   phase,
   executablePath,
-  installerSizeBytes: process.env.DEVIN_WORKSPACES_SMOKE_INSTALLER_SIZE
-    ? Number(process.env.DEVIN_WORKSPACES_SMOKE_INSTALLER_SIZE)
+  installerSizeBytes: process.env.AGENT_WORKSPACE_SMOKE_INSTALLER_SIZE
+    ? Number(process.env.AGENT_WORKSPACE_SMOKE_INSTALLER_SIZE)
     : undefined,
   startedAt: new Date().toISOString(),
 };
@@ -62,13 +62,13 @@ async function launchInstalled(profile: string, logFile: string): Promise<Instan
   const child = spawn(executablePath, ['--remote-debugging-port=0'], {
     env: {
       ...process.env,
-      DEVIN_WORKSPACES_TEST: '1',
-      DEVIN_WORKSPACES_TENANT_URL: fixtures.devinUrl,
-      DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS: new URL(fixtures.githubUrl).origin,
-      DEVIN_WORKSPACES_USER_DATA: profile,
-      DEVIN_WORKSPACES_LOG: logFile,
-      DEVIN_WORKSPACES_DOWNLOAD_DIR: join(profile, 'downloads'),
-      DEVIN_WORKSPACES_ALLOW_EXTERNAL: '0',
+      AGENT_WORKSPACE_TEST: '1',
+      AGENT_WORKSPACE_TENANT_URL: fixtures.devinUrl,
+      AGENT_WORKSPACE_TEST_GITHUB_ORIGINS: new URL(fixtures.githubUrl).origin,
+      AGENT_WORKSPACE_USER_DATA: profile,
+      AGENT_WORKSPACE_LOG: logFile,
+      AGENT_WORKSPACE_DOWNLOAD_DIR: join(profile, 'downloads'),
+      AGENT_WORKSPACE_ALLOW_EXTERNAL: '0',
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -127,12 +127,12 @@ async function shellPage(browser: Browser): Promise<Page> {
 
 async function hooksReady(shell: Page): Promise<void> {
   await expect
-    .poll(async () => shell.evaluate(() => typeof (window as any).devinworkspaces?.getState === 'function'))
+    .poll(async () => shell.evaluate(() => typeof (window as any).agentworkspace?.getState === 'function'))
     .toBe(true);
 }
 
 async function shellState(shell: Page): Promise<PublicState> {
-  return shell.evaluate(() => (window as any).devinworkspaces.getState() as Promise<PublicState>);
+  return shell.evaluate(() => (window as any).agentworkspace.getState() as Promise<PublicState>);
 }
 
 // Graceful close: WM_CLOSE → BaseWindow 'close' → shutdown() → settings flushed, app.quit().
@@ -183,8 +183,10 @@ test('installed resources carry the Agent SDK unpacked, without the platform bin
 
 test('installed app launches, creates views, and persists across relaunch', async () => {
   const profile =
-    process.env.DEVIN_WORKSPACES_SMOKE_PROFILE ?? join(tmpdir(), `devin-workspaces-smoke-${Date.now()}`);
-  mkdirSync(profile, { recursive: true });
+    process.env.AGENT_WORKSPACE_SMOKE_PROFILE ?? join(tmpdir(), `agent-workspace-smoke-${Date.now()}`);
+  // Cross-rename smoke: with MIGRATE_FROM set the profile dir must not exist
+  // yet — the app migrates the legacy dir onto it at first launch.
+  if (!process.env.AGENT_WORKSPACE_TEST_MIGRATE_FROM) mkdirSync(profile, { recursive: true });
   const logFile = join(profile, 'events.jsonl');
   const persistedUrl = `${fixtures.githubUrl}/page/persisted`;
   const upgrade = phase === 'upgrade';
@@ -249,9 +251,9 @@ test('installed app launches, creates views, and persists across relaunch', asyn
 
     // Fresh install: the packaged app can load the external (unpacked) Agent
     // SDK. CDP cannot evaluate in the Electron main process, so the test-only
-    // 'test:hook' bridge dispatches into the main-side __devinworkspaces hooks.
+    // 'test:hook' bridge dispatches into the main-side __agentworkspace hooks.
     const probe = (await shell.evaluate(() =>
-      (window as any).devinworkspaces.testHook('claudeSdkProbe'),
+      (window as any).agentworkspace.testHook('claudeSdkProbe'),
     )) as { ok: boolean; ms: number; hasListSessions: boolean };
     evidence.claudeSdkProbe = probe;
     expect(probe.ok).toBe(true);
@@ -265,7 +267,7 @@ test('installed app launches, creates views, and persists across relaunch', asyn
     const registryFile = join(profile, 'claude-sessions.json');
     expect(existsSync(registryFile)).toBe(false);
     const claudeState = (await shell.evaluate(() =>
-      (window as any).devinworkspaces.testHook('claudeState'),
+      (window as any).agentworkspace.testHook('claudeState'),
     )) as { status: string; sessions: { id: string }[] };
     evidence.claudeStatus = claudeState.status;
     expect(claudeState.status === 'ready' || claudeState.status === 'error').toBe(true);
@@ -273,7 +275,7 @@ test('installed app launches, creates views, and persists across relaunch', asyn
       const sessionId = claudeState.sessions[0].id;
       // The contextMenu invoke stays open until a menuClick resolves it.
       void shell.evaluate((id: string) =>
-        (window as any).devinworkspaces.claudeContextMenu({
+        (window as any).agentworkspace.claudeContextMenu({
           kind: 'session',
           sessionId: id,
           x: 5,
@@ -283,17 +285,17 @@ test('installed app launches, creates views, and persists across relaunch', asyn
       await expect
         .poll(async () => {
           const items = (await shell.evaluate(() =>
-            (window as any).devinworkspaces.testHook('claudeMenuItems'),
+            (window as any).agentworkspace.testHook('claudeMenuItems'),
           )) as { label: string }[];
           return items.some((i) => i.label === 'Pin');
         })
         .toBe(true);
       const items = (await shell.evaluate(() =>
-        (window as any).devinworkspaces.testHook('claudeMenuItems'),
+        (window as any).agentworkspace.testHook('claudeMenuItems'),
       )) as { id: string; label: string }[];
       const pin = items.find((i) => i.label === 'Pin')!;
       await shell.evaluate(
-        (id: string) => (window as any).devinworkspaces.testHook('claudeMenuClick', id),
+        (id: string) => (window as any).agentworkspace.testHook('claudeMenuClick', id),
         pin.id,
       );
       await expect.poll(() => existsSync(registryFile)).toBe(true);
@@ -307,9 +309,9 @@ test('installed app launches, creates views, and persists across relaunch', asyn
     expect(urls.some((url) => url.startsWith(fixtures.devinUrl))).toBe(true);
 
     // 0.374 ≈ 500 px of the 1338 px available at the 1400 px default window.
-    await shell.evaluate(() => (window as any).devinworkspaces.setSettings({ pane: { fraction: 0.374 } }));
+    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ pane: { fraction: 0.374 } }));
     await expect.poll(async () => (await shellState(shell)).paneFraction).toBeCloseTo(0.374, 2);
-    await shell.evaluate((url: string) => (window as any).devinworkspaces.openLink(url), persistedUrl);
+    await shell.evaluate((url: string) => (window as any).agentworkspace.openLink(url), persistedUrl);
     await expect
       .poll(async () => (await shellState(shell)).tabs.tabs.some((tab) => tab.title.includes('persisted')))
       .toBe(true);
@@ -328,7 +330,7 @@ test('installed app launches, creates views, and persists across relaunch', asyn
     expect(settings.pane?.width).toBeUndefined();
     expect(settings.tabSnapshot?.tabs?.[0]?.url).toBe(persistedUrl);
     // Separate partitions exist on disk.
-    expect(existsSync(join(profile, 'Partitions', 'devin'))).toBe(true);
+    expect(existsSync(join(profile, 'Partitions', 'cloud'))).toBe(true);
     expect(existsSync(join(profile, 'Partitions', 'github'))).toBe(true);
 
     instance = await launchInstalled(profile, logFile);
@@ -364,6 +366,6 @@ test('installed app launches, creates views, and persists across relaunch', asyn
       await instance.browser.close().catch(() => undefined);
       instance.child.kill();
     }
-    if (!process.env.DEVIN_WORKSPACES_SMOKE_PROFILE) rmSync(profile, { recursive: true, force: true });
+    if (!process.env.AGENT_WORKSPACE_SMOKE_PROFILE) rmSync(profile, { recursive: true, force: true });
   }
 });

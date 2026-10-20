@@ -24,36 +24,36 @@ function hooks(app: ElectronApplication) {
     cloudState: () =>
       evaluate(
         () =>
-          (globalThis as any).__devinworkspaces.cloudState(),
+          (globalThis as any).__agentworkspace.cloudState(),
       ) as Promise<{
         status: string;
         sessions: Array<{ id: string; url: string; folder: string | null }>;
         folders: string[];
         cached: boolean;
       }>,
-    cloudRefresh: () => evaluate(() => (globalThis as any).__devinworkspaces.cloudRefresh()),
+    cloudRefresh: () => evaluate(() => (globalThis as any).__agentworkspace.cloudRefresh()),
     layoutRects: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.layoutRects()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.layoutRects()) as Promise<{
         devin: { x: number; width: number };
         sessions: { x: number; width: number } | null;
         paneCollapsed: boolean;
       }>,
     setSessionsOpen: (value: boolean) =>
       app.evaluate(
-        (_e, v: boolean) => (globalThis as any).__devinworkspaces.setSessionsOpen(v),
+        (_e, v: boolean) => (globalThis as any).__agentworkspace.setSessionsOpen(v),
         value,
       ),
     setWindowSize: (width: number, height: number) =>
       app.evaluate(
         (_e, size: { w: number; h: number }) =>
-          (globalThis as any).__devinworkspaces.setWindowSize(size.w, size.h),
+          (globalThis as any).__agentworkspace.setWindowSize(size.w, size.h),
         { w: width, h: height },
       ),
   };
 }
 
 test('cloud session sidebar: data, sections, interactions, geometry', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const fixturePath = join(profile, 'cloudSessions.json');
   const raw = JSON.parse(
@@ -65,8 +65,8 @@ test('cloud session sidebar: data, sections, interactions, geometry', async () =
   writeFileSync(fixturePath, JSON.stringify(raw));
 
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS: fixturePath,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLOUD_SESSIONS: fixturePath,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -130,9 +130,9 @@ test('cloud session sidebar: data, sections, interactions, geometry', async () =
       page.locator('[data-session-id="bbbb0000000000000000000000000002"]'),
     ).toHaveCount(0);
     // survives a surface round-trip
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await expect(page.locator('#sessionsPanel')).toHaveCount(0);
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('cloud'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('cloud'));
     await expect(page.locator('#sessionsPanel')).toBeVisible();
     await expect(
       page.locator('[data-session-id="bbbb0000000000000000000000000002"]'),
@@ -177,12 +177,12 @@ test('cloud session sidebar: data, sections, interactions, geometry', async () =
     // --- (7) narrow window collapses the column (and the pane) ------------
     // The pane-open min width (1000) blocks shrinking to 900 — close the pane
     // first so the window can actually get that narrow.
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setPaneOpen(false));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setPaneOpen(false));
     await h.setWindowSize(900, 800);
     await expect.poll(async () => (await state(app)).sessionsCollapsed).toBe(true);
     await expect(page.locator('#sessionsPanel')).toHaveCount(0);
     await h.setWindowSize(1400, 900);
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setPaneOpen(true));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setPaneOpen(true));
     await expect.poll(async () => (await state(app)).sessionsCollapsed).toBe(false);
     await expect(page.locator('#sessionsPanel')).toBeVisible();
 
@@ -201,7 +201,7 @@ test('cloud session sidebar: data, sections, interactions, geometry', async () =
 });
 
 test('cloud session sidebar: cached list renders while connecting', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const raw = JSON.parse(
     readFileSync(resolve(__dirname, '../fixtures/cloudSessions.json'), 'utf8'),
@@ -224,8 +224,8 @@ test('cloud session sidebar: cached list renders while connecting', async () => 
   );
 
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_CLOUD_CACHE: cachePath,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLOUD_CACHE: cachePath,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -271,7 +271,7 @@ function findMenuItem(items: MenuItem[], label: string): MenuItem | null {
 }
 
 test('cloud session sidebar: mutations, menus, PR badges', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const fixturePath = join(profile, 'cloudSessions.json');
   const raw = JSON.parse(
@@ -283,23 +283,23 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
   writeFileSync(fixturePath, JSON.stringify(raw));
 
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS: fixturePath,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLOUD_SESSIONS: fixturePath,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   const mutations = () =>
-    evaluate(() => (globalThis as any).__devinworkspaces.cloudMutations()) as Promise<
+    evaluate(() => (globalThis as any).__agentworkspace.cloudMutations()) as Promise<
       { op: string; payload: { method: string; path: string; body?: unknown } }[]
     >;
   const menuItems = () =>
-    evaluate(() => (globalThis as any).__devinworkspaces.cloudMenuItems()) as Promise<
+    evaluate(() => (globalThis as any).__agentworkspace.cloudMenuItems()) as Promise<
       MenuItem[]
     >;
   const menuClick = (id: string) =>
-    app.evaluate((_e, itemId) => (globalThis as any).__devinworkspaces.cloudMenuClick(itemId), id);
+    app.evaluate((_e, itemId) => (globalThis as any).__agentworkspace.cloudMenuClick(itemId), id);
   const clipboardRead = () =>
-    evaluate(() => (globalThis as any).__devinworkspaces.clipboardRead()) as Promise<string>;
+    evaluate(() => (globalThis as any).__agentworkspace.clipboardRead()) as Promise<string>;
 
   try {
     await expect.poll(async () => (await h.cloudState()).status).toBe('ready');
@@ -469,7 +469,7 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
     const rename = findMenuItem(await menuItems(), 'Rename…');
     expect(rename).toBeTruthy();
     const renameResult = (await app.evaluate(
-      (_e, id) => (globalThis as any).__devinworkspaces.cloudMenuClick(id),
+      (_e, id) => (globalThis as any).__agentworkspace.cloudMenuClick(id),
       rename!.id,
     )) as { action: string | null };
     expect(renameResult.action).toBe('rename');
@@ -503,7 +503,7 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
       ),
     ).toBe(true);
     await evaluate(
-      () => (globalThis as any).__devinworkspaces.cloudNoteHomeNavigation('abc123'),
+      () => (globalThis as any).__agentworkspace.cloudNoteHomeNavigation('abc123'),
     );
     const movedTo = (id: string, folder: string | null) =>
       mutations().then((ms) =>
@@ -535,10 +535,10 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
 
     // Top-level new session: the watch still updates the sidebar, files nothing.
     await app.evaluate(
-      () => (globalThis as any).__devinworkspaces.cloudNewSession(null),
+      () => (globalThis as any).__agentworkspace.cloudNewSession(null),
     );
     await evaluate(
-      () => (globalThis as any).__devinworkspaces.cloudNoteHomeNavigation('def456'),
+      () => (globalThis as any).__agentworkspace.cloudNoteHomeNavigation('def456'),
     );
     raw.sessions.push({
       ...seed,
@@ -565,11 +565,11 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
       (m) => m.op === 'session-move',
     ).length;
     await app.evaluate(
-      (_e, folder) => (globalThis as any).__devinworkspaces.cloudNewSession(folder),
+      (_e, folder) => (globalThis as any).__agentworkspace.cloudNewSession(folder),
       'Beta',
     );
     await app.evaluate(
-      (_e, id) => (globalThis as any).__devinworkspaces.cloudNoteHomeNavigation(id),
+      (_e, id) => (globalThis as any).__agentworkspace.cloudNoteHomeNavigation(id),
       'aaaa0000000000000000000000000001',
     );
     expect(
@@ -584,7 +584,7 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
 
 // ux3 S1: drag session rows to reorder inside a user folder and Recent.
 test('cloud session sidebar: session row drag reorders inside a folder and recent', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-cloud-reorder-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-cloud-reorder-'));
   const fixturePath = join(profile, 'cloudSessions.json');
   const raw = JSON.parse(
     readFileSync(resolve(__dirname, '../fixtures/cloudSessions.json'), 'utf8'),
@@ -602,8 +602,8 @@ test('cloud session sidebar: session row drag reorders inside a folder and recen
   writeFileSync(fixturePath, JSON.stringify(raw));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS: fixturePath,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLOUD_SESSIONS: fixturePath,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   const orderIn = async (section: string) => {

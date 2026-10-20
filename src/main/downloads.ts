@@ -8,7 +8,7 @@ export function setupDownloads(githubSession: Electron.Session): void {
   githubSession.on('will-download', (_event, item, webContents) => {
     const url = item.getURL();
     const filename = basename(item.getFilename().replace(/[\\/:*?"<>|]/g, '_'));
-    const directory = process.env.DEVIN_WORKSPACES_DOWNLOAD_DIR;
+    const directory = process.env.AGENT_WORKSPACE_DOWNLOAD_DIR;
     log('gh:download', 'download-start', {
       url,
       decision: directory ? 'configured-directory' : 'save-dialog',
