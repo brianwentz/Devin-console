@@ -42,6 +42,7 @@ describe('draftFromSettings', () => {
       local: {
         devinPath: 'D:\\bin\\devin.exe',
         defaultWslDistro: 'Ubuntu-22.04',
+        defaultMode: 'plan',
         pickerFolder: 'C:\\work',
       },
       notifications: { userId: 'user-1', orgId: 'org-2' },
@@ -69,6 +70,7 @@ describe('draftFromSettings', () => {
       terminalShell: 'pwsh.exe',
       devinPath: 'D:\\bin\\devin.exe',
       localDefaultWslDistro: 'Ubuntu-22.04',
+      localDefaultMode: 'plan',
       localPickerFolder: 'C:\\work',
       claudePath: 'C:\\tools\\claude.exe',
       claudeAutoArchiveDays: '30',
@@ -94,6 +96,9 @@ describe('isDraftDirty', () => {
     expect(isDraftDirty(draft({ tenantUrl: 'https://other.example.com' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ devinPath: 'C:\\x\\devin.exe' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ localDefaultWslDistro: 'Ubuntu-22.04' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ localDefaultMode: 'smart' }), defaults)).toBe(true);
+    // '' maps to the null default; whitespace-only stays clean.
+    expect(isDraftDirty(draft({ localDefaultMode: '   ' }), defaults)).toBe(false);
     expect(isDraftDirty(draft({ claudeKeepAliveMinutes: '30' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ claudeMaxLiveAgents: '5' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ claudeDefaultWslDistro: 'Ubuntu-22.04' }), defaults)).toBe(true);
@@ -178,6 +183,7 @@ describe('isDraftDirty', () => {
     expect(result.patch.local).toEqual({
       devinPath: 'D:\\bin\\devin.exe',
       defaultWslDistro: 'Ubuntu-22.04',
+      defaultMode: null,
       pickerFolder: null,
     });
     expect(result.patch.claude).toMatchObject({
@@ -221,7 +227,7 @@ describe('validateDraft', () => {
       usage: { devinPollMinutes: 15 },
       sessions: { open: true, maxLiveViews: 6, keepAliveHours: 24 },
       terminal: { shell: 'pwsh.exe -l' },
-      local: { devinPath: null, defaultWslDistro: null, pickerFolder: null },
+      local: { devinPath: null, defaultWslDistro: null, defaultMode: null, pickerFolder: null },
       claude: {
         path: null,
         autoArchiveDays: 0,
@@ -457,3 +463,27 @@ describe('pickerFolder draft fields (ux3 S0)', () => {
   });
 });
 
+
+describe('localDefaultMode draft field', () => {
+  it("maps '' <-> null and round-trips a mode id through the patch", () => {
+    expect(draftFromSettings(defaults).localDefaultMode).toBe('');
+    const withMode = mergeSettings(defaults, { local: { defaultMode: 'plan' } });
+    expect(draftFromSettings(withMode).localDefaultMode).toBe('plan');
+
+    const set = validateDraft(draft({ localDefaultMode: '  smart  ' }));
+    expect(set.ok && set.patch.local?.defaultMode).toBe('smart');
+    const cleared = validateDraft(draft({ localDefaultMode: '   ' }));
+    expect(cleared.ok && cleared.patch.local?.defaultMode).toBe(null);
+
+    const roundTrip = validateDraft(draftFromSettings(withMode));
+    expect(roundTrip.ok && mergeSettings(defaults, roundTrip.patch)).toEqual(withMode);
+  });
+
+  it('routes its errors to the local tab', () => {
+    expect(DRAFT_TAB.localDefaultMode).toBe('local');
+    const { errors } = fieldErrorsFromIssues([
+      { path: ['local', 'defaultMode'], message: 'bad mode' },
+    ]);
+    expect(errors.localDefaultMode).toBe('bad mode');
+  });
+});

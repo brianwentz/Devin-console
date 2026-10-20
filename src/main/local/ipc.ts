@@ -76,6 +76,7 @@ export function setupLocal(): void {
       autoOpenLocalPr(url, localScope(sessionId), 'local-chat');
     },
     prLinkContext: { githubOrigins: fixtureOrigins },
+    defaultMode: () => state.settings?.current.local.defaultMode ?? null,
   });
   setupTerminalIpc();
   app.on('before-quit', () => host?.dispose());

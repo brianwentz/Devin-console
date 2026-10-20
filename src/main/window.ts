@@ -389,6 +389,9 @@ function applyBounds(bounds: WindowBounds, size: { width: number; height: number
 }
 
 export function applyLayout(): void {
+  // Shutdown IPC churn must not restack views whose webContents are being torn
+  // down (same rule as raiseShell/lowerShell).
+  if (state.shuttingDown) return;
   const { windowRef, shellView, devinView, tabManager } = state;
   if (!windowRef || !shellView || !devinView || !tabManager) return;
   syncScope();

@@ -79,7 +79,7 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_AUTOFILL_DISMISS_MS` | test mode (P5) | Shortens its 10 s auto-dismiss. |
 | `DEVIN_WORKSPACES_TEST_RELEASES_URL` | test mode | Overrides the GitHub API base used by the release-notes fetcher (`src/main/releases.ts`). |
 | `DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD` | test mode | e.g. `node out/fixtures/fakeAuthStatus.cjs` — replaces the `devin auth status` spawn used for service-user identity resolution; the fake reads `FAKE_AUTH_STATUS_EXIT` / `FAKE_AUTH_STATUS_USER_ID` / `FAKE_AUTH_STATUS_ORG_ID`. |
-| `DEVIN_WORKSPACES_LOCAL_AGENT_CMD` | test mode | e.g. `node out/fixtures/fakeAcpAgent.cjs` — replaces the `devin acp` spawn with a full command; the fake agent reads `FAKE_ACP_LIST=1` / `FAKE_ACP_LOAD=1` / `FAKE_ACP_DELETE=1` / `FAKE_ACP_LINK_URL` / `FAKE_ACP_USAGE=1` (emits a `usage_update` mid-prompt and `usage` on the prompt response) / `FAKE_ACP_PROMPT_DELAY_MS` (stalls the prompt so the thinking indicator is observable). |
+| `DEVIN_WORKSPACES_LOCAL_AGENT_CMD` | test mode | e.g. `node out/fixtures/fakeAcpAgent.cjs` — replaces the `devin acp` spawn with a full command; the fake agent reads `FAKE_ACP_LIST=1` / `FAKE_ACP_LOAD=1` / `FAKE_ACP_DELETE=1` / `FAKE_ACP_LINK_URL` / `FAKE_ACP_USAGE=1` (emits a `usage_update` mid-prompt and `usage` on the prompt response) / `FAKE_ACP_PROMPT_DELAY_MS` (stalls the prompt so the thinking indicator is observable) / `FAKE_ACP_MODES=1` (advertises `modes` on session/new+load and implements `session/set_mode` → `current_mode_update`) / `FAKE_ACP_MODE_LOG` (file the fake appends `<sessionId> <modeId>` to per set_mode call). |
 | `DEVIN_CLI` | always (scripts) | Overrides the binary for `acp:probe` / `acp:contract`. |
 | `DEVIN_WORKSPACES_TEST_TERMINAL_CMD` | test mode | e.g. `node out/fixtures/fakePty.cjs` — replaces the command the embedded terminal spawns — for `devin`-kind (Local panel), `shell`-kind (dock) and claude-kind ptys (the fake pty echoes argv → `-r <id>` assertable, and `env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=set`; `tests/fixtures/fakePty.ts` echoes stdin with control bytes escaped as `\xNN`). |
 | `DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS` | test mode | Path to a JSON file shaped like `CloudListResult` — `{ sessions: CloudSession[], folders: string[], folderTotals: {}, nextCursor }` — makes the cloud sidebar data layer (`src/main/cloudSessions.ts`) skip the network and load the file at start and on every `cloudRefresh()`; unset in test mode → `cloud.status` is `'disabled'`. |
@@ -152,8 +152,11 @@ variable that selects it.
 - `usage.devinPollMinutes` (int 5..240, default 15) — Devin usage poll cadence; Settings → General `#usageDevinPollMinutes` ("Check Devin Cloud usage every (minutes)").
 - `notifications.kinds.usage` (default true) — usage-limit alert entries (50%/80%); Settings → Notifications "Usage limits (50% / 80%)". Usage entries never banner.
 - `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
+- `local.{devinPath, defaultWslDistro, defaultMode, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
   `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
-  needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), labels/collapse keyed by workspace path.
+  needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), `defaultMode` (`#localDefaultModeSelect`; free
+  string, null = agent default; applied by `acpHost.applyModes` on session/new and crash-rebind only — never on load, where the agent's persisted mode
+  wins; options are the union of modes live agents advertise, falling back to `DEVIN_LOCAL_MODES`), labels/collapse keyed by workspace path.
 - `local.pickerFolder` / `claude.pickerFolder` (`string | null`, ux3 S3) — "Folder pickers start in" (`#localPickerFolderInput` + `#localPickerFolderBrowse`,
   `#claudePickerFolderInput` + `#claudePickerFolderBrowse`; shared `PickerFolderField` in `settings/fields.tsx`, Browse… = `dialogPickFolder`). Draft
   validation: blank or `isAbsolutePickerPath` (drive, UNC or POSIX-absolute). Precedence is the pure `pickerStartPath(configured, distroHome, exists)`
@@ -447,7 +450,9 @@ variable that selects it.
 - Workspaces (ux2 P4b, plan D8 — landed): Claude folders became path-bound workspaces on the shared `WorkspaceSidebar` (`ClaudeSidebar` is the adapter;
   subagent rows, the background-agents section, host chip and activity dots survive through `renderRow`/`extraSections`/`rowOpts`). A session's folder is
   *derived* — the workspace whose path matches its `cwd`, host-aware via `workspaceFor` in `core/workspaceTree.ts` (local paths compare
-  case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, exact match — a sub-folder is Recent). IPC
+  case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, ancestor match on
+  segment boundaries — nested workspaces resolve deepest-wins via `workspaceDepth`, and the row meta shows the cwd relative to the workspace, '' on an
+  exact match). Sub-folder sessions are workspace members, so they're auto-archive exempt like exact matches. IPC
   `claude:workspaceAdd|Reorder|Rename|Remove`; `newSession(cwd)` from a header passes the path through without the picker; `fork` files itself from the
   same cwd. The free-form folder registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`, the `folders` list) is
   deleted — the loader still tolerates the legacy fields and `registryFileObject` deletes them by name once the migration has consumed them (while
@@ -714,6 +719,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `usage-alert` | `{ metric, threshold, percent }` — a threshold crossed (fires even when the kind is muted; channel `shell`). |
 | `usage-alerts-save-error` | `{ message }` — ledger write failure. |
 | `active-session` | Local selected session lifted to state. |
+| `session-mode-set` / `session-mode-unavailable` / `session-mode-error` | `{ sessionId, modeId, source:'new'\|'rebind' }` — `local.defaultMode` applied on session/new|rebind (never load); `unavailable` also carries `available` (count; 0 when the agent advertised no modes); `error` carries `message` when `session/set_mode` failed. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |
 | `picker-folder-missing` | `{ surface: 'local' \| 'claude' }` — `*.pickerFolder` is set but no longer exists; the picker fell back to the distro home / OS default (the path is never logged, the setting is kept). |

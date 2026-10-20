@@ -522,6 +522,7 @@ describe('ux2 P0 — new local/claude workspace keys and removed-key migration',
     expect(settings.local).toEqual({
       devinPath: null,
       defaultWslDistro: null,
+      defaultMode: null,
       workspaceLabels: {},
       collapsedWorkspaces: [],
       sessionOrder: {},
@@ -622,5 +623,22 @@ describe('ux3 S0 — sessionOrder + pickerFolder contracts', () => {
     const cleared = mergeSettings(next, { local: { pickerFolder: null } });
     expect(cleared.local.pickerFolder).toBeNull();
     expect(cleared.claude.pickerFolder).toBe('\\\\wsl.localhost\\Ubuntu\\home\\u');
+  });
+
+  it('round-trips local.defaultMode (null default, mode id, empty leaf dropped)', () => {
+    const base = SettingsSchema.parse({});
+    expect(base.local.defaultMode).toBeNull();
+    const { settings, dropped } = parseSettingsFile({ local: { defaultMode: 'plan' } });
+    expect(dropped).toEqual([]);
+    expect(settings.local.defaultMode).toBe('plan');
+    const next = mergeSettings(base, { local: { defaultMode: 'smart' } });
+    expect(next.local.defaultMode).toBe('smart');
+    const cleared = mergeSettings(next, { local: { defaultMode: null } });
+    expect(cleared.local.defaultMode).toBeNull();
+    // '' fails min(1): leaf-repair drops just this leaf at dotted-path granularity.
+    const bad = parseSettingsFile({ local: { defaultMode: '', devinPath: 'D:\\devin.exe' } });
+    expect(bad.dropped).toEqual(['local.defaultMode']);
+    expect(bad.settings.local.defaultMode).toBeNull();
+    expect(bad.settings.local.devinPath).toBe('D:\\devin.exe');
   });
 });

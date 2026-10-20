@@ -89,6 +89,7 @@ const FIELD_INPUT: Record<DraftField, string> = {
   terminalShell: 'terminalShellInput',
   devinPath: 'devinPathInput',
   localDefaultWslDistro: 'localDefaultWslDistroSelect',
+  localDefaultMode: 'localDefaultModeSelect',
   localPickerFolder: 'localPickerFolderInput',
   claudePath: 'claudePathInput',
   claudeAutoArchiveDays: 'claudeAutoArchiveInput',

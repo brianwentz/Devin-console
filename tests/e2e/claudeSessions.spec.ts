@@ -35,6 +35,7 @@ test.afterAll(async () => {
 const UA = '11111111-0000-4000-8000-00000000000a';
 const UB = '11111111-0000-4000-8000-00000000000b';
 const UC = '11111111-0000-4000-8000-00000000000c';
+const UD = '11111111-0000-4000-8000-00000000000d';
 
 type MenuItem = {
   id: string;
@@ -135,7 +136,7 @@ function hooks(app: ElectronApplication) {
 }
 
 test('claude sidebar: rows, filter, menus, view, surface round-trip', async () => {
-  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
     DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
@@ -171,6 +172,34 @@ test('claude sidebar: rows, filter, menus, view, surface round-trip', async () =
     await expect(shell.locator('[data-section-name="pinned"]')).toBeVisible();
     await expect(row(UB)).toHaveAttribute('data-pinned', 'true');
 
+    // A transcript in a sub-folder of the soon-to-be workspace, staged into
+    // the copied claude-home (never the committed fixture).
+    const subDir = join(claudeHome, 'projects', 'C--work-alpha-sub');
+    mkdirSync(subDir, { recursive: true });
+    const subLine = (type: 'user' | 'assistant', suffix: string, extra: object) =>
+      JSON.stringify({
+        parentUuid: null,
+        isSidechain: false,
+        userType: 'external',
+        cwd: 'C:\\work\\alpha\\sub',
+        sessionId: UD,
+        version: '2.1.296',
+        gitBranch: 'main',
+        type,
+        message: { role: type, ...extra },
+        uuid: `${UD}-${suffix}`,
+        timestamp: '2026-10-12T10:00:00.000Z',
+      });
+    writeFileSync(
+      join(subDir, `${UD}.jsonl`),
+      subLine('user', 'u1', { content: 'Sub alpha prompt' }) +
+        '\n' +
+        subLine('assistant', 'a1', { content: [{ type: 'text', text: 'Sub reply' }] }) +
+        '\n',
+    );
+    await shell.locator('#claudeRefresh').click();
+    await expect(shell.locator('#claudeStatus')).toHaveText(/ready · 4 sessions/);
+
     // --- workspace add → sessions file under it automatically (D8) --------
     await shell.locator('#workspaceAdd').click();
     await expect
@@ -185,6 +214,10 @@ test('claude sidebar: rows, filter, menus, view, surface round-trip', async () =
     await expect
       .poll(async () => (await h.claudeState()).sessions.find((s) => s.id === UA)?.folder)
       .toBe('C:\\work\\alpha');
+    // The sub-folder cwd files under the same workspace; its row meta shows
+    // the path relative to the workspace.
+    await expect.poll(async () => sectionHasRow(app, 'C:\\work\\alpha', UD)).toBe(true);
+    await expect(row(UD)).toHaveText(/sub/);
 
     // --- rename-session → inline editor → watcher refresh ------------------
     await row(UB).click({ button: 'right' });

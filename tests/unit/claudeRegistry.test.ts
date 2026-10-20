@@ -240,6 +240,16 @@ describe('reconcile', () => {
     expect(registry.entries['s2']?.archived).toBeFalsy();
   });
 
+  it('a session in a workspace sub-folder files under the workspace and is auto-archive exempt', () => {
+    const { registry, sessions } = reconcile(
+      reg(),
+      [store({ cwd: 'C:\\ws\\one\\sub', lastModified: NOW - 90 * DAY })],
+      { now: NOW, autoArchiveDays: 30, workspaces: ['C:\\ws\\one'] },
+    );
+    expect(sessions[0]?.folder).toBe('C:\\ws\\one');
+    expect(registry.entries['s1']?.archived).toBeFalsy();
+  });
+
   it('suppresses auto-archive after a manual unarchive until the session is modified again', () => {
     const r = reg({
       entries: { s1: entry({ unarchivedAt: NOW - 40 * DAY }) },
