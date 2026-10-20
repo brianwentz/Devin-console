@@ -105,10 +105,7 @@ const FIELD_INPUT: Record<DraftField, string> = {
 function focusErrorField(errors: DraftErrors): void {
   const field = firstErrorField(errors);
   if (!field) return;
-  // 'cloud' has no SettingsTabs entry until S2 lands — keep error focus on
-  // 'general' for the fields DRAFT_TAB already routes there.
-  const tabId = DRAFT_TAB[field];
-  setSettingsTab(tabId === 'cloud' ? 'general' : tabId);
+  setSettingsTab(DRAFT_TAB[field]);
   requestAnimationFrame(() => {
     document.getElementById(FIELD_INPUT[field])?.focus();
   });

@@ -140,16 +140,16 @@ On Windows, Devin Workspaces can run Claude and Devin Local sessions *inside* yo
 
 ## Settings reference
 
-Settings is split into seven tabs: **General**, **Devin Local**, **Claude Code**, **Link Handling**, **Passwords**, **Notifications** and **Updates**. Fields save automatically when you switch tabs, leave Settings or quit; invalid values are flagged inline and block the save. The API token Save/Clear and password Add/Edit buttons are explicit actions.
+Settings is split into eight tabs: **General** (GitHub-pane limits, sessions column, shell, hosts), **Devin Cloud** (tenant URL, API base, Cloud session pooling), **Devin Local**, **Claude Code**, **Link Handling**, **Passwords**, **Notifications** and **Updates**. Fields save automatically when you switch tabs, leave Settings or quit; invalid values are flagged inline and block the save. The API token Save/Clear and password Add/Edit buttons are explicit actions.
 
 | Setting | Tab | Notes |
 |---|---|---|
-| Tenant URL / API base | General | Must be `https` |
-| Keep hidden tabs live for (hours) / Max live tabs | General | Memory controls for GitHub tabs of sessions you're not viewing — the session you're viewing keeps its tabs loaded; hidden sessions' tabs are discarded after the keep-alive window and the live cap only ever applies to them |
-| Cloud sessions kept loaded / Keep hidden Cloud sessions live for (hours) | General | The same two controls for the Cloud session views opened from the sessions column (1–20 live views, default 6; 0–168 h, default 24, 0 = discard on switch) |
+| GitHub pane: Keep hidden GitHub tabs live for (hours) / Max live tabs | General | Memory controls for GitHub tabs of sessions you're not viewing, whichever surface (Cloud, Devin Local, Claude) they belong to — the session you're viewing keeps its tabs loaded; hidden sessions' tabs are discarded after the keep-alive window and the live cap only ever applies to them |
 | Show the sessions column (Cloud, Devin Local and Claude) | General | Same as `Ctrl+Shift+S` on the Cloud surface; the column also hosts the Devin Local workspaces |
 | Shell command | General | Blank = Windows Terminal default profile (else PowerShell) on Windows, `$SHELL` on macOS; e.g. `wsl.exe -d Ubuntu` or `/bin/zsh -l` |
 | Hosts | General | Per execution host (`local` + each `wsl:<distro>`): state badge, CLI/env/hooks facts, enable checkbox (wsl rows), **Re-check** and **Overrides** (`claudePath`, `devinPath`, `home`, `shell`, `envCaptureDisabled`). The Devin Local and Claude Code tabs point here for per-host paths |
+| Tenant URL / API base | Devin Cloud | Must be `https`; the Cloud view reloads on tenant change, no restart needed |
+| Cloud sessions kept loaded / Keep hidden Cloud sessions live for (hours) | Devin Cloud | Pooling for the Cloud session views opened from the sessions column (1–20 live views, default 6; 0–168 h, default 24, 0 = discard on switch); the session you're viewing is exempt |
 | devin CLI path | Devin Local | Blank = find `devin` on PATH; a non-empty path that doesn't resolve is flagged inline. Local agents resolve the CLI at startup — restart the app after changing it |
 | Default WSL distro for new sessions | Devin Local | The folder picker for new Devin Local workspaces starts in that distro's home; "none" = current directory picker. Independent of the Claude Code setting |
 | Folder pickers start in | Devin Local | Absolute folder (local or `\\wsl.localhost\…`) where the *Add workspace* dialog opens — type it or **Browse…**. Nothing is pre-selected; a folder that no longer exists is skipped (the setting is kept). Blank = the default WSL distro's home when one is set, else the system default |

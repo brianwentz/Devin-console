@@ -7,6 +7,7 @@ import { setSettingsTab, useSettingsTab, useShellState } from '../store';
 import { NotificationSettings } from './NotificationSettings';
 import { PasswordsSection } from './PasswordsSection';
 import { ClaudeTab } from './settings/ClaudeTab';
+import { CloudTab } from './settings/CloudTab';
 import { GeneralTab } from './settings/GeneralTab';
 import { LinksTab } from './settings/LinksTab';
 import { LocalTab } from './settings/LocalTab';
@@ -60,6 +61,7 @@ export function SettingsPanel({ settings, credentials, style }: SettingsPanelPro
       )}
       <section role="tabpanel" id={`settingsPanel-${tab}`}>
         {tab === 'general' && <GeneralTab />}
+        {tab === 'cloud' && <CloudTab />}
         {tab === 'local' && <LocalTab />}
         {tab === 'claude' && <ClaudeTab />}
         {tab === 'links' && <LinksTab />}
