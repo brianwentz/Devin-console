@@ -330,6 +330,30 @@ export function groupAccounts(
   return [...groups.values()];
 }
 
+/** Drop per-file cache entries that belong to a host scanned this pass but no
+ * longer map to a file under that host's store (`<hostId>:<relative path>`
+ * keys). Entries for hosts that were *not* scanned (a stopped/disabled distro)
+ * are kept so their incremental state survives. Returns the pruned map and
+ * the count removed; the input is not mutated. */
+export function pruneFileCache<T>(
+  files: Record<string, T>,
+  scannedHosts: Iterable<string>,
+  liveKeys: Iterable<string>,
+): { files: Record<string, T>; pruned: number } {
+  const prefixes = [...new Set(scannedHosts)].map((id) => `${id}:`);
+  const live = new Set(liveKeys);
+  const out: Record<string, T> = {};
+  let pruned = 0;
+  for (const [key, entry] of Object.entries(files)) {
+    if (!live.has(key) && prefixes.some((p) => key.startsWith(p))) {
+      pruned += 1;
+      continue;
+    }
+    out[key] = entry;
+  }
+  return { files: out, pruned };
+}
+
 /** Idle pushed-state seed for the service to emit before the first scan. */
 export function emptyClaudeUsageState(month: string): ClaudeUsageState {
   return {

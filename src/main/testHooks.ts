@@ -23,6 +23,7 @@ import {
 import { handleLink } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
+import { lastOpenDialogOptions } from './dialogs';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -48,6 +49,7 @@ export function registerTestHooks(): void {
   Object.assign(globalThis, {
     __devinworkspaces: {
       state: () => publicState(),
+      lastOpenDialogOptions: () => lastOpenDialogOptions(),
       open: (url: string) => {
         const id = state.tabManager?.open(url);
         if (!id) return '';
@@ -123,6 +125,18 @@ export function registerTestHooks(): void {
       hostStatus: (id: string) => hosts().status(id as HostId),
       hostRefresh: (id?: string) => hosts().refresh(id as HostId | undefined),
       hostShellEnvKeys: (id: string) => hosts().shellEnvKeys(id as HostId),
+      // Holds a `withConfigDir` swap open for `ms` so a spec can race it
+      // against readers of `configDir()` (the usage scanner); resolves to the
+      // env value seen mid-swap vs the registry's answer for the local host.
+      withConfigDirHold: async (id: string, ms: number) => {
+        const host = hosts().hostById(id);
+        if (!host) throw new Error(`unknown host ${id}`);
+        return hosts().withConfigDir(host, async () => {
+          const envDuring = process.env.CLAUDE_CONFIG_DIR ?? null;
+          await new Promise((resolve) => setTimeout(resolve, ms));
+          return { envDuring, localDuring: hosts().localConfigDir() };
+        });
+      },
       saveCredential: (credential: { origin: string; username: string; password: string }) =>
         state.credentials?.add(credential) ?? null,
       listCredentials: () => state.credentials?.list() ?? [],

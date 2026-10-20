@@ -1,10 +1,39 @@
+import { z } from 'zod';
 import { fractionFromPx } from './layout';
+import {
+  isPlainObject,
+  overlayKnown,
+  setPath,
+  structural,
+  type PreserveSpec,
+} from './storePreserve';
 import {
   SettingsObject,
   SettingsPatchSchema,
   SettingsSchema,
   type Settings,
+  type SettingsPatch,
 } from '../shared/ipc';
+
+// ux3 S6: which settings.json blocks are structural (unknown nested keys
+// survive a save). Every other field — scalars, arrays, records such as
+// `workspaceLabels`, `hosts.overrides`, `windowPlacements` — is replaced
+// wholesale. tests/unit/storePreserve.test.ts introspects SettingsObject and
+// fails when this drifts from the set of ZodObject fields.
+export const SETTINGS_PRESERVE_SPEC: PreserveSpec = structural({
+  routing: structural(),
+  pane: structural(),
+  local: structural(),
+  tabs: structural(),
+  notifications: structural({ kinds: structural() }),
+  prs: structural(),
+  layout: structural(),
+  sessions: structural(),
+  terminal: structural(),
+  analytics: structural(),
+  claude: structural(),
+  hosts: structural(),
+});
 
 // F2: `pane.width` (px) was persisted against the 1400 px default window.
 const LEGACY_PANE_WINDOW_WIDTH = 1400;
@@ -98,26 +127,117 @@ export function migrateSettingsRaw(raw: unknown): unknown {
   return out;
 }
 
+// Unwrap `.default()` / `.optional()` wrappers down to the field schema.
+export function unwrapSchema(schema: z.ZodType): z.ZodType {
+  let node: z.ZodType = schema;
+  for (;;) {
+    const def = node.def as { type: string; innerType?: z.ZodType };
+    if ((def.type === 'default' || def.type === 'optional') && def.innerType) node = def.innerType;
+    else return node;
+  }
+}
+
+export function innerObjectShape(schema: z.ZodType): Record<string, z.ZodType> | null {
+  const inner = unwrapSchema(schema);
+  return inner instanceof z.ZodObject ? (inner.shape as Record<string, z.ZodType>) : null;
+}
+
+export interface ParsedSettingsFile {
+  settings: Settings;
+  /** Dotted paths whose value failed validation (`surface`, `claude.model`). */
+  dropped: string[];
+  /** Raw values of the dropped paths — written back by the store unless the
+   * path is changed in this run (ux3 S6: invalid-but-known is preserved). */
+  invalid: Record<string, unknown>;
+}
+
 // Parse a raw settings.json payload. On whole-object failure, keep each
-// individually valid field and report the dropped keys so the caller can log
-// a repair event.
-export function parseSettingsFile(raw: unknown): { settings: Settings; dropped: string[] } {
-  const parsed = SettingsSchema.safeParse(migrateSettingsRaw(raw));
-  if (parsed.success) return { settings: parsed.data, dropped: [] };
-  const dropped: string[] = [];
-  const kept: Record<string, unknown> = {};
+// individually valid field; a structural block that fails is repaired at
+// leaf granularity (only the failing leaves fall back to their defaults).
+// Dropped paths are reported so the caller can log a repair event.
+export function parseSettingsFile(raw: unknown): ParsedSettingsFile {
   const migrated = migrateSettingsRaw(raw);
-  if (migrated && typeof migrated === 'object') {
+  const parsed = SettingsSchema.safeParse(migrated);
+  if (parsed.success) return { settings: parsed.data, dropped: [], invalid: {} };
+  const dropped: string[] = [];
+  const invalid: Record<string, unknown> = {};
+  const kept: Record<string, unknown> = {};
+  if (isPlainObject(migrated)) {
     for (const key of Object.keys(SettingsObject.shape)) {
       const field = SettingsObject.shape[key as keyof typeof SettingsObject.shape];
-      const value = (migrated as Record<string, unknown>)[key];
+      const value = migrated[key];
       if (value === undefined) continue;
       const result = field.safeParse(value);
-      if (result.success) kept[key] = result.data;
-      else dropped.push(key);
+      if (result.success) {
+        kept[key] = result.data;
+        continue;
+      }
+      const shape = innerObjectShape(field);
+      if (!shape || !isPlainObject(value)) {
+        dropped.push(key);
+        invalid[key] = value;
+        continue;
+      }
+      const block: Record<string, unknown> = {};
+      for (const [leaf, leafSchema] of Object.entries(shape)) {
+        const leafValue = value[leaf];
+        if (leafValue === undefined) continue;
+        const leafResult = leafSchema.safeParse(leafValue);
+        if (leafResult.success) block[leaf] = leafResult.data;
+        else {
+          dropped.push(`${key}.${leaf}`);
+          invalid[`${key}.${leaf}`] = leafValue;
+        }
+      }
+      kept[key] = block;
     }
   }
-  return { settings: SettingsSchema.parse(kept), dropped };
+  return { settings: SettingsSchema.parse(kept), dropped, invalid };
+}
+
+// Dotted paths a validated patch writes: `key` for top-level fields,
+// `block.key` for leaves of structural blocks (two levels — a
+// `notifications.kinds.x` change counts as `notifications.kinds`).
+export function settingsPatchPaths(patch: SettingsPatch): string[] {
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    const sub = SETTINGS_PRESERVE_SPEC.kind === 'object' ? SETTINGS_PRESERVE_SPEC.keys[key] : undefined;
+    if (sub?.kind === 'object' && isPlainObject(value)) {
+      for (const [leaf, leafValue] of Object.entries(value)) {
+        if (leafValue !== undefined) paths.push(`${key}.${leaf}`);
+      }
+    } else {
+      paths.push(key);
+    }
+  }
+  return paths;
+}
+
+// A dropped path counts as touched when it, a parent or a child of it was
+// written this run (`pane` touched covers `pane.fraction`; `layout.terminalOpen`
+// touched covers a whole-block `layout` drop).
+export function pathTouched(path: string, touched: ReadonlySet<string>): boolean {
+  for (const t of touched) {
+    if (t === path || t.startsWith(`${path}.`) || path.startsWith(`${t}.`)) return true;
+  }
+  return false;
+}
+
+// The object written to settings.json: the in-memory value overlaid on the
+// file as read (unknown keys survive), then every untouched invalid leaf
+// restored to its raw value.
+export function serializeSettingsFile(
+  raw: Record<string, unknown>,
+  value: Settings,
+  invalid: Record<string, unknown>,
+  touched: ReadonlySet<string>,
+): Record<string, unknown> {
+  const out = overlayKnown(raw, value, SETTINGS_PRESERVE_SPEC) as Record<string, unknown>;
+  for (const [path, rawValue] of Object.entries(invalid)) {
+    if (!pathTouched(path, touched)) setPath(out, path, rawValue);
+  }
+  return out;
 }
 
 // exactOptionalPropertyTypes: spreading a Partial can write explicit

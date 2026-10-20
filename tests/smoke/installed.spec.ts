@@ -200,6 +200,9 @@ test('installed app launches, creates views, and persists across relaunch', asyn
     writeFileSync(join(profile, 'settings.json'), JSON.stringify(before));
     evidence.settingsBeforeUpgradeLaunch = before;
     expect(before.pane?.width).toBe(500);
+    // ux3 S6: the fake-future keys appended by the fresh phase are still there.
+    expect(before.__futureProbe).toEqual({ x: 1 });
+    expect(before.claude?.__futureProbe).toBe(true);
     // Fixture ports differ between runs; the persisted URL keeps the old port.
     // P8: the snapshot lives at settings.tabSnapshot (settings.tabs is settings).
     expect(pathOf(before.tabSnapshot?.tabs?.[0]?.url)).toBe('/page/persisted');
@@ -228,6 +231,19 @@ test('installed app launches, creates views, and persists across relaunch', asyn
       evidence.restoredAfterUpgrade = restored;
       await quit(instance, logFile, 1);
       open = false;
+      // ux3 S6: the upgraded build rewrote settings.json (pane.width → fraction)
+      // without dropping keys it does not know, and said so in the log.
+      const after = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+      evidence.settingsAfterUpgradeRun = after;
+      expect(after.pane?.width).toBeUndefined();
+      expect(after.__futureProbe).toEqual({ x: 1 });
+      expect(after.claude?.__futureProbe).toBe(true);
+      const preserved = (await readEvents(logFile)).find(
+        (e) => e.event === 'store-preserved' && (e.detail as any)?.store === 'settings',
+      );
+      expect((preserved?.detail as any)?.keys).toEqual(
+        expect.arrayContaining(['__futureProbe', 'claude.__futureProbe']),
+      );
       return;
     }
 
@@ -335,6 +351,14 @@ test('installed app launches, creates views, and persists across relaunch', asyn
     expect(closes.every((entry) => (entry.detail as any)?.webContentsCountAfter === 0)).toBe(true);
     evidence.eventCount = events.length;
     evidence.closeEvents = closes;
+
+    // ux3 S6: plant fake-future keys (a newer build's data) for the upgrade
+    // phase to find after the upgraded app has run and rewritten the file.
+    const planted = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+    planted.__futureProbe = { x: 1 };
+    planted.claude = { ...(planted.claude ?? {}), __futureProbe: true };
+    writeFileSync(join(profile, 'settings.json'), JSON.stringify(planted));
+    evidence.futureProbePlanted = true;
   } finally {
     if (open) {
       await instance.browser.close().catch(() => undefined);

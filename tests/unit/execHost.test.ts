@@ -9,6 +9,7 @@ import {
   parseShellEnv,
   parseWslList,
   ptySpec,
+  resolveLocalConfigDir,
   spawnSpec,
   toHostPath,
   toWindowsPath,
@@ -228,5 +229,22 @@ describe('shellFamily', () => {
   it('fish ptys use exec $argv', () => {
     const spec = ptySpec(UB, { file: '/x', args: [], cwd: '/p' }, '/usr/bin/fish');
     expect(spec.args).toContain('exec $argv');
+  });
+});
+
+describe('resolveLocalConfigDir', () => {
+  const j = (...p: string[]) => p.join('/');
+  it('prefers a trimmed, non-empty CLAUDE_CONFIG_DIR', () => {
+    expect(resolveLocalConfigDir({ CLAUDE_CONFIG_DIR: '  D:/claude  ' }, '/home/u', j)).toBe('D:/claude');
+  });
+  it('falls back to <home>/.claude when unset or blank', () => {
+    expect(resolveLocalConfigDir({}, '/home/u', j)).toBe('/home/u/.claude');
+    expect(resolveLocalConfigDir({ CLAUDE_CONFIG_DIR: '   ' }, '/home/u', j)).toBe('/home/u/.claude');
+  });
+  it('is a snapshot — later env mutation does not change the captured value', () => {
+    const env: { CLAUDE_CONFIG_DIR?: string } = { CLAUDE_CONFIG_DIR: 'C:/one' };
+    const captured = resolveLocalConfigDir(env, '/home/u', j);
+    env.CLAUDE_CONFIG_DIR = '//wsl.localhost/D/home/u/.claude';
+    expect(captured).toBe('C:/one');
   });
 });

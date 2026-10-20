@@ -24,6 +24,7 @@ export function SectionHeader({
   leading,
   dataAttrs,
   moveDisabled = false,
+  reorderable = true,
 }: {
   section: SessionTreeSection;
   userFolderNames: string[];
@@ -46,6 +47,8 @@ export function SectionHeader({
   dataAttrs?: Record<string, string>;
   // ux2 D7: path-bound workspaces are filing only — no session-move drops.
   moveDisabled?: boolean;
+  // ux3 S1b: no ghost drag when there is nothing to reorder (one folder).
+  reorderable?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
   const [dropBefore, setDropBefore] = useState(false);
@@ -73,7 +76,9 @@ export function SectionHeader({
         {...dataAttrs}
         data-drop-target={dropTarget}
         data-drop-before={dropBefore}
-        draggable={section.kind === 'folder' && isEditableFolder(section.name)}
+        draggable={
+          reorderable && section.kind === 'folder' && isEditableFolder(section.name)
+        }
         onDragStart={(e) => {
           e.dataTransfer.setData(FOLDER_MIME, section.name);
           e.dataTransfer.effectAllowed = 'move';

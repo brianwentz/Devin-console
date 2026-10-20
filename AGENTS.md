@@ -88,6 +88,7 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_CLOUD_KEEPALIVE_MS` | test mode | Overrides `settings.sessions.keepAliveHours` for the pooled Cloud views — mirrors `DEVIN_WORKSPACES_TEST_KEEPALIVE_MS` (tabs). |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_SDK` | test mode | An ESM module `loadSdk()` imports instead of the real SDK — `tests/fixtures/fakeClaudeSdk.ts` → `out/fixtures/fakeClaudeSdk.mjs` (`export *` real SDK + fake `query`; writes real-shaped jsonl into `CLAUDE_CONFIG_DIR/projects/<encoded cwd>/`; emits `message_start` per group). The fake reads `FAKE_CLAUDE_TOOL=1` (parks on `canUseTool`), `FAKE_CLAUDE_DELAY_MS` (stalls the deltas), `FAKE_CLAUDE_TWO_MESSAGES=1` (splits a turn into two API messages), `FAKE_CLAUDE_COST_USD` (`result.total_cost_usd`). |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` | test mode | Replaces the folder `showOpenDialog` in `newSession(cwd|null)`. |
+| `DEVIN_WORKSPACES_TEST_PICKER_CANCEL` | test mode | Every folder dialog routed through `src/main/dialogs.ts openFolderDialog` returns canceled immediately; the options are recorded for the `lastOpenDialogOptions()` test hook. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD` | test mode | Whole command, e.g. `node out/fixtures/fakeClaudeAgents.cjs` — replaces the `claude` binary for background agents; the fake prints `FAKE_CLAUDE_AGENTS` for `agents --json --all` and appends `stop <id>` to `FAKE_CLAUDE_AGENTS_LOG`. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS` | test mode | Background-agent poll interval. |
 | `DEVIN_WORKSPACES_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
@@ -138,7 +139,7 @@ variable that selects it.
 - `pane.open` + `pane.fraction` (0..1 share of the available width — px guards are derived in `computeBounds`, never persisted; `pane.width` migrates to
   fraction on load), `windowPlacements` (per-display-config window bounds/maximized), `layout.terminalOpen`/`layout.terminalHeight` (the dock's
   visibility is `terminalOpen ∧ dockSurface(surface)` — there is no per-surface opt-in key any more; `terminal.allSurfaces` was deleted in ux2 P0 and is
-  stripped as an unknown key on load), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
+  ignored on load — since ux3 S6 it stays in the file as unknown data rather than being stripped), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
 - `sessions.open`/`sessions.width`/`sessions.collapsedFolders` (Cloud session sidebar, below); `sessions.open` also drives the Settings checkbox
   `#sessionsColumnToggle` and applies to the `cloud`, `claude` and `local` surfaces (`computeBounds` reserves the column for all three);
   `sessions.maxLiveViews` (1..20, default 6) + `sessions.keepAliveHours` (0..168, default 24) — the Cloud view pool caps/idle TTL.
@@ -149,6 +150,12 @@ variable that selects it.
 - `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
   `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
   needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), labels/collapse keyed by workspace path.
+- `local.pickerFolder` / `claude.pickerFolder` (`string | null`, ux3 S3) — "Folder pickers start in" (`#localPickerFolderInput` + `#localPickerFolderBrowse`,
+  `#claudePickerFolderInput` + `#claudePickerFolderBrowse`; shared `PickerFolderField` in `settings/fields.tsx`, Browse… = `dialogPickFolder`). Draft
+  validation: blank or `isAbsolutePickerPath` (drive, UNC or POSIX-absolute). Precedence is the pure `pickerStartPath(configured, distroHome, exists)`
+  in `src/core/pickerFolder.ts`: configured folder if it `existsSync` → default WSL distro home → undefined; a missing configured folder logs
+  `picker-folder-missing {surface}` and is skipped, never cleared. Wired at `localWorkspacePick` (`src/main/local/ipc.ts`) and Claude
+  `pickerDefaultPath()` (`sessions.ts`, used by `newSession(null)` and `pickWorkspaceDir`); `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` still short-circuits before it.
 - `claude.{workspaces: string[], workspaceLabels, defaultWslDistro}` — the Claude workspace list (separate from `workspaces`), labels by path,
   `defaultWslDistro` (`#claudeDefaultWslDistroSelect`; read by Claude `newSession(null)`); collapse state reuses `claude.collapsedFolders` keyed by path.
 - `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
@@ -159,6 +166,26 @@ variable that selects it.
   `src/core/linkRules.ts`, RouteKind `'rule'` ranks after github/tenant; gh-tab decisions reached via a rule log `rule-tab`/`rule-tab-background` with
   `{ruleId, ruleKind}` detail — never the pattern; the `clipboard-sanitized-write` permission extends to rule-owned origins).
 - Claude keys (`claude.*`) are listed under Claude integration.
+
+### Stores preserve unknown data (ux3 S6)
+- Rule: a build may only rewrite what it understands in a user-data store; everything else in the file comes back out exactly as it went in, across
+  upgrades *and* downgrades. Applies to `settings.json`, `claude-sessions.json`, `local-sessions.json`, `notifications.json`, `pr-ledger.json`; caches
+  rebuilt from source (`cloud-cache.json`, `claude-usage-cache.json`, `prs.json`, `identity.json`) and the encrypted credential stores are exempt.
+- Mechanism: each store keeps the file as read (`raw`) and saves `overlayKnown(raw, inMemoryValue, spec)` (`src/core/storePreserve.ts`). A `PreserveSpec`
+  marks the structural parts — `object` (unknown keys survive), `record` / `array` with an `identity` key (membership from memory, unknown fields inside a
+  matched entry survive), `replace` (memory wins wholesale: scalars, plain arrays, records whose absence is a deletion such as `workspaceLabels`,
+  `hosts.overrides`, `windowPlacements`). Specs: `SETTINGS_PRESERVE_SPEC` (`src/core/settings.ts` — every `ZodObject` block + `notifications.kinds`;
+  `tests/unit/storePreserve.test.ts` introspects the zod schema and fails on drift), `REGISTRY_PRESERVE_SPEC` (`src/core/claudeRegistry.ts` — entries
+  record → per-entry object → `prs` by `url`), local index (`sessions` by `id`), notifications (top-level array by `id`), PR ledger (all leaves replace).
+- Invalid-but-known settings values are preserved, not repaired away: `parseSettingsFile` repairs at leaf granularity (`dropped: ['surface',
+  'claude.model']`, raw values in `invalid`), the default is used in memory, and `SettingsStore.save()` writes the raw value back unless that path was
+  *touched* this run — `merge()` touches every path in the validated patch (`key`, or `block.key` for structural blocks), `syncFromState()` touches
+  `pane`/`layout`/`sessions.open`/`sessions.width`/`surface`/`tabSnapshot` only once the live state differs from what was loaded. Note the Settings
+  page commits its whole draft, so a form commit touches every draft-covered path (e.g. `claude.model`).
+- Only named migrations delete: `migrateSettingsRaw` removes `hosts.defaultWslDistro` / `discardIdleMinutes` / `pane.width` / `notifications.enabled`
+  on the raw object before the overlay; `registryFileObject` removes the P4b `folders` / `entries[*].folder` once the in-memory registry has consumed
+  them and `prUrls` once read into `prs`. The overlay itself never deletes.
+- Each store logs `store-preserved {store, keys}` once at load when the file carried data this build does not know (keys capped at 50).
 
 ### Cloud session sidebar
 - Shell-rendered column right of the rail, `SessionSidebar.tsx`. Geometry in `computeBounds`: `leftChrome = RAIL + sessionsWidth + SPLITTER` when visible,
@@ -187,7 +214,7 @@ variable that selects it.
   native context menus over `cloud:contextMenu` (test mode returns item descriptions instead of popping — `cloudMenuItems`/`cloudMenuClick` hooks,
   `cloudMutations()` records the fake backend's ops; shell applies optimistic edits via `src/core/sessionTree.ts` helpers, cleared on the next cloud
   update or lastError).
-- Settings keys: `sessions.open`/`sessions.width`/`sessions.collapsedFolders`, `sessions.maxLiveViews`, `sessions.keepAliveHours` (see Settings keys).
+- Settings keys: `sessions.open`/`sessions.width`/`sessions.collapsedFolders`, `sessions.maxLiveViews`, `sessions.keepAliveHours`, `sessions.sessionOrder` (manual row order per section, ux3 S1) (see Settings keys).
 
 ### Cloud view pool
 - `state.devinView` is a getter for `cloudViews().activeView()` (`src/main/cloudViews.ts`) — views are keyed by the session they display (`keyForUrl`,
@@ -396,7 +423,7 @@ variable that selects it.
   The claude GitHub-tab scope is `claude:<sessionId>` (`claudeScope`/`effectiveScope`).
 - Settings `claude.path` (Settings → Claude Code `#claudePathInput`; a non-empty path that doesn't resolve is flagged inline from `claude.cliPath === null`,
   not a commit error), `claude.autoArchiveDays` (0-365, 0 = off; `#claudeAutoArchiveInput`), `claude.showArchived`, `claude.collapsedFolders`,
-  `claude.workspaces`/`claude.workspaceLabels`/`claude.defaultWslDistro` (see Settings keys).
+  `claude.workspaces`/`claude.workspaceLabels`/`claude.defaultWslDistro`/`claude.sessionOrder` (see Settings keys).
   `preload.setSurface` guards on `SurfaceSchema` — new surfaces must be added to the schema.
 - Workspaces (ux2 P4b, plan D8 — landed): Claude folders became path-bound workspaces on the shared `WorkspaceSidebar` (`ClaudeSidebar` is the adapter;
   subagent rows, the background-agents section, host chip and activity dots survive through `renderRow`/`extraSections`/`rowOpts`). A session's folder is
@@ -404,7 +431,8 @@ variable that selects it.
   case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, exact match — a sub-folder is Recent). IPC
   `claude:workspaceAdd|Reorder|Rename|Remove`; `newSession(cwd)` from a header passes the path through without the picker; `fork` files itself from the
   same cwd. The free-form folder registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`, the `folders` list) is
-  deleted — the loader still tolerates the legacy fields and `serializeRegistry` never writes them back. The one-shot migration (`migrateLegacyFolders`
+  deleted — the loader still tolerates the legacy fields and `registryFileObject` deletes them by name once the migration has consumed them (while
+  `legacyFolders` is still pending they are written back as `folders`, so a save before the migration can't lose them). The one-shot migration (`migrateLegacyFolders`
   → most-common `(host,cwd)` per folder → `toWindowsPath`, label = folder name when it differs from the basename) runs in `ClaudeSessions` after the
   first *complete* store refresh — a pass where any host's store fails skips it and retries next refresh — and drops folders whose members resolve to
   no session or an unresolvable host. Logs `claude-folders-migrated {converted,dropped}`.
@@ -431,7 +459,7 @@ variable that selects it.
 - `options`: `cwd`, `pathToClaudeCodeExecutable`, `permissionMode`, `model?`, `includePartialMessages:true`, `settingSources:['user','project','local']`,
   `canUseTool`, `abortController`.
 - Channels `claude:chatState` (invoke), `claude:chatUpdate` (push), `claude:newSession|prompt|cancel|permission|setPermissionMode|setModel|loadHistory`
-  (invoke → `LocalResult` via `handleResult`). `sessions.ts` `newSession(cwd|null)` → folder `showOpenDialog` / `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` →
+  (invoke → `LocalResult` via `handleResult`). `sessions.ts` `newSession(cwd|null)` → `openFolderDialog` (`src/main/dialogs.ts` — records options for `lastOpenDialogOptions()`, honours `DEVIN_WORKSPACES_TEST_PICKER_CANCEL`) / `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` →
   `host.newSession` → `open`; `claude.lastSessionId` persists on open and restores on the first list; `versions` = `claude --version` (execFile, 3 s) vs
   the SDK `manifest.json` (`sdkTargetCliVersion()`), re-checked on `claude.path` change. Ctrl+N on the claude surface → `newSession(null)`.
 - Fake SDK for tests: `DEVIN_WORKSPACES_TEST_CLAUDE_SDK` + `FAKE_CLAUDE_*` (see Env vars).
@@ -518,6 +546,10 @@ variable that selects it.
 ### Execution hosts (WSL) (landed Phase 8)
 - `src/core/execHost.ts` (pure): `HostId` `'local' | \`wsl:<distro>\``, `hostIdForPath`/`toHostPath`/`toWindowsPath` (UNC forms `\\wsl.localhost`/`\\wsl$`/`//wsl.localhost`), `spawnSpec`/`ptySpec` (`wsl.exe -d D --cd <linux cwd> -e /usr/bin/env …` / `-ilc 'exec "$0" "$@"'`; fish → `exec $argv`), `parseShellEnv`/`mergeShellEnv` (`WSL_ENV_DENYLIST`), `parseWslList`, `shellFamily`, `displayPath`/`workspaceLabel`.
 - `src/main/hosts.ts` singleton: async enumeration (`-l -v` utf16le, running+default or explicit `settings.hosts.wslDistros`; a stopped distro is never started implicitly — only explicit listing enables it), per-host probe (`home`/`shell`/CLI paths/`gh`/`inotifywait`/hook reachability — loopback then `vEthernet (WSL)` IPv4 with a second `hookServer.listenOn`), `-ilc` env capture (spawn `stdio:['ignore',…]`, marker-parsed, 60 s cache refreshed at next spawn — `shellEnv()` primes, `spawnOn`/`execOn`/`ptySpawnSpec` read the cache), `withConfigDir` (per-process mutex swapping `CLAUDE_CONFIG_DIR`), `errorParts` joined into `hostErrors`.
+- The local `CLAUDE_CONFIG_DIR` is captured once at `HostsRegistry` construction (`resolveLocalConfigDir` in `src/core/execHost.ts`; `localConfigDir()` /
+  `configDir(LOCAL_HOST)`); a `withConfigDir` swap is only ever visible to the SDK through `process.env` and must never be observed through
+  `configDir()` — never read `process.env.CLAUDE_CONFIG_DIR` from app code (ux3 S7: the usage scanner raced a swap and cached a whole WSL store as
+  `local:`; `runScan` now also prunes cache keys of scanned hosts that no longer map to a file → `usage-cache-pruned {count}`).
 - The *path form selects the host* — a UNC `\\wsl.localhost\<D>` cwd/workspace means wsl everywhere (session rows, agent spawn, pty, store, gh). `hosts.errors()` feeds `claude.hostErrors`; `hooks.ts` applies the hooks block per `allHosts()`; `store.ts` watches per host (inotifywait → tiered poll: 30 s scan computes the recent-20 ∪ hot set, 2 s tick stats it and emits `<proj>/<id>.jsonl` relative paths).
 - Never log env values or filesystem paths under hosts — `host-list`/`host-probe`/`host-env`/`host-spawn` carry ids, counts, ms only. Test hooks: `hosts`, `hostStatus(id)`, `hostRefresh(id?)`, `hostShellEnvKeys(id)`.
 - Settings: `hosts.{wslEnabled,wslDistros:null|auto,overrides[id].{claudePath,devinPath,home,shell,envCaptureDisabled}}`; the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`). The default-distro select moved to the per-surface keys `local.defaultWslDistro` / `claude.defaultWslDistro` (see Settings keys) — `hosts.defaultWslDistro` is migrated away on load.
@@ -598,6 +630,8 @@ All are `__devinworkspaces` hooks (test mode only; reachable from the installed 
 | `claudeRecordPr` / `claudePrs(id)` / `claudeRefreshPrStates` / `prTitlesSeed(url,{title,state})` | Record a Claude PR, read a session's PRs, re-ensure states, seed the title+state cache. |
 | `claudeSubagents` / `claudeOpenSubagent` / `claudeChatMessageIds` | Subagent list / open read-only / per-session current message ids. |
 | `claudeUsageState` / `claudeUsageRefresh` | Claude usage state snapshot / force fetch+scan (resolves when both finish). |
+| `lastOpenDialogOptions()` | The options of the most recent `openFolderDialog` call (recorded in test mode). |
+| `withConfigDirHold(id, ms)` | Holds a host's `configDir` context open (WSL env capture) so a configDir read races the hold. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
 
 ## Log events
@@ -629,6 +663,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `cloud-new-session-settled` / `cloud-new-session-skip` | skip reasons `{existing\|not-listed\|folder-gone}`. |
 | `cloud-org-change` | `{reason}`, no ids. |
 | `cloud-mutate` | `{op,ok,status}` only. |
+| `cloud-session-reorder` | `{ section: 'folder'\|'pinned'\|'recent'\|'participated', count }` — row drag in the Cloud sidebar persisted to `sessions.sessionOrder` (app-local, no server op). |
 | `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only. |
 | `pr-read` / `pr-dismiss` | `{ all, count }`. |
 | `prs-panel` / `prs-save-error` | PR panel open/close, store write failure. |
@@ -646,16 +681,20 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `update-check` / `update-check-skipped` | `{ source }` / `{ source, reason: disabled\|in-flight\|throttled, sinceMs }`. |
 | `release-notes` | version/ok/status/length, never body. |
 | `settings-commit` / `settings-flush` | field names and counts only. |
-| `settings-repaired` / `settings-migrated` | `{ dropped }` key names / `{ from: 'hosts.defaultWslDistro' \| 'spike-state.json' }` — one-shot load-time migrations. |
+| `settings-repaired` / `settings-migrated` | `{ dropped: [dotted paths], preserved: true }` (invalid leaves defaulted in memory, raw value kept in the file until touched) / `{ from: 'hosts.defaultWslDistro' \| 'spike-state.json' }` — one-shot load-time migrations. |
+| `store-preserved` | `{ store: 'settings' \| 'claude-sessions' \| 'local-sessions' \| 'notifications' \| 'pr-ledger', keys: [dotted paths, ≤50] }` — once at load when the file carried data this build does not know (see "Stores preserve unknown data"). |
 | `analytics-refresh` / `analytics-view-created` / `analytics` | `mode: reload\|navigate`; `load-error`. |
 | `analytics-refresh-skipped` | `{ tab }` — surface re-entered on the Claude tab (nothing hosted to reload). |
 | `usage-fetch` | `{ ok, status, ms, stale, accounts }` — OAuth `/usage` fetch per account group (the bearer token is never logged). |
 | `usage-scan` | `{ files, changed, ms }` — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
 | `usage-cache-load` | `{ files }` — `userData/claude-usage-cache.json` loaded. |
+| `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. pre-S7 `local:` keys from a WSL store). |
 | `active-session` | Local selected session lifted to state. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |
+| `picker-folder-missing` | `{ surface: 'local' \| 'claude' }` — `*.pickerFolder` is set but no longer exists; the picker fell back to the distro home / OS default (the path is never logged, the setting is kept). |
 | `local-workspace-reorder` | `{ count }`. |
+| `local-session-reorder` | `{ section: 'folder'\|'pinned'\|'recent'\|'participated', count }` — row drag in the Local sidebar persisted to `local.sessionOrder`. |
 | `agents-autostart` | `{ count, skipped }` — configured workspaces autostart after window creation (fix/ux2-local-startup); UNC workspaces whose distro isn't enabled count as `skipped`; a missing CLI keeps `missing-cli`. |
 | `local-workspace-rename` / `local-session-copy-id` | No detail (label and id are never logged). |
 | `agent-restart` / `session-reclaim-error` / `terminal-session-release-error` / `terminal-session-locked` | Local terminal handoff. |
@@ -666,6 +705,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `claude-folders-migrated` | `{ converted, dropped }` — one-shot folder → workspace migration (P4b). |
 | `claude-workspace-add` | `{ host }` — `claude:workspaceAdd` (the path is never logged). |
 | `claude-workspace-reorder` | `{ count }`. |
+| `claude-session-reorder` | `{ section, count }` — row drag in the Claude sidebar persisted to `claude.sessionOrder`. |
 | `claude-workspace-rename` / `claude-workspace-remove` | No detail (paths and labels are never logged). |
 | `claude-query` | `{mode:new\|resume,ms}`. |
 | `claude-prompt` | `{length}`. |

@@ -85,6 +85,10 @@ const localApi = {
   testWslUncRoot: process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT ?? null,
   // Deterministic clock for the Claude-analytics gauges in tests (A4).
   testNow: process.env.DEVIN_WORKSPACES_TEST_NOW ?? null,
+  localSessionReorder: (section: string, ids: string[]) =>
+    ipcRenderer.invoke(IpcChannels.localSessionReorder, { section, ids }) as Promise<
+      LocalResult<null>
+    >,
   localWorkspaceReorder: (paths: string[]) =>
     ipcRenderer.invoke(IpcChannels.localWorkspaceReorder, { paths }) as Promise<LocalResult<null>>,
   localWorkspaceRename: (path: string, label: string) =>
@@ -390,6 +394,15 @@ const api = {
   cloudFolderReorder: (names: string[]) => {
     if (Array.isArray(names)) ipcRenderer.send(IpcChannels.cloudFolderReorder, { names });
   },
+  cloudSessionReorder: (section: string, ids: string[]) => {
+    if (isString(section) && Array.isArray(ids)) {
+      ipcRenderer.send(IpcChannels.cloudSessionReorder, { section, ids });
+    }
+  },
+  dialogPickFolder: (title: string, defaultPath?: string) =>
+    ipcRenderer.invoke(IpcChannels.dialogPickFolder, { title, defaultPath }) as Promise<
+      string | null
+    >,
   cloudSessionMove: (sessionId: string, folder: string | null) => {
     if (isString(sessionId) && sessionId.length <= 128) {
       ipcRenderer.send(IpcChannels.cloudSessionMove, { sessionId, folder });
@@ -463,6 +476,10 @@ const api = {
   },
   claudeWorkspaceAdd: (path?: string) =>
     ipcRenderer.invoke(IpcChannels.claudeWorkspaceAdd, path ? { path } : {}) as Promise<
+      LocalResult<null>
+    >,
+  claudeSessionReorder: (section: string, ids: string[]) =>
+    ipcRenderer.invoke(IpcChannels.claudeSessionReorder, { section, ids }) as Promise<
       LocalResult<null>
     >,
   claudeWorkspaceReorder: (paths: string[]) =>

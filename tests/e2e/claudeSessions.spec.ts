@@ -493,3 +493,237 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
     rmSync(uncRoot, { recursive: true, force: true });
   }
 });
+
+// ux3 S1: drag session rows to reorder inside 'recent' and 'pinned'.
+test('claude sidebar: session row drag reorders inside recent and pinned', async () => {
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await h.setSurface('claude');
+    const shell = await shellPage(app);
+    const rowOrder = (section: string) =>
+      evaluateInShell(
+        app,
+        `[...(([...document.querySelectorAll('[data-section-name]')]
+          .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(section)})
+          ?.closest('div.mb-px')
+          ?.querySelectorAll('[data-reorder-row]')) ?? [])]
+          .map((e) => e.getAttribute('data-reorder-row'))`,
+      ) as Promise<string[]>;
+    await expect.poll(async () => (await rowOrder('recent')).length).toBe(3);
+
+    // drag the last recent row above the first → order flips.
+    const before = await rowOrder('recent');
+    await dndMove(
+      shell,
+      `[data-session-id="${before[2]}"]`,
+      `[data-session-id="${before[0]}"]`,
+    );
+    const expected = [before[2], before[0], before[1]];
+    await expect.poll(async () => rowOrder('recent')).toEqual(expected);
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)?.claude
+            ?.sessionOrder?.recent,
+      )
+      .toEqual(expected);
+    await waitForEvent(join(profile, 'events.jsonl'), 'claude-session-reorder');
+
+    // pin UA + UB → they file under 'pinned'; reorder there too.
+    await shell.evaluate(
+      `window.devinworkspaces.claudeSessionPin(${JSON.stringify(UA)}, true)`,
+    );
+    await shell.evaluate(
+      `window.devinworkspaces.claudeSessionPin(${JSON.stringify(UB)}, true)`,
+    );
+    await expect.poll(async () => (await rowOrder('pinned')).length).toBe(2);
+    const pinOrder = await rowOrder('pinned');
+    await dndMove(
+      shell,
+      `[data-session-id="${pinOrder[1]}"]`,
+      `[data-session-id="${pinOrder[0]}"]`,
+    );
+    const expectedPin = [pinOrder[1], pinOrder[0]];
+    await expect.poll(async () => rowOrder('pinned')).toEqual(expectedPin);
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)?.claude
+            ?.sessionOrder?.pinned,
+      )
+      .toEqual(expectedPin);
+
+    // relaunch preserves the manual order.
+    await closeApp(app);
+    const secondApp = await launchApp(
+      profile,
+      join(profile, 'events2.jsonl'),
+      join(profile, 'downloads'),
+      fixtures,
+      { CLAUDE_CONFIG_DIR: claudeHome, DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' },
+    );
+    const h2 = hooks(secondApp);
+    try {
+      await expect.poll(async () => (await h2.claudeState()).status).toBe('ready');
+      await h2.setSurface('claude');
+      const rowOrder2 = (section: string) =>
+        evaluateInShell(
+          secondApp,
+          `[...(([...document.querySelectorAll('[data-section-name]')]
+            .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(section)})
+            ?.closest('div.mb-px')
+            ?.querySelectorAll('[data-reorder-row]')) ?? [])]
+            .map((e) => e.getAttribute('data-reorder-row'))`,
+        ) as Promise<string[]>;
+      await expect.poll(async () => (await rowOrder2('recent')).length).toBeGreaterThanOrEqual(1);
+      expect((await rowOrder2('recent')).filter((id) => expected.includes(id))).toEqual(
+        expected.filter((id) => id !== UA && id !== UB),
+      );
+      await expect.poll(async () => (await rowOrder2('pinned')).length).toBe(2);
+      expect(await rowOrder2('pinned')).toEqual(expectedPin);
+    } finally {
+      await closeApp(secondApp).catch(() => undefined);
+    }
+  } finally {
+    await closeApp(app).catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+// ux3 S3 — Settings → Claude Code "Folder pickers start in": the header's
+// New session picker opens there (DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD unset
+// so the dialog seam is reached); a relative path is refused on the tab.
+test('claude picker start folder: New session dialog starts in the configured folder; relative paths are rejected', async () => {
+  const startDir = mkdtempSync(join(tmpdir(), 'devin-workspaces-picker-start-'));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    DEVIN_WORKSPACES_TEST_PICKER_CANCEL: '1',
+  });
+  const h = hooks(app);
+  const lastDialog = () =>
+    app.evaluate(
+      () =>
+        (globalThis as any).__devinworkspaces.lastOpenDialogOptions() as {
+          title?: string;
+          defaultPath?: string;
+        } | null,
+    );
+  const pickerFolder = async () =>
+    ((await h.state()) as unknown as { settings: { claude: { pickerFolder: string | null } } })
+      .settings.claude.pickerFolder;
+  const el = (expr: string) => evaluateInShell(app, expr);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+
+    await h.setSurface('settings');
+    await el(`document.querySelector('[data-settings-tab="claude"]').click()`);
+    await expect
+      .poll(async () => el(`Boolean(document.getElementById('claudePickerFolderInput'))`))
+      .toBe(true);
+    expect(await el(`Boolean(document.getElementById('claudePickerFolderBrowse'))`)).toBe(true);
+
+    // Relative path → inline error, tab switch refused.
+    expect(await setInputValue(app, 'claudePickerFolderInput', 'relative\\x')).toBe(true);
+    await el(`document.querySelector('[data-settings-tab="general"]').click()`);
+    await expect
+      .poll(async () =>
+        el(`document.getElementById('claudePickerFolderInput')?.getAttribute('aria-invalid')`),
+      )
+      .toBe('true');
+    expect(await el(`document.getElementById('claudePickerFolderInputError')?.textContent`)).toBe(
+      'Enter an absolute folder path',
+    );
+    expect(
+      await el(
+        `document.querySelector('#settingsTabs [role="tab"][aria-selected="true"]')?.dataset.settingsTab`,
+      ),
+    ).toBe('claude');
+
+    // Absolute path → the tab switch now commits.
+    expect(await setInputValue(app, 'claudePickerFolderInput', startDir)).toBe(true);
+    await el(`document.querySelector('[data-settings-tab="general"]').click()`);
+    await expect.poll(pickerFolder).toBe(startDir);
+    await h.setSurface('claude');
+
+    const shell = await shellPage(app);
+    await expect(shell.locator('#claudeNewSession')).toBeVisible();
+    await shell.locator('#claudeNewSession').click();
+    await expect.poll(async () => (await lastDialog())?.defaultPath).toBe(startDir);
+    expect((await lastDialog())?.title).toBe(
+      'Choose the working directory for the new Claude session',
+    );
+    // Cancelled → no session was created.
+    expect((await h.claudeState()).sessions).toHaveLength(3);
+
+    // The Add workspace picker shares the start folder.
+    await shell.locator('#workspaceAdd').click();
+    await expect.poll(async () => (await lastDialog())?.title).toBe('Add Claude workspace folder');
+    expect((await lastDialog())?.defaultPath).toBe(startDir);
+    expect((await readEvents(join(profile, 'events.jsonl'))).some((e) => e.event === 'picker-folder-missing')).toBe(false);
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(startDir, { recursive: true, force: true });
+  }
+});
+
+// ux3 S1 regression: a drag that starts on a subagent row inside a root's
+// wrapper must NOT reorder the root — dragState stays empty, the drop is
+// refused, and nothing is persisted.
+test('claude sidebar: dragging a subagent child row does not reorder its parent', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await h.setSurface('claude');
+    const shell = await shellPage(app);
+    const rowOrder = () =>
+      evaluateInShell(
+        app,
+        `[...document.querySelectorAll('[data-reorder-row]')].map((e) => e.getAttribute('data-reorder-row'))`,
+      ) as Promise<string[]>;
+    await expect.poll(async () => (await rowOrder()).length).toBe(3);
+    const before = await rowOrder();
+
+    // Expand UA's subagents — the toggle sits before its button in the
+    // row's flex wrapper.
+    await shell.evaluate(
+      `document.querySelector('[data-session-id="${UA}"]')
+        ?.parentElement?.querySelector('[data-subagents-toggle]')?.click()`,
+    );
+    await expect(
+      shell.locator('[data-subagent-id]').first(),
+    ).toBeAttached({ timeout: 10_000 });
+
+    // synthetic drag: subagent row → another root. Without the origin guard
+    // this records dragState and reorders UA.
+    await shell.evaluate(
+      `(() => {
+        const src = document.querySelector('[data-subagent-id]');
+        const tgt = document.querySelector('[data-session-id="${UB}"]');
+        const dt = new DataTransfer();
+        dt.setData('application/x-devin-session', 'subagent');
+        const fire = (el, type) =>
+          el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+        fire(src, 'dragstart');
+        fire(tgt, 'dragover');
+        fire(tgt, 'drop');
+        fire(src, 'dragend');
+        return true;
+      })()`,
+    );
+    await new Promise((r) => setTimeout(r, 400));
+    expect(await rowOrder()).toEqual(before);
+    const events = await readEvents(join(profile, 'events.jsonl'));
+    expect(events.some((entry) => entry.event === 'claude-session-reorder')).toBe(false);
+  } finally {
+    await closeApp(app).catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

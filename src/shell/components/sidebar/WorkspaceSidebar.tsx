@@ -9,6 +9,7 @@ import type { WorkspaceEntry } from '../../../core/workspaceTree';
 import type { Rect } from '../../../core/layout';
 import { workspaceLabel } from '../../../core/execHost';
 import { SessionRow, SessionRowButton, type RowRenderOpts } from './SessionRow';
+import { ReorderableRow } from './ReorderableRow';
 import { SectionHeader } from './SectionHeader';
 import { useOptimisticList } from './useOptimisticList';
 import { useRowKeyboardNav } from './useRowKeyboardNav';
@@ -22,6 +23,8 @@ export interface WorkspaceSidebarProps<S extends SidebarSession> {
   error?: string | null;
   entries: WorkspaceEntry[];
   listData: SidebarListData<S>;
+  // ux3 S1: manual row order per section (workspace path / pinned / recent).
+  sessionOrder: Record<string, string[]>;
   collapsed: string[];
   currentSessionId: string | null;
   rowOpts: RowRenderOpts<S>;
@@ -31,6 +34,7 @@ export interface WorkspaceSidebarProps<S extends SidebarSession> {
   headerAttrs?: (path: string) => Record<string, string>;
   onToggle: (path: string) => void;
   onReorder: (paths: string[]) => void;
+  onReorderSessions: (section: string, ids: string[]) => void;
   onRename: (path: string, label: string) => void;
   onNewSession: (path: string | null) => void;
   onAdd: () => void;
@@ -66,6 +70,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
   error,
   entries,
   listData,
+  sessionOrder,
   collapsed,
   currentSessionId,
   rowOpts,
@@ -73,6 +78,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
   headerAttrs,
   onToggle,
   onReorder,
+  onReorderSessions,
   onRename,
   onNewSession,
   onAdd,
@@ -99,8 +105,11 @@ export function WorkspaceSidebar<S extends SidebarSession>({
 
   // Optimistic order/labels until the next settings publish replaces them.
   const { data, applyOptimistic } = useOptimisticList(
-    useMemo(() => ({ entries, listData }), [entries, listData]),
-    [entries, listData],
+    useMemo(
+      () => ({ entries, listData, sessionOrder }),
+      [entries, listData, sessionOrder],
+    ),
+    [entries, listData, sessionOrder],
   );
 
   const tree = useMemo(
@@ -108,8 +117,9 @@ export function WorkspaceSidebar<S extends SidebarSession>({
       buildSessionTree(data.listData, {
         collapsedFolders: collapsed,
         currentSessionId,
+        sectionOrder: data.sessionOrder,
       }),
-    [data.listData, collapsed, currentSessionId],
+    [data.listData, collapsed, currentSessionId, data.sessionOrder],
   );
   const entryByPath = useMemo(() => new Map(data.entries.map((e) => [e.path, e])), [data.entries]);
   const userFolderNames = useMemo(() => data.entries.map((e) => e.path), [data.entries]);
@@ -122,6 +132,13 @@ export function WorkspaceSidebar<S extends SidebarSession>({
         .filter((e): e is WorkspaceEntry => Boolean(e)),
     }));
     onReorder(names);
+  };
+  const reorderSessionsTo = (section: string, ids: string[]) => {
+    applyOptimistic((d) => ({
+      ...d,
+      sessionOrder: { ...d.sessionOrder, [section]: ids },
+    }));
+    onReorderSessions(section, ids);
   };
   const renameTo = (path: string, label: string) => {
     applyOptimistic((d) => ({
@@ -276,6 +293,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
                   onMenu={(name, x, y) => void workspaceMenu(name, x, y)}
                   onMove={() => undefined}
                   onReorder={reorderTo}
+                  reorderable={userFolderNames.length > 1}
                   {...(sectionItem.kind === 'folder'
                     ? {
                         onNewInFolder: onNewSession,
@@ -291,21 +309,28 @@ export function WorkspaceSidebar<S extends SidebarSession>({
                   (sectionItem.nodes.length === 0 ? (
                     <div className="pl-6 py-1 text-[11px] text-[#5c6b80]">No sessions</div>
                   ) : (
-                    sectionItem.nodes.map((node) =>
-                      renderRow ? (
-                        renderRow(node)
-                      ) : (
-                        <SessionRow
-                          key={node.session.id}
-                          node={node}
-                          collapsedChildren={emptyChildren}
-                          onToggleChildren={() => undefined}
-                          registerRow={registerRow}
-                          opts={rowOpts}
-                          onMenu={(id, x, y) => void onSessionMenu(id, x, y)}
-                        />
-                      ),
-                    )
+                    sectionItem.nodes.map((node) => (
+                      <ReorderableRow
+                        key={node.session.id}
+                        section={sectionItem.name}
+                        sessionId={node.session.id}
+                        rootIds={sectionItem.nodes.map((n) => n.session.id)}
+                        onReorder={reorderSessionsTo}
+                      >
+                        {renderRow ? (
+                          renderRow(node)
+                        ) : (
+                          <SessionRow
+                            node={node}
+                            collapsedChildren={emptyChildren}
+                            onToggleChildren={() => undefined}
+                            registerRow={registerRow}
+                            opts={rowOpts}
+                            onMenu={(id, x, y) => void onSessionMenu(id, x, y)}
+                          />
+                        )}
+                      </ReorderableRow>
+                    ))
                   ))}
               </div>
             );

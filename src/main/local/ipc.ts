@@ -1,5 +1,8 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { app, dialog } from 'electron';
+import { openFolderDialog } from '../dialogs';
+import { pickerFolderMissing, pickerStartPath } from '../../core/pickerFolder';
 import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
   IpcChannels,
@@ -16,6 +19,7 @@ import {
   LocalSessionNewArg,
   LocalWorkspaceArg,
   WorkspaceRenameSchema,
+  SessionReorderArg,
   WorkspaceReorderSchema,
   type LocalContextMenuRequest,
   type LocalResult,
@@ -100,18 +104,27 @@ export function setupLocal(): void {
 
   guardedHandle(IpcChannels.localWorkspacePick, async (): Promise<LocalResult<string | null>> => {
     try {
-      // Start the picker in the configured default WSL distro's home.
-      const defaultDistro = state.settings?.current.local.defaultWslDistro;
+      // Start the picker in local.pickerFolder when it exists, else in the
+      // configured default WSL distro's home (ux3 S3 precedence).
+      const local = state.settings?.current.local;
+      const defaultDistro = local?.defaultWslDistro;
       const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
+      const distroHome =
+        defaultHost && isWslHost(defaultHost) && defaultHost.home
+          ? hosts().windowsPath(defaultHost, defaultHost.home)
+          : undefined;
+      const configured = local?.pickerFolder ?? null;
+      if (pickerFolderMissing(configured, existsSync)) {
+        log('local', 'picker-folder-missing', { detail: { surface: 'local' } });
+      }
+      const defaultPath = pickerStartPath(configured, distroHome, existsSync);
       const options: Electron.OpenDialogOptions = {
         title: 'Add workspace folder',
         properties: ['openDirectory'],
-        ...(defaultHost && isWslHost(defaultHost) && defaultHost.home
-          ? { defaultPath: hosts().windowsPath(defaultHost, defaultHost.home) }
-          : {}),
+        ...(defaultPath ? { defaultPath } : {}),
       };
       const result = state.windowRef
-        ? await dialog.showOpenDialog(state.windowRef, options)
+        ? await openFolderDialog(state.windowRef, options)
         : await dialog.showOpenDialog(options);
       const picked = result.canceled ? null : (result.filePaths[0] ?? null);
       if (!picked) return { ok: true as const, value: null };
@@ -124,6 +137,13 @@ export function setupLocal(): void {
   handleResult(IpcChannels.localWorkspaceAdd, LocalWorkspaceArg, ({ path }) => requireHost().addWorkspace(path));
   handleResult(IpcChannels.localWorkspaceRemove, LocalWorkspaceArg, ({ path }) => {
     removeWorkspace(path);
+    const order = { ...(state.settings?.current.local.sessionOrder ?? {}) };
+    const normalized = resolve(path);
+    if (path in order || normalized in order) {
+      delete order[path];
+      delete order[normalized];
+      state.settings?.merge({ local: { sessionOrder: order } });
+    }
     return null;
   });
   handleResult(IpcChannels.localWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) => {
@@ -134,6 +154,21 @@ export function setupLocal(): void {
     requireHost().syncWorkspaces(next);
     applyLayout();
     log('local', 'local-workspace-reorder', { detail: { count: next.length } });
+    return null;
+  });
+  handleResult(IpcChannels.localSessionReorder, SessionReorderArg, ({ section, ids }) => {
+    const current = state.settings?.current.local.sessionOrder ?? {};
+    const prev = current[section] ?? [];
+    if (prev.length === ids.length && prev.every((id, i) => id === ids[i])) return null;
+    state.settings?.merge({ local: { sessionOrder: { ...current, [section]: ids } } });
+    applyLayout();
+    const kind =
+      section === 'pinned' || section === 'recent' || section === 'participated'
+        ? section
+        : 'folder';
+    log('local', 'local-session-reorder', {
+      detail: { section: kind, count: ids.length },
+    });
     return null;
   });
   handleResult(IpcChannels.localWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) => {

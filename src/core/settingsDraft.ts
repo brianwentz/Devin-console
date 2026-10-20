@@ -13,6 +13,12 @@ export const CLAUDE_PERMISSION_MODES = [
   'auto',
 ] as const satisfies readonly ClaudePermissionMode[];
 
+// Picker start-folder draft fields accept a Windows drive root, a UNC path, or
+// a POSIX-absolute path (a WSL home is valid for a UNC-rooted picker).
+export function isAbsolutePickerPath(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\') || value.startsWith('/');
+}
+
 export function isClaudePermissionMode(value: unknown): value is ClaudePermissionMode {
   return (CLAUDE_PERMISSION_MODES as readonly unknown[]).includes(value);
 }
@@ -29,6 +35,7 @@ export interface SettingsDraft {
   terminalShell: string;
   devinPath: string;
   localDefaultWslDistro: string;
+  localPickerFolder: string;
   claudePath: string;
   claudeAutoArchiveDays: string;
   claudePermissionMode: ClaudePermissionMode;
@@ -36,6 +43,7 @@ export interface SettingsDraft {
   claudeKeepAliveMinutes: string;
   claudeMaxLiveAgents: string;
   claudeDefaultWslDistro: string;
+  claudePickerFolder: string;
   userId: string;
   orgId: string;
   linkRules: LinkRule[];
@@ -45,6 +53,7 @@ export type DraftField = keyof SettingsDraft;
 
 export type SettingsTabId =
   | 'general'
+  | 'cloud'
   | 'local'
   | 'claude'
   | 'links'
@@ -53,17 +62,18 @@ export type SettingsTabId =
   | 'updates';
 
 export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
-  tenantUrl: 'general',
-  apiBase: 'general',
+  tenantUrl: 'cloud',
+  apiBase: 'cloud',
   allowExternal: 'links',
   keepAliveHours: 'general',
   maxLiveTabs: 'general',
   sessionsOpen: 'general',
-  sessionsMaxLiveViews: 'general',
-  sessionsKeepAliveHours: 'general',
+  sessionsMaxLiveViews: 'cloud',
+  sessionsKeepAliveHours: 'cloud',
   terminalShell: 'general',
   devinPath: 'local',
   localDefaultWslDistro: 'local',
+  localPickerFolder: 'local',
   claudePath: 'claude',
   claudeAutoArchiveDays: 'claude',
   claudePermissionMode: 'claude',
@@ -71,6 +81,7 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   claudeKeepAliveMinutes: 'claude',
   claudeMaxLiveAgents: 'claude',
   claudeDefaultWslDistro: 'claude',
+  claudePickerFolder: 'claude',
   userId: 'notifications',
   orgId: 'notifications',
   linkRules: 'links',
@@ -93,6 +104,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     terminalShell: settings.terminal.shell,
     devinPath: settings.local.devinPath ?? '',
     localDefaultWslDistro: settings.local.defaultWslDistro ?? '',
+    localPickerFolder: settings.local.pickerFolder ?? '',
     claudePath: settings.claude.path ?? '',
     claudeAutoArchiveDays: String(settings.claude.autoArchiveDays),
     claudePermissionMode: settings.claude.defaultPermissionMode,
@@ -100,6 +112,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     claudeKeepAliveMinutes: String(settings.claude.keepAliveMinutes),
     claudeMaxLiveAgents: String(settings.claude.maxLiveAgents),
     claudeDefaultWslDistro: settings.claude.defaultWslDistro ?? '',
+    claudePickerFolder: settings.claude.pickerFolder ?? '',
     userId: settings.notifications.userId,
     orgId: settings.notifications.orgId,
     linkRules: settings.routing.rules.map((rule) => ({ ...rule })),
@@ -129,6 +142,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     draft.terminalShell.trim() !== base.terminalShell ||
     draft.devinPath.trim() !== base.devinPath ||
     draft.localDefaultWslDistro !== base.localDefaultWslDistro ||
+    draft.localPickerFolder.trim() !== base.localPickerFolder ||
     draft.claudePath.trim() !== base.claudePath ||
     Number(draft.claudeAutoArchiveDays) !== Number(base.claudeAutoArchiveDays) ||
     draft.claudePermissionMode !== base.claudePermissionMode ||
@@ -136,6 +150,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     Number(draft.claudeKeepAliveMinutes) !== Number(base.claudeKeepAliveMinutes) ||
     Number(draft.claudeMaxLiveAgents) !== Number(base.claudeMaxLiveAgents) ||
     draft.claudeDefaultWslDistro !== base.claudeDefaultWslDistro ||
+    draft.claudePickerFolder.trim() !== base.claudePickerFolder ||
     draft.userId.trim() !== base.userId ||
     draft.orgId.trim() !== base.orgId ||
     draft.linkRules.length !== base.linkRules.length ||
@@ -208,6 +223,14 @@ export function validateDraft(
       break;
     }
   }
+  const localPickerFolder = draft.localPickerFolder.trim();
+  const claudePickerFolder = draft.claudePickerFolder.trim();
+  if (localPickerFolder && !isAbsolutePickerPath(localPickerFolder)) {
+    errors.localPickerFolder = 'Enter an absolute folder path';
+  }
+  if (claudePickerFolder && !isAbsolutePickerPath(claudePickerFolder)) {
+    errors.claudePickerFolder = 'Enter an absolute folder path';
+  }
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -228,6 +251,7 @@ export function validateDraft(
       local: {
         devinPath: draft.devinPath.trim() || null,
         defaultWslDistro: draft.localDefaultWslDistro || null,
+        pickerFolder: localPickerFolder || null,
       },
       claude: {
         path: draft.claudePath.trim() || null,
@@ -237,6 +261,7 @@ export function validateDraft(
         keepAliveMinutes: claudeKeepAlive,
         maxLiveAgents: claudeMaxLive,
         defaultWslDistro: draft.claudeDefaultWslDistro || null,
+        pickerFolder: claudePickerFolder || null,
       },
       notifications: { userId: draft.userId.trim(), orgId: draft.orgId.trim() },
     },

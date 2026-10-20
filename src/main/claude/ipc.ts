@@ -3,8 +3,6 @@
 // guardedOn sends (failures surface as claude.lastError, same as cloud:*);
 // claude:contextMenu is the one invoke.
 import type { ZodType } from 'zod';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { app } from 'electron';
 import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
@@ -31,6 +29,7 @@ import {
   ClaudeSessionPinArg,
   LocalWorkspaceArg,
   WorkspaceRenameSchema,
+  SessionReorderArg,
   WorkspaceReorderSchema,
   ClaudeSessionRemoveArg,
   ClaudeSetModelArg,
@@ -45,7 +44,9 @@ import { publicChatState } from './chatState';
 import { hosts } from '../hosts';
 
 export function setupClaude(): ClaudeSessions {
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
+  // Captured-at-startup local Claude home — never the live env var, which
+  // `withConfigDir` swaps while a WSL store call runs.
+  const configDir = hosts().localConfigDir();
   const sessions = setupClaudeSessions({ configDir, userData: app.getPath('userData') });
   sessions.start();
 
@@ -88,6 +89,9 @@ export function setupClaude(): ClaudeSessions {
   );
   handleResult(IpcChannels.claudeWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) =>
     sessions.workspaceReorder(paths),
+  );
+  handleResult(IpcChannels.claudeSessionReorder, SessionReorderArg, ({ section, ids }) =>
+    sessions.sessionReorder(section, ids),
   );
   handleResult(IpcChannels.claudeWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) =>
     sessions.workspaceRename(path, label),

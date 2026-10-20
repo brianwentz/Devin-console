@@ -1,6 +1,6 @@
 import type { DraftField } from '../../../core/settingsDraft';
 import { useShellState } from '../../store';
-import { errorTextClass, inputClass, inputErrorClass } from './styles';
+import { buttonClass, errorTextClass, inputClass, inputErrorClass } from './styles';
 
 // Non-empty claude.path that didn't resolve — surfaced inline under the
 // field from the live claude state rather than as a commit-blocking error.
@@ -64,6 +64,57 @@ export function WslDistroSelect({
         <span className="text-xs text-[#7f8ca0]">No WSL distros detected.</span>
       )}
     </label>
+  );
+}
+
+// ux3 S3: shared by the Devin Local and Claude Code tabs — where that
+// surface's folder pickers start. Browse… starts in the current value and
+// writes the pick into the draft (null = cancelled → unchanged).
+export function PickerFolderField({
+  id,
+  browseId,
+  value,
+  error,
+  hint,
+  onChange,
+}: {
+  id: string;
+  browseId: string;
+  value: string;
+  error: string | undefined;
+  hint: string;
+  onChange: (next: string) => void;
+}) {
+  const browse = async () => {
+    const picked = await window.devinworkspaces.dialogPickFolder(
+      'Choose where folder pickers start',
+      value.trim() || undefined,
+    );
+    if (picked !== null) onChange(picked);
+  };
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <label htmlFor={id} className="text-[#aeb9c8]">
+        Folder pickers start in
+      </label>
+      <div className="flex items-center gap-2 w-full max-w-md">
+        <input
+          id={id}
+          className={error ? `${inputClass} ${inputErrorClass}` : inputClass}
+          value={value}
+          aria-invalid={error ? 'true' : undefined}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="e.g. C:\Users\me\src or \\wsl.localhost\Ubuntu\home\me"
+        />
+        <button id={browseId} type="button" className={buttonClass} onClick={() => void browse()}>
+          Browse…
+        </button>
+      </div>
+      <FieldError inputId={id} message={error} />
+      <span className="text-xs text-[#7f8ca0]">
+        {hint} Blank = the default WSL distro's home when one is set, else the system default.
+      </span>
+    </div>
   );
 }
 

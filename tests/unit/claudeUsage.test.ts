@@ -23,6 +23,7 @@ import {
   monthKey,
   parseUsageResponse,
   previousMonthKey,
+  pruneFileCache,
   resetsIn,
   severityFor,
   sumTotals,
@@ -299,5 +300,45 @@ describe('aggregateUsageLines zero-token models', () => {
     const buckets = aggregateUsageLines(lines);
     expect(Object.keys(buckets['2026-10']!.byModel)).toEqual(['opus-5-5']);
     expect(buckets['2026-10']!.byDay['2026-10-05']).toEqual({ 'opus-5-5': 6 });
+  });
+});
+
+describe('pruneFileCache', () => {
+  const entry = { size: 1, mtime: 1, offset: 1, buckets: {} };
+  it('drops keys of scanned hosts that no longer map to a live file', () => {
+    // The poisoned shape: local: keys that carry a WSL store's project paths.
+    // Keys use the scanner's shape `<hostId>:<path relative to projects/>`
+    // (Windows separators on the real machine; the helper never parses them).
+    const files = {
+      'local:/C--work-alpha/a.jsonl': entry,
+      'local:/-home-u-ws/poisoned.jsonl': entry,
+      'wsl:Fake:/-home-u-ws/w.jsonl': entry,
+    };
+    const out = pruneFileCache(
+      files,
+      ['local', 'wsl:Fake'],
+      ['local:/C--work-alpha/a.jsonl', 'wsl:Fake:/-home-u-ws/w.jsonl'],
+    );
+    expect(out.pruned).toBe(1);
+    expect(Object.keys(out.files).sort()).toEqual([
+      'local:/C--work-alpha/a.jsonl',
+      'wsl:Fake:/-home-u-ws/w.jsonl',
+    ]);
+    // Input untouched.
+    expect(Object.keys(files)).toHaveLength(3);
+  });
+  it('keeps entries of hosts that were not scanned this pass', () => {
+    const files = {
+      'local:/a.jsonl': entry,
+      'wsl:Stopped:/-home-u-x/s.jsonl': entry,
+    };
+    const out = pruneFileCache(files, ['local'], ['local:/a.jsonl']);
+    expect(out.pruned).toBe(0);
+    expect(Object.keys(out.files)).toHaveLength(2);
+  });
+  it('a host id that prefixes another host id does not claim its keys', () => {
+    const files = { 'wsl:Fake-2:/p/x.jsonl': entry };
+    const out = pruneFileCache(files, ['wsl:Fake'], []);
+    expect(out.pruned).toBe(0);
   });
 });

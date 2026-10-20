@@ -16,6 +16,7 @@ import { sessionRowClass } from './sessionRowStyles';
 import { FolderNameInput } from './sidebar/FolderNameInput';
 import { PrBadges } from './sidebar/PrBadges';
 import { SessionRow, SessionRowButton } from './sidebar/SessionRow';
+import { ReorderableRow } from './sidebar/ReorderableRow';
 import { SectionHeader } from './sidebar/SectionHeader';
 import { isEditableFolder } from './sidebar/dnd';
 import { useOptimisticList } from './sidebar/useOptimisticList';
@@ -106,14 +107,16 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
   const cloud = state!.cloud;
   const liveIds = useMemo(() => new Set(cloud.liveSessionIds), [cloud.liveSessionIds]);
   const collapsedFolders = state!.settings.sessions.collapsedFolders;
+  const sessionOrder = state!.settings.sessions.sessionOrder;
 
-  const cloudData = useMemo<CloudListData>(
+  const cloudData = useMemo<CloudListData & { sessionOrder: Record<string, string[]> }>(
     () => ({
       sessions: cloud.sessions,
       folders: cloud.folders,
       folderTotals: cloud.folderTotals,
+      sessionOrder,
     }),
-    [cloud.sessions, cloud.folders, cloud.folderTotals],
+    [cloud.sessions, cloud.folders, cloud.folderTotals, sessionOrder],
   );
   // Optimistic edits hold until the next cloud update (a successful list —
   // or the test-mode fake applying the same change — replaces them) or a
@@ -121,6 +124,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
   const { data: baseData, applyOptimistic } = useOptimisticList(cloudData, [
     cloud.lastSyncAt,
     cloud.lastError,
+    sessionOrder,
   ]);
   const data = useMemo<CloudListData>(
     () => ({
@@ -154,6 +158,13 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     applyOptimistic((d) => reorderFolders(d, names));
     window.devinworkspaces.cloudFolderReorder(names);
   };
+  const reorderSessionsTo = (section: string, ids: string[]) => {
+    applyOptimistic((d) => ({
+      ...d,
+      sessionOrder: { ...d.sessionOrder, [section]: ids },
+    }));
+    window.devinworkspaces.cloudSessionReorder(section, ids);
+  };
 
   const sessionMenu = async (sessionId: string, x: number, y: number) => {
     const { action } = await window.devinworkspaces.cloudContextMenu({
@@ -180,8 +191,9 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       buildSessionTree(data, {
         collapsedFolders,
         currentSessionId,
+        sectionOrder: baseData.sessionOrder,
       }),
-    [data, collapsedFolders, currentSessionId],
+    [data, baseData.sessionOrder, collapsedFolders, currentSessionId],
   );
 
   const toggleFolder = (name: string) => {
@@ -359,6 +371,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
                 onMenu={(name, x, y) => void folderMenu(name, x, y)}
                 onMove={moveSessionTo}
                 onReorder={reorderTo}
+                reorderable={userFolderNames.length > 1}
                 onNewInFolder={(name) => window.devinworkspaces.cloudNewSession(name)}
               />
               {!sectionItem.collapsed && (
@@ -367,15 +380,22 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
                     <div className="pl-6 py-1 text-[11px] text-[#5c6b80]">No sessions</div>
                   ) : (
                     sectionItem.nodes.map((node) => (
-                      <SessionRow
+                      <ReorderableRow
                         key={node.session.id}
-                        node={node}
-                        collapsedChildren={collapsedChildren}
-                        onToggleChildren={toggleChildren}
-                        registerRow={registerRow}
-                        opts={rowOpts}
-                        onMenu={(id, x, y) => void sessionMenu(id, x, y)}
-                      />
+                        section={sectionItem.name}
+                        sessionId={node.session.id}
+                        rootIds={sectionItem.nodes.map((n) => n.session.id)}
+                        onReorder={reorderSessionsTo}
+                      >
+                        <SessionRow
+                          node={node}
+                          collapsedChildren={collapsedChildren}
+                          onToggleChildren={toggleChildren}
+                          registerRow={registerRow}
+                          opts={rowOpts}
+                          onMenu={(id, x, y) => void sessionMenu(id, x, y)}
+                        />
+                      </ReorderableRow>
                     ))
                   )}
                   {sectionItem.hasMore && (

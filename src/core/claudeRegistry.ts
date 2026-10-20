@@ -4,6 +4,15 @@
 // when a mutation touches it, so the file stays small.
 
 import { z } from 'zod';
+import {
+  identityArray,
+  isPlainObject,
+  overlayKnown,
+  record,
+  replace,
+  structural,
+  type PreserveSpec,
+} from './storePreserve';
 import { workspaceFor } from './workspaceTree';
 import type { HostId as ExecHostId } from './execHost';
 import type { HostId, ClaudeSessionState } from '../shared/ipc';
@@ -70,16 +79,46 @@ export const emptyRegistry = (): ClaudeRegistry => ({
   entries: {},
 });
 
-/** Serialised form: legacy `folder`/`folders` fields are stripped (P4b —
- * workspaces live in settings.claude.workspaces now). */
-export function serializeRegistry(reg: ClaudeRegistry): string {
-  const entries = Object.fromEntries(
-    Object.entries(reg.entries).map(([id, entry]) => {
-      const { folder: _folder, ...rest } = entry;
-      return [id, rest];
-    }),
-  );
-  return JSON.stringify({ version: reg.version, entries });
+// ux3 S6: structural parts of claude-sessions.json — unknown root keys,
+// unknown per-entry fields and unknown per-PR fields survive a save; entry
+// membership comes from memory (an absent entry is a deletion), PRs are
+// matched by url.
+export const REGISTRY_PRESERVE_SPEC: PreserveSpec = structural({
+  version: replace,
+  entries: record(structural({ prs: identityArray('url', structural()) })),
+});
+
+/** The object written to claude-sessions.json: the in-memory registry
+ * overlaid on the file as read (`raw`), so fields this build doesn't know
+ * come back out unchanged. The legacy P4b fields are the one intentional
+ * deletion: `folders` / `entries[*].folder` are removed by name once the
+ * in-memory registry no longer carries them (the migration consumed them),
+ * and `prUrls` is removed once an entry has been read into `prs`. While
+ * `legacyFolders` is still pending it is written back as `folders`. */
+export function registryFileObject(reg: ClaudeRegistry, raw: unknown): Record<string, unknown> {
+  const base: Record<string, unknown> = isPlainObject(raw) ? { ...raw } : {};
+  const { legacyFolders, ...rest } = reg;
+  const known: Record<string, unknown> = { ...rest };
+  if (legacyFolders !== undefined) known.folders = legacyFolders;
+  else delete base.folders;
+  const rawEntries: Record<string, unknown> = isPlainObject(base.entries) ? { ...base.entries } : {};
+  for (const [id, entry] of Object.entries(reg.entries)) {
+    const rawEntry = rawEntries[id];
+    if (!isPlainObject(rawEntry)) continue;
+    const copy = { ...rawEntry };
+    if (entry.folder === undefined) delete copy.folder;
+    delete copy.prUrls;
+    rawEntries[id] = copy;
+  }
+  base.entries = rawEntries;
+  return overlayKnown(base, known, REGISTRY_PRESERVE_SPEC) as Record<string, unknown>;
+}
+
+/** Serialised form (see registryFileObject): legacy `folder`/`folders`
+ * fields are stripped once consumed (P4b — workspaces live in
+ * settings.claude.workspaces now). */
+export function serializeRegistry(reg: ClaudeRegistry, raw: unknown = undefined): string {
+  return JSON.stringify(registryFileObject(reg, raw));
 }
 
 const PrStateSchema = z.enum(['open', 'draft', 'merged', 'closed']);

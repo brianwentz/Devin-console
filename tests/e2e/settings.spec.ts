@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -49,8 +49,10 @@ const selectedTab = (app: ElectronApplication) =>
     app,
     `document.querySelector('#settingsTabs [role="tab"][aria-selected="true"]')?.dataset.settingsTab`,
   );
+const hasEl = (app: ElectronApplication, id: string) =>
+  shell(app, `Boolean(document.getElementById('${id}'))`);
 
-test('settings has seven tabs and switches panels', async () => {
+test('settings has eight tabs and switches panels', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
@@ -58,12 +60,43 @@ test('settings has seven tabs and switches panels', async () => {
     await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     await expect
-      .poll(async () => shell(app, `document.querySelectorAll('#settingsTabs [role="tab"]').length`))
-      .toBe(7);
+      .poll(async () =>
+        shell(
+          app,
+          `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.dataset.settingsTab).join(',')`,
+        ),
+      )
+      .toBe('general,cloud,local,claude,links,passwords,notifications,updates');
+    expect(
+      await shell(
+        app,
+        `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.textContent).join('|')`,
+      ),
+    ).toBe(
+      'General|Devin Cloud|Devin Local|Claude Code|Link Handling|Passwords|Notifications|Updates',
+    );
     expect(await selectedTab(app)).toBe('general');
+    // General keeps the GitHub-pane rows; the Cloud rows moved to Devin Cloud.
     await expect
-      .poll(async () => shell(app, `Boolean(document.getElementById('tenantUrlInput'))`))
+      .poll(async () => shell(app, `Boolean(document.getElementById('keepAliveInput'))`))
       .toBe(true);
+    expect(await shell(app, `Boolean(document.getElementById('tenantUrlInput'))`)).toBe(false);
+    expect(await shell(app, `document.getElementById('settingsPanel-general').textContent`)).toContain(
+      'GitHub pane',
+    );
+
+    await clickTab(app, 'cloud');
+    await expect.poll(async () => selectedTab(app)).toBe('cloud');
+    for (const id of [
+      'tenantUrlInput',
+      'apiBaseInput',
+      'sessionsMaxLiveViews',
+      'sessionsKeepAliveHours',
+    ]) {
+      await expect.poll(async () => hasEl(app, id), id).toBe(true);
+    }
+    expect(await hasEl(app, 'keepAliveInput')).toBe(false);
+    expect(await hasEl(app, 'settingsPanel-cloud')).toBe(true);
 
     await clickTab(app, 'notifications');
     await expect.poll(async () => selectedTab(app)).toBe('notifications');
@@ -114,19 +147,19 @@ test('a validation failure keeps the tab and flags the field', async () => {
   const app = await launch(profile, logFile);
   try {
     await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
-    await expect
-      .poll(async () => shell(app, `Boolean(document.getElementById('tenantUrlInput'))`))
-      .toBe(true);
+    await clickTab(app, 'cloud');
+    await expect.poll(async () => hasEl(app, 'tenantUrlInput')).toBe(true);
 
     await setInputValue(app, 'tenantUrlInput', 'ftp://bad');
     await clickTab(app, 'passwords');
-    // Tab switch is refused; the field is flagged and the error banner shows.
-    await expect.poll(async () => selectedTab(app)).toBe('general');
+    // Tab switch is refused; the field is flagged, focused, and the error banner shows.
+    await expect.poll(async () => selectedTab(app)).toBe('cloud');
     await expect
       .poll(async () =>
         shell(app, `document.getElementById('tenantUrlInput')?.getAttribute('aria-invalid')`),
       )
       .toBe('true');
+    await expect.poll(async () => shell(app, `document.activeElement?.id`)).toBe('tenantUrlInput');
     await expect
       .poll(async () => shell(app, `Boolean(document.getElementById('settingsError'))`))
       .toBe(true);
@@ -134,6 +167,14 @@ test('a validation failure keeps the tab and flags the field', async () => {
       .poll(async () => shell(app, `Boolean(document.getElementById('tenantUrlInputError'))`))
       .toBe(true);
     expect((await readEvents(logFile)).some((e) => e.event === 'tenant-changed')).toBe(false);
+
+    // Leaving Settings through the rail is refused the same way and the
+    // error routing lands on the Cloud tab (DRAFT_TAB.tenantUrl === 'cloud').
+    await shell(app, `document.getElementById('cloudButton').click()`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect((await state(app)).surface).toBe('settings');
+    expect(await selectedTab(app)).toBe('cloud');
+    expect(await shell(app, `document.activeElement?.id`)).toBe('tenantUrlInput');
 
     // A valid value saves and the switch goes through. The fixture URL is a
     // real change (settings.tenantUrl defaults to the cloud tenant) and the
@@ -264,8 +305,6 @@ test('updates tab reports missing release notes on a non-2xx response', async ()
   }
 });
 
-const hasEl = (app: ElectronApplication, id: string) =>
-  shell(app, `Boolean(document.getElementById('${id}'))`);
 // PublicState types settings loosely; the P3 tabs read these two sections.
 const settingsOf = async (app: ElectronApplication) =>
   (await state(app)).settings as unknown as {
@@ -303,10 +342,11 @@ test('Devin Local tab renders the devin path and the agents summary', async () =
     expect(await shell(app, `document.getElementById('settingsPanel-local').textContent`)).toContain(
       'No WSL distros detected.',
     );
-    // The Claude controls no longer live on General.
+    // Neither the Claude controls nor the Cloud rows live on General.
     await clickTab(app, 'general');
-    await expect.poll(async () => hasEl(app, 'tenantUrlInput')).toBe(true);
+    await expect.poll(async () => hasEl(app, 'keepAliveInput')).toBe(true);
     expect(await hasEl(app, 'claudePathInput')).toBe(false);
+    expect(await hasEl(app, 'tenantUrlInput')).toBe(false);
   } finally {
     await quit(app, profile);
   }
@@ -457,5 +497,53 @@ test('a dirty draft is flushed on quit', async () => {
     tabs: { maxLiveTabs: number };
   };
   expect(persisted.tabs.maxLiveTabs).toBe(7);
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+});
+
+// ux3 S6: a build only rewrites what it understands — keys written by a
+// newer build (or an unknown value for a known key) come back out unchanged.
+test('settings.json keeps unknown keys and an invalid untouched value across a run', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(
+    join(profile, 'settings.json'),
+    JSON.stringify({
+      future: { x: 1 },
+      // showArchived is invalid here and has no Settings-page field, so the
+      // form commit below never touches it (the draft covers claude.model etc.).
+      claude: { futureField: true, showArchived: 'yes', model: 'opus-x' },
+      tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
+    }),
+  );
+  const app = await launch(profile, logFile);
+  await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+  await expect
+    .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
+    .toBe(true);
+  // The invalid leaf fell back to its default in memory; the rest of the block survived.
+  const loaded = (await state(app)).settings;
+  expect(loaded.claude).toMatchObject({ showArchived: false, model: 'opus-x' });
+  await setInputValue(app, 'maxLiveTabsInput', '7');
+  await clickTab(app, 'passwords');
+  await waitForEvent(logFile, 'settings-commit');
+
+  await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+  await app.close().catch(() => undefined);
+
+  const persisted = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+  expect(persisted.tabs.maxLiveTabs).toBe(7);
+  expect(persisted.future).toEqual({ x: 1 });
+  expect(persisted.claude.futureField).toBe(true);
+  expect(persisted.claude.showArchived).toBe('yes');
+  expect(persisted.claude.model).toBe('opus-x');
+  const events = await readEvents(logFile);
+  const preserved = events.filter((e) => e.event === 'store-preserved');
+  expect(preserved.some((e) => (e.detail as any)?.store === 'settings')).toBe(true);
+  const settingsPreserved = preserved.find((e) => (e.detail as any)?.store === 'settings');
+  expect((settingsPreserved!.detail as any).keys).toEqual(
+    expect.arrayContaining(['future', 'claude.futureField']),
+  );
+  const repaired = events.find((e) => e.event === 'settings-repaired');
+  expect((repaired?.detail as any)).toMatchObject({ dropped: ['claude.showArchived'], preserved: true });
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
 });

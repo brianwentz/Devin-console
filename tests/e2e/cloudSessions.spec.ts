@@ -581,3 +581,101 @@ test('cloud session sidebar: mutations, menus, PR badges', async () => {
     rmSync(profile, { recursive: true, force: true });
   }
 });
+
+// ux3 S1: drag session rows to reorder inside a user folder and Recent.
+test('cloud session sidebar: session row drag reorders inside a folder and recent', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-cloud-reorder-'));
+  const fixturePath = join(profile, 'cloudSessions.json');
+  const raw = JSON.parse(
+    readFileSync(resolve(__dirname, '../fixtures/cloudSessions.json'), 'utf8'),
+  ) as CloudListResult;
+  for (const session of raw.sessions) {
+    session.url = `${fixtures.devinUrl}/sessions/${session.id}`;
+  }
+  // Two extra Alpha roots (the fixture's other Alpha rows are children) so the
+  // section has four reorderable roots: bbbb, eeee, a100, a200.
+  const seed = raw.sessions.find((s) => s.folder === 'Alpha' && !s.isPinned)!;
+  raw.sessions.push(
+    { ...seed, id: 'a1000000000000000000000000000001', acpId: 'devin-a1000000000000000000000000000001', title: 'Alpha extra 1', url: `${fixtures.devinUrl}/sessions/a1000000000000000000000000000001`, isPinned: false, parentId: null, updatedAt: 1759525000000 },
+    { ...seed, id: 'a2000000000000000000000000000002', acpId: 'devin-a2000000000000000000000000000002', title: 'Alpha extra 2', url: `${fixtures.devinUrl}/sessions/a2000000000000000000000000000002`, isPinned: false, parentId: null, updatedAt: 1759524000000 },
+  );
+  writeFileSync(fixturePath, JSON.stringify(raw));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_TEST_CLOUD_SESSIONS: fixturePath,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  const orderIn = async (section: string) => {
+    const page = await shellPage(app);
+    return page.evaluate((sec) => {
+      const header = [...document.querySelectorAll('[data-section-name]')].find(
+        (e) => e.getAttribute('data-section-name') === sec,
+      );
+      const wrap = header?.closest('div.mb-px');
+      return [...(wrap?.querySelectorAll('[data-reorder-row]') ?? [])].map((e) =>
+        e.getAttribute('data-reorder-row'),
+      );
+    }, section);
+  };
+  try {
+    await expect.poll(async () => (await h.cloudState()).status).toBe('ready');
+    const page = await shellPage(app);
+    await expect.poll(async () => (await orderIn('Alpha')).length).toBe(4);
+
+    // drag the last Alpha row above the first → DOM order + settings.
+    const alpha = await orderIn('Alpha');
+    await dndMove(
+      page,
+      `[data-session-id="${alpha[3]}"]`,
+      `[data-session-id="${alpha[0]}"]`,
+    );
+    const expectedAlpha = [alpha[3], alpha[0], alpha[1], alpha[2]];
+    await expect.poll(async () => orderIn('Alpha')).toEqual(expectedAlpha);
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)
+            ?.sessions?.sessionOrder?.Alpha,
+      )
+      .toEqual(expectedAlpha);
+
+    // same inside Recent (folder:null rows): drag the older above the newer.
+    const recent = await orderIn('recent');
+    await dndMove(
+      page,
+      `[data-session-id="${recent[1]}"]`,
+      `[data-session-id="${recent[0]}"]`,
+    );
+    const expectedRecent = [recent[1], recent[0]];
+    await expect.poll(async () => orderIn('recent')).toEqual(expectedRecent);
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)
+            ?.sessions?.sessionOrder?.recent,
+      )
+      .toEqual(expectedRecent);
+
+    // a session that arrives later still lists above the manual order.
+    const seedRow = raw.sessions.find((s) => s.folder === 'Alpha')!;
+    raw.sessions.push({
+      ...seedRow,
+      id: 'eeee9999eeee9999eeee9999eeee9999',
+      acpId: 'devin-eeee9999eeee9999eeee9999eeee9999',
+      title: 'Newest session',
+      url: `${fixtures.devinUrl}/sessions/eeee9999eeee9999eeee9999eeee9999`,
+      isPinned: false,
+      updatedAt: 1759800000000,
+    });
+    writeFileSync(fixturePath, JSON.stringify(raw));
+    await h.cloudRefresh();
+    await expect
+      .poll(async () => (await orderIn('Alpha'))[0])
+      .toBe('eeee9999eeee9999eeee9999eeee9999');
+    expect((await orderIn('Alpha')).slice(1)).toEqual(expectedAlpha);
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

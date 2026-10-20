@@ -4,10 +4,12 @@
 // names, ids, counts and durations only — never titles or transcript text.
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
-import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { openFolderDialog } from '../dialogs';
+import { pickerFolderMissing, pickerStartPath } from '../../core/pickerFolder';
+import { basename, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
   ClaudeStoreSession,
@@ -682,16 +684,8 @@ export class ClaudeSessions {
       else {
         const win = state.windowRef;
         if (!win) return null;
-        // The configured default WSL distro becomes the picker's starting dir.
-        const defaultDistro = state.settings?.current.claude.defaultWslDistro;
-        const defaultHost = defaultDistro
-          ? hosts().hostById(`wsl:${defaultDistro}`)
-          : null;
-        const defaultPath =
-          defaultHost && isWslHost(defaultHost)
-            ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
-            : undefined;
-        const result = await dialog.showOpenDialog(win, {
+        const defaultPath = this.pickerDefaultPath();
+        const result = await openFolderDialog(win, {
           title: 'Choose the working directory for the new Claude session',
           properties: ['openDirectory', 'createDirectory'],
           ...(defaultPath ? { defaultPath } : {}),
@@ -759,23 +753,35 @@ export class ClaudeSessions {
   // The workspace list/labels live in settings.claude.*; a session's folder
   // is derived (exact host+cwd match in reconcile) — never stored.
 
+  // Where the New session / Add workspace pickers start (ux3 S3):
+  // claude.pickerFolder when it exists, else the configured default WSL
+  // distro's home, else undefined (the OS decides). A missing configured
+  // folder is logged and skipped, never cleared.
+  private pickerDefaultPath(): string | undefined {
+    const claude = state.settings?.current.claude;
+    const defaultDistro = claude?.defaultWslDistro;
+    const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
+    const distroHome =
+      defaultHost && isWslHost(defaultHost)
+        ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
+        : undefined;
+    const configured = claude?.pickerFolder ?? null;
+    if (pickerFolderMissing(configured, existsSync)) {
+      log('claude', 'picker-folder-missing', { detail: { surface: 'claude' } });
+    }
+    return pickerStartPath(configured, distroHome, existsSync);
+  }
+
   // Picks a directory (same seam as newSession(null): test mode reads
   // DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD, else the folder dialog starting in
-  // the configured default WSL distro's home).
+  // pickerDefaultPath()).
   private async pickWorkspaceDir(title: string): Promise<string | null> {
     const envCwd = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD?.trim() : '';
     if (envCwd) return envCwd;
     const win = state.windowRef;
     if (!win) return null;
-    const defaultDistro = state.settings?.current.claude.defaultWslDistro;
-    const defaultHost = defaultDistro
-      ? hosts().hostById(`wsl:${defaultDistro}`)
-      : null;
-    const defaultPath =
-      defaultHost && isWslHost(defaultHost)
-        ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
-        : undefined;
-    const result = await dialog.showOpenDialog(win, {
+    const defaultPath = this.pickerDefaultPath();
+    const result = await openFolderDialog(win, {
       title,
       properties: ['openDirectory', 'createDirectory'],
       ...(defaultPath ? { defaultPath } : {}),
@@ -807,6 +813,25 @@ export class ClaudeSessions {
       state.settings?.merge({ claude: { workspaces: next } });
       applyLayout();
       log('claude', 'claude-workspace-reorder', { detail: { count: next.length } });
+      this.emit();
+    });
+  }
+
+  sessionReorder(section: string, ids: string[]): Promise<void> {
+    this.recordMutation('sessionReorder', { count: ids.length });
+    return this.mutate('sessionReorder', () => {
+      const current = state.settings?.current.claude.sessionOrder ?? {};
+      state.settings?.merge({
+        claude: { sessionOrder: { ...current, [section]: ids } },
+      });
+      applyLayout();
+      const kind =
+        section === 'pinned' || section === 'recent' || section === 'participated'
+          ? section
+          : 'folder';
+      log('claude', 'claude-session-reorder', {
+        detail: { section: kind, count: ids.length },
+      });
       this.emit();
     });
   }
@@ -845,10 +870,13 @@ export class ClaudeSessions {
     const current = state.settings?.current.claude;
     const labels = { ...(current?.workspaceLabels ?? {}) };
     delete labels[normalized];
+    const order = { ...(current?.sessionOrder ?? {}) };
+    delete order[normalized];
     state.settings?.merge({
       claude: {
         workspaces: (current?.workspaces ?? []).filter((p) => p !== normalized),
         workspaceLabels: labels,
+        sessionOrder: order,
       },
     });
     applyLayout();
@@ -940,7 +968,7 @@ export class ClaudeSessions {
 
   // One-shot (ux2 D8): legacy free-form registry folders → path-bound
   // workspaces. Runs once after the first successful refresh; the legacy
-  // fields are then stripped (serializeRegistry never writes them back).
+  // fields are then stripped (registryFileObject deletes them by name).
   private migratedLegacyFolders = false;
   private migrateLegacyFoldersOnce(storeComplete: boolean): void {
     if (this.migratedLegacyFolders) return;
@@ -1104,8 +1132,9 @@ export function setupClaudeSessions(opts: {
 }
 
 function create(opts?: { configDir: string; userData: string }): ClaudeSessions {
-  const configDir =
-    opts?.configDir ?? (process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude'));
+  // The un-started fallback can be created at any time (publicState() before
+  // setupClaude()), so it must not read the live env var either.
+  const configDir = opts?.configDir ?? hosts().localConfigDir();
   const userData = opts?.userData ?? app.getPath('userData');
   return new ClaudeSessions({
     configDir,

@@ -39,7 +39,11 @@ describe('draftFromSettings', () => {
       tabs: { keepAliveHours: 48, maxLiveTabs: 3 },
       sessions: { maxLiveViews: 4, keepAliveHours: 12 },
       terminal: { shell: 'pwsh.exe' },
-      local: { devinPath: 'D:\\bin\\devin.exe', defaultWslDistro: 'Ubuntu-22.04' },
+      local: {
+        devinPath: 'D:\\bin\\devin.exe',
+        defaultWslDistro: 'Ubuntu-22.04',
+        pickerFolder: 'C:\\work',
+      },
       notifications: { userId: 'user-1', orgId: 'org-2' },
       claude: {
         path: 'C:\\tools\\claude.exe',
@@ -49,6 +53,7 @@ describe('draftFromSettings', () => {
         keepAliveMinutes: 30,
         maxLiveAgents: 2,
         defaultWslDistro: 'Ubuntu-24.04',
+        pickerFolder: '/home/u/ws',
       },
     });
     expect(draftFromSettings(custom)).toEqual({
@@ -63,6 +68,7 @@ describe('draftFromSettings', () => {
       terminalShell: 'pwsh.exe',
       devinPath: 'D:\\bin\\devin.exe',
       localDefaultWslDistro: 'Ubuntu-22.04',
+      localPickerFolder: 'C:\\work',
       claudePath: 'C:\\tools\\claude.exe',
       claudeAutoArchiveDays: '30',
       claudePermissionMode: 'plan',
@@ -70,6 +76,7 @@ describe('draftFromSettings', () => {
       claudeKeepAliveMinutes: '30',
       claudeMaxLiveAgents: '2',
       claudeDefaultWslDistro: 'Ubuntu-24.04',
+      claudePickerFolder: '/home/u/ws',
       userId: 'user-1',
       orgId: 'org-2',
       linkRules: [{ id: 'r1', kind: 'prefix', pattern: 'https://x.example/', enabled: true }],
@@ -114,6 +121,7 @@ describe('isDraftDirty', () => {
       keepAliveMinutes: 15,
       maxLiveAgents: 3,
       defaultWslDistro: null,
+      pickerFolder: null,
     });
     // Blank path clears the override.
     const cleared = validateDraft(draft({ claudePath: '  ' }));
@@ -130,6 +138,7 @@ describe('isDraftDirty', () => {
       keepAliveMinutes: 15,
       maxLiveAgents: 3,
       defaultWslDistro: null,
+      pickerFolder: null,
     });
     const blankModel = validateDraft(draft({ claudeModel: '   ' }));
     expect(blankModel.ok && blankModel.patch.claude?.model).toBe(null);
@@ -168,6 +177,7 @@ describe('isDraftDirty', () => {
     expect(result.patch.local).toEqual({
       devinPath: 'D:\\bin\\devin.exe',
       defaultWslDistro: 'Ubuntu-22.04',
+      pickerFolder: null,
     });
     expect(result.patch.claude).toMatchObject({
       keepAliveMinutes: 30,
@@ -209,7 +219,7 @@ describe('validateDraft', () => {
       tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
       sessions: { open: true, maxLiveViews: 6, keepAliveHours: 24 },
       terminal: { shell: 'pwsh.exe -l' },
-      local: { devinPath: null, defaultWslDistro: null },
+      local: { devinPath: null, defaultWslDistro: null, pickerFolder: null },
       claude: {
         path: null,
         autoArchiveDays: 0,
@@ -218,6 +228,7 @@ describe('validateDraft', () => {
         keepAliveMinutes: 15,
         maxLiveAgents: 3,
         defaultWslDistro: null,
+        pickerFolder: null,
       },
       notifications: { userId: 'u1', orgId: 'o1' },
     });
@@ -307,7 +318,12 @@ describe('DRAFT_TAB / firstErrorField', () => {
     expect(Object.keys(DRAFT_TAB).sort()).toEqual(draftKeys.sort());
     expect(DRAFT_TAB.userId).toBe('notifications');
     expect(DRAFT_TAB.orgId).toBe('notifications');
-    expect(DRAFT_TAB.tenantUrl).toBe('general');
+    expect(DRAFT_TAB.tenantUrl).toBe('cloud');
+    expect(DRAFT_TAB.apiBase).toBe('cloud');
+    expect(DRAFT_TAB.sessionsMaxLiveViews).toBe('cloud');
+    expect(DRAFT_TAB.sessionsKeepAliveHours).toBe('cloud');
+    expect(DRAFT_TAB.localPickerFolder).toBe('local');
+    expect(DRAFT_TAB.claudePickerFolder).toBe('claude');
     expect(DRAFT_TAB.allowExternal).toBe('links');
     // ux2: Devin Local fields route to the 'local' tab, every claude* field to 'claude'.
     expect(DRAFT_TAB.devinPath).toBe('local');
@@ -391,3 +407,51 @@ describe('link rules draft field', () => {
     ]);
   });
 });
+
+describe('pickerFolder draft fields (ux3 S0)', () => {
+  it('maps settings <-> draft (empty = unset)', () => {
+    const withFolders = mergeSettings(defaults, {
+      local: { pickerFolder: 'C:\\work' },
+      claude: { pickerFolder: '\\\\wsl.localhost\\Ubuntu\\home\\u' },
+    });
+    const d = draftFromSettings(withFolders);
+    expect(d.localPickerFolder).toBe('C:\\work');
+    expect(d.claudePickerFolder).toBe('\\\\wsl.localhost\\Ubuntu\\home\\u');
+    const result = validateDraft(d);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.patch.local?.pickerFolder).toBe('C:\\work');
+    expect(result.patch.claude?.pickerFolder).toBe('\\\\wsl.localhost\\Ubuntu\\home\\u');
+    // blank -> null in the patch
+    const blank = validateDraft(draft({}));
+    expect(blank.ok).toBe(true);
+    if (!blank.ok) return;
+    expect(blank.patch.local?.pickerFolder).toBeNull();
+    expect(blank.patch.claude?.pickerFolder).toBeNull();
+  });
+
+  it('accepts drive, UNC and posix-absolute paths; rejects relative', () => {
+    for (const value of [
+      'C:\\x',
+      'd:/x',
+      '\\\\wsl.localhost\\Ubuntu\\home\\u',
+      '\\\\server\\share',
+      '/home/u',
+    ]) {
+      const result = validateDraft(
+        draft({ localPickerFolder: value, claudePickerFolder: value }),
+      );
+      expect(result.ok, value).toBe(true);
+    }
+    for (const value of ['relative\\x', './x', '..\\up', 'home/u']) {
+      const result = validateDraft(draft({ localPickerFolder: value }));
+      expect(result.ok, value).toBe(false);
+      if (result.ok) continue;
+      expect(result.errors.localPickerFolder).toBe('Enter an absolute folder path');
+      const r2 = validateDraft(draft({ claudePickerFolder: value }));
+      expect(r2.ok, value).toBe(false);
+      if (!r2.ok) expect(r2.errors.claudePickerFolder).toBe('Enter an absolute folder path');
+    }
+  });
+});
+

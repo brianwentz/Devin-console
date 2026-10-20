@@ -266,9 +266,13 @@ describe('terminal dock settings (F5)', () => {
 
   it('rejects a terminal height below the minimum', () => {
     expect(SettingsPatchSchema.safeParse({ layout: { terminalHeight: 60 } }).success).toBe(false);
-    const { settings, dropped } = parseSettingsFile({ layout: { terminalHeight: 60 } });
-    expect(dropped).toEqual(['layout']);
-    expect(settings.layout.terminalHeight).toBe(280);
+    // ux3 S6: repair is leaf-granular inside structural blocks.
+    const { settings, dropped, invalid } = parseSettingsFile({
+      layout: { terminalOpen: true, terminalHeight: 60 },
+    });
+    expect(dropped).toEqual(['layout.terminalHeight']);
+    expect(invalid).toEqual({ 'layout.terminalHeight': 60 });
+    expect(settings.layout).toEqual({ terminalOpen: true, terminalHeight: 280 });
   });
 });
 
@@ -304,12 +308,13 @@ describe('routing.rules', () => {
       },
     };
     const { settings, dropped } = parseSettingsFile(oversized);
-    expect(dropped).toEqual(['routing']);
-    expect(settings.routing).toEqual({ allowExternal: true, rules: [] });
+    // ux3 S6: only the failing leaf is dropped; allowExternal survives.
+    expect(dropped).toEqual(['routing.rules']);
+    expect(settings.routing).toEqual({ allowExternal: false, rules: [] });
     const badRule = parseSettingsFile({
       routing: { rules: [{ id: 'x', kind: 'bogus', pattern: 'p', enabled: true }] },
     });
-    expect(badRule.dropped).toEqual(['routing']);
+    expect(badRule.dropped).toEqual(['routing.rules']);
     expect(badRule.settings.routing.rules).toEqual([]);
   });
 
@@ -336,6 +341,7 @@ describe('sessions settings', () => {
       collapsedFolders: [],
       maxLiveViews: 6,
       keepAliveHours: 24,
+      sessionOrder: {},
     });
   });
 
@@ -356,6 +362,7 @@ describe('sessions settings', () => {
       collapsedFolders: ['Alpha'],
       maxLiveViews: 4,
       keepAliveHours: 2,
+      sessionOrder: {},
     });
     expect(
       parseSettingsFile({ sessions: { width: 9999 } }).settings.sessions.width,
@@ -365,7 +372,14 @@ describe('sessions settings', () => {
   it('patches collapsedFolders without touching open/width', () => {
     const base: Settings = {
       ...SettingsSchema.parse({}),
-      sessions: { open: false, width: 300, collapsedFolders: [], maxLiveViews: 6, keepAliveHours: 24 },
+      sessions: {
+        open: false,
+        width: 300,
+        collapsedFolders: [],
+        maxLiveViews: 6,
+        keepAliveHours: 24,
+        sessionOrder: {},
+      },
     };
     const next = mergeSettings(base, {
       sessions: { collapsedFolders: ['Alpha', 'pinned'], maxLiveViews: 3 },
@@ -376,6 +390,7 @@ describe('sessions settings', () => {
       collapsedFolders: ['Alpha', 'pinned'],
       maxLiveViews: 3,
       keepAliveHours: 24,
+      sessionOrder: {},
     });
   });
 
@@ -412,6 +427,8 @@ describe('claude settings', () => {
       workspaces: [],
       workspaceLabels: {},
       defaultWslDistro: null,
+      sessionOrder: {},
+      pickerFolder: null,
     });
   });
 
@@ -506,6 +523,8 @@ describe('ux2 P0 — new local/claude workspace keys and removed-key migration',
       defaultWslDistro: null,
       workspaceLabels: {},
       collapsedWorkspaces: [],
+      sessionOrder: {},
+      pickerFolder: null,
     });
     expect(settings.claude.workspaces).toEqual([]);
     expect(settings.claude.workspaceLabels).toEqual({});
@@ -558,5 +577,49 @@ describe('ux2 P0 — new local/claude workspace keys and removed-key migration',
     expect(dropped).toEqual([]);
     expect(settings.terminal).toEqual({ shell: 'pwsh.exe' });
     expect('allSurfaces' in settings.terminal).toBe(false);
+  });
+});
+
+describe('ux3 S0 — sessionOrder + pickerFolder contracts', () => {
+  it('round-trips sessionOrder through mergeSettings on all three surfaces', () => {
+    const base = SettingsSchema.parse({});
+    const next = mergeSettings(base, {
+      local: { sessionOrder: { 'C:\\ws': ['l2', 'l1'] } },
+      sessions: { sessionOrder: { Alpha: ['c3', 'c1'], recent: ['c9'] } },
+      claude: { sessionOrder: { '/home/u/ws': ['k1'] } },
+    });
+    expect(next.local.sessionOrder).toEqual({ 'C:\\ws': ['l2', 'l1'] });
+    expect(next.sessions.sessionOrder).toEqual({ Alpha: ['c3', 'c1'], recent: ['c9'] });
+    expect(next.claude.sessionOrder).toEqual({ '/home/u/ws': ['k1'] });
+    // untouched surface keeps its default
+    const again = mergeSettings(next, { local: { sessionOrder: { 'C:\\ws': ['l1'] } } });
+    expect(again.sessions.sessionOrder).toEqual(next.sessions.sessionOrder);
+  });
+
+  it('rejects a malformed sessionOrder', () => {
+    expect(
+      SettingsPatchSchema.safeParse({ local: { sessionOrder: { x: 'not-array' } } }).success,
+    ).toBe(false);
+    expect(
+      SettingsPatchSchema.safeParse({
+        sessions: { sessionOrder: { x: Array(501).fill('id') } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('round-trips local.pickerFolder + claude.pickerFolder (null and set)', () => {
+    const base = SettingsSchema.parse({});
+    expect(base.local.pickerFolder).toBeNull();
+    expect(base.claude.pickerFolder).toBeNull();
+    const next = mergeSettings(base, {
+      local: { pickerFolder: 'C:\\work' },
+      claude: { pickerFolder: '\\\\wsl.localhost\\Ubuntu\\home\\u' },
+    });
+    expect(next.local.pickerFolder).toBe('C:\\work');
+    expect(next.claude.pickerFolder).toBe('\\\\wsl.localhost\\Ubuntu\\home\\u');
+    expect(next.local.devinPath).toBeNull();
+    const cleared = mergeSettings(next, { local: { pickerFolder: null } });
+    expect(cleared.local.pickerFolder).toBeNull();
+    expect(cleared.claude.pickerFolder).toBe('\\\\wsl.localhost\\Ubuntu\\home\\u');
   });
 });
