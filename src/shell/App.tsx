@@ -17,6 +17,8 @@ import { ClaudeSidebar } from './components/ClaudeSidebar';
 import { ClaudeView } from './claude/ClaudeView';
 import { LocalPanel } from './local/LocalPanel';
 import { LocalSidebar } from './local/LocalSidebar';
+import { AnalyticsTabs } from './components/AnalyticsTabs';
+import { ClaudeAnalyticsTab } from './components/analytics/ClaudeAnalyticsTab';
 
 function useWindowSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
@@ -84,7 +86,9 @@ export function App() {
       state.sessionsOpen &&
       (state.surface === 'cloud' || state.surface === 'claude' || state.surface === 'local'),
     sessionsWidth: state.sessionsWidth,
+    analyticsTabs: state.surface === 'analytics',
   });
+  const analyticsTab = state.settings.analytics.tab;
   const paneVisible = state.paneOpen && !bounds.paneCollapsed;
   const mainRect = bounds.devin;
 
@@ -141,6 +145,24 @@ export function App() {
       )}
       {state.surface === 'claude' && (
         <ClaudeView
+          style={{
+            position: 'absolute',
+            left: Math.max(RAIL_WIDTH, mainRect.x),
+            top: mainRect.y,
+            width: mainRect.width,
+            height: mainRect.height,
+          }}
+        />
+      )}
+      {state.surface === 'analytics' && bounds.analyticsTabs && (
+        <AnalyticsTabs
+          rect={bounds.analyticsTabs}
+          active={analyticsTab}
+          onSelect={(tab) => void window.devinworkspaces.setSettings({ analytics: { tab } })}
+        />
+      )}
+      {state.surface === 'analytics' && analyticsTab === 'claude' && (
+        <ClaudeAnalyticsTab
           style={{
             position: 'absolute',
             left: Math.max(RAIL_WIDTH, mainRect.x),

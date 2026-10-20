@@ -30,8 +30,15 @@ export function ensureAnalyticsView(): WebContentsView {
 }
 
 // Re-entering the surface reloads in place so the charts are never stale.
-// First entry is covered by the creation load — no double load.
+// First entry is covered by the creation load — no double load. Only the Devin
+// tab shows the hosted page: on the Claude tab (shell DOM) nothing is created
+// or reloaded — applyBounds creates the view lazily when the Devin tab is shown.
 export function refreshAnalyticsView(): void {
+  const tab = state.settings?.current.analytics.tab ?? 'devin';
+  if (tab !== 'devin') {
+    log('analytics', 'analytics-refresh-skipped', { detail: { tab } });
+    return;
+  }
   if (!state.analyticsView) {
     ensureAnalyticsView();
     return;

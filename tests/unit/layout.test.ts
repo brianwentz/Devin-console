@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANALYTICS_TABS_HEIGHT,
   clampFraction01,
   clampPaneWidth,
   clampSessionsWidth,
@@ -19,6 +20,7 @@ import {
   SESSIONS_MAX_WIDTH,
   SESSIONS_MIN_WIDTH,
   SPLITTER_WIDTH,
+  TITLE_BAR_HEIGHT,
   type LayoutState,
 } from '../../src/core/layout';
 import type { Surface } from '../../src/shared/ipc';
@@ -360,5 +362,64 @@ describe('dockSurface', () => {
     expect(surfaces.filter(dockSurface)).toEqual(['cloud', 'local', 'claude']);
     expect(dockSurface('settings')).toBe(false);
     expect(dockSurface('analytics')).toBe(false);
+  });
+});
+
+describe('analytics tab strip', () => {
+  it('is absent by default and leaves every rect untouched', () => {
+    const base = computeBounds({ width: 1400, height: 900 }, layout());
+    expect(ANALYTICS_TABS_HEIGHT).toBe(36);
+    expect(base.analyticsTabs).toBeNull();
+    const explicit = computeBounds({ width: 1400, height: 900 }, layout({ analyticsTabs: false }));
+    expect(explicit).toEqual(base);
+  });
+
+  it('sits directly under the title bar, full main-column width, and shrinks the main rect', () => {
+    const base = computeBounds({ width: 1400, height: 900 }, layout({ paneFraction: F560 }));
+    const bounds = computeBounds(
+      { width: 1400, height: 900 },
+      layout({ paneFraction: F560, analyticsTabs: true }),
+    );
+    expect(bounds.analyticsTabs).toEqual({ x: 56, y: TITLE_BAR_HEIGHT, width: 778, height: 36 });
+    expect(bounds.devin).toEqual({ x: 56, y: TITLE_BAR_HEIGHT + 36, width: 778, height: 864 - 36 });
+    // Pane, splitter, rail and title bar are unaffected.
+    expect(bounds.ghTab).toEqual(base.ghTab);
+    expect(bounds.splitter).toEqual(base.splitter);
+    expect(bounds.rail).toEqual(base.rail);
+    expect(bounds.titleBar).toEqual(base.titleBar);
+    expect(bounds.paneCollapsed).toBe(false);
+  });
+
+  it('follows the main column when the pane is closed and the sessions column is open', () => {
+    const bounds = computeBounds(
+      { width: 1400, height: 900 },
+      layout({ paneOpen: false, sessionsOpen: true, analyticsTabs: true }),
+    );
+    const chrome = RAIL_WIDTH + DEFAULT_SESSIONS_WIDTH + SPLITTER_WIDTH;
+    expect(bounds.analyticsTabs).toEqual({ x: chrome, y: 36, width: 1400 - chrome, height: 36 });
+    expect(bounds.devin).toEqual({ x: chrome, y: 72, width: 1400 - chrome, height: 828 });
+    expect(bounds.sessions?.height).toBe(864);
+  });
+
+  it('keeps the strip above an open terminal dock and never makes the main rect negative', () => {
+    const bounds = computeBounds(
+      { width: 1400, height: 900 },
+      layout({ paneOpen: false, terminalOpen: true, terminalHeight: 280, analyticsTabs: true }),
+    );
+    expect(bounds.analyticsTabs?.y).toBe(36);
+    expect(bounds.devin.y).toBe(72);
+    expect(bounds.devin.height).toBe(900 - 36 - 36 - 280 - SPLITTER_WIDTH);
+    expect(bounds.terminal?.y).toBe(900 - 280);
+
+    const tiny = computeBounds({ width: 1400, height: 50 }, layout({ paneOpen: false, analyticsTabs: true }));
+    expect(tiny.analyticsTabs?.height).toBe(14);
+    expect(tiny.devin.height).toBe(0);
+  });
+
+  it('survives the pane auto-collapse path', () => {
+    const bounds = computeBounds({ width: 900, height: 900 }, layout({ analyticsTabs: true }));
+    expect(bounds.paneCollapsed).toBe(true);
+    expect(bounds.analyticsTabs).toEqual({ x: 56, y: 36, width: 844, height: 36 });
+    expect(bounds.devin).toEqual({ x: 56, y: 72, width: 844, height: 828 });
   });
 });
