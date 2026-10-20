@@ -1,6 +1,6 @@
 # UX round 3 — reorder everywhere, Devin Cloud tab, picker start folder, store passthrough, analytics check
 
-Status: Planned — awaiting go
+Status: Implemented — PR pending
 
 Reports from testing the round-2 + analytics builds, plus one hazard found while investigating them. Four
 code streams run in parallel after one small contracts commit; the analytics item is a verification pass.
@@ -178,7 +178,12 @@ No code change expected. Work item:
    a build that contains round 2 + analytics — otherwise the same reports recur.
 3. If step 1 shows an empty Claude tab anyway, that becomes a bug stream with the log evidence.
 
+Verified on current main against the real profile: two accounts (Max + Cloudbeds team) with live gauges
+matching `/usage`; Oct totals 11.06 M output / 53,067 messages across 3 hosts before the S7 fix (local
+double-counted).
+
 ## 6. S6 — stores preserve unknown data across upgrade/downgrade
+
 
 Rule: **a build may only rewrite what it understands; everything else in the file comes back out exactly
 as it went in.** Applies to the user-data stores: `settings.json`, `claude-sessions.json`,
@@ -220,6 +225,14 @@ Owned files: `src/core/storePreserve.ts`, `src/core/settings.ts`, `src/main/sett
 `tests/smoke/installed.spec.ts`, AGENTS.
 
 No overlap with S1–S3 (they add schema keys in S0 and never touch the store classes).
+
+## 6b. S7 — local configDir race (found during S4)
+
+- **Symptom:** `byHost.local` identical to `wsl:Ubuntu-24.04`; 2,148 of 2,209 `local:` usage-cache keys were
+  Linux-home paths.
+- **Cause:** `configDir(local)` read `process.env.CLAUDE_CONFIG_DIR` live while `withConfigDir` had swapped
+  it for a host.
+- **Fix:** captured at startup + cache prune (`feat/ux3-configdir`, `59c11a1`).
 
 ## 7. Out of scope / follow-ups
 

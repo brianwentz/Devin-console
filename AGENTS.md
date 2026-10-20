@@ -630,6 +630,8 @@ All are `__devinworkspaces` hooks (test mode only; reachable from the installed 
 | `claudeRecordPr` / `claudePrs(id)` / `claudeRefreshPrStates` / `prTitlesSeed(url,{title,state})` | Record a Claude PR, read a session's PRs, re-ensure states, seed the title+state cache. |
 | `claudeSubagents` / `claudeOpenSubagent` / `claudeChatMessageIds` | Subagent list / open read-only / per-session current message ids. |
 | `claudeUsageState` / `claudeUsageRefresh` | Claude usage state snapshot / force fetch+scan (resolves when both finish). |
+| `lastOpenDialogOptions()` | The options of the most recent `openFolderDialog` call (recorded in test mode). |
+| `withConfigDirHold(id, ms)` | Holds a host's `configDir` context open (WSL env capture) so a configDir read races the hold. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
 
 ## Log events

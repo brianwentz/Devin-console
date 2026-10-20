@@ -17,6 +17,7 @@ Design history of the Claude Code integration (Phases 0–7). The files are kept
 | `ux-round-2.md` | UX round 2 — composer keys, dock rule, Settings tabs, workspaces in the session column | In progress — P0/P4a merged (#77); P1–P3, P4b, P5 open |
 | `quiet-tests.md` | Quiet e2e runs — invisible, never-activated test window | Implemented — PR pending |
 | `analytics-claude.md` | Analytics Claude tab — plan-limit gauges + monthly token totals | Implemented — PR pending |
+| `ux-round-3.md` | UX round 3 — session/folder reorder, Devin Cloud tab, picker start folder, store passthrough, local configDir fix | Implemented — PR pending |
 
 ## How we worked
 

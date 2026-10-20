@@ -9,8 +9,7 @@ import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
 import { openFolderDialog } from '../dialogs';
 import { pickerFolderMissing, pickerStartPath } from '../../core/pickerFolder';
-import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
   ClaudeStoreSession,

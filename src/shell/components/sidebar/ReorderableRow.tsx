@@ -35,7 +35,11 @@ export function ReorderableRow({
       data-drop-before={dropBefore}
       data-drop-after={dropAfter}
       className="data-[drop-before=true]:border-t-2 data-[drop-before=true]:border-t-[#54749c] data-[drop-after=true]:border-b-2 data-[drop-after=true]:border-b-[#54749c]"
-      onDragStart={() => {
+      onDragStart={(e) => {
+        // Sub-rows (Claude subagent children) bubble here too — only a drag
+        // that started on this root row's session button counts.
+        const origin = (e.target as HTMLElement).closest('[data-session-id]');
+        if (origin?.getAttribute('data-session-id') !== sessionId) return;
         dragState.current = { id: sessionId, section };
       }}
       onDragEnd={() => {

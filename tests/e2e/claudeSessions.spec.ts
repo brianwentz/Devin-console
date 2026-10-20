@@ -670,3 +670,60 @@ test('claude picker start folder: New session dialog starts in the configured fo
     rmSync(startDir, { recursive: true, force: true });
   }
 });
+
+// ux3 S1 regression: a drag that starts on a subagent row inside a root's
+// wrapper must NOT reorder the root — dragState stays empty, the drop is
+// refused, and nothing is persisted.
+test('claude sidebar: dragging a subagent child row does not reorder its parent', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await h.setSurface('claude');
+    const shell = await shellPage(app);
+    const rowOrder = () =>
+      evaluateInShell(
+        app,
+        `[...document.querySelectorAll('[data-reorder-row]')].map((e) => e.getAttribute('data-reorder-row'))`,
+      ) as Promise<string[]>;
+    await expect.poll(async () => (await rowOrder()).length).toBe(3);
+    const before = await rowOrder();
+
+    // Expand UA's subagents — the toggle sits before its button in the
+    // row's flex wrapper.
+    await shell.evaluate(
+      `document.querySelector('[data-session-id="${UA}"]')
+        ?.parentElement?.querySelector('[data-subagents-toggle]')?.click()`,
+    );
+    await expect(
+      shell.locator('[data-subagent-id]').first(),
+    ).toBeAttached({ timeout: 10_000 });
+
+    // synthetic drag: subagent row → another root. Without the origin guard
+    // this records dragState and reorders UA.
+    await shell.evaluate(
+      `(() => {
+        const src = document.querySelector('[data-subagent-id]');
+        const tgt = document.querySelector('[data-session-id="${UB}"]');
+        const dt = new DataTransfer();
+        dt.setData('application/x-devin-session', 'subagent');
+        const fire = (el, type) =>
+          el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+        fire(src, 'dragstart');
+        fire(tgt, 'dragover');
+        fire(tgt, 'drop');
+        fire(src, 'dragend');
+        return true;
+      })()`,
+    );
+    await new Promise((r) => setTimeout(r, 400));
+    expect(await rowOrder()).toEqual(before);
+    const events = await readEvents(join(profile, 'events.jsonl'));
+    expect(events.some((entry) => entry.event === 'claude-session-reorder')).toBe(false);
+  } finally {
+    await closeApp(app).catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
