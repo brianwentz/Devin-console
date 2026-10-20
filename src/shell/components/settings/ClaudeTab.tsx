@@ -1,7 +1,14 @@
 import { CLAUDE_PERMISSION_MODES, isClaudePermissionMode } from '../../../core/settingsDraft';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
-import { CliPathHint, FieldError, HostsPointer, WslDistroSelect, fieldInputClass } from './fields';
+import {
+  CliPathHint,
+  FieldError,
+  HostsPointer,
+  PickerFolderField,
+  WslDistroSelect,
+  fieldInputClass,
+} from './fields';
 
 // Mirrors the Notifications-tab checkbox: not a draft field — it commits
 // immediately through setSettings, exactly like NotificationSettings does.
@@ -145,6 +152,14 @@ export function ClaudeTab() {
         id="claudeDefaultWslDistroSelect"
         value={draft.claudeDefaultWslDistro}
         onChange={(next) => updateDraft({ claudeDefaultWslDistro: next })}
+      />
+      <PickerFolderField
+        id="claudePickerFolderInput"
+        browseId="claudePickerFolderBrowse"
+        value={draft.claudePickerFolder}
+        error={errors.claudePickerFolder}
+        hint="Where the New session and Add workspace dialogs open."
+        onChange={(next) => updateDraft({ claudePickerFolder: next })}
       />
       <HooksMirror />
       <HostsPointer />

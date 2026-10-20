@@ -1,7 +1,7 @@
 import { workspaceLabel } from '../../../core/execHost';
 import { useLocalState } from '../../local/store';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
-import { FieldError, HostsPointer, WslDistroSelect, fieldInputClass } from './fields';
+import { FieldError, HostsPointer, PickerFolderField, WslDistroSelect, fieldInputClass } from './fields';
 import { errorTextClass } from './styles';
 
 // Non-empty local.devinPath that didn't resolve — surfaced inline from the
@@ -76,6 +76,14 @@ export function LocalTab() {
         id="localDefaultWslDistroSelect"
         value={draft.localDefaultWslDistro}
         onChange={(next) => updateDraft({ localDefaultWslDistro: next })}
+      />
+      <PickerFolderField
+        id="localPickerFolderInput"
+        browseId="localPickerFolderBrowse"
+        value={draft.localPickerFolder}
+        error={errors.localPickerFolder}
+        hint="Where the Add workspace dialog opens."
+        onChange={(next) => updateDraft({ localPickerFolder: next })}
       />
       <AgentsSummary />
       <HostsPointer />

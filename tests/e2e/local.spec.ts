@@ -4,8 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { dndMove, evaluateInShell, launchApp, readEvents, shellPage, state, waitForEvent, waitForEventCount } from './helpers';
-
+import { dndMove, evaluateInShell, launchApp, readEvents, setInputValue, shellPage, state, waitForEvent, waitForEventCount } from './helpers';
 // Mirrors LocalStateSchema in src/shared/ipc.ts (subset used by the assertions).
 type LocalState = {
   cliPath: string | null;
@@ -1276,5 +1275,79 @@ test('Local sidebar: session row drag reorders inside the section and persists',
   } finally {
     rmSync(profile, { recursive: true, force: true });
     rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+// ux3 S3 — Settings → Devin Local "Folder pickers start in": the Add
+// workspace dialog opens there (defaultPath), with the default-WSL-distro
+// home as the fallback when the folder is gone (logged, never cleared).
+test('Local picker start folder: configured folder wins, missing folder falls back to the distro home', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-picker-'));
+  const startDir = mkdtempSync(join(tmpdir(), 'devin-workspaces-picker-start-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    DEVIN_WORKSPACES_TEST_PICKER_CANCEL: '1',
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const lastDialog = () =>
+    app.evaluate(
+      () =>
+        (globalThis as any).__devinworkspaces.lastOpenDialogOptions() as {
+          title?: string;
+          defaultPath?: string;
+        } | null,
+    );
+  const pickerFolder = async () =>
+    ((await state(app)).settings as unknown as { local: { pickerFolder: string | null } }).local
+      .pickerFolder;
+  try {
+    await waitForHooks(app);
+    await expect
+      .poll(async () => (await state(app)).hosts.some((h) => h.id === 'wsl:Fake'), { timeout: 30_000 })
+      .toBe(true);
+
+    // Set the folder through the Settings tab; switching tabs commits.
+    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('settings'));
+    await evaluateInShell(app, `document.querySelector('[data-settings-tab="local"]').click()`);
+    await expect.poll(() => shellCount(app, '#localPickerFolderInput')).toBe(1);
+    expect(await shellCount(app, '#localPickerFolderBrowse')).toBe(1);
+    expect(await setInputValue(app, 'localPickerFolderInput', startDir)).toBe(true);
+    await evaluateInShell(app, `document.querySelector('[data-settings-tab="general"]').click()`);
+    await expect.poll(pickerFolder).toBe(startDir);
+    await setSurfaceLocal(app);
+
+    // Add workspace → the (cancelled) dialog started in the configured folder.
+    await expect.poll(() => shellCount(app, '#workspaceAdd')).toBe(1);
+    const shell = await shellPage(app);
+    await shell.locator('#workspaceAdd').click();
+    await expect.poll(async () => (await lastDialog())?.defaultPath).toBe(startDir);
+    expect((await lastDialog())?.title).toBe('Add workspace folder');
+    expect((await readEvents(logFile)).some((e) => e.event === 'picker-folder-missing')).toBe(false);
+
+    // Missing folder + default distro → the distro home; the setting stays.
+    const gone = join(startDir, 'gone');
+    await shell.evaluate(
+      (value: string) =>
+        (window as any).devinworkspaces.setSettings({
+          local: { pickerFolder: value, defaultWslDistro: 'Fake' },
+        }),
+      gone,
+    );
+    await expect.poll(pickerFolder).toBe(gone);
+    await shell.locator('#workspaceAdd').click();
+    await expect.poll(async () => (await lastDialog())?.defaultPath).toBe(`${uncRoot}\\home\\u`);
+    await waitForEvent(logFile, 'picker-folder-missing');
+    const missing = (await readEvents(logFile)).find((e) => e.event === 'picker-folder-missing');
+    expect((missing?.detail as { surface?: string } | undefined)?.surface).toBe('local');
+    expect(await pickerFolder()).toBe(gone);
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(startDir, { recursive: true, force: true });
+    rmSync(uncRoot, { recursive: true, force: true });
   }
 });

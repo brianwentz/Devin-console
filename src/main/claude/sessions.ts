@@ -4,10 +4,13 @@
 // names, ids, counts and durations only — never titles or transcript text.
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
 import { openFolderDialog } from '../dialogs';
-import { basename, resolve } from 'node:path';
+import { pickerFolderMissing, pickerStartPath } from '../../core/pickerFolder';
+import { homedir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
   ClaudeStoreSession,
@@ -682,15 +685,7 @@ export class ClaudeSessions {
       else {
         const win = state.windowRef;
         if (!win) return null;
-        // The configured default WSL distro becomes the picker's starting dir.
-        const defaultDistro = state.settings?.current.claude.defaultWslDistro;
-        const defaultHost = defaultDistro
-          ? hosts().hostById(`wsl:${defaultDistro}`)
-          : null;
-        const defaultPath =
-          defaultHost && isWslHost(defaultHost)
-            ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
-            : undefined;
+        const defaultPath = this.pickerDefaultPath();
         const result = await openFolderDialog(win, {
           title: 'Choose the working directory for the new Claude session',
           properties: ['openDirectory', 'createDirectory'],
@@ -759,22 +754,34 @@ export class ClaudeSessions {
   // The workspace list/labels live in settings.claude.*; a session's folder
   // is derived (exact host+cwd match in reconcile) — never stored.
 
+  // Where the New session / Add workspace pickers start (ux3 S3):
+  // claude.pickerFolder when it exists, else the configured default WSL
+  // distro's home, else undefined (the OS decides). A missing configured
+  // folder is logged and skipped, never cleared.
+  private pickerDefaultPath(): string | undefined {
+    const claude = state.settings?.current.claude;
+    const defaultDistro = claude?.defaultWslDistro;
+    const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
+    const distroHome =
+      defaultHost && isWslHost(defaultHost)
+        ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
+        : undefined;
+    const configured = claude?.pickerFolder ?? null;
+    if (pickerFolderMissing(configured, existsSync)) {
+      log('claude', 'picker-folder-missing', { detail: { surface: 'claude' } });
+    }
+    return pickerStartPath(configured, distroHome, existsSync);
+  }
+
   // Picks a directory (same seam as newSession(null): test mode reads
   // DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD, else the folder dialog starting in
-  // the configured default WSL distro's home).
+  // pickerDefaultPath()).
   private async pickWorkspaceDir(title: string): Promise<string | null> {
     const envCwd = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD?.trim() : '';
     if (envCwd) return envCwd;
     const win = state.windowRef;
     if (!win) return null;
-    const defaultDistro = state.settings?.current.claude.defaultWslDistro;
-    const defaultHost = defaultDistro
-      ? hosts().hostById(`wsl:${defaultDistro}`)
-      : null;
-    const defaultPath =
-      defaultHost && isWslHost(defaultHost)
-        ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
-        : undefined;
+    const defaultPath = this.pickerDefaultPath();
     const result = await openFolderDialog(win, {
       title,
       properties: ['openDirectory', 'createDirectory'],
