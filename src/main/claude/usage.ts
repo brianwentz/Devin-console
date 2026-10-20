@@ -41,6 +41,7 @@ const IDLE_FETCH_MS = 10 * 60_000;
 const POKE_DEBOUNCE_MS = 5_000;
 const CHUNK_FILES = 50;
 const PROGRESS_MS = 250;
+const SCAN_WORKERS = 6;
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 
 // --- on-disk cache (userData, never inside the CLI's configDir) ---------------
@@ -211,12 +212,27 @@ export class ClaudeUsageService {
     }
   }
 
+  /** Test-mode account file seam: a bare path is the default for all hosts;
+   * `;`-separated `hostId=path` entries override per host (multi-account). */
+  private accountFileFor(host: ExecHost): string {
+    const env = testMode ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE?.trim() ?? '') : '';
+    if (!testMode || !env) return join(dirname(hosts().configDir(host)), '.claude.json');
+    let fallback: string | null = null;
+    for (const entry of env.split(';')) {
+      const part = entry.trim();
+      if (!part) continue;
+      const eq = part.indexOf('=');
+      if (eq > 0) {
+        if (part.slice(0, eq).trim() === host.id) return part.slice(eq + 1).trim();
+      } else {
+        fallback = part;
+      }
+    }
+    return fallback ?? join(dirname(hosts().configDir(host)), '.claude.json');
+  }
+
   private accountForHost(host: ExecHost): { email: string | null; organization: string | null } {
-    const configDir = hosts().configDir(host);
-    const file = testMode
-      ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE?.trim() ||
-        join(dirname(configDir), '.claude.json'))
-      : join(dirname(configDir), '.claude.json');
+    const file = this.accountFileFor(host);
     if (!file || !existsSync(file)) return { email: null, organization: null };
     try {
       const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
@@ -478,59 +494,69 @@ export class ClaudeUsageService {
       let globalBuckets: UsageBuckets = {};
       let done = 0;
       let lastPublish = 0;
-      for (const task of tasks) {
-        const cached = this.cache.files[task.key];
-        const stat = statSync(task.path);
-        const plan = fileScanPlan(cached, stat.size, stat.mtimeMs);
-        let buckets: UsageBuckets = cached?.buckets ?? {};
-        if (plan !== 'reuse' && !fileMayContainMonths(stat.mtimeMs, months)) {
-          // Older than the previous month — can't contain relevant lines;
-          // skip the read and pin it as fully consumed.
-          skipped += 1;
-          this.cache.files[task.key] = {
-            size: stat.size,
-            mtime: stat.mtimeMs,
-            offset: stat.size,
-            buckets: {},
-          };
-        } else if (plan !== 'reuse') {
-          changed += 1;
-          let offset = plan === 'append' && cached ? cached.offset : 0;
-          // Line-aligned append: if the byte before the offset isn't a line
-          // break the cached offset is mid-line → re-read the whole file.
-          if (offset > 0 && this.byteAt(task.path, offset - 1) !== 0x0a) offset = 0;
-          const lines = await this.readLines(task.path, offset);
-          const fresh = aggregateUsageLines(lines, { months });
-          buckets = offset > 0 ? mergeBuckets(cached!.buckets, fresh) : fresh;
-          this.cache.files[task.key] = {
-            size: stat.size,
-            mtime: stat.mtimeMs,
-            offset: stat.size,
-            buckets,
-          };
-        }
-        done += 1;
-        for (const totals of Object.values(buckets[current]?.byModel ?? {})) {
-          const into = (perHost[task.host.id] ??= emptyTotals());
-          into.input += totals.input;
-          into.output += totals.output;
-          into.cacheRead += totals.cacheRead;
-          into.cacheWrite += totals.cacheWrite;
-          into.messages += totals.messages;
-        }
-        globalBuckets = mergeBuckets(globalBuckets, buckets);
-        if (done % CHUNK_FILES === 0) {
-          if (Date.now() - lastPublish > PROGRESS_MS) {
-            lastPublish = Date.now();
-            const progress = { files, done };
-            this.store.update((state) => ({
-              ...state,
-              tokens: { ...state.tokens, scanning: progress },
-            }));
+      // Worker pool: reads are IO-bound (UNC in particular), so N files are in
+      // flight at once; merges are commutative (mergeBuckets) so completion
+      // order doesn't affect the result.
+      let index = 0;
+      const worker = async (): Promise<void> => {
+        while (index < tasks.length) {
+          const task = tasks[index++]!;
+          const cached = this.cache.files[task.key];
+          const stat = statSync(task.path);
+          const plan = fileScanPlan(cached, stat.size, stat.mtimeMs);
+          let buckets: UsageBuckets = cached?.buckets ?? {};
+          if (plan !== 'reuse' && !fileMayContainMonths(stat.mtimeMs, months)) {
+            // Older than the previous month — can't contain relevant lines;
+            // skip the read and pin it as fully consumed.
+            skipped += 1;
+            this.cache.files[task.key] = {
+              size: stat.size,
+              mtime: stat.mtimeMs,
+              offset: stat.size,
+              buckets: {},
+            };
+          } else if (plan !== 'reuse') {
+            changed += 1;
+            let offset = plan === 'append' && cached ? cached.offset : 0;
+            // Line-aligned append: if the byte before the offset isn't a line
+            // break the cached offset is mid-line → re-read the whole file.
+            if (offset > 0 && this.byteAt(task.path, offset - 1) !== 0x0a) offset = 0;
+            const lines = await this.readLines(task.path, offset);
+            const fresh = aggregateUsageLines(lines, { months });
+            buckets = offset > 0 ? mergeBuckets(cached!.buckets, fresh) : fresh;
+            this.cache.files[task.key] = {
+              size: stat.size,
+              mtime: stat.mtimeMs,
+              offset: stat.size,
+              buckets,
+            };
           }
-          await new Promise((resolve) => setImmediate(resolve));
+          done += 1;
+          for (const totals of Object.values(buckets[current]?.byModel ?? {})) {
+            const into = (perHost[task.host.id] ??= emptyTotals());
+            into.input += totals.input;
+            into.output += totals.output;
+            into.cacheRead += totals.cacheRead;
+            into.cacheWrite += totals.cacheWrite;
+            into.messages += totals.messages;
+          }
+          globalBuckets = mergeBuckets(globalBuckets, buckets);
+          if (done % CHUNK_FILES === 0) {
+            if (Date.now() - lastPublish > PROGRESS_MS) {
+              lastPublish = Date.now();
+              const progress = { files, done };
+              this.store.update((state) => ({
+                ...state,
+                tokens: { ...state.tokens, scanning: progress },
+              }));
+            }
+            await new Promise((resolve) => setImmediate(resolve));
+          }
         }
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(SCAN_WORKERS, tasks.length) }, () => worker()),
+      );
       const month = globalBuckets[current] ?? { byModel: {}, byDay: {} };
       const tokens = {
         total: sumTotals(Object.values(month.byModel)),

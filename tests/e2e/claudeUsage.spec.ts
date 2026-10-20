@@ -9,6 +9,7 @@ import { startFixtureServers } from '../fixtures/http';
 import {
   CLAUDE_FIXTURE_HOME,
   closeApp,
+  shellPage,
   launchApp,
   launchWithClaudeFixture,
   readEvents,
@@ -266,6 +267,61 @@ test('usage: fake WSL host contributes byHost + joins the same account', async (
     expect(state.accounts[0]!.hosts.sort()).toEqual(['local', 'wsl:Fake']);
     expect(state.tokens.byHost['wsl:Fake']).toMatchObject({ input: 7, messages: 1 });
     expect(state.tokens.total.input).toBe(OCT_TOTAL.input + 7);
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(uncRoot, { recursive: true, force: true });
+    await fixtures.close();
+  }
+});
+
+test('usage: two accounts render as two gauge blocks (per-host account files)', async () => {
+  const fixtures = await startFixtureServers();
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const claudeHome = join(profile, 'claude-home');
+  cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
+  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const wslClaude = join(uncRoot, 'home', 'u', '.claude');
+  mkdirSync(join(wslClaude, 'projects'), { recursive: true });
+  cpSync(join(CLAUDE_FIXTURE_HOME, '.credentials.json'), join(wslClaude, '.credentials.json'));
+  // The fake distro is signed into a different account (per-host seam).
+  const wslAccountFile = join(profile, 'wsl-account.json');
+  writeFileSync(
+    wslAccountFile,
+    JSON.stringify({
+      oauthAccount: { emailAddress: 'personal@outlook.com', organizationName: 'Personal Org' },
+    }),
+  );
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    CLAUDE_CONFIG_DIR: claudeHome,
+    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE: `tests/fixtures/claude-account.json;wsl:Fake=${wslAccountFile}`,
+  });
+  const h = hooks(app);
+  try {
+    await h.refresh();
+    const state = await h.usage();
+    expect(state.accounts).toHaveLength(2);
+    const emails = state.accounts.map((a) => a.email).sort();
+    expect(emails).toEqual(['dev@example.com', 'personal@outlook.com']);
+    const personal = state.accounts.find((a) => a.email === 'personal@outlook.com')!;
+    expect(personal.hosts).toEqual(['wsl:Fake']);
+    expect(personal.limits).toHaveLength(3);
+
+    // DOM: one gauge block per account, each with its own header.
+    const shell = await shellPage(app);
+    await shell.locator('#analyticsButton').click();
+    await shell.locator('#analyticsTab-claude').click();
+    const blocks = shell.locator('[data-usage-account]');
+    await expect.poll(async () => blocks.count()).toBe(2);
+    await expect(blocks.nth(0)).toContainText('dev@example.com');
+    await expect(blocks.nth(1)).toContainText('personal@outlook.com');
+    await expect.poll(async () => blocks.nth(0).locator('[data-gauge-kind]').count()).toBe(3);
+    await expect.poll(async () => blocks.nth(1).locator('[data-gauge-kind]').count()).toBe(3);
+    await expect(blocks.nth(1)).toContainText('Personal Org');
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
