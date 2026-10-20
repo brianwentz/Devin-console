@@ -2,6 +2,7 @@ import { WebContentsView } from 'electron';
 import { analyticsUrl, isAnalyticsUrl } from '../core/sessions';
 import { log } from './log';
 import { attachRouting } from './routing';
+import { devinUsage } from './devinUsage';
 import { state } from './state';
 
 // The Analytics surface is a hosted view on the tenant partition, created on
@@ -34,6 +35,7 @@ export function ensureAnalyticsView(): WebContentsView {
 // tab shows the hosted page: on the Claude tab (shell DOM) nothing is created
 // or reloaded — applyBounds creates the view lazily when the Devin tab is shown.
 export function refreshAnalyticsView(): void {
+  void devinUsage().refresh();
   const tab = state.settings?.current.analytics.tab ?? 'devin';
   if (tab !== 'devin') {
     log('analytics', 'analytics-refresh-skipped', { detail: { tab } });

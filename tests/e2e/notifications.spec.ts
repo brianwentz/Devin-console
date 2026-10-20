@@ -147,6 +147,10 @@ test.beforeEach(() => {
   fixtures.api.clearRequests();
 });
 
+// The api fixture also serves the eager Claude /api/oauth/usage fetch — the
+// assertions below are about the v3 session poller's traffic only.
+const v3Requests = () => fixtures.api.requests().filter((r) => r.path.startsWith('/v3'));
+
 test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_user', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
@@ -156,7 +160,7 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
     // No token yet: no API traffic, state reflects it.
     expect((await state(app)).notifications.hasToken).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, POLL_MS * 2));
-    expect(fixtures.api.requests().length).toBe(0);
+    expect(v3Requests().length).toBe(0);
 
     fixtures.api.setSessions([
       { session_id: 'sess-1', title: 'Fix login bug', status: 'running', status_detail: 'working', updated_at: 10 },
@@ -169,7 +173,7 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
     await expect
       .poll(() => fixtures.api.requests().some((r) => r.path.startsWith('/v3/organizations/org-fixture/sessions')))
       .toBe(true);
-    const requests = fixtures.api.requests();
+    const requests = v3Requests();
     expect(requests.every((r) => r.authorization === `Bearer ${PAT}`)).toBe(true);
     expect(requests[0]?.path).toBe('/v3/self');
     expect(requests.find((r) => r.path.includes('/sessions'))?.path).toContain('first=100');
@@ -251,7 +255,7 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
     expect(existsSync(secretsFile)).toBe(false);
     fixtures.api.clearRequests();
     await new Promise((resolve) => setTimeout(resolve, POLL_MS * 3));
-    expect(fixtures.api.requests().length).toBe(0);
+    expect(v3Requests().length).toBe(0);
   } finally {
     await quit(app, profile);
   }
@@ -283,10 +287,10 @@ test('surfaces 401 as authError and honours 429 Retry-After', async () => {
     // 429 with Retry-After: 2 -> the next request is not before 2s later.
     fixtures.api.clearRequests();
     fixtures.api.setMode({ kind: 'status', status: 429, retryAfter: '2', once: true });
-    await expect.poll(() => fixtures.api.requests().length).toBeGreaterThanOrEqual(1);
-    const limitedAt = fixtures.api.requests()[0]!.ts;
-    await expect.poll(() => fixtures.api.requests().length, { timeout: 6000 }).toBeGreaterThanOrEqual(2);
-    const nextAt = fixtures.api.requests()[1]!.ts;
+    await expect.poll(() => v3Requests().length).toBeGreaterThanOrEqual(1);
+    const limitedAt = v3Requests()[0]!.ts;
+    await expect.poll(() => v3Requests().length, { timeout: 6000 }).toBeGreaterThanOrEqual(2);
+    const nextAt = v3Requests()[1]!.ts;
     expect(nextAt - limitedAt).toBeGreaterThanOrEqual(1900);
     const rateEvents = (await readEvents(logFile)).filter(
       (e) => e.event === 'poll-error' && (e.detail as any).kind === 'rateLimited',

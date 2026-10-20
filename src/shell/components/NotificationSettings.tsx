@@ -94,7 +94,15 @@ export function NotificationSettings() {
     void window.devinworkspaces.setSettings({ notifications: { banner: enabled } });
   };
   const toggleKind = (
-    key: 'waiting' | 'approval' | 'blocked' | 'finished' | 'prOpened' | 'prCompleted' | 'update',
+    key:
+      | 'waiting'
+      | 'approval'
+      | 'blocked'
+      | 'finished'
+      | 'prOpened'
+      | 'prCompleted'
+      | 'update'
+      | 'usage',
     enabled: boolean,
   ) => {
     void window.devinworkspaces.setSettings({ notifications: { kinds: { [key]: enabled } } });
@@ -241,6 +249,7 @@ export function NotificationSettings() {
             ['prOpened', 'PR opened'],
             ['prCompleted', 'PR merged or closed'],
             ['update', 'App updates'],
+            ['usage', 'Usage limits (50% / 80%)'],
           ] as const
         ).map(([key, label]) => (
           <label key={key} className="flex items-center gap-2">

@@ -1,0 +1,19 @@
+{
+  "tier_id": "tier-FIXTURE",
+  "tier_name": "Power",
+  "tier_policy": "conditional",
+  "tier_max_limit": 20000,
+  "auto_increase_eligible": true,
+  "tier_soft_limit_type": null,
+  "tier_soft_limit_value": null,
+  "cycle_usage_limit": 12000,
+  "primary_cycle_usage_limit": 12000,
+  "fallback_tier_id": null,
+  "fallback_tier_name": null,
+  "fallback_cycle_usage_limit": null,
+  "on_fallback": false,
+  "cycle_usage": 1404.8785719676328,
+  "estimated_cycle_usage": 3939.3586202556517,
+  "cycle_start": "2026-10-14T00:00:00-08:00",
+  "cycle_end": "2026-11-01T00:00:00-08:00"
+}

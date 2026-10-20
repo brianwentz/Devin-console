@@ -96,6 +96,8 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`configDir`, `toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro. |
 | `DEVIN_WORKSPACES_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
+| `DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
+| `DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Value may be a `;`-separated list of `hostId=path` pairs for multi-account staging (bare path = default for hosts without a pair). |
 | `DEVIN_WORKSPACES_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
 | `DEVIN_WORKSPACES_PROBE_HOST` / `DEVIN_WORKSPACES_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `DEVIN_WORKSPACES_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
@@ -147,6 +149,9 @@ variable that selects it.
   array order is the display order of the Local sidebar (reorder = rewrite the array via `local:workspaceReorder`). No Settings UI — managed from the
   session column.
 - `analytics.tab` (`'devin'|'claude'`, default `'devin'`) — the last-selected Analytics tab strip tab; no Settings UI.
+- `usage.devinPollMinutes` (int 5..240, default 15) — Devin usage poll cadence; Settings → General `#usageDevinPollMinutes` ("Check Devin Cloud usage every (minutes)").
+- `notifications.kinds.usage` (default true) — usage-limit alert entries (50%/80%); Settings → Notifications "Usage limits (50% / 80%)". Usage entries never banner.
+- `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
 - `local.{devinPath, defaultWslDistro, defaultMode, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
   `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
   needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), `defaultMode` (`#localDefaultModeSelect`; free
@@ -172,7 +177,7 @@ variable that selects it.
 ### Stores preserve unknown data (ux3 S6)
 - Rule: a build may only rewrite what it understands in a user-data store; everything else in the file comes back out exactly as it went in, across
   upgrades *and* downgrades. Applies to `settings.json`, `claude-sessions.json`, `local-sessions.json`, `notifications.json`, `pr-ledger.json`; caches
-  rebuilt from source (`cloud-cache.json`, `claude-usage-cache.json`, `prs.json`, `identity.json`) and the encrypted credential stores are exempt.
+  rebuilt from source (`cloud-cache.json`, `claude-usage-cache.json`, `devin-usage-cache.json`, `usage-alerts.json`, `prs.json`, `identity.json`) and the encrypted credential stores are exempt.
 - Mechanism: each store keeps the file as read (`raw`) and saves `overlayKnown(raw, inMemoryValue, spec)` (`src/core/storePreserve.ts`). A `PreserveSpec`
   marks the structural parts — `object` (unknown keys survive), `record` / `array` with an `identity` key (membership from memory, unknown fields inside a
   matched entry survive), `replace` (memory wins wholesale: scalars, plain arrays, records whose absence is a deletion such as `workspaceLabels`,
@@ -350,9 +355,9 @@ variable that selects it.
 - **Two tabs** (shell `AnalyticsTabs` strip, `analytics.tab` setting `'devin'|'claude'` — default `devin`): the Devin tab keeps the hosted view (Refresh
   button → `analytics:refresh` IPC → `refreshAnalyticsView()`); the Claude tab is shell-rendered `ClaudeAnalyticsPanel` and zeroes/detaches the hosted
   view (`getAnalyticsBounds` returns null; re-entering on the Claude tab logs `analytics-refresh-skipped {tab:'claude'}` — the hosted page is created
-  lazily when the Devin tab is shown). `#analyticsRefresh` → `claudeUsageRefresh` on Claude / `analytics:refresh` on Devin.
+  lazily when the Devin tab is shown). `#analyticsRefresh` → `claudeUsageRefresh` on Claude / `analytics:refresh` + `devin:usageRefresh` on Devin.
 - **Claude usage service** (`src/main/claude/usage.ts`, singleton `claudeUsage()`): pushes `ClaudeUsageState` on `claude:usage` (`createPushedStore`;
-  invoke `claudeUsageState`, `claudeUsageRefresh`, send `claudeUsageVisible`). Lazy start on first use; visible → fetch+scan every 60 s, hidden → fetch
+  invoke `claudeUsageState`, `claudeUsageRefresh`, send `claudeUsageVisible`). Started eagerly at window creation (usage alerts); visible → fetch+scan every 60 s, hidden → fetch
   every 10 min; `poke('turn'|'hook')` (debounced 5 s) fires on chat `end_turn` and `Stop` hook events. Accounts: per-host `.credentials.json`
   (`claudeAiOauth.accessToken` — never logged/stored in state) + `oauthAccount` email grouping (same email across hosts → one account, fetch via the
   host with the latest `expiresAt`). 401/403/expired → stale fallback (cache `lastBody`, else newest `<configDir>/.usage-cache`); 429/5xx/network →
@@ -360,7 +365,22 @@ variable that selects it.
   (`{size,mtime,offset,buckets}` → `fileScanPlan` reuse/append/full with a newline line-boundary check), `aggregateUsageLines` for the current + previous
   month, chunked with `setImmediate` yields. Cache: `userData/claude-usage-cache.json` (`{version,files,accounts}`) — never written into the CLI's
   configDir. Pure helpers in `src/core/claudeUsage.ts` (`parseUsageResponse`, `aggregateUsageLines`, `fileScanPlan`, `groupAccounts`, `gaugeArc`,
-  `resetsIn`, …).
+  `resetsIn`, …). `claudeUsage().start()` runs eagerly after `devinUsage().start()` at window creation (usage alerts can't wait for a tab visit).
+- **Usage alerts** — `DevinUsageService` (`src/main/devinUsage.ts`, singleton `devinUsage()`, started after `cloudSessions().start()`) polls
+  `GET <tenant>/api/personal-analytics/usage-limit` with the Cloud view's `devinDebug` bearer + `x-cog-org-id` header (BOTH required — 401
+  without the org header; identity via `cloudSessions().readIdentity()` → `{identity,reason}`, token never logged/stored; 401 → identity re-read
+  + one retry). Cadence `usage.devinPollMinutes` (first poll +5 s); failures keep the last good (`stale: true`, backoff 1→16 min). Transient
+  identity reasons (`view-not-ready`/`timeout`/`error`) leave status/backoff alone and retry in 30 s, max 6 consecutive; `login-required`/
+  `no-devindebug` → status `login-required`. Cache `userData/devin-usage-cache.json` (`{version,tenantUrl,savedAt,body}`, tenant-gated, loaded
+  stale). Parsed by `src/core/devinUsage.ts` (`parseUsageLimit`, `fmt`, `shortDate`); state rides `ShellState.usage.devin` (no pushed store —
+  `notifyShell` on change; `devin:usageRefresh` send + `refreshAnalyticsView()` both force a poll). `src/main/usageAlerts.ts` `UsageAlertStore`
+  (`userData/usage-alerts.json` ledger, cache-class): `deriveUsageAlerts` (`src/core/usageAlerts.ts`) fires thresholds 50/80 once per period —
+  highest-only per reading (40→85 fires 80, marks [50,80]), a new `periodKey` re-arms, muted kinds still advance the ledger. Devin metric
+  `devin-monthly` (periodKey = `cycle_start`); Claude `claude-session`/`claude-weekly` per non-stale account (`resetsAt` periodKey), fed by the
+  claude service's `runFetch`. Alerts become `usage`-kind notification entries (persisted, never banner, `itemKey` = `usage:<metric>:<account>`,
+  open → Analytics on the matching tab) gated by `notifications.collect` ∧ `notifications.kinds.usage`. `ShellState.usage` = `{level,items,devin}`
+  → `#usageBadge` rail dot (warn amber `#e0a03c` / critical `#d93a2f`), `#devinUsageSummary` + `#claudeUsageSummary` rows inside the strip
+  (`ANALYTICS_TABS_HEIGHT = 36 + 24`).
 
 ### Devin Local
 - `src/main/local/`, `src/shell/local/`, reducers in `src/core/localModel.ts`: spawn the external `devin` binary (`acp`), never fork Node (RunAsNode fuse
@@ -634,6 +654,7 @@ All are `__devinworkspaces` hooks (test mode only; reachable from the installed 
 | `claudeRecordPr` / `claudePrs(id)` / `claudeRefreshPrStates` / `prTitlesSeed(url,{title,state})` | Record a Claude PR, read a session's PRs, re-ensure states, seed the title+state cache. |
 | `claudeSubagents` / `claudeOpenSubagent` / `claudeChatMessageIds` | Subagent list / open read-only / per-session current message ids. |
 | `claudeUsageState` / `claudeUsageRefresh` | Claude usage state snapshot / force fetch+scan (resolves when both finish). |
+| `devinUsageState` / `devinUsageRefresh` | Devin usage metric state snapshot / force a poll (resolves when it finishes). |
 | `lastOpenDialogOptions()` | The options of the most recent `openFolderDialog` call (recorded in test mode). |
 | `withConfigDirHold(id, ms)` | Holds a host's `configDir` context open (WSL env capture) so a configDir read races the hold. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
@@ -693,6 +714,10 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `usage-scan` | `{ files, changed, ms }` — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
 | `usage-cache-load` | `{ files }` — `userData/claude-usage-cache.json` loaded. |
 | `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. pre-S7 `local:` keys from a WSL store). |
+| `devin-usage-fetch` | `{ ok, status, ms, stale, reason? }` — `reason: login-required\|no-devindebug\|view-not-ready\|timeout\|error\|http\|parse\|network\|disabled` (channel `cloud`; token never logged). |
+| `devin-usage-cache` | `{ loaded }` — `userData/devin-usage-cache.json` load. |
+| `usage-alert` | `{ metric, threshold, percent }` — a threshold crossed (fires even when the kind is muted; channel `shell`). |
+| `usage-alerts-save-error` | `{ message }` — ledger write failure. |
 | `active-session` | Local selected session lifted to state. |
 | `session-mode-set` / `session-mode-unavailable` / `session-mode-error` | `{ sessionId, modeId, source:'new'\|'rebind' }` — `local.defaultMode` applied on session/new|rebind (never load); `unavailable` also carries `available` (count; 0 when the agent advertised no modes); `error` carries `message` when `session/set_mode` failed. |
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |

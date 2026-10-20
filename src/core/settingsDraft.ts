@@ -40,6 +40,7 @@ export interface SettingsDraft {
   allowExternal: boolean;
   keepAliveHours: string;
   maxLiveTabs: string;
+  usageDevinPollMinutes: string;
   sessionsOpen: boolean;
   sessionsMaxLiveViews: string;
   sessionsKeepAliveHours: string;
@@ -80,6 +81,7 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   allowExternal: 'links',
   keepAliveHours: 'general',
   maxLiveTabs: 'general',
+  usageDevinPollMinutes: 'general',
   sessionsOpen: 'general',
   sessionsMaxLiveViews: 'cloud',
   sessionsKeepAliveHours: 'cloud',
@@ -112,6 +114,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     allowExternal: settings.routing.allowExternal,
     keepAliveHours: String(settings.tabs.keepAliveHours),
     maxLiveTabs: String(settings.tabs.maxLiveTabs),
+    usageDevinPollMinutes: String(settings.usage.devinPollMinutes),
     sessionsOpen: settings.sessions.open,
     sessionsMaxLiveViews: String(settings.sessions.maxLiveViews),
     sessionsKeepAliveHours: String(settings.sessions.keepAliveHours),
@@ -151,6 +154,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     draft.allowExternal !== base.allowExternal ||
     Number(draft.keepAliveHours) !== Number(base.keepAliveHours) ||
     Number(draft.maxLiveTabs) !== Number(base.maxLiveTabs) ||
+    Number(draft.usageDevinPollMinutes) !== Number(base.usageDevinPollMinutes) ||
     draft.sessionsOpen !== base.sessionsOpen ||
     Number(draft.sessionsMaxLiveViews) !== Number(base.sessionsMaxLiveViews) ||
     Number(draft.sessionsKeepAliveHours) !== Number(base.sessionsKeepAliveHours) ||
@@ -193,6 +197,11 @@ export function validateDraft(
   const maxLive = Number(draft.maxLiveTabs);
   if (!Number.isInteger(maxLive) || maxLive < 1 || maxLive > 40) {
     errors.maxLiveTabs = 'Max live tabs must be a whole number between 1 and 40';
+  }
+  const devinPoll = Number(draft.usageDevinPollMinutes);
+  if (!Number.isInteger(devinPoll) || devinPoll < 5 || devinPoll > 240) {
+    errors.usageDevinPollMinutes =
+      'Usage check interval must be a whole number between 5 and 240 minutes';
   }
   const sessionsMaxLive = Number(draft.sessionsMaxLiveViews);
   if (!Number.isInteger(sessionsMaxLive) || sessionsMaxLive < 1 || sessionsMaxLive > 20) {
@@ -258,6 +267,7 @@ export function validateDraft(
         rules: draft.linkRules.map((rule) => ({ ...rule, pattern: rule.pattern.trim() })),
       },
       tabs: { keepAliveHours: keepAlive, maxLiveTabs: maxLive },
+      usage: { devinPollMinutes: devinPoll },
       sessions: {
         open: draft.sessionsOpen,
         maxLiveViews: sessionsMaxLive,
@@ -292,6 +302,7 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'routing.rules': 'linkRules',
   'tabs.keepAliveHours': 'keepAliveHours',
   'tabs.maxLiveTabs': 'maxLiveTabs',
+  'usage.devinPollMinutes': 'usageDevinPollMinutes',
   'sessions.open': 'sessionsOpen',
   'sessions.maxLiveViews': 'sessionsMaxLiveViews',
   'sessions.keepAliveHours': 'sessionsKeepAliveHours',

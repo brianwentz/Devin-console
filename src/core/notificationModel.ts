@@ -3,6 +3,7 @@
 // entries are created by main (auto-updater), not by deriveNotifications.
 import type { DevinSession } from './devinApi';
 import { effectiveStatus, newPullRequests, prTitle } from './notifyModel';
+import type { UsageMetric } from './usageAlerts';
 
 export type NotificationKind =
   | 'waiting'
@@ -13,7 +14,8 @@ export type NotificationKind =
   | 'pr-completed'
   | 'update'
   | 'identity'
-  | 'auth';
+  | 'auth'
+  | 'usage';
 
 export interface AppNotification {
   id: string;
@@ -27,6 +29,9 @@ export interface AppNotification {
   // the Devin identity reconcile.
   source?: 'devin' | 'claude' | undefined;
   sessionTitle: string;
+  // 'usage' entries: which metric/account the alert is about.
+  metric?: UsageMetric | undefined;
+  accountKey?: string | undefined;
   prUrl?: string | undefined;
   prState?: string | undefined;
   version?: string | undefined;
@@ -44,12 +49,17 @@ export type NewNotification = Omit<AppNotification, 'id' | 'readAt'>;
 // earlier ones. Session kinds are keyed by source too, so a Claude uuid can
 // never supersede a Devin entry (or vice versa).
 export function itemKey(
-  n: Pick<AppNotification, 'kind' | 'sessionId' | 'prUrl' | 'version' | 'source'>,
+  n: Pick<
+    AppNotification,
+    'kind' | 'sessionId' | 'prUrl' | 'version' | 'source' | 'metric' | 'accountKey'
+  >,
 ): string {
   switch (n.kind) {
     case 'pr-opened':
     case 'pr-completed':
       return `pr:${n.prUrl ?? ''}`;
+    case 'usage':
+      return `usage:${n.metric ?? ''}:${n.accountKey ?? ''}`;
     case 'waiting':
     case 'approval':
     case 'blocked':
@@ -146,6 +156,7 @@ const STATUS_BODY: Record<NotificationKind, string> = {
   update: '',
   identity: '',
   auth: '',
+  usage: '',
 };
 
 const sessionTitleOf = (s: DevinSession) => s.title?.trim() || s.session_id;

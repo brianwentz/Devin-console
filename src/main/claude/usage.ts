@@ -20,9 +20,11 @@ import {
   parseUsageResponse,
   previousMonthKey,
   pruneFileCache,
+  resetsIn,
   sumTotals,
   type UsageBuckets,
 } from '../../core/claudeUsage';
+import { usageAlertStore, type UsageAlertInput } from '../usageAlerts';
 import type {
   ClaudeUsageAccount,
   ClaudeUsageState,
@@ -33,6 +35,7 @@ import { ClaudeUsageStateSchema, IpcChannels } from '../../shared/ipc';
 import { hosts } from '../hosts';
 import type { ExecHost } from '../../core/execHost';
 import { log } from '../log';
+import { notifyShell } from '../window';
 import { createPushedStore } from '../pushedStore';
 import { testMode } from '../state';
 
@@ -395,6 +398,33 @@ export class ClaudeUsageService {
         accounts,
         perToken: accounts.length === 0,
       }));
+      // ShellState.usage mirrors these limits — push a full state update too.
+      notifyShell();
+      // Usage alerts: one reading per non-stale account per plan limit
+      // (session + weekly-all).
+      const readings: UsageAlertInput[] = [];
+      for (const account of accounts) {
+        if (account.stale) continue;
+        const accountKey = account.email ?? `host:${account.hosts[0] ?? ''}`;
+        for (const limit of account.limits) {
+          const metric =
+            limit.kind === 'session'
+              ? 'claude-session'
+              : limit.kind === 'weekly_all'
+                ? 'claude-weekly'
+                : null;
+          if (!metric) continue;
+          readings.push({
+            metric,
+            accountKey,
+            percent: limit.percent,
+            periodKey: limit.resetsAt ?? '',
+            source: 'claude',
+            body: `${account.email ?? 'Claude'} — ${Math.round(limit.percent)}% used${limit.resetsAt ? `, resets in ${resetsIn(this.now(), limit.resetsAt)}` : ''}`,
+          });
+        }
+      }
+      usageAlertStore().evaluate(readings);
     } catch {
       /* surfaced via the account error field / backoff */
     }

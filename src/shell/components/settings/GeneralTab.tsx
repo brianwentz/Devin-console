@@ -183,6 +183,24 @@ export function GeneralTab() {
           at is exempt.
         </span>
       </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Check Devin Cloud usage every (minutes)</span>
+        <input
+          id="usageDevinPollMinutes"
+          className={fieldInputClass(errors, 'usageDevinPollMinutes')}
+          type="number"
+          min={5}
+          max={240}
+          step={1}
+          value={draft.usageDevinPollMinutes}
+          aria-invalid={errors.usageDevinPollMinutes ? 'true' : undefined}
+          onChange={(event) => updateDraft({ usageDevinPollMinutes: event.target.value })}
+        />
+        <FieldError inputId="usageDevinPollMinutes" message={errors.usageDevinPollMinutes} />
+        <span className="text-xs text-[#7f8ca0]">
+          How often the app polls your monthly ACU usage for alerts (50% / 80%).
+        </span>
+      </label>
       <label className="flex items-center gap-2 text-sm">
         <input
           id="sessionsColumnToggle"

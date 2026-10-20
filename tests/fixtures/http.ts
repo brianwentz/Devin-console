@@ -20,8 +20,14 @@ export interface FixtureServers {
   apiUrl: string;
   // Analytics Claude tab: <apiUrl>/api/oauth/usage fixture route.
   claudeUsageUrl: string;
+  // Usage alerts: <devinUrl>/api/personal-analytics/usage-limit fixture route.
+  devinUsageUrl: string;
   api: FixtureApi;
   github: { setPrTitle(n: number, title: string): void };
+  devin: {
+    setUsageLimit(body: unknown | null): void;
+    setUsageStatus(n: number): void;
+  };
   close: () => Promise<void>;
 }
 
@@ -265,6 +271,11 @@ export async function startFixtureServers(): Promise<FixtureServers> {
   let idpUrl = '';
   const prTitles = new Map<number, string>();
   let analyticsLoads = 0;
+  // Usage alerts: runtime overrides for the usage-limit route (null = the
+  // FAKE_DEVIN_USAGE_JSON env or the bundled fixture file).
+  const usageDefault = readFileSync(join(__dirname, 'devin-usage-limit.json'), 'utf8');
+  let usageBody: string | null = null;
+  let usageStatus = 0;
 
   const devin = createServer((request, response) => {
     const url = new URL(request.url ?? '/', devinUrl);
@@ -280,6 +291,16 @@ export async function startFixtureServers(): Promise<FixtureServers> {
     }
     if (url.pathname === '/sso-start') {
       redirect(response, `${idpUrl}/devin-finish`);
+      return;
+    }
+    // Usage alerts: stands in for the tenant's usage-limit endpoint
+    // (DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL points here).
+    if (url.pathname === '/api/personal-analytics/usage-limit') {
+      const status =
+        usageStatus || Number(process.env.FAKE_DEVIN_USAGE_STATUS ?? '200') || 200;
+      const body = usageBody ?? process.env.FAKE_DEVIN_USAGE_JSON ?? usageDefault;
+      response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      response.end(body);
       return;
     }
     // Cross-origin iframe embedding the GitHub login — the frame's preload must
@@ -536,10 +557,19 @@ export async function startFixtureServers(): Promise<FixtureServers> {
     githubOrigins: `${new URL(githubUrl).origin},${new URL(githubAltUrl).origin}`,
     apiUrl,
     claudeUsageUrl: `${apiUrl}/api/oauth/usage`,
+    devinUsageUrl: `${devinUrl}/api/personal-analytics/usage-limit`,
     api: fixtureApi.api,
     github: {
       setPrTitle: (n: number, title: string) => {
         prTitles.set(n, title);
+      },
+    },
+    devin: {
+      setUsageLimit: (body: unknown | null) => {
+        usageBody = body === null ? null : JSON.stringify(body);
+      },
+      setUsageStatus: (n: number) => {
+        usageStatus = n;
       },
     },
     close: async () => {

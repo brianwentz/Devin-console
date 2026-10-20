@@ -16,11 +16,14 @@ import {
   type WindowBounds,
 } from '../core/layout';
 import { unreadPrCount, visiblePrs } from '../core/prPanelModel';
+import { usageLevel, USAGE_METRIC_LABEL, type UsageMetric } from '../core/usageAlerts';
 import { effectiveScope } from '../core/tabModel';
 import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
 
 import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
+import { claudeUsage } from './claude/usage';
+import { devinUsage } from './devinUsage';
 import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { terminalHost } from './local/terminalHost';
@@ -130,6 +133,43 @@ export function setSessionsOpen(open: boolean, source: string): void {
   log('shell', 'sessions-panel', { detail: { open, source } });
 }
 
+// Rail badge + summary inputs: the Devin monthly percent plus each non-stale
+// Claude account's session/weekly limits. Reading claudeUsage().state is safe
+// before start — the getter returns the initial state without starting the
+// service.
+function usageSummary(): ShellState['usage'] {
+  const items: { metric: string; accountKey: string; label: string; percent: number }[] = [];
+  const devin = devinUsage().state;
+  if (devin.percent !== null) {
+    items.push({
+      metric: 'devin-monthly',
+      accountKey: '',
+      label: USAGE_METRIC_LABEL['devin-monthly'],
+      percent: devin.percent,
+    });
+  }
+  for (const account of claudeUsage().state.accounts) {
+    if (account.stale) continue;
+    const accountKey = account.email ?? `host:${account.hosts[0] ?? ''}`;
+    for (const limit of account.limits) {
+      const metric: UsageMetric | null =
+        limit.kind === 'session'
+          ? 'claude-session'
+          : limit.kind === 'weekly_all'
+            ? 'claude-weekly'
+            : null;
+      if (!metric) continue;
+      items.push({
+        metric,
+        accountKey,
+        label: `${USAGE_METRIC_LABEL[metric]}${account.email ? ` (${account.email})` : ''}`,
+        percent: limit.percent,
+      });
+    }
+  }
+  return { level: usageLevel(items.map((item) => item.percent)), items, devin };
+}
+
 export function publicState(): ShellState {
   return {
     paneOpen: state.paneOpen,
@@ -172,6 +212,7 @@ export function publicState(): ShellState {
       unreadCount: notificationsUnread(),
       panelOpen: state.notificationsPanelOpen,
     },
+    usage: usageSummary(),
     cloud: cloudSessions().snapshot(),
     claude: claudeSessions().snapshot(),
     update: updateState(),

@@ -36,6 +36,7 @@ import { fieldErrorsFromIssues } from '../core/settingsDraft';
 import { sanitizeMessage } from '../core/devinApi';
 import { analyticsUrl } from '../core/sessions';
 import { refreshAnalyticsView } from './analytics';
+import { devinUsage } from './devinUsage';
 import { settingsFlushDone } from './settingsFlush';
 import { identityResolver } from './identity';
 import { log } from './log';
@@ -85,6 +86,7 @@ export function applySettingsPatch(patch: SettingsPatch): Settings {
   const next: Settings = state.settings!.merge(patch);
   notifier.onSettingsChanged(previousSettings, next);
   claudeSessions().onSettingsChanged(previousSettings, next);
+  devinUsage().onSettingsChanged(previousSettings, next);
   if (next.pane.open !== state.paneOpen) setPaneOpen(next.pane.open, 'settings');
   // Skip layout churn on the quit-flush path — it sits inside the settings
   // commit round trip and must stay cheap.
@@ -118,6 +120,9 @@ export function setupIpc(): void {
   guardedHandle(IpcChannels.analyticsRefresh, () => {
     refreshAnalyticsView();
     return null;
+  });
+  guardedOn(IpcChannels.devinUsageRefresh, () => {
+    void devinUsage().refresh();
   });
   guardedHandle(IpcChannels.settingsGet, () => state.settings?.current ?? SettingsSchema.parse({}));
   guardedHandle(IpcChannels.settingsSet, (_event, patch: unknown) => {

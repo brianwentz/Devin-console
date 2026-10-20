@@ -511,6 +511,7 @@ const api = {
     }>,
   analyticsRefresh: () =>
     ipcRenderer.invoke(IpcChannels.analyticsRefresh) as Promise<LocalResult<null> | null>,
+  devinUsageRefresh: () => ipcRenderer.send(IpcChannels.devinUsageRefresh),
   // Analytics Claude tab: pushed usage state + controls.
   claudeUsageState: () =>
     ipcRenderer.invoke(IpcChannels.claudeUsageState) as Promise<ClaudeUsageState>,

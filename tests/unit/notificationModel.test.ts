@@ -18,6 +18,7 @@ import {
 } from '../../src/core/notificationModel';
 
 const ENABLED: Record<NotificationKind, boolean> = {
+  usage: true,
   waiting: true,
   approval: true,
   blocked: true,
@@ -79,6 +80,17 @@ describe('itemKey', () => {
     expect(itemKey({ kind: 'waiting', sessionId: null })).toBe('session:devin:');
   });
   it('maps update to a singleton and identity/auth to their kind', () => {
+    expect(itemKey({ kind: 'usage', sessionId: null, metric: 'devin-monthly' })).toBe(
+      'usage:devin-monthly:',
+    );
+    expect(
+      itemKey({
+        kind: 'usage',
+        sessionId: null,
+        metric: 'claude-weekly',
+        accountKey: 'a@x.com',
+      }),
+    ).toBe('usage:claude-weekly:a@x.com');
     expect(itemKey({ kind: 'update', sessionId: null, version: '1.0.0' })).toBe('update');
     expect(itemKey({ kind: 'update', sessionId: null, version: '2.0.0' })).toBe('update');
     expect(itemKey({ kind: 'identity', sessionId: null })).toBe('identity');
@@ -117,6 +129,37 @@ describe('addNotification', () => {
     );
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ id: 'id-done', kind: 'pr-completed', prUrl, readAt: null });
+  });
+  it('a usage 80 alert supersedes the 50 entry for the same metric+account', () => {
+    const usage = (title: string, metric: AppNotification['metric'], accountKey = '') => ({
+      kind: 'usage' as const,
+      sessionId: null,
+      sessionTitle: 'Usage',
+      metric,
+      accountKey,
+      title,
+      body: 'b',
+      createdAt: 0,
+    });
+    let list = addNotification(
+      [],
+      usage('Devin Cloud monthly ACUs: 50% used', 'devin-monthly'),
+      'id-50',
+    );
+    list = addNotification(
+      list,
+      usage('Devin Cloud monthly ACUs: 80% used', 'devin-monthly'),
+      'id-80',
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0]!.title).toContain('80%');
+    // A different metric (or account) is a different item — untouched.
+    list = addNotification(
+      list,
+      usage('Claude weekly limit: 50% used', 'claude-weekly', 'a@x.com'),
+      'id-cl',
+    );
+    expect(list).toHaveLength(2);
   });
   it('a waiting followed by a blocked for the same session leaves only the blocked one', () => {
     let list = addNotification([], note('x', 'waiting', 's1'), 'id-w');
