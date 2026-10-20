@@ -1,6 +1,8 @@
 // Generates build/icon.ico (256/128/64/48/32/16 px) with no external deps.
-// The artwork is drawn procedurally: a rounded navy square with a white "D"
-// ring opening — good enough as a placeholder until design assets exist.
+// The artwork is drawn procedurally: a rounded navy square with a white
+// periodic-table "Ag" tile (silver's symbol — Agent Workspace) and an accent
+// "47" atomic number — good enough as a placeholder until design assets
+// exist.
 // 16–128 px entries are stored as 32-bpp DIBs (maximum compatibility with
 // NSIS/rcedit/Explorer); the 256 px entry is PNG-compressed as Windows expects.
 import { deflateSync } from 'node:zlib';
@@ -33,14 +35,67 @@ function crc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+// --- glyph: signed-distance stroke renderer -------------------------------
+// Primitives in unit coordinates (fraction of size). A sample belongs to a
+// stroke when its distance to the nearest primitive ≤ strokeWidth/2.
+const seg = (x1, y1, x2, y2) => ({ x1, y1, x2, y2 });
+const arc = (cx, cy, r, a0, a1) => ({ cx, cy, r, a0, a1 });
+
+function segDist(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function primDist(p, px, py) {
+  if (p.r === undefined) return segDist(px, py, p.x1, p.y1, p.x2, p.y2);
+  const d = Math.hypot(px - p.cx, py - p.cy);
+  let ang = Math.atan2(py - p.cy, px - p.cx);
+  while (ang < p.a0) ang += Math.PI * 2;
+  if (ang <= p.a1) return Math.abs(d - p.r);
+  return Math.min(
+    Math.hypot(px - (p.cx + p.r * Math.cos(p.a0)), py - (p.cy + p.r * Math.sin(p.a0))),
+    Math.hypot(px - (p.cx + p.r * Math.cos(p.a1)), py - (p.cy + p.r * Math.sin(p.a1))),
+  );
+}
+
+function dist(prims, px, py) {
+  let m = Infinity;
+  for (const p of prims) m = Math.min(m, primDist(p, px, py));
+  return m;
+}
+
+// "A" — cap height 0.40, baseline 0.68.
+const A_LEGS = [seg(0.36, 0.28, 0.2, 0.68), seg(0.36, 0.28, 0.52, 0.68)];
+const A_T = (0.555 - 0.28) / 0.4;
+const AG = [
+  ...A_LEGS,
+  seg(0.36 - 0.16 * A_T, 0.555, 0.36 + 0.16 * A_T, 0.555), // crossbar
+  // "g" — x-height top 0.42, baseline 0.68, descender to 0.845.
+  arc(0.695, 0.55, 0.125, 0, Math.PI * 2), // bowl
+  seg(0.82, 0.42, 0.82, 0.765), // stem
+  arc(0.715, 0.765, 0.105, 0, Math.PI * 1.0), // hook: 0.82,0.765 → under the bowl, ends at 0.61,0.765
+];
+const AG_SW = 0.082;
+
+// Atomic number "47", top-left — only on 48 px and up. 0.10 tall, stroke 0.022.
+const NUM47 = [
+  seg(0.185, 0.12, 0.13, 0.185),
+  seg(0.13, 0.185, 0.205, 0.185),
+  seg(0.185, 0.12, 0.185, 0.22),
+  seg(0.235, 0.12, 0.31, 0.12),
+  seg(0.31, 0.12, 0.26, 0.22),
+];
+const NUM47_SW = 0.022;
+
 // Returns RGBA pixels (top-down) for a size.
 function render(size) {
   const px = new Uint8Array(size * size * 4);
   const radius = size * 0.22;
   const cx = size / 2;
   const cy = size / 2;
-  const ringOuter = size * 0.34;
-  const ringInner = size * 0.2;
   const ss = 4; // supersampling per axis
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -57,16 +112,11 @@ function render(size) {
           const dy = Math.max(Math.abs(fy - cy) - (size / 2 - radius), 0);
           const inside = dx * dx + dy * dy <= radius * radius;
           if (!inside) continue;
+          const u = fx / size;
+          const v = fy / size;
           let c = BG;
-          const d = Math.hypot(fx - cx, fy - cy);
-          // "D" shape: ring, with the left side flattened into a bar.
-          const inRing = d <= ringOuter && d >= ringInner && fx >= cx - size * 0.06;
-          const inBar =
-            fx >= cx - ringOuter && fx <= cx - ringOuter + (ringOuter - ringInner) &&
-            Math.abs(fy - cy) <= ringOuter;
-          if (inRing || inBar) c = FG;
-          // accent dot (status indicator) bottom-right
-          if (Math.hypot(fx - size * 0.76, fy - size * 0.76) <= size * 0.09) c = ACCENT;
+          if (size >= 48 && dist(NUM47, u, v) <= NUM47_SW / 2) c = ACCENT;
+          else if (dist(AG, u, v) <= AG_SW / 2) c = FG;
           r += c[0];
           g += c[1];
           b += c[2];
@@ -178,3 +228,5 @@ console.log(`wrote ${output} (${offset} bytes, sizes ${sizes.join('/')})`);
 const png = encodePng(1024, render(1024));
 writeFileSync(outputPng, png);
 console.log(`wrote ${outputPng} (${png.length} bytes, 1024x1024)`);
+
+export { render, encodePng };
