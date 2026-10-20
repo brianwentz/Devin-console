@@ -1,7 +1,8 @@
 // Claude sidebar context menus — the same test seam as cloudSessions: in
 // test mode the popup is described and the claudeMenuItems/claudeMenuClick
 // hooks drive the same callbacks.
-import { Menu } from 'electron';
+import { Menu, shell } from 'electron';
+import { resolve } from 'node:path';
 import type { ClaudeSessions } from './sessions';
 import { log } from '../log';
 import { state, testMode } from '../state';
@@ -9,9 +10,9 @@ import { state, testMode } from '../state';
 export type MenuAction =
   | 'rename'
   | 'rename-session'
-  | 'new-folder'
   | 'open-terminal'
   | 'attach-agent'
+  | 'add'
   | null;
 
 export class ClaudeContextMenu {
@@ -46,9 +47,9 @@ export class ClaudeContextMenu {
   }
 
   async popup(arg: {
-    kind: 'session' | 'folder' | 'header' | 'agent';
+    kind: 'session' | 'workspace' | 'header' | 'agent';
     sessionId?: string | undefined;
-    name?: string | undefined;
+    path?: string | undefined;
     agentId?: string | undefined;
     x: number;
     y: number;
@@ -74,10 +75,22 @@ export class ClaudeContextMenu {
         checked: this.owner.showArchived,
         click: (item) => this.owner.setShowArchived(item.checked),
       });
-      items.push({ label: 'Refresh', click: () => void this.owner.refresh('menu') });
-    } else if (arg.kind === 'folder' && arg.name) {
-      const name = arg.name;
       items.push(
+        {
+          label: 'Add workspace…',
+          click: () => {
+            this.pendingAction = 'add';
+          },
+        },
+        { label: 'Refresh', click: () => void this.owner.refresh('menu') },
+      );
+    } else if (arg.kind === 'workspace' && arg.path) {
+      const path = arg.path;
+      items.push(
+        {
+          label: 'New session here',
+          click: () => void this.owner.newSession(path),
+        },
         {
           label: 'Rename…',
           click: () => {
@@ -85,35 +98,26 @@ export class ClaudeContextMenu {
           },
         },
         {
-          label: 'Delete…',
-          click: () => void this.owner.folderDelete(name),
+          label: 'Open terminal here',
+          click: () => {
+            this.pendingAction = 'open-terminal';
+          },
+        },
+        {
+          label: 'Reveal in Explorer',
+          click: () => {
+            shell.showItemInFolder(resolve(path));
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Remove workspace',
+          click: () => void this.owner.workspaceRemove(path),
         },
       );
     } else if (arg.kind === 'session' && arg.sessionId) {
       const session = this.owner.sessions.find((s) => s.id === arg.sessionId);
       if (!session) return { action: null };
-      const submenu: Electron.MenuItemConstructorOptions[] = this.owner.registry.folders.map(
-        (name) => ({
-          label: name,
-          type: 'checkbox',
-          checked: session.folder === name,
-          click: () => void this.owner.sessionMove(session.id, name),
-        }),
-      );
-      submenu.push(
-        { type: 'separator' },
-        {
-          label: 'Remove from folder',
-          enabled: session.folder !== null,
-          click: () => void this.owner.sessionMove(session.id, null),
-        },
-        {
-          label: 'New folder…',
-          click: () => {
-            this.pendingAction = 'new-folder';
-          },
-        },
-      );
       items.push(
         {
           label: 'Rename…',
@@ -129,7 +133,6 @@ export class ClaudeContextMenu {
           },
         },
         { type: 'separator' },
-        { label: 'Move to folder', submenu },
         {
           label: session.isPinned ? 'Unpin' : 'Pin',
           click: () => void this.owner.sessionPin(session.id, !session.isPinned),

@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { AgentBadge } from './Cards';
 import { TerminalView } from '../chat/TerminalView';
-import { ChatView } from '../chat/ChatView';
+import { ChatView, sendShortcutLabel } from '../chat/ChatView';
 import { UsagePill } from '../chat/UsagePill';
 import { useShellState } from '../store';
 import { consumeTerminalRequest, useLocalState, useSelectedWorkspace, useTerminalRequest } from './store';
@@ -189,7 +189,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
             }}
             footerHint={
               <>
-                Enter sends · Shift+Enter newline · type <code>/handoff</code> to move this session to Devin Cloud
+                {sendShortcutLabel()} sends · Enter newline · type <code>/handoff</code> to move this session to Devin Cloud
               </>
             }
             banner={

@@ -36,7 +36,12 @@ import {
   type StopReason,
 } from '../../core/localModel';
 import { LinkScanner, type PrLinkContext } from '../../core/prLinks';
-import { isWslHost, LOCAL_HOST, type ExecHost } from '../../core/execHost';
+import {
+  hostIdForPath as coreHostIdForPath,
+  isWslHost,
+  LOCAL_HOST,
+  type ExecHost,
+} from '../../core/execHost';
 import type { LocalSessionSummary } from '../../shared/ipc';
 import { log } from '../log';
 import { hosts } from '../hosts';
@@ -302,6 +307,43 @@ export class DevinLocalHost {
   }
 
   // ---- agent lifecycle ----
+
+  /**
+   * Start the agent of every configured workspace. The constructor registers
+   * them as `stopped`; with the sidebar listing on the ready transition (see
+   * `start`) nothing else would ever spawn them on a fresh launch. Callers
+   * defer this past window creation so startup paint isn't held up.
+   *
+   * Waits for the first distro enumeration so `\\wsl.localhost\<distro>\…`
+   * workspaces map to their host instead of being spawned locally with a UNC
+   * cwd. Local workspaces stay `missing-cli` when the devin binary is absent;
+   * WSL ones resolve devin inside the distro (ensureAgent handles that case).
+   */
+  startConfigured(): void {
+    if (this.disposed) return;
+    void hosts()
+      .whenEnumerated()
+      .then(() => {
+        if (this.disposed) return;
+        // Materialise the enabled hosts so hostById() resolves UNC paths.
+        hosts().list();
+        const targets: string[] = [];
+        const skipped: string[] = [];
+        for (const workspace of this.workspaces) {
+          const execHost = this.hostFor(workspace);
+          if (isWslHost(execHost)) targets.push(workspace);
+          else if (coreHostIdForPath(workspace) !== 'local') skipped.push(workspace); // distro not enabled
+          else if (this.command) targets.push(workspace);
+          else skipped.push(workspace); // missing-cli — set by the constructor
+        }
+        log('local', 'agents-autostart', { detail: { count: targets.length, skipped: skipped.length } });
+        for (const workspace of targets) {
+          // ensureAgent → start → ready, which lists sessions once — calling
+          // listSessions here would list twice.
+          void this.ensureAgent(workspace).catch(() => undefined);
+        }
+      });
+  }
 
   async ensureAgent(workspace: string): Promise<AgentHandle> {
     if (this.disposed) throw new Error('local host disposed');

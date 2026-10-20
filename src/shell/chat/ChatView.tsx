@@ -5,6 +5,11 @@ import { MessageView, PermissionCard, PlanList, buttonClass } from './Cards';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { clearDraft, getDraft, setDraft as setStoredDraft } from './drafts';
 
+// Label for the composer's send chord (Ctrl+Enter / ⌘+Enter) — the hints in
+// LocalPanel and ClaudeView both read it so the string is defined once.
+export const sendShortcutLabel = (): string =>
+  `${window.devinworkspaces.platform === 'darwin' ? '⌘' : 'Ctrl'}+Enter`;
+
 export interface ChatViewProps {
   session: ChatSessionPublic | null;
   // Drafts store key (session id); the textarea state lives here so unsent
@@ -68,8 +73,10 @@ export function ChatView({
     onSend(text);
   };
 
+  // Ctrl+Enter (⌘+Enter on macOS) sends; plain Enter and Shift+Enter fall
+  // through to the textarea and insert a newline.
   const onComposerKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       send();
     }

@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { clampPaneWidth, fractionFromPx, paneWidthPx } from '../core/layout';
+import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx } from '../core/layout';
 import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
 import { claudeSessions } from './claude/sessions';
@@ -120,8 +120,11 @@ export function handleShortcut(
       openNewSession();
     }
     handled = true;
-  } else if (ctrl && !input.alt && key === '`') {
+  } else if (ctrl && !input.alt && key === '`' && dockSurface(state.surface)) {
+    // Off dock surfaces (Settings/Analytics) the shortcut is a no-op, matching
+    // the disabled rail button — the persisted toggle is left untouched.
     state.terminalOpen = !state.terminalOpen;
+    log('shell', 'terminal-toggle', { detail: { open: state.terminalOpen, source: 'shortcut' } });
     applyLayout();
     focusVisibleContents(contents);
     handled = true;

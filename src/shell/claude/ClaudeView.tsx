@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Keyb
 import { ArrowLeft, GitFork } from 'lucide-react';
 import type { ClaudeChatSessionPublic, LocalResult } from '../../shared/ipc';
 import { CLAUDE_PERMISSION_MODES, isClaudePermissionMode } from '../../core/settingsDraft';
-import { ChatView } from '../chat/ChatView';
+import { ChatView, sendShortcutLabel } from '../chat/ChatView';
 import { TerminalView } from '../chat/TerminalView';
 import { UsagePill } from '../chat/UsagePill';
 import { buttonClass } from '../chat/Cards';
@@ -375,7 +375,7 @@ export function ClaudeView({ style }: { style: CSSProperties }) {
             draftKey={id}
             emptyText="Loading…"
             composerPlaceholder="Message Claude…"
-            footerHint="Enter sends · Shift+Enter newline"
+            footerHint={`${sendShortcutLabel()} sends · Enter newline`}
             errorId="claudeError"
             error={error}
             disabledReason={session?.terminalOwned ? 'Close the terminal to chat here' : null}

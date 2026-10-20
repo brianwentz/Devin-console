@@ -69,7 +69,7 @@ async function shellClick(app: ElectronApplication, selector: string): Promise<b
   )) as boolean;
 }
 
-// Drive the React composer like a user: native setter + input + Enter.
+// Drive the React composer like a user: native setter + input + Ctrl+Enter (send chord).
 async function typeAndSend(app: ElectronApplication, text: string): Promise<void> {
   const ok = await evaluateInShell(
     app,

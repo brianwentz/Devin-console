@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -207,7 +207,7 @@ async function shellClick(app: ElectronApplication, selector: string): Promise<b
 }
 
 // Drive the React-controlled composer the way a user would: set the value via the
-// native setter so React sees the input event, then press Enter.
+// native setter so React sees the input event, then press Ctrl+Enter (the send chord).
 async function typeAndSend(app: ElectronApplication, text: string): Promise<void> {
   const ok = await evaluateInShell(
     app,
@@ -740,6 +740,74 @@ test('Local composer keeps unsent text across a surface switch', async () => {
   }
 });
 
+test('Local composer: plain Enter inserts a newline, Ctrl+Enter sends', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-enter-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const agentPids: number[] = [];
+  try {
+    await waitForHooks(app);
+    await setSurfaceLocal(app);
+    const ws = await addWorkspace(app, workspace);
+    await expect.poll(async () => (await localState(app)).agents[ws]?.status).toBe('ready');
+    agentPids.push(await agentPid(app, ws));
+    const sessionId = await newSession(app, ws);
+    expect(sessionId).toBeTruthy();
+
+    const page = await shellPage(app);
+    await expect.poll(() => shellCount(app, `.session-item[data-session-id="${sessionId}"]`)).toBe(1);
+    expect(await shellClick(app, `.session-item[data-session-id="${sessionId}"]`)).toBe(true);
+    await page.waitForSelector('#composer:not([disabled])');
+    const composer = page.locator('#composer');
+    await composer.click();
+    await page.keyboard.type('line one');
+
+    // Plain Enter is a newline, not a send: the textarea grows, no prompt reaches the agent.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('line two');
+    await expect.poll(async () => composer.inputValue()).toBe('line one\nline two');
+    expect((await localState(app)).sessions[sessionId]?.messages ?? []).toHaveLength(0);
+    expect((await localState(app)).sessions[sessionId]?.running).toBe(false);
+
+    // Shift+Enter still inserts a newline.
+    await page.keyboard.press('Shift+Enter');
+    await expect.poll(async () => composer.inputValue()).toBe('line one\nline two\n');
+    expect((await localState(app)).sessions[sessionId]?.messages ?? []).toHaveLength(0);
+
+    // The footer hint advertises the chord (Ctrl on Windows/Linux).
+    await expect(page.locator('footer p', { hasText: 'sends' })).toContainText('Ctrl+Enter sends · Enter newline');
+
+    // Ctrl+Enter sends the multi-line draft as one prompt and clears the composer.
+    await page.keyboard.press('Control+Enter');
+    await expect.poll(async () => (await localState(app)).sessions[sessionId]?.messages.length ?? 0).toBeGreaterThan(0);
+    expect((await localState(app)).sessions[sessionId]?.messages[0]).toEqual({
+      role: 'user',
+      blocks: [{ type: 'text', text: 'line one\nline two' }],
+    });
+    await expect.poll(async () => composer.inputValue()).toBe('');
+    await expect.poll(async () => (await localState(app)).sessions[sessionId]?.lastStopReason).toBe('end_turn');
+
+    await app.evaluate(({ app: electronApp }) => electronApp.quit());
+    await waitForEventCount(logFile, 'window-close-complete', 1);
+    await app.close();
+  } finally {
+    await app.close().catch(() => undefined);
+    for (const pid of agentPids) {
+      try {
+        process.kill(pid);
+      } catch {
+        // already gone
+      }
+    }
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('Local: thinking indicator and token usage while a prompt runs', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-thinking-'));
   const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
@@ -1048,5 +1116,92 @@ test('Local sidebar: sections list at start, reorder/collapse/rename persist, co
     rmSync(wsA, { recursive: true, force: true });
     rmSync(wsB, { recursive: true, force: true });
     rmSync(uncRoot, { recursive: true, force: true });
+  }
+});
+
+// Regression: workspaces already in settings.json must get their agents
+// started at launch — the sidebar lists on the ready transition, and nothing
+// else spawns an agent before the user acts.
+test('Local startup: configured workspaces autostart their agents and list in the sidebar', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-autostart-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
+  const wsB = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsB-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ workspaces: [wsA, wsB] }));
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    FAKE_ACP_LIST: '1',
+  });
+  try {
+    await waitForHooks(app);
+    // No user action: both agents come up on their own.
+    await expect.poll(async () => (await localState(app)).agents[wsA]?.status).toBe('ready');
+    await expect.poll(async () => (await localState(app)).agents[wsB]?.status).toBe('ready');
+    const events = await readEvents(logFile);
+    const autostart = events.find((entry) => entry.event === 'agents-autostart');
+    expect(autostart).toBeDefined();
+    expect((autostart!.detail as any)?.count).toBe(2);
+    expect(events.filter((entry) => entry.event === 'agent-start')).toHaveLength(2);
+    // The ready hook lists each workspace exactly once (no double list).
+    await expect
+      .poll(async () =>
+        (await readEvents(logFile)).filter(
+          (entry) => entry.event === 'session-list' && (entry.detail as any)?.source === 'agent',
+        ).length,
+      )
+      .toBe(2);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+    expect(
+      (await readEvents(logFile)).filter(
+        (entry) => entry.event === 'session-list' && (entry.detail as any)?.source === 'agent',
+      ),
+    ).toHaveLength(2);
+
+    await setSurfaceLocal(app);
+    await expect.poll(() => shellCount(app, '[data-sidebar="local"]')).toBe(1);
+    await expect
+      .poll(() =>
+        evaluateInShell(
+          app,
+          `[...document.querySelectorAll('[data-section-name]')].map((e) => e.getAttribute('data-section-name')).sort()`,
+        ),
+      )
+      .toEqual([wsA, wsB].sort());
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(wsA, { recursive: true, force: true });
+    rmSync(wsB, { recursive: true, force: true });
+  }
+});
+
+// Negative: a configured workspace with no devin binary (local.devinPath
+// points nowhere, no test command) stays missing-cli — nothing is spawned.
+test('Local startup: missing CLI leaves configured workspaces missing-cli without spawning', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-autostart-nocli-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(
+    join(profile, 'settings.json'),
+    JSON.stringify({ workspaces: [wsA], local: { devinPath: join(profile, 'missing', 'devin.exe') } }),
+  );
+  const env: Record<string, string> = { DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' };
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
+  try {
+    await waitForHooks(app);
+    await waitForEvent(logFile, 'agents-autostart');
+    const events = await readEvents(logFile);
+    const autostart = events.find((entry) => entry.event === 'agents-autostart');
+    expect((autostart!.detail as any)?.count).toBe(0);
+    expect((autostart!.detail as any)?.skipped).toBe(1);
+    const local = await localState(app);
+    expect(local.cliPath).toBeNull();
+    expect(local.agents[wsA]?.status).toBe('missing-cli');
+    expect(events.some((entry) => entry.event === 'agent-start')).toBe(false);
+  } finally {
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(wsA, { recursive: true, force: true });
   }
 });

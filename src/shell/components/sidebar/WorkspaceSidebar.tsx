@@ -3,7 +3,7 @@
 // LocalSidebar adapts the Local surface; P4b adapts Claude the same way.
 import { useMemo, useState, type ReactNode } from 'react';
 import { Ellipsis, FolderPlus, RefreshCw, SquarePen } from 'lucide-react';
-import type { SidebarListData, SidebarSession } from '../../../core/sessionTree';
+import type { SessionTreeNode, SidebarListData, SidebarSession } from '../../../core/sessionTree';
 import { buildSessionTree } from '../../../core/sessionTree';
 import type { WorkspaceEntry } from '../../../core/workspaceTree';
 import type { Rect } from '../../../core/layout';
@@ -44,6 +44,17 @@ export interface WorkspaceSidebarProps<S extends SidebarSession> {
   onCopyId?: (id: string) => void;
   emptyText?: string;
   extraSections?: ReactNode;
+  // Filter match: extra per-session text (e.g. cwd basename for Claude).
+  filterTextOf?(session: S): string;
+  // Claude extras: custom row renderers (subagent chevron + inline session
+  // rename). Defaults render SessionRow / SessionRowButton respectively.
+  renderRow?(node: SessionTreeNode<S>): ReactNode;
+  renderFlatRow?(session: S): ReactNode;
+  // Element ids are Local-flavoured by default; Claude passes its own.
+  ids?: Partial<{ newSession: string; refresh: string; status: string }>;
+  statusAttrs?: Record<string, string | undefined>;
+  // Extra lines under the status row (Claude: cliPath / hostErrors / lastError).
+  statusExtra?: ReactNode;
 }
 
 export function WorkspaceSidebar<S extends SidebarSession>({
@@ -73,6 +84,12 @@ export function WorkspaceSidebar<S extends SidebarSession>({
   onCopyId,
   emptyText,
   extraSections,
+  filterTextOf,
+  renderRow,
+  renderFlatRow,
+  ids,
+  statusAttrs,
+  statusExtra,
 }: WorkspaceSidebarProps<S>) {
   const [query, setQuery] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -121,6 +138,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
   const q = query.trim().toLowerCase();
   const matches = (s: S) =>
     (s.title || 'Untitled session').toLowerCase().includes(q) ||
+    (filterTextOf?.(s) ?? '').toLowerCase().includes(q) ||
     (s.folder !== null && (entryByPath.get(s.folder)?.label ?? '').toLowerCase().includes(q));
   const filtered: S[] = q ? data.listData.sessions.filter(matches) : [];
 
@@ -135,7 +153,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <span className="text-[13px] font-semibold flex-1">{title}</span>
         <button
-          id="sessionNew"
+          id={ids?.newSession ?? 'sessionNew'}
           type="button"
           aria-label="New session"
           title="New session"
@@ -155,7 +173,7 @@ export function WorkspaceSidebar<S extends SidebarSession>({
           <FolderPlus size={13} />
         </button>
         <button
-          id="workspaceRefresh"
+          id={ids?.refresh ?? 'workspaceRefresh'}
           type="button"
           aria-label="Refresh sessions"
           title="Refresh"
@@ -176,13 +194,15 @@ export function WorkspaceSidebar<S extends SidebarSession>({
         </button>
       </div>
       <div
-        id="localStatus"
+        id={ids?.status ?? 'localStatus'}
+        {...(statusAttrs ?? {})}
         data-sidebar-status
         className="px-3 pb-1.5 text-[11px] text-[#8b9bb0] truncate"
         title={statusTitle}
       >
         {statusText}
       </div>
+      {statusExtra}
       {error && (
         <div id="sessionsError" className="px-3 pb-1.5 text-[11px] text-[#e0a03c] truncate">
           {error}
@@ -199,23 +219,28 @@ export function WorkspaceSidebar<S extends SidebarSession>({
         />
       </div>
       <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+        {!q && extraSections}
         {q ? (
           filtered.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No matches</div>
           ) : (
-            filtered.map((s) => (
-              <SessionRowButton
-                key={s.id}
-                s={s}
-                depth={0}
-                current={s.id === currentSessionId}
-                registerRow={registerRow}
-                opts={rowOpts}
-                onMenu={(id, x, y) => void onSessionMenu(id, x, y)}
-              />
-            ))
+            filtered.map((s) =>
+              renderFlatRow ? (
+                renderFlatRow(s)
+              ) : (
+                <SessionRowButton
+                  key={s.id}
+                  s={s}
+                  depth={0}
+                  current={s.id === currentSessionId}
+                  registerRow={registerRow}
+                  opts={rowOpts}
+                  onMenu={(id, x, y) => void onSessionMenu(id, x, y)}
+                />
+              )
+            )
           )
-        ) : data.entries.length === 0 ? (
+        ) : data.entries.length === 0 && data.listData.sessions.length === 0 ? (
           <div className="px-2 py-3 text-[12px] text-[#5c6b80]">
             {emptyText ?? 'Add a workspace folder to start.'}
             <div className="pt-2">
@@ -266,23 +291,26 @@ export function WorkspaceSidebar<S extends SidebarSession>({
                   (sectionItem.nodes.length === 0 ? (
                     <div className="pl-6 py-1 text-[11px] text-[#5c6b80]">No sessions</div>
                   ) : (
-                    sectionItem.nodes.map((node) => (
-                      <SessionRow
-                        key={node.session.id}
-                        node={node}
-                        collapsedChildren={emptyChildren}
-                        onToggleChildren={() => undefined}
-                        registerRow={registerRow}
-                        opts={rowOpts}
-                        onMenu={(id, x, y) => void onSessionMenu(id, x, y)}
-                      />
-                    ))
+                    sectionItem.nodes.map((node) =>
+                      renderRow ? (
+                        renderRow(node)
+                      ) : (
+                        <SessionRow
+                          key={node.session.id}
+                          node={node}
+                          collapsedChildren={emptyChildren}
+                          onToggleChildren={() => undefined}
+                          registerRow={registerRow}
+                          opts={rowOpts}
+                          onMenu={(id, x, y) => void onSessionMenu(id, x, y)}
+                        />
+                      ),
+                    )
                   ))}
               </div>
             );
           })
         )}
-        {extraSections}
       </div>
     </section>
   );

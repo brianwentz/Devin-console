@@ -151,17 +151,11 @@ export const IpcChannels = {
   claudeRefresh: 'claude:refresh',
   claudeRename: 'claude:rename',
   claudeFork: 'claude:fork',
-  // Deprecated: free-form Claude folders are replaced by path-bound workspaces in P4b (plans/ux-round-2.md D8); removed then.
-  claudeSessionMove: 'claude:sessionMove',
   claudeSessionPin: 'claude:sessionPin',
   claudeSessionArchive: 'claude:sessionArchive',
   claudeSessionRemove: 'claude:sessionRemove',
   claudeSessionDeleteTranscript: 'claude:sessionDeleteTranscript',
   claudeRevealTranscript: 'claude:revealTranscript',
-  claudeFolderCreate: 'claude:folderCreate',
-  claudeFolderRename: 'claude:folderRename',
-  claudeFolderDelete: 'claude:folderDelete',
-  claudeFolderReorder: 'claude:folderReorder',
   claudeShowArchived: 'claude:showArchived',
   claudeContextMenu: 'claude:contextMenu',
   // Claude chat: SDK-backed chat per session.
@@ -911,7 +905,6 @@ export const CloudContextMenuArg = z.object({
 export const CloudShowArchivedArg = z.object({ value: z.boolean() });
 export const CloudNewSessionArg = z.object({ folder: CloudFolderName.nullable() });
 
-const ClaudeFolderName = z.string().trim().min(1).max(100);
 const ClaudeSessionId = z.string().uuid();
 export const ClaudeOpenArg = z.object({ sessionId: ClaudeSessionId });
 export const ClaudeRenameArg = z.object({
@@ -919,10 +912,6 @@ export const ClaudeRenameArg = z.object({
   title: z.string().trim().min(1).max(200),
 });
 export const ClaudeForkArg = z.object({ sessionId: ClaudeSessionId });
-export const ClaudeSessionMoveArg = z.object({
-  sessionId: ClaudeSessionId,
-  folder: ClaudeFolderName.nullable(),
-});
 export const ClaudeSessionPinArg = z.object({
   sessionId: ClaudeSessionId,
   pinned: z.boolean(),
@@ -934,14 +923,9 @@ export const ClaudeSessionArchiveArg = z.object({
 export const ClaudeSessionRemoveArg = z.object({ sessionId: ClaudeSessionId });
 export const ClaudeSessionDeleteTranscriptArg = z.object({ sessionId: ClaudeSessionId });
 export const ClaudeRevealTranscriptArg = z.object({ sessionId: ClaudeSessionId });
-export const ClaudeFolderCreateArg = z.object({ name: ClaudeFolderName });
-export const ClaudeFolderRenameArg = z.object({
-  oldName: ClaudeFolderName,
-  newName: ClaudeFolderName,
-});
-export const ClaudeFolderDeleteArg = z.object({ name: ClaudeFolderName });
-export const ClaudeFolderReorderArg = z.object({
-  names: z.array(ClaudeFolderName).max(200),
+// ux2 D8: claude.workspaces mutations; path optional → folder picker.
+export const ClaudeWorkspaceAddArg = z.object({
+  path: z.string().min(1).max(4096).optional(),
 });
 export const ClaudeShowArchivedArg = z.object({ value: z.boolean() });
 export const ClaudePermissionModeSchema = z.enum([
@@ -984,9 +968,9 @@ export const ClaudeRecheckEnvArg = z.object({ sessionId: ClaudeSessionId });
 export const HostsRefreshArg = z.object({ id: HostIdSchema.optional() });
 export const HostsSetEnabledArg = z.object({ id: HostIdSchema, enabled: z.boolean() });
 export const ClaudeContextMenuArg = z.object({
-  kind: z.enum(['session', 'folder', 'header', 'agent']),
+  kind: z.enum(['session', 'workspace', 'header', 'agent']),
   sessionId: ClaudeSessionId.optional(),
-  name: ClaudeFolderName.optional(),
+  path: z.string().max(1024).optional(),
   agentId: z.string().min(1).max(64).optional(),
   x: z.number().finite(),
   y: z.number().finite(),

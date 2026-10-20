@@ -1,9 +1,21 @@
-import { readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { closeApp, launchApp, launchWithClaudeFixture, shellPage, setInputValue } from './helpers';
+import {
+  CLAUDE_FIXTURE_HOME,
+  closeApp,
+  dndMove,
+  evaluateInShell,
+  launchApp,
+  launchWithClaudeFixture,
+  readEvents,
+  shellPage,
+  setInputValue,
+  waitForEvent,
+} from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §5.4: the Claude sidebar end-to-end — same fixture tree as
@@ -41,6 +53,50 @@ function findMenuItem(items: MenuItem[], label: string): MenuItem | undefined {
   }
   return undefined;
 }
+
+// Right-click a workspace section header (data-section-name = the stored path).
+async function rightClickWorkspace(app: ElectronApplication, path: string): Promise<void> {
+  const ok = await evaluateInShell(
+    app,
+    `(() => {
+      const el = [...document.querySelectorAll('[data-section-name]')]
+        .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)});
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
+      return true;
+    })()`,
+  );
+  expect(ok).toBe(true);
+}
+
+const sectionExists = (app: ElectronApplication, path: string) =>
+  evaluateInShell(
+    app,
+    `[...document.querySelectorAll('[data-section-name]')].some((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)})`,
+  );
+const sectionLabel = (app: ElectronApplication, path: string) =>
+  evaluateInShell(
+    app,
+    `[...document.querySelectorAll('[data-section-name]')].find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)})?.querySelector('[data-section-label]')?.textContent ?? ''`,
+  );
+const sectionHasRow = (app: ElectronApplication, sectionName: string, sessionId: string) =>
+  evaluateInShell(
+    app,
+    `(() => {
+      const sec = [...document.querySelectorAll('[data-section-name]')]
+        .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(sectionName)})?.closest('div.mb-px');
+      return sec ? !!sec.querySelector('[data-session-id="${sessionId}"]') : false;
+    })()`,
+  );
+// CSS selector for a workspace section: backslashes are escaped for the
+// attr value so a Windows path still matches data-section-name.
+const sectionSel = (path: string) =>
+  `[data-section-name="${path.replace(/\\/g, '\\\\')}"]`;
+const hostChipOf = (app: ElectronApplication, path: string) =>
+  evaluateInShell(
+    app,
+    `[...document.querySelectorAll('[data-section-name]')].find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(path)})?.querySelector('[data-host-chip]')?.textContent ?? null`,
+  );
 
 function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
@@ -81,6 +137,7 @@ function hooks(app: ElectronApplication) {
 test('claude sidebar: rows, filter, menus, view, surface round-trip', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -114,17 +171,20 @@ test('claude sidebar: rows, filter, menus, view, surface round-trip', async () =
     await expect(shell.locator('[data-section-name="pinned"]')).toBeVisible();
     await expect(row(UB)).toHaveAttribute('data-pinned', 'true');
 
-    // --- folder create + move ---------------------------------------------
-    await shell.locator('#sessionFolderNew').click();
-    await shell.locator('#sessionFolderEdit').fill('Work');
-    await shell.keyboard.press('Enter');
-    await expect(shell.locator('[data-section-name="Work"]')).toBeVisible();
-    await row(UA).click({ button: 'right' });
-    const moveMenu = await h.claudeMenuItems();
-    await h.claudeMenuClick(findMenuItem(moveMenu, 'Work')!.id);
+    // --- workspace add → sessions file under it automatically (D8) --------
+    await shell.locator('#workspaceAdd').click();
+    await expect
+      .poll(async () => (await h.claudeState()).folders)
+      .toContain('C:\\work\\alpha');
+    await expect.poll(async () => sectionExists(app, 'C:\\work\\alpha')).toBe(true);
+    // alpha-cwd sessions file under the workspace (UB is pinned → the
+    // 'pinned' section takes precedence); the beta session stays Recent.
+    await expect.poll(async () => sectionHasRow(app, 'pinned', UB)).toBe(true);
+    await expect.poll(async () => sectionHasRow(app, 'C:\\work\\alpha', UA)).toBe(true);
+    await expect.poll(async () => sectionHasRow(app, 'recent', UC)).toBe(true);
     await expect
       .poll(async () => (await h.claudeState()).sessions.find((s) => s.id === UA)?.folder)
-      .toBe('Work');
+      .toBe('C:\\work\\alpha');
 
     // --- rename-session → inline editor → watcher refresh ------------------
     await row(UB).click({ button: 'right' });
@@ -167,6 +227,8 @@ test('claude sidebar: rows, filter, menus, view, surface round-trip', async () =
 
     // --- Settings fields round-trip into settings.json ----------------------
     await h.setSurface('settings');
+    await shell.locator('#settingsTab-claude').click();
+    await expect(shell.locator('#claudePathInput')).toBeVisible();
     await setInputValue(app, 'claudePathInput', 'C:\\tools\\claude.exe');
     await setInputValue(app, 'claudeAutoArchiveInput', '30');
     // Leaving via the rail commits the dirty draft (requestSurface).
@@ -214,5 +276,220 @@ test('rail button switches to the claude surface and persists it', async () => {
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('claude workspaces: new-session-here, reorder, collapse, rename, remove', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    // The fake SDK drives newSession → a real transcript row files itself.
+    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: join(process.cwd(), 'out/fixtures/fakeClaudeSdk.mjs'),
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await h.setSurface('claude');
+    const shell = await shellPage(app);
+    await expect(shell.locator('[data-sidebar="claude"]')).toBeVisible();
+
+    // Two workspaces: alpha via the env picker seam, beta via the IPC arg.
+    await shell.locator('#workspaceAdd').click();
+    await expect
+      .poll(async () => (await h.claudeState()).folders)
+      .toContain('C:\\work\\alpha');
+    await shell.evaluate(() =>
+      (window as any).devinworkspaces.claudeWorkspaceAdd('C:\\work\\beta'),
+    );
+    await expect
+      .poll(async () => (await h.claudeState()).folders)
+      .toEqual(['C:\\work\\alpha', 'C:\\work\\beta']);
+
+    // --- "New session here" on a workspace header opens a session in that
+    // cwd without the picker (no transcript row until the first prompt, so
+    // assert via the selection + the view's cwd display).
+    await rightClickWorkspace(app, 'C:\\work\\alpha');
+    const wsMenu = await h.claudeMenuItems();
+    await h.claudeMenuClick(findMenuItem(wsMenu, 'New session here')!.id);
+    await expect.poll(async () => (await h.state()).claudeSessionId).not.toBeNull();
+    const createdId = (await h.state()).claudeSessionId;
+    expect(createdId).not.toBe(UA);
+    await expect.poll(async () => h.currentScope()).toBe(`claude:${createdId}`);
+    await expect(shell.locator('[data-claude-view]')).toContainText('C:\\work\\alpha');
+
+    // --- rename → label + settings.claude.workspaceLabels.
+    await rightClickWorkspace(app, 'C:\\work\\alpha');
+    const renameMenu = await h.claudeMenuItems();
+    await h.claudeMenuClick(findMenuItem(renameMenu, 'Rename…')!.id);
+    await shell.locator('#sessionFolderEdit').fill('Alpha ws');
+    await shell.keyboard.press('Enter');
+    await expect.poll(async () => sectionLabel(app, 'C:\\work\\alpha')).toBe('Alpha ws');
+    await expect
+      .poll(async () => {
+        const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+        return settings.claude.workspaceLabels['C:\\work\\alpha'];
+      })
+      .toBe('Alpha ws');
+
+    // --- DnD reorder → settings.claude.workspaces order flips.
+    await dndMove(shell, sectionSel('C:\\work\\beta'), sectionSel('C:\\work\\alpha'));
+    await expect
+      .poll(async () => {
+        const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+        return settings.claude.workspaces;
+      })
+      .toEqual(['C:\\work\\beta', 'C:\\work\\alpha']);
+
+    // --- collapse persists in claude.collapsedFolders.
+    await evaluateInShell(
+      app,
+      `[...document.querySelectorAll('[data-section-name]')].find((e) => e.getAttribute('data-section-name') === ${JSON.stringify('C:\\work\\beta')})?.click() ?? true`,
+    );
+    await expect
+      .poll(async () => {
+        const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+        return settings.claude.collapsedFolders;
+      })
+      .toContain('C:\\work\\beta');
+
+    // --- Remove workspace via context menu → sessions fall back to Recent.
+    await rightClickWorkspace(app, 'C:\\work\\beta');
+    const removeMenu = await h.claudeMenuItems();
+    await h.claudeMenuClick(findMenuItem(removeMenu, 'Remove workspace')!.id);
+    await expect
+      .poll(async () => {
+        const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+        return settings.claude.workspaces;
+      })
+      .toEqual(['C:\\work\\alpha']);
+    await expect.poll(async () => sectionExists(app, 'C:\\work\\beta')).toBe(false);
+    await expect.poll(async () => sectionHasRow(app, 'recent', UC)).toBe(true);
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('claude workspace migration: legacy registry folders → claude.workspaces', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-mig-'));
+  const claudeHome = join(profile, 'claude-home');
+  cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
+  const logFile = join(profile, 'events.jsonl');
+  // Legacy registry: 'Alpha folder' has two sessions (same cwd), 'Orphan' none.
+  const legacyEntry = (folder: string) => ({
+    id: UA,
+    host: 'local',
+    folder,
+    pinned: false,
+    archived: false,
+    archivedAt: null,
+    unarchivedAt: null,
+    removed: false,
+    removedAt: null,
+    lastOpenedAt: null,
+    prs: [],
+  });
+  writeFileSync(
+    join(profile, 'claude-sessions.json'),
+    JSON.stringify({
+      version: 1,
+      folders: ['Alpha folder', 'Orphan'],
+      entries: {
+        [UA]: legacyEntry('Alpha folder'),
+        [UB]: { ...legacyEntry('Alpha folder'), id: UB },
+      },
+    }),
+  );
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    CLAUDE_CONFIG_DIR: claudeHome,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await expect
+      .poll(async () => (await h.claudeState()).folders)
+      .toEqual(['C:\\work\\alpha']);
+    const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+    expect(settings.claude.workspaces).toEqual(['C:\\work\\alpha']);
+    expect(settings.claude.workspaceLabels['C:\\work\\alpha']).toBe('Alpha folder');
+    // Alpha sessions file under the migrated workspace; UC (no folder) stays Recent.
+    await expect
+      .poll(async () => (await h.claudeState()).sessions.find((s) => s.id === UA)?.folder)
+      .toBe('C:\\work\\alpha');
+    await waitForEvent(logFile, 'claude-folders-migrated');
+    const mig = (await readEvents(logFile)).find((e) => e.event === 'claude-folders-migrated');
+    expect((mig as any)?.detail).toMatchObject({ converted: 1, dropped: 1 });
+    // Legacy fields are stripped from the persisted registry.
+    await expect
+      .poll(async () => {
+        const reg = JSON.parse(readFileSync(join(profile, 'claude-sessions.json'), 'utf8'));
+        return 'folders' in reg ? 'legacy' : 'stripped';
+      })
+      .toBe('stripped');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + host chip', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-wsl-'));
+  const claudeHome = join(profile, 'claude-home');
+  cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
+  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  // The fake distro's claude home: <root>\home\u\.claude
+  const wslHome = join(uncRoot, 'home', 'u');
+  mkdirSync(join(wslHome, '.claude', 'projects', '-home-u-ws'), { recursive: true });
+  const WSL_ID = '22222222-0000-4000-8000-0000000000d1';
+  writeFileSync(
+    join(wslHome, '.claude', 'projects', '-home-u-ws', `${WSL_ID}.jsonl`),
+    JSON.stringify({
+      parentUuid: null,
+      isSidechain: false,
+      userType: 'external',
+      cwd: '/home/u/ws',
+      sessionId: WSL_ID,
+      version: '2.1.296',
+      gitBranch: 'main',
+      type: 'user',
+      message: { role: 'user', content: 'wsl session' },
+      uuid: `${WSL_ID}-u1`,
+      timestamp: '2026-10-10T10:00:00.000Z',
+    }) + '\n',
+  );
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    CLAUDE_CONFIG_DIR: claudeHome,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await expect
+      .poll(
+        async () =>
+          (await h.claudeState()).sessions.some((s) => s.id === WSL_ID && s.host === 'wsl:Fake'),
+      )
+      .toBe(true);
+    // Add the UNC workspace (uncRoot stands in for \\wsl.localhost\Fake).
+    const shell = await shellPage(app);
+    const wsPath = `${uncRoot}\\home\\u\\ws`;
+    await shell.evaluate((_p) => (window as any).devinworkspaces.claudeWorkspaceAdd(_p), wsPath);
+    await h.setSurface('claude');
+    await expect
+      .poll(async () => (await h.claudeState()).folders)
+      .toContain(wsPath);
+    await expect
+      .poll(async () => (await h.claudeState()).sessions.find((s) => s.id === WSL_ID)?.folder)
+      .toBe(wsPath);
+    await expect.poll(async () => sectionExists(app, wsPath)).toBe(true);
+    await expect.poll(async () => hostChipOf(app, wsPath)).toBe('Fake');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(uncRoot, { recursive: true, force: true });
   }
 });

@@ -1,5 +1,5 @@
 import { BarChart3, Bell, Sparkles } from 'lucide-react';
-import { RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
+import { dockSurface, RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
 import { useShellState } from '../store';
 import { requestSurface } from '../surface';
 import type { Surface } from '../../shared/ipc';
@@ -90,8 +90,9 @@ export function Rail({
   paneCollapsed,
   terminalOpen,
 }: RailProps) {
-  const terminalOffSurface =
-    surface !== 'cloud' && surface !== 'local' && surface !== 'claude';
+  // Settings/Analytics: the dock is hidden and the toggle is inert (the
+  // persisted preference survives the visit — see core/layout dockSurface).
+  const terminalOffSurface = !dockSurface(surface);
   return (
     <aside
       id="rail"
@@ -142,11 +143,14 @@ export function Rail({
         aria-pressed={terminalOpen}
         title={
           terminalOffSurface
-            ? 'Terminal dock shows on Cloud — enable for all surfaces in Settings'
+            ? 'Terminal dock shows on Cloud, Local and Claude'
             : 'Toggle terminal (Ctrl+`)'
         }
-        className={`${buttonClass} text-sm${terminalOffSurface ? ' opacity-50' : ''}`}
-        onClick={() => window.devinworkspaces.terminalToggle()}
+        disabled={terminalOffSurface}
+        className={`${buttonClass} text-sm`}
+        onClick={() => {
+          if (!terminalOffSurface) window.devinworkspaces.terminalToggle();
+        }}
       >
         &gt;_
       </button>

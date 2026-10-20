@@ -439,9 +439,6 @@ const api = {
   claudeFork: (sessionId: string) => {
     if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeFork, { sessionId });
   },
-  claudeSessionMove: (sessionId: string, folder: string | null) => {
-    if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeSessionMove, { sessionId, folder });
-  },
   claudeSessionPin: (sessionId: string, pinned: boolean) => {
     if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeSessionPin, { sessionId, pinned });
   },
@@ -461,36 +458,34 @@ const api = {
   claudeRevealTranscript: (sessionId: string) => {
     if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeRevealTranscript, { sessionId });
   },
-  claudeFolderCreate: (name: string) => {
-    const trimmed = name.trim();
-    if (trimmed.length >= 1 && trimmed.length <= 100) {
-      ipcRenderer.send(IpcChannels.claudeFolderCreate, { name: trimmed });
-    }
-  },
-  claudeFolderRename: (oldName: string, newName: string) => {
-    const trimmed = newName.trim();
-    if (isString(oldName) && trimmed.length >= 1 && trimmed.length <= 100) {
-      ipcRenderer.send(IpcChannels.claudeFolderRename, { oldName, newName: trimmed });
-    }
-  },
-  claudeFolderDelete: (name: string) => {
-    if (isString(name)) ipcRenderer.send(IpcChannels.claudeFolderDelete, { name });
-  },
-  claudeFolderReorder: (names: string[]) => {
-    if (Array.isArray(names)) ipcRenderer.send(IpcChannels.claudeFolderReorder, { names });
-  },
+  claudeWorkspaceAdd: (path?: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeWorkspaceAdd, path ? { path } : {}) as Promise<
+      LocalResult<null>
+    >,
+  claudeWorkspaceReorder: (paths: string[]) =>
+    ipcRenderer.invoke(IpcChannels.claudeWorkspaceReorder, { paths }) as Promise<
+      LocalResult<null>
+    >,
+  claudeWorkspaceRename: (path: string, label: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeWorkspaceRename, { path, label }) as Promise<
+      LocalResult<null>
+    >,
+  claudeWorkspaceRemove: (path: string) =>
+    ipcRenderer.invoke(IpcChannels.claudeWorkspaceRemove, { path }) as Promise<
+      LocalResult<null>
+    >,
   claudeShowArchived: (value: boolean) =>
     ipcRenderer.send(IpcChannels.claudeShowArchived, { value }),
   claudeContextMenu: (request: {
-    kind: 'session' | 'folder' | 'header' | 'agent';
+    kind: 'session' | 'workspace' | 'header' | 'agent';
     sessionId?: string;
-    name?: string;
+    path?: string;
     agentId?: string;
     x: number;
     y: number;
   }) =>
     ipcRenderer.invoke(IpcChannels.claudeContextMenu, request) as Promise<{
-      action: 'rename' | 'rename-session' | 'new-folder' | 'open-terminal' | 'attach-agent' | null;
+      action: 'rename' | 'rename-session' | 'open-terminal' | 'attach-agent' | 'add' | null;
       sessionId?: string;
       agentId?: string;
     }>,

@@ -4,6 +4,8 @@
 // when a mutation touches it, so the file stays small.
 
 import { z } from 'zod';
+import { workspaceFor } from './workspaceTree';
+import type { HostId as ExecHostId } from './execHost';
 import type { HostId, ClaudeSessionState } from '../shared/ipc';
 import type { SessionPrCounts } from './cloudAcp';
 
@@ -38,7 +40,9 @@ export const MAX_PRS_PER_SESSION = 20;
 export interface ClaudeRegistryEntry {
   id: string;
   host: HostId;
-  folder: string | null;
+  /** ux2 P4b: legacy free-form folder name, in-memory only after load —
+   * consumed by the one-shot workspace migration and stripped on save. */
+  folder?: string | null;
   pinned: boolean;
   archived: boolean;
   /** Set by auto-archive; null when archived manually or not archived. */
@@ -55,15 +59,28 @@ export interface ClaudeRegistryEntry {
 
 export interface ClaudeRegistry {
   version: 1;
-  folders: string[];
+  /** Legacy free-form folder names, in-memory only after load (P4b
+   * migration consumes them once); never written back to disk. */
+  legacyFolders?: string[];
   entries: Record<string, ClaudeRegistryEntry>;
 }
 
 export const emptyRegistry = (): ClaudeRegistry => ({
   version: 1,
-  folders: [],
   entries: {},
 });
+
+/** Serialised form: legacy `folder`/`folders` fields are stripped (P4b —
+ * workspaces live in settings.claude.workspaces now). */
+export function serializeRegistry(reg: ClaudeRegistry): string {
+  const entries = Object.fromEntries(
+    Object.entries(reg.entries).map(([id, entry]) => {
+      const { folder: _folder, ...rest } = entry;
+      return [id, rest];
+    }),
+  );
+  return JSON.stringify({ version: reg.version, entries });
+}
 
 const PrStateSchema = z.enum(['open', 'draft', 'merged', 'closed']);
 
@@ -91,7 +108,8 @@ const RegistryEntrySchema = z
     id: z.string(),
     // Execution host; legacy files lack it and default to 'local'.
     host: z.string().default('local'),
-    folder: z.string().nullable(),
+    // Legacy free-form folder (P4b strips it on save); absent in new files.
+    folder: z.string().nullable().optional(),
     pinned: z.boolean(),
     archived: z.boolean(),
     archivedAt: z.number().nullable(),
@@ -102,21 +120,27 @@ const RegistryEntrySchema = z
     prUrls: z.array(z.string()).optional(),
     prs: z.array(RegistryPrSchema).optional(),
   })
-  .transform(({ prUrls, prs, ...rest }): ClaudeRegistryEntry => ({
+  .transform(({ prUrls, prs, folder, ...rest }): ClaudeRegistryEntry => ({
     ...rest,
+    ...(folder !== undefined ? { folder } : {}),
     prs: prs ?? (prUrls ?? []).map(legacyPr),
   }));
 
-export const ClaudeRegistrySchema: z.ZodType<ClaudeRegistry, unknown> = z.object({
-  version: z.literal(1),
-  folders: z.array(z.string()),
-  entries: z.record(z.string(), RegistryEntrySchema),
-});
+export const ClaudeRegistrySchema: z.ZodType<ClaudeRegistry, unknown> = z
+  .object({
+    version: z.literal(1),
+    // Legacy: folder names kept for the one-shot migration, then dropped.
+    folders: z.array(z.string()).optional(),
+    entries: z.record(z.string(), RegistryEntrySchema),
+  })
+  .transform(({ folders, ...rest }): ClaudeRegistry => ({
+    ...rest,
+    ...(folders ? { legacyFolders: folders } : {}),
+  }));
 
 const newEntry = (id: string, host: HostId = 'local'): ClaudeRegistryEntry => ({
   id,
   host,
-  folder: null,
   pinned: false,
   archived: false,
   archivedAt: null,
@@ -158,7 +182,15 @@ const DAY_MS = 86_400_000;
 export function reconcile(
   reg: ClaudeRegistry,
   store: ClaudeStoreSession[],
-  opts: { now: number; autoArchiveDays: number },
+  opts: {
+    now: number;
+    autoArchiveDays: number;
+    /** Path-bound workspaces (settings.claude.workspaces) — a session's folder
+     * is derived by exact (host,cwd) match, never stored (ux2 D8). */
+    workspaces: string[];
+    uncRoot?: string | undefined;
+    uncHostId?: ExecHostId | undefined;
+  },
 ): { registry: ClaudeRegistry; sessions: ClaudeSessionState[]; changed: boolean } {
   let changed = false;
   const entries: Record<string, ClaudeRegistryEntry> = { ...reg.entries };
@@ -194,7 +226,10 @@ export function reconcile(
       tag: stored.tag,
       createdAt: stored.createdAt,
       updatedAt: stored.lastModified,
-      folder: entry?.folder ?? null,
+      folder: workspaceFor(opts.workspaces, { host: stored.host as ExecHostId, cwd: stored.cwd }, {
+        uncRoot: opts.uncRoot,
+        uncHostId: opts.uncHostId,
+      }),
       parentId: null,
       isPinned: entry?.pinned ?? false,
       isArchived: entry?.archived ?? false,
@@ -206,12 +241,13 @@ export function reconcile(
     });
   }
 
-  // Entries with no store session survive only while pinned or foldered;
-  // otherwise they are dropped.
+  // Entries with no store session survive only while pinned; otherwise they
+  // are dropped. (ux2 P4b: a legacy `folder` no longer keeps them — with no
+  // transcript there is no cwd to file under anyway.)
   for (const [id, entry] of Object.entries(entries)) {
     if (storeById.has(id)) continue;
     if (entry.removed) continue;
-    if (entry.pinned || entry.folder !== null) {
+    if (entry.pinned) {
       sessions.push({
         id,
         host: entry.host,
@@ -221,7 +257,7 @@ export function reconcile(
         tag: null,
         createdAt: null,
         updatedAt: entry.lastOpenedAt ?? 0,
-        folder: entry.folder,
+        folder: null,
         parentId: null,
         isPinned: entry.pinned,
         isArchived: entry.archived,
@@ -237,15 +273,18 @@ export function reconcile(
     }
   }
 
-  // Auto-archive: idle sessions that are not pinned, not foldered, and not
-  // already archived. autoArchiveDays 0 disables it entirely.
+  // Auto-archive: idle sessions that are not pinned, not in any workspace
+  // (derived), and not already archived. autoArchiveDays 0 disables it.
   if (opts.autoArchiveDays > 0) {
     const cutoff = opts.now - opts.autoArchiveDays * DAY_MS;
     for (const stored of store) {
       const entry = entries[stored.id];
       if (entry?.removed) continue;
       const pinned = entry?.pinned ?? false;
-      const folder = entry?.folder ?? null;
+      const folder = workspaceFor(opts.workspaces, { host: stored.host as ExecHostId, cwd: stored.cwd }, {
+        uncRoot: opts.uncRoot,
+        uncHostId: opts.uncHostId,
+      });
       const archived = entry?.archived ?? false;
       const unarchivedAt = entry?.unarchivedAt ?? null;
       const eligible =
@@ -285,14 +324,6 @@ const withEntry = (
   ...reg,
   entries: { ...reg.entries, [id]: { ...(reg.entries[id] ?? newEntry(id)), ...patch } },
 });
-
-export function setFolder(
-  reg: ClaudeRegistry,
-  id: string,
-  folder: string | null,
-): ClaudeRegistry {
-  return withEntry(reg, id, { folder });
-}
 
 export function setPinned(
   reg: ClaudeRegistry,
@@ -385,41 +416,8 @@ export function setPrState(
   return { registry: withEntry(reg, id, { prs }), completed };
 }
 
-// Folder ops mirror sessionTree's rules: create appends unseen names, rename
-// moves member entries, delete unfolders members, reorder keeps unknown
+// (P4b deleted the free-form folder reducers — workspaces are settings.)
 // names appended.
-export function folderCreate(reg: ClaudeRegistry, name: string): ClaudeRegistry {
-  if (reg.folders.includes(name)) return reg;
-  return { ...reg, folders: [...reg.folders, name] };
-}
 
-export function folderRename(
-  reg: ClaudeRegistry,
-  oldName: string,
-  newName: string,
-): ClaudeRegistry {
-  if (!reg.folders.includes(oldName) || oldName === newName) return reg;
-  const entries = { ...reg.entries };
-  for (const [id, entry] of Object.entries(entries)) {
-    if (entry.folder === oldName) entries[id] = { ...entry, folder: newName };
-  }
-  return {
-    ...reg,
-    folders: reg.folders.map((n) => (n === oldName ? newName : n)),
-    entries,
-  };
-}
 
-export function folderDelete(reg: ClaudeRegistry, name: string): ClaudeRegistry {
-  if (!reg.folders.includes(name)) return reg;
-  const entries = { ...reg.entries };
-  for (const [id, entry] of Object.entries(entries)) {
-    if (entry.folder === name) entries[id] = { ...entry, folder: null };
-  }
-  return { ...reg, folders: reg.folders.filter((n) => n !== name), entries };
-}
 
-export function folderReorder(reg: ClaudeRegistry, names: string[]): ClaudeRegistry {
-  const rest = reg.folders.filter((n) => !names.includes(n));
-  return { ...reg, folders: [...names.filter((n) => reg.folders.includes(n)), ...rest] };
-}
