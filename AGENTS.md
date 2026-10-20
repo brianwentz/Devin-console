@@ -88,6 +88,7 @@ variable that selects it.
 | `DEVIN_WORKSPACES_TEST_CLOUD_KEEPALIVE_MS` | test mode | Overrides `settings.sessions.keepAliveHours` for the pooled Cloud views — mirrors `DEVIN_WORKSPACES_TEST_KEEPALIVE_MS` (tabs). |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_SDK` | test mode | An ESM module `loadSdk()` imports instead of the real SDK — `tests/fixtures/fakeClaudeSdk.ts` → `out/fixtures/fakeClaudeSdk.mjs` (`export *` real SDK + fake `query`; writes real-shaped jsonl into `CLAUDE_CONFIG_DIR/projects/<encoded cwd>/`; emits `message_start` per group). The fake reads `FAKE_CLAUDE_TOOL=1` (parks on `canUseTool`), `FAKE_CLAUDE_DELAY_MS` (stalls the deltas), `FAKE_CLAUDE_TWO_MESSAGES=1` (splits a turn into two API messages), `FAKE_CLAUDE_COST_USD` (`result.total_cost_usd`). |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` | test mode | Replaces the folder `showOpenDialog` in `newSession(cwd|null)`. |
+| `DEVIN_WORKSPACES_TEST_PICKER_CANCEL` | test mode | Every folder dialog routed through `src/main/dialogs.ts openFolderDialog` returns canceled immediately; the options are recorded for the `lastOpenDialogOptions()` test hook. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD` | test mode | Whole command, e.g. `node out/fixtures/fakeClaudeAgents.cjs` — replaces the `claude` binary for background agents; the fake prints `FAKE_CLAUDE_AGENTS` for `agents --json --all` and appends `stop <id>` to `FAKE_CLAUDE_AGENTS_LOG`. |
 | `DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS` | test mode | Background-agent poll interval. |
 | `DEVIN_WORKSPACES_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
@@ -431,7 +432,7 @@ variable that selects it.
 - `options`: `cwd`, `pathToClaudeCodeExecutable`, `permissionMode`, `model?`, `includePartialMessages:true`, `settingSources:['user','project','local']`,
   `canUseTool`, `abortController`.
 - Channels `claude:chatState` (invoke), `claude:chatUpdate` (push), `claude:newSession|prompt|cancel|permission|setPermissionMode|setModel|loadHistory`
-  (invoke → `LocalResult` via `handleResult`). `sessions.ts` `newSession(cwd|null)` → folder `showOpenDialog` / `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` →
+  (invoke → `LocalResult` via `handleResult`). `sessions.ts` `newSession(cwd|null)` → `openFolderDialog` (`src/main/dialogs.ts` — records options for `lastOpenDialogOptions()`, honours `DEVIN_WORKSPACES_TEST_PICKER_CANCEL`) / `DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD` →
   `host.newSession` → `open`; `claude.lastSessionId` persists on open and restores on the first list; `versions` = `claude --version` (execFile, 3 s) vs
   the SDK `manifest.json` (`sdkTargetCliVersion()`), re-checked on `claude.path` change. Ctrl+N on the claude surface → `newSession(null)`.
 - Fake SDK for tests: `DEVIN_WORKSPACES_TEST_CLAUDE_SDK` + `FAKE_CLAUDE_*` (see Env vars).

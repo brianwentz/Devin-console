@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { app, dialog } from 'electron';
+import { openFolderDialog } from '../dialogs';
 import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
   IpcChannels,
@@ -16,6 +17,7 @@ import {
   LocalSessionNewArg,
   LocalWorkspaceArg,
   WorkspaceRenameSchema,
+  SessionReorderArg,
   WorkspaceReorderSchema,
   type LocalContextMenuRequest,
   type LocalResult,
@@ -111,7 +113,7 @@ export function setupLocal(): void {
           : {}),
       };
       const result = state.windowRef
-        ? await dialog.showOpenDialog(state.windowRef, options)
+        ? await openFolderDialog(state.windowRef, options)
         : await dialog.showOpenDialog(options);
       const picked = result.canceled ? null : (result.filePaths[0] ?? null);
       if (!picked) return { ok: true as const, value: null };
@@ -136,6 +138,8 @@ export function setupLocal(): void {
     log('local', 'local-workspace-reorder', { detail: { count: next.length } });
     return null;
   });
+  // ux3 S0: contract only — S1 wires the real reorder.
+  handleResult(IpcChannels.localSessionReorder, SessionReorderArg, () => null);
   handleResult(IpcChannels.localWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) => {
     const normalized = resolve(path);
     const labels = state.settings?.current.local.workspaceLabels ?? {};

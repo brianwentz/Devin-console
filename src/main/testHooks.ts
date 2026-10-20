@@ -23,6 +23,7 @@ import {
 import { handleLink } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
+import { lastOpenDialogOptions } from './dialogs';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -48,6 +49,7 @@ export function registerTestHooks(): void {
   Object.assign(globalThis, {
     __devinworkspaces: {
       state: () => publicState(),
+      lastOpenDialogOptions: () => lastOpenDialogOptions(),
       open: (url: string) => {
         const id = state.tabManager?.open(url);
         if (!id) return '';

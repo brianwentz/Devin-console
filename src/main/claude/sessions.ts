@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
+import { openFolderDialog } from '../dialogs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import type {
@@ -691,7 +692,7 @@ export class ClaudeSessions {
           defaultHost && isWslHost(defaultHost)
             ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
             : undefined;
-        const result = await dialog.showOpenDialog(win, {
+        const result = await openFolderDialog(win, {
           title: 'Choose the working directory for the new Claude session',
           properties: ['openDirectory', 'createDirectory'],
           ...(defaultPath ? { defaultPath } : {}),
@@ -775,7 +776,7 @@ export class ClaudeSessions {
       defaultHost && isWslHost(defaultHost)
         ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
         : undefined;
-    const result = await dialog.showOpenDialog(win, {
+    const result = await openFolderDialog(win, {
       title,
       properties: ['openDirectory', 'createDirectory'],
       ...(defaultPath ? { defaultPath } : {}),

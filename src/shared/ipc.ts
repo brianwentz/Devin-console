@@ -106,6 +106,7 @@ export const IpcChannels = {
   localOpenLink: 'local:openLink',
   localActiveSession: 'local:activeSession',
   localWorkspaceReorder: 'local:workspaceReorder',
+  localSessionReorder: 'local:sessionReorder',
   localWorkspaceRename: 'local:workspaceRename',
   localContextMenu: 'local:contextMenu',
   claudeWorkspaceAdd: 'claude:workspaceAdd',
@@ -117,6 +118,7 @@ export const IpcChannels = {
   claudeUsageVisible: 'claude:usageVisible',
   claudeUsage: 'claude:usage',
   claudeWorkspaceReorder: 'claude:workspaceReorder',
+  claudeSessionReorder: 'claude:sessionReorder',
   claudeWorkspaceRename: 'claude:workspaceRename',
   claudeWorkspaceRemove: 'claude:workspaceRemove',
   // P4b: embedded terminal per workspace
@@ -148,6 +150,8 @@ export const IpcChannels = {
   cloudFolderDelete: 'cloud:folderDelete',
   cloudFolderReorder: 'cloud:folderReorder',
   cloudSessionMove: 'cloud:sessionMove',
+  cloudSessionReorder: 'cloud:sessionReorder',
+  dialogPickFolder: 'dialog:pickFolder',
   cloudSessionArchive: 'cloud:sessionArchive',
   cloudCopyLink: 'cloud:copyLink',
   cloudContextMenu: 'cloud:contextMenu',
@@ -259,11 +263,19 @@ const NotificationsFields = {
 };
 // F1: open a background tab (in the session's scope) when the poller sees a new PR.
 const PrsFields = { autoOpenTabs: z.boolean() };
+// ux3 S0: manual session order per section (path/folder key -> session ids).
+const SessionOrderSchema = z.record(
+  z.string().max(1024),
+  z.array(z.string().max(128)).max(500),
+);
 const LocalFields = {
   devinPath: z.string().nullable(),
   defaultWslDistro: z.string().max(128).nullable(),
   workspaceLabels: z.record(z.string(), z.string().max(128)),
   collapsedWorkspaces: z.array(z.string().max(1024)).max(200),
+  sessionOrder: SessionOrderSchema,
+  // ux3 S3: where the Add-workspace folder picker opens (null = distro default).
+  pickerFolder: z.string().max(1024).nullable(),
 };
 // P8: session-scoped tabs. keepAliveHours=0 discards hidden-scope tabs on switch;
 // maxLiveTabs caps live webContents across all scopes (the visible active tab excluded).
@@ -286,6 +298,7 @@ const SessionsFields = {
   // Pooled Cloud views: how many session views stay loaded, and for how long.
   maxLiveViews: z.number().int().min(1).max(20),
   keepAliveHours: z.number().min(0).max(168),
+  sessionOrder: SessionOrderSchema,
 };
 // Claude session sidebar: local Claude Code registry settings.
 const ClaudeFields = {
@@ -305,6 +318,9 @@ const ClaudeFields = {
   workspaces: z.array(z.string().max(1024)).max(200),
   workspaceLabels: z.record(z.string(), z.string().max(128)),
   defaultWslDistro: z.string().max(128).nullable(),
+  sessionOrder: SessionOrderSchema,
+  // ux3 S3: where Claude's folder pickers open (null = distro default).
+  pickerFolder: z.string().max(1024).nullable(),
 };
 const TerminalFields = {
   // Optional command line override for dock shells ('' = Windows Terminal
@@ -427,8 +443,17 @@ export const SettingsObject = z.object({
       defaultWslDistro: LocalFields.defaultWslDistro.default(null),
       workspaceLabels: LocalFields.workspaceLabels.default({}),
       collapsedWorkspaces: LocalFields.collapsedWorkspaces.default([]),
+      sessionOrder: LocalFields.sessionOrder.default({}),
+      pickerFolder: LocalFields.pickerFolder.default(null),
     })
-    .default({ devinPath: null, defaultWslDistro: null, workspaceLabels: {}, collapsedWorkspaces: [] }),
+    .default({
+      devinPath: null,
+      defaultWslDistro: null,
+      workspaceLabels: {},
+      collapsedWorkspaces: [],
+      sessionOrder: {},
+      pickerFolder: null,
+    }),
   surface: SettingsFields.surface.default('cloud'),
   // Tab strip snapshot (v2 shape from core/tabModel.serializeTabs).
   tabSnapshot: SettingsFields.tabSnapshot.optional(),
@@ -470,6 +495,7 @@ export const SettingsObject = z.object({
       collapsedFolders: SessionsFields.collapsedFolders.default([]),
       maxLiveViews: SessionsFields.maxLiveViews.default(6),
       keepAliveHours: SessionsFields.keepAliveHours.default(24),
+      sessionOrder: SessionsFields.sessionOrder.default({}),
     })
     .default({
       open: true,
@@ -477,6 +503,7 @@ export const SettingsObject = z.object({
       collapsedFolders: [],
       maxLiveViews: 6,
       keepAliveHours: 24,
+      sessionOrder: {},
     }),
   terminal: z
     .object({
@@ -501,6 +528,8 @@ export const SettingsObject = z.object({
       workspaces: ClaudeFields.workspaces.default([]),
       workspaceLabels: ClaudeFields.workspaceLabels.default({}),
       defaultWslDistro: ClaudeFields.defaultWslDistro.default(null),
+      sessionOrder: ClaudeFields.sessionOrder.default({}),
+      pickerFolder: ClaudeFields.pickerFolder.default(null),
     })
     .default({
       path: null,
@@ -516,6 +545,8 @@ export const SettingsObject = z.object({
       workspaces: [],
       workspaceLabels: {},
       defaultWslDistro: null,
+      sessionOrder: {},
+      pickerFolder: null,
     }),
   hosts: z
     .object({
@@ -963,6 +994,15 @@ export const CloudFolderRenameArg = z.object({
 export const CloudFolderDeleteArg = z.object({ name: CloudFolderName });
 export const CloudFolderReorderArg = z.object({
   names: z.array(CloudFolderName).max(200),
+});
+// ux3 S0: manual session order inside one sidebar section.
+export const SessionReorderArg = z.object({
+  section: z.string().max(1024),
+  ids: z.array(z.string().max(128)).max(500),
+});
+export const DialogPickFolderArg = z.object({
+  title: z.string().max(200),
+  defaultPath: z.string().max(1024).optional(),
 });
 export const CloudSessionMoveArg = z.object({
   sessionId: CloudSessionId,

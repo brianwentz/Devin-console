@@ -1,5 +1,6 @@
 import { clipboard, Menu } from 'electron';
 import { guardedHandle, guardedOn } from './ipcGuard';
+import { openFolderDialog } from './dialogs';
 import { clampFraction01 } from '../core/layout';
 import { closeAutofillOverlays } from './autofill';
 import {
@@ -44,7 +45,7 @@ import { prStore } from './prs';
 import { handleLink } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
 import { historyAction, navigationTarget } from './shortcuts';
-import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
+import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
 import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
@@ -283,6 +284,18 @@ export function setupIpc(): void {
   guardedOn(IpcChannels.cloudFolderReorder, (_event, payload: unknown) => {
     const parsed = CloudFolderReorderArg.safeParse(payload);
     if (parsed.success) void cloudSessions().folderReorder(parsed.data.names);
+  });
+  // ux3 S0: contract only — S1 wires the real reorder.
+  guardedOn(IpcChannels.cloudSessionReorder, () => undefined);
+  guardedHandle(IpcChannels.dialogPickFolder, async (_event, payload: unknown) => {
+    const parsed = DialogPickFolderArg.safeParse(payload);
+    if (!parsed.success || !state.windowRef) return null;
+    const result = await openFolderDialog(state.windowRef, {
+      title: parsed.data.title,
+      properties: ['openDirectory', 'createDirectory'],
+      ...(parsed.data.defaultPath ? { defaultPath: parsed.data.defaultPath } : {}),
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
   });
   guardedOn(IpcChannels.cloudSessionMove, (_event, payload: unknown) => {
     const parsed = CloudSessionMoveArg.safeParse(payload);

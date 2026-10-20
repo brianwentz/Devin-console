@@ -31,6 +31,7 @@ import {
   ClaudeSessionPinArg,
   LocalWorkspaceArg,
   WorkspaceRenameSchema,
+  SessionReorderArg,
   WorkspaceReorderSchema,
   ClaudeSessionRemoveArg,
   ClaudeSetModelArg,
@@ -89,6 +90,8 @@ export function setupClaude(): ClaudeSessions {
   handleResult(IpcChannels.claudeWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) =>
     sessions.workspaceReorder(paths),
   );
+  // ux3 S0: contract only — S1 wires the real reorder.
+  handleResult(IpcChannels.claudeSessionReorder, SessionReorderArg, () => null);
   handleResult(IpcChannels.claudeWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) =>
     sessions.workspaceRename(path, label),
   );
