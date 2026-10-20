@@ -1,10 +1,20 @@
-import type { CSSProperties } from 'react';
+import { useEffect, type CSSProperties } from 'react';
+import { emptyClaudeUsageState, monthKey } from '../../../core/claudeUsage';
+import { useClaudeUsage } from '../../claude/usageStore';
 import { ClaudeAnalyticsPanel } from './ClaudeAnalyticsPanel';
-import { useUsageSource } from './useUsageSource';
 
-// Data-bound Claude tab. A4 swaps `useUsageSource` for the real pushed store
-// (`useClaudeUsage` from shell/claude/usageStore) — one line.
+// Data-bound Claude tab: the pushed usage store (A2's service) + the
+// visibility signal that drives its fetch/scan cadence.
 export function ClaudeAnalyticsTab({ style }: { style: CSSProperties }) {
-  const state = useUsageSource();
-  return <ClaudeAnalyticsPanel state={state} style={style} />;
+  const state = useClaudeUsage();
+  useEffect(() => {
+    window.devinworkspaces.claudeUsageVisible(true);
+    return () => window.devinworkspaces.claudeUsageVisible(false);
+  }, []);
+  return (
+    <ClaudeAnalyticsPanel
+      state={state ?? emptyClaudeUsageState(monthKey(new Date()))}
+      style={style}
+    />
+  );
 }

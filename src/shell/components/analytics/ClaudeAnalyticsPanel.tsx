@@ -22,13 +22,18 @@ const hostChip = (host: string) => (
   </span>
 );
 
-// Tick once a minute so "resets in …" / "Updated … ago" stay current.
+// Tick once a minute so "resets in …" / "Updated … ago" stay current. In
+// test mode DEVIN_WORKSPACES_TEST_NOW pins the clock so e2e/screenshots are
+// deterministic (mirrors the main-process service's now()).
 function useMinuteNow(): number {
-  const [now, setNow] = useState(() => Date.now());
+  const testNow = (window.devinworkspaces as unknown as { testNow?: string | null }).testNow;
+  const pinned = testNow ? Date.parse(testNow) : NaN;
+  const [now, setNow] = useState(() => (Number.isFinite(pinned) ? pinned : Date.now()));
   useEffect(() => {
+    if (Number.isFinite(pinned)) return;
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [pinned]);
   return now;
 }
 
@@ -104,7 +109,10 @@ function AccountBlock({ account, now, showHosts }: { account: ClaudeUsageAccount
 function statusLine(state: ClaudeUsageState, now: number): { text: string; tone: 'muted' | 'warn' } {
   if (state.status === 'idle' || state.status === 'loading') return { text: 'Loading…', tone: 'muted' };
   const stale = state.accounts.find((a) => a.stale);
-  if (stale) return { text: `Stale — ${stale.error ?? 'could not refresh'}`, tone: 'warn' };
+  if (stale) {
+    const when = ago(now, stale.fetchedAt);
+    return { text: `Stale${when ? ` (updated ${when})` : ''} — ${stale.error ?? 'could not refresh'}`, tone: 'warn' };
+  }
   if (state.status === 'error') {
     const err = state.accounts.find((a) => a.error)?.error;
     return { text: `Stale — ${err ?? 'could not refresh'}`, tone: 'warn' };

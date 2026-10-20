@@ -12,9 +12,10 @@ const TABS: { id: AnalyticsTabId; label: string }[] = [
 
 export const ANALYTICS_TAB_IDS = TABS.map((tab) => tab.id);
 
-// Optional preload surface added by the main-process usage service (A2); typed
-// loosely so this component compiles before/without it.
-type UsageRefreshApi = { claudeUsageRefresh?: () => Promise<void> };
+type RefreshApi = {
+  analyticsRefresh: () => Promise<LocalResult<null> | null>;
+  claudeUsageRefresh: () => Promise<LocalResult<null> | null>;
+};
 
 interface AnalyticsTabsProps {
   rect: Rect;
@@ -28,6 +29,8 @@ interface AnalyticsTabsProps {
 // right re-fetches the Claude usage data; the Devin page has no shell-side
 // refresh IPC (the Rail entry reloads it on surface entry), so the button is
 // disabled on that tab.
+import type { LocalResult } from '../../shared/ipc';
+
 export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -40,8 +43,9 @@ export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
   };
 
   const onRefresh = () => {
-    if (active !== 'claude') return;
-    void (window.devinworkspaces as unknown as UsageRefreshApi).claudeUsageRefresh?.();
+    const api = window.devinworkspaces as unknown as RefreshApi;
+    if (active === 'claude') void api.claudeUsageRefresh();
+    else void api.analyticsRefresh();
   };
 
   return (
@@ -71,8 +75,8 @@ export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
         id="analyticsRefresh"
         type="button"
         aria-label="Refresh"
-        title={active === 'claude' ? 'Refresh Claude usage' : 'Refresh (Claude tab only)'}
-        disabled={active !== 'claude'}
+        title={active === 'claude' ? 'Refresh Claude usage' : 'Reload analytics'}
+        disabled={false}
         className="mb-1 flex h-6 w-6 items-center justify-center rounded text-[#7f8ca0] hover:bg-[#1c2735] hover:text-[#e8edf5] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#7f8ca0]"
         onClick={onRefresh}
       >

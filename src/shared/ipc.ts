@@ -111,6 +111,7 @@ export const IpcChannels = {
   claudeWorkspaceAdd: 'claude:workspaceAdd',
   // Analytics Claude tab: usage state (invoke), refresh (invoke), visibility
   // (send) and the pushed state channel.
+  analyticsRefresh: 'analytics:refresh',
   claudeUsageState: 'claude:usageState',
   claudeUsageRefresh: 'claude:usageRefresh',
   claudeUsageVisible: 'claude:usageVisible',

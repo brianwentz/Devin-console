@@ -1,6 +1,6 @@
 # Analytics: Claude tab — plan limits as gauges, tokens per month
 
-Status: Approved — Q1 tokens only, Q2 calendar month (local), Q3 daily bars in, Q4 refresh on Stop hook; implementing
+Status: Implemented — PR pending
 
 ## 0. The ask
 

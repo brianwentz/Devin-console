@@ -225,9 +225,12 @@ export class ClaudeUsageService {
 
   // --- fetch (limits) ----------------------------------------------------------
 
-  private staleBody(accountKey: string, members: HostCreds[]): unknown | null {
+  private staleBody(
+    accountKey: string,
+    members: HostCreds[],
+  ): { body: unknown; at: number | null } | null {
     const cached = this.cache.accounts[accountKey];
-    if (cached) return cached.lastBody;
+    if (cached) return { body: cached.lastBody, at: cached.at };
     // Fall back to the newest .usage-cache the CLI left on the account's hosts.
     let best: { at: number; body: unknown } | null = null;
     for (const member of members) {
@@ -242,7 +245,7 @@ export class ClaudeUsageService {
         /* unreadable cache — skip */
       }
     }
-    return best?.body ?? null;
+    return best;
   }
 
   private fetchAll(): Promise<void> {
@@ -267,10 +270,13 @@ export class ClaudeUsageService {
         let status = 0;
         let stale = false;
         let error: string | null = null;
+        let bodyAt: number | null = null;
         if (expired) {
           stale = true;
           error = 'Sign-in expired — run claude to refresh';
-          body = this.staleBody(group.key, group.hosts);
+          const last = this.staleBody(group.key, group.hosts);
+          body = last?.body ?? null;
+          bodyAt = last?.at ?? null;
         } else {
           try {
             const response = await fetch(url, {
@@ -290,14 +296,29 @@ export class ClaudeUsageService {
             } else if (status === 401 || status === 403) {
               stale = true;
               error = 'Sign-in expired — run claude to refresh';
-              body = this.staleBody(group.key, group.hosts);
+              const last = this.staleBody(group.key, group.hosts);
+              body = last?.body ?? null;
+              bodyAt = last?.at ?? null;
             } else {
+              // Non-auth failure — keep last good instead of dropping gauges.
               ok = false;
               error = `Fetch failed (HTTP ${status})`;
+              const last = this.staleBody(group.key, group.hosts);
+              if (last) {
+                stale = true;
+                body = last.body;
+                bodyAt = last.at;
+              }
             }
           } catch {
             ok = false;
             error = 'Fetch failed (network)';
+            const last = this.staleBody(group.key, group.hosts);
+            if (last) {
+              stale = true;
+              body = last.body;
+              bodyAt = last.at;
+            }
           }
         }
         if (!ok && !stale) {
@@ -313,7 +334,11 @@ export class ClaudeUsageService {
           hosts: group.hosts.map((member) => member.host.id),
           limits: parsed.limits,
           credits: parsed.credits,
-          fetchedAt: stale ? null : new Date(this.now()).toISOString(),
+          // Fresh → now; stale → the cached body's timestamp so the UI can
+          // show "updated 3h ago".
+          fetchedAt: stale
+            ? (bodyAt !== null ? new Date(bodyAt).toISOString() : null)
+            : new Date(this.now()).toISOString(),
           stale,
           error,
         });

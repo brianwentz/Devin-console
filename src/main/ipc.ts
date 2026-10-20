@@ -114,6 +114,10 @@ export function applySettingsPatch(patch: SettingsPatch): Settings {
 
 export function setupIpc(): void {
   guardedHandle(IpcChannels.stateGet, () => publicState());
+  guardedHandle(IpcChannels.analyticsRefresh, () => {
+    refreshAnalyticsView();
+    return null;
+  });
   guardedHandle(IpcChannels.settingsGet, () => state.settings?.current ?? SettingsSchema.parse({}));
   guardedHandle(IpcChannels.settingsSet, (_event, patch: unknown) => {
     const parsed = SettingsPatchSchema.safeParse(patch);

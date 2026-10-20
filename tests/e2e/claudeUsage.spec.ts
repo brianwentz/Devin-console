@@ -49,7 +49,8 @@ function hooks(app: ElectronApplication) {
 // agent-fixture01.jsonl subagent (in 2, out 2, 2 msgs).
 const OCT_TOTAL = { input: 1602, output: 452, cacheRead: 6500, cacheWrite: 350, messages: 5 };
 
-test.beforeEach(async (_fixtures, testInfo) => {
+// eslint-disable-next-line no-empty-pattern
+test.beforeEach(async ({}, testInfo) => {
   testInfo.setTimeout(120_000);
 });
 
@@ -129,7 +130,8 @@ test('usage: 401 → stale true from the seeded .usage-cache', async () => {
     expect(account.stale).toBe(true);
     expect(account.error).toContain('expired');
     expect(account.limits.map((l) => l.kind)).toEqual(['session', 'weekly_all', 'weekly_scoped']);
-    expect(account.fetchedAt).toBeNull();
+    // Stale keeps the cached body's timestamp (the .usage-cache mtime).
+    expect(account.fetchedAt).not.toBeNull();
   } finally {
     if (prevStatus === undefined) delete process.env.FAKE_USAGE_STATUS;
     else process.env.FAKE_USAGE_STATUS = prevStatus;
