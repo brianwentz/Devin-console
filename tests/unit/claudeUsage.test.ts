@@ -13,9 +13,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   aggregateUsageLines,
+  fileScanPlan,
   emptyClaudeUsageState,
   emptyTotals,
   gaugeArc,
+  groupAccounts,
   mergeBuckets,
   monthKey,
   parseUsageResponse,
@@ -221,5 +223,33 @@ describe('gauge + labels', () => {
       month: '2026-10',
       tokens: { total: emptyTotals(), byModel: {}, byHost: {}, byDay: [] },
     });
+  });
+});
+
+describe('fileScanPlan (incremental scan decisions)', () => {
+  const prev = { size: 100, mtime: 1, offset: 100 };
+  it('new file → full; unchanged size+mtime → reuse; grown → append; shrunk/rewritten → full', () => {
+    expect(fileScanPlan(undefined, 100, 1)).toBe('full');
+    expect(fileScanPlan(prev, 100, 1)).toBe('reuse');
+    expect(fileScanPlan(prev, 150, 2)).toBe('append');
+    expect(fileScanPlan(prev, 50, 2)).toBe('full');
+    expect(fileScanPlan(prev, 100, 2)).toBe('full'); // same size, new mtime → rewritten
+  });
+});
+
+describe('groupAccounts', () => {
+  it('groups hosts by email; no email → per-host group', () => {
+    const groups = groupAccounts([
+      { hostId: 'local', email: 'dev@example.com', organization: 'Org', plan: 'team' },
+      { hostId: 'wsl:D', email: 'dev@example.com', organization: 'Org', plan: 'team' },
+      { hostId: 'wsl:E', email: null, organization: null, plan: null },
+    ]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({
+      key: 'dev@example.com',
+      email: 'dev@example.com',
+      hostIds: ['local', 'wsl:D'],
+    });
+    expect(groups[1]).toMatchObject({ key: 'host:wsl:E', hostIds: ['wsl:E'] });
   });
 });

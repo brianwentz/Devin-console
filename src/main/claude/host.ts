@@ -38,6 +38,7 @@ import {
 import { fixtureOrigins, state, testMode } from '../state';
 import { log } from '../log';
 import { getChatState, update, type ClaudeChatState } from './chatState';
+import { claudeUsage } from './usage';
 import { loadSdk } from './sdk';
 import { resolveClaudePath } from './claudePath';
 import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
@@ -168,6 +169,8 @@ export class ClaudeHost {
   // Chat-derived notification events: finished on end_turn, blocked
   // on any other terminal stop reason except cancelled (never emitted).
   private emitFinish(id: string, stopReason: string, error?: string): void {
+    // A turn finished — utilization moved; nudge the usage service (Q4).
+    if (stopReason === 'end_turn') claudeUsage().poke('turn');
     if (stopReason === 'end_turn') this.onEvent(id, 'finished');
     else if (stopReason !== 'cancelled') this.onEvent(id, 'blocked', { error: error ?? '' });
   }

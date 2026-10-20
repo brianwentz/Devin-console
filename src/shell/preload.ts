@@ -8,6 +8,7 @@ import {
   SurfaceSchema,
   type BadgeRender,
   type ClaudeChatStatePublic,
+  type ClaudeUsageState,
   type HostId,
   type ClaudePermissionMode,
   type ClaudeSubagent,
@@ -489,6 +490,21 @@ const api = {
       sessionId?: string;
       agentId?: string;
     }>,
+  // Analytics Claude tab: pushed usage state + controls.
+  claudeUsageState: () =>
+    ipcRenderer.invoke(IpcChannels.claudeUsageState) as Promise<ClaudeUsageState>,
+  onClaudeUsage: (callback: (state: ClaudeUsageState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      callback(value as ClaudeUsageState);
+    };
+    ipcRenderer.on(IpcChannels.claudeUsage, listener);
+    return () => ipcRenderer.removeListener(IpcChannels.claudeUsage, listener);
+  },
+  claudeUsageRefresh: () =>
+    ipcRenderer.invoke(IpcChannels.claudeUsageRefresh) as Promise<LocalResult<null> | null>,
+  claudeUsageVisible: (visible: boolean) =>
+    ipcRenderer.send(IpcChannels.claudeUsageVisible, { visible }),
   claudeAgentStop: (agentId: string) =>
     ipcRenderer.invoke(IpcChannels.claudeAgentStop, { agentId }) as Promise<LocalResult<null>>,
   claudeAgentsRefresh: () => ipcRenderer.send(IpcChannels.claudeAgentsRefresh),

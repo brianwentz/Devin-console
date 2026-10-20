@@ -30,6 +30,7 @@ import { localContextMenuClick, localContextMenuItems, localHost } from './local
 import { loadSdk } from './claude/sdk';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
+import { claudeUsage } from './claude/usage';
 import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
@@ -273,6 +274,8 @@ export function registerTestHooks(): void {
       clipboardRead: () => clipboard.readText(),
       // Claude sidebar.
       claudeState: () => claudeSessions().snapshot(),
+      claudeUsageState: () => claudeUsage().state,
+      claudeUsageRefresh: () => claudeUsage().refresh(),
       claudeRefresh: () => claudeSessions().refresh('test'),
       claudeSelect: (id: string | null) => {
         if (id === null) {

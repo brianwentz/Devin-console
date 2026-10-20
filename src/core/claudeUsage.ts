@@ -3,6 +3,7 @@
 // panel needs. No I/O — the main-process service feeds lines/JSON in.
 
 import type {
+  HostId,
   ClaudeTokenTotals,
   ClaudeUsageAccount,
   ClaudeUsageLimit,
@@ -269,6 +270,44 @@ export function resetsIn(nowMs: number, resetsAt: string | null): string | null 
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
+}
+
+/** Incremental-scan decision: cached file metadata → read plan. */
+export function fileScanPlan(
+  prev: { size: number; mtime: number; offset: number } | undefined,
+  size: number,
+  mtime: number,
+): 'reuse' | 'append' | 'full' {
+  if (!prev) return 'full';
+  if (prev.size === size && prev.mtime === mtime) return 'reuse';
+  if (size > prev.size) return 'append';
+  return 'full'; // shrunk or rewritten
+}
+
+/** Group per-host credentials into usage accounts: same email → one account. */
+export function groupAccounts(
+  creds: { hostId: HostId; email: string | null; organization: string | null; plan: string | null }[],
+): { key: string; email: string | null; organization: string | null; plan: string | null; hostIds: HostId[] }[] {
+  const groups = new Map<
+    string,
+    { key: string; email: string | null; organization: string | null; plan: string | null; hostIds: HostId[] }
+  >();
+  for (const cred of creds) {
+    const key = cred.email ?? `host:${cred.hostId}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        email: cred.email,
+        organization: cred.organization,
+        plan: cred.plan,
+        hostIds: [],
+      };
+      groups.set(key, group);
+    }
+    group.hostIds.push(cred.hostId);
+  }
+  return [...groups.values()];
 }
 
 /** Idle pushed-state seed for the service to emit before the first scan. */
