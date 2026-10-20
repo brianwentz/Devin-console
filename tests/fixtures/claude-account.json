@@ -1,0 +1,9 @@
+{
+  "oauthAccount": {
+    "emailAddress": "dev@example.com",
+    "organizationName": "Fixture Org",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "seatTier": "standard"
+  }
+}

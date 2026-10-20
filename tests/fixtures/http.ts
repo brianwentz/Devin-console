@@ -18,6 +18,8 @@ export interface FixtureServers {
   githubOrigins: string;
   // P5: in-memory v3 API fixture. http://127.0.0.1:<p>
   apiUrl: string;
+  // Analytics Claude tab: <apiUrl>/api/oauth/usage fixture route.
+  claudeUsageUrl: string;
   api: FixtureApi;
   github: { setPrTitle(n: number, title: string): void };
   close: () => Promise<void>;
@@ -80,6 +82,16 @@ function createFixtureApi(): { api: FixtureApi; handle: (request: IncomingMessag
     const url = new URL(request.url ?? '/', 'http://fixture');
     const authorization = request.headers.authorization ?? null;
     requests.push({ ts: Date.now(), method: request.method ?? 'GET', path: url.pathname + url.search, authorization });
+    // Analytics Claude tab: stands in for api.anthropic.com (A2 sets
+    // DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL to this URL).
+    if (url.pathname === '/api/oauth/usage') {
+      const status = Number(process.env.FAKE_USAGE_STATUS ?? '200') || 200;
+      const body =
+        process.env.FAKE_USAGE_JSON ??
+        readFileSync(join(__dirname, 'claude-usage.json'), 'utf8');
+      json(response, status, JSON.parse(body));
+      return;
+    }
     // GitHub Releases API stand-in (DEVIN_WORKSPACES_TEST_RELEASES_URL) — no
     // auth, the app fetches release notes without credentials.
     const release = /^\/repos\/[^/]+\/[^/]+\/releases\/tags\/(v[^/]+)$/.exec(url.pathname);
@@ -523,6 +535,7 @@ export async function startFixtureServers(): Promise<FixtureServers> {
     idpUrl,
     githubOrigins: `${new URL(githubUrl).origin},${new URL(githubAltUrl).origin}`,
     apiUrl,
+    claudeUsageUrl: `${apiUrl}/api/oauth/usage`,
     api: fixtureApi.api,
     github: {
       setPrTitle: (n: number, title: string) => {

@@ -8,6 +8,7 @@ import {
   SurfaceSchema,
   type BadgeRender,
   type ClaudeChatStatePublic,
+  type ClaudeUsageState,
   type HostId,
   type ClaudePermissionMode,
   type ClaudeSubagent,
@@ -82,6 +83,8 @@ const localApi = {
   // Test seam only: mirrors main's DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT so the
   // sidebar's host chip resolves fake-UNC workspace paths.
   testWslUncRoot: process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT ?? null,
+  // Deterministic clock for the Claude-analytics gauges in tests (A4).
+  testNow: process.env.DEVIN_WORKSPACES_TEST_NOW ?? null,
   localWorkspaceReorder: (paths: string[]) =>
     ipcRenderer.invoke(IpcChannels.localWorkspaceReorder, { paths }) as Promise<LocalResult<null>>,
   localWorkspaceRename: (path: string, label: string) =>
@@ -489,6 +492,23 @@ const api = {
       sessionId?: string;
       agentId?: string;
     }>,
+  analyticsRefresh: () =>
+    ipcRenderer.invoke(IpcChannels.analyticsRefresh) as Promise<LocalResult<null> | null>,
+  // Analytics Claude tab: pushed usage state + controls.
+  claudeUsageState: () =>
+    ipcRenderer.invoke(IpcChannels.claudeUsageState) as Promise<ClaudeUsageState>,
+  onClaudeUsage: (callback: (state: ClaudeUsageState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      callback(value as ClaudeUsageState);
+    };
+    ipcRenderer.on(IpcChannels.claudeUsage, listener);
+    return () => ipcRenderer.removeListener(IpcChannels.claudeUsage, listener);
+  },
+  claudeUsageRefresh: () =>
+    ipcRenderer.invoke(IpcChannels.claudeUsageRefresh) as Promise<LocalResult<null> | null>,
+  claudeUsageVisible: (visible: boolean) =>
+    ipcRenderer.send(IpcChannels.claudeUsageVisible, { visible }),
   claudeAgentStop: (agentId: string) =>
     ipcRenderer.invoke(IpcChannels.claudeAgentStop, { agentId }) as Promise<LocalResult<null>>,
   claudeAgentsRefresh: () => ipcRenderer.send(IpcChannels.claudeAgentsRefresh),

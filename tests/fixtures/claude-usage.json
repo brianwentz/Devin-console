@@ -1,0 +1,45 @@
+{
+  "five_hour": { "utilization": 0, "resets_at": "2026-10-20T18:00:00.000Z" },
+  "seven_day": { "utilization": 10, "resets_at": "2026-10-26T03:00:00.000Z" },
+  "limits": [
+    {
+      "kind": "session",
+      "group": "rate",
+      "percent": 0,
+      "severity": "normal",
+      "resets_at": "2026-10-20T18:00:00.000Z",
+      "scope": {},
+      "is_active": true
+    },
+    {
+      "kind": "weekly_all",
+      "group": "rate",
+      "percent": 10,
+      "severity": "normal",
+      "resets_at": "2026-10-26T03:00:00.000Z",
+      "scope": {},
+      "is_active": true
+    },
+    {
+      "kind": "weekly_scoped",
+      "group": "rate",
+      "percent": 0,
+      "severity": "normal",
+      "resets_at": "2026-10-26T03:00:00.000Z",
+      "scope": { "model": { "id": "fable-5-1", "display_name": "Fable" } },
+      "is_active": true
+    }
+  ],
+  "extra_usage": null,
+  "spend": {
+    "used": { "amount_minor": 0, "currency": "USD", "exponent": 2 },
+    "limit": null,
+    "percent": 0,
+    "severity": "normal",
+    "enabled": false
+  },
+  "weekly_scoped_shares": [
+    { "limit_index": 2, "used_percent_of_weekly": 0, "allowance_percent_of_weekly": 20 }
+  ],
+  "member_dashboard_available": false
+}

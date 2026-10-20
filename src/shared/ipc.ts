@@ -109,6 +109,13 @@ export const IpcChannels = {
   localWorkspaceRename: 'local:workspaceRename',
   localContextMenu: 'local:contextMenu',
   claudeWorkspaceAdd: 'claude:workspaceAdd',
+  // Analytics Claude tab: usage state (invoke), refresh (invoke), visibility
+  // (send) and the pushed state channel.
+  analyticsRefresh: 'analytics:refresh',
+  claudeUsageState: 'claude:usageState',
+  claudeUsageRefresh: 'claude:usageRefresh',
+  claudeUsageVisible: 'claude:usageVisible',
+  claudeUsage: 'claude:usage',
   claudeWorkspaceReorder: 'claude:workspaceReorder',
   claudeWorkspaceRename: 'claude:workspaceRename',
   claudeWorkspaceRemove: 'claude:workspaceRemove',
@@ -304,6 +311,73 @@ const TerminalFields = {
   // default profile, else PowerShell).
   shell: z.string().max(1024),
 };
+// Analytics surface: which tab the column shows (Claude usage panel vs the
+// hosted tenant analytics view).
+const AnalyticsFields = {
+  tab: z.enum(['devin', 'claude']),
+};
+
+// Analytics Claude tab — pushed state (see plans/analytics-claude.md §3).
+export const ClaudeUsageLimitSchema = z.object({
+  kind: z.enum(['session', 'weekly_all', 'weekly_scoped', 'other']),
+  label: z.string(),
+  percent: z.number().min(0).max(100),
+  severity: z.enum(['normal', 'warning', 'critical']),
+  resetsAt: z.string().nullable(), // ISO
+  active: z.boolean(),
+});
+export type ClaudeUsageLimit = z.infer<typeof ClaudeUsageLimitSchema>;
+export const ClaudeUsageAccountSchema = z.object({
+  email: z.string().nullable(),
+  organization: z.string().nullable(),
+  plan: z.string().nullable(), // subscriptionType
+  hosts: z.array(HostIdSchema), // hosts signed into this account
+  limits: z.array(ClaudeUsageLimitSchema),
+  credits: z
+    .object({
+      enabled: z.boolean(),
+      usedMinor: z.number(),
+      limitMinor: z.number().nullable(),
+      currency: z.string(),
+      percent: z.number().nullable(),
+    })
+    .nullable(),
+  fetchedAt: z.string().nullable(),
+  stale: z.boolean(),
+  error: z.string().nullable(),
+});
+export type ClaudeUsageAccount = z.infer<typeof ClaudeUsageAccountSchema>;
+export const ClaudeTokenTotalsSchema = z.object({
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number(),
+  cacheWrite: z.number(),
+  messages: z.number(),
+});
+export type ClaudeTokenTotals = z.infer<typeof ClaudeTokenTotalsSchema>;
+export const ClaudeUsageStateSchema = z.object({
+  status: z.enum(['idle', 'loading', 'ready', 'error']),
+  accounts: z.array(ClaudeUsageAccountSchema), // [] → per-token plan / not signed in
+  perToken: z.boolean(), // no OAuth creds on any host
+  month: z.string(), // 'yyyy-mm' (local)
+  tokens: z.object({
+    total: ClaudeTokenTotalsSchema,
+    byModel: z.record(z.string(), ClaudeTokenTotalsSchema),
+    byHost: z.record(z.string(), ClaudeTokenTotalsSchema),
+    byDay: z.array(
+      z.object({
+        date: z.string(),
+        byModel: z.record(z.string(), z.number()),
+      }),
+    ),
+    previousMonthTotal: ClaudeTokenTotalsSchema.nullable(),
+    scannedAt: z.string().nullable(),
+    scanning: z.object({ files: z.number(), done: z.number() }).nullable(),
+  }),
+});
+export type ClaudeUsageState = z.infer<typeof ClaudeUsageStateSchema>;
+// Send arg for claude:usageVisible — the shell reports Claude-tab visibility.
+export const ClaudeUsageVisibleArg = z.object({ visible: z.boolean() });
 // Execution hosts (WSL). wslDistros: null = auto (running + default);
 // overrides: per-host path/shell/env-capture settings keyed by HostId.
 const HostsFields = {
@@ -409,6 +483,9 @@ export const SettingsObject = z.object({
       shell: TerminalFields.shell.default(''),
     })
     .default({ shell: '' }),
+  analytics: z
+    .object({ tab: AnalyticsFields.tab.default('devin') })
+    .default({ tab: 'devin' }),
   claude: z
     .object({
       path: ClaudeFields.path.default(null),
@@ -467,6 +544,7 @@ export const SettingsPatchSchema = z.object({
   local: z.object(LocalFields).partial().optional(),
   layout: z.object(LayoutFields).partial().optional(),
   terminal: z.object(TerminalFields).partial().optional(),
+  analytics: z.object(AnalyticsFields).partial().optional(),
   sessions: z.object(SessionsFields).partial().optional(),
   claude: z.object(ClaudeFields).partial().optional(),
   hosts: z.object(HostsFields).partial().optional(),

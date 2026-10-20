@@ -17,10 +17,14 @@ export interface LayoutState {
   terminalHeight: number; // px
   sessionsOpen: boolean;
   sessionsWidth: number; // px
+  // Analytics surface only: the shell-rendered Devin/Claude tab strip sits at
+  // the top of the main column and the main rect shrinks by its height.
+  analyticsTabs?: boolean;
 }
 
 export interface WindowBounds {
   devin: Rect;
+  analyticsTabs: Rect | null;
   ghTab: Rect | null;
   splitter: Rect | null;
   titleBar: Rect | null;
@@ -36,6 +40,9 @@ export interface WindowBounds {
 export const RAIL_WIDTH = 56;
 export const SPLITTER_WIDTH = 6;
 export const TITLE_BAR_HEIGHT = 36;
+// Analytics surface: height of the shell-rendered Devin/Claude tab strip
+// directly under the title bar (plans/analytics-claude.md D5).
+export const ANALYTICS_TABS_HEIGHT = 36;
 export const MIN_PANE_WIDTH = 320;
 // Cloud session sidebar column (left of the devin view, right of the rail).
 export const SESSIONS_MIN_WIDTH = 200;
@@ -129,10 +136,32 @@ export function leftChrome(layout: LayoutState, width: number): number {
   return RAIL_WIDTH + (visible ? sessionsWidth + SPLITTER_WIDTH : 0);
 }
 
-export function computeBounds(
-  windowSize: Size,
-  layout: LayoutState,
-): WindowBounds {
+// The Analytics tab strip is carved out of the top of the main column after
+// everything else is laid out: full main-column width, directly under the
+// title bar; the main rect moves down and shrinks by the strip height. Pane,
+// splitters, sessions column and dock are unaffected.
+export function computeBounds(windowSize: Size, layout: LayoutState): WindowBounds {
+  const base = computeBoundsBase(windowSize, layout);
+  if (!layout.analyticsTabs) return base;
+  const stripHeight = Math.min(ANALYTICS_TABS_HEIGHT, base.devin.height);
+  return {
+    ...base,
+    analyticsTabs: {
+      x: base.devin.x,
+      y: base.devin.y,
+      width: base.devin.width,
+      height: stripHeight,
+    },
+    devin: {
+      x: base.devin.x,
+      y: base.devin.y + stripHeight,
+      width: base.devin.width,
+      height: Math.max(0, base.devin.height - stripHeight),
+    },
+  };
+}
+
+function computeBoundsBase(windowSize: Size, layout: LayoutState): WindowBounds {
   const width = Math.max(0, Math.floor(windowSize.width));
   const height = Math.max(0, Math.floor(windowSize.height));
   const rail: Rect = { x: 0, y: 0, width: Math.min(RAIL_WIDTH, width), height };
@@ -215,6 +244,7 @@ export function computeBounds(
         width: Math.max(0, width - chrome),
         height: docked.devinHeight,
       },
+      analyticsTabs: null,
       ghTab: null,
       splitter: null,
       terminal: docked.terminal,
@@ -229,7 +259,7 @@ export function computeBounds(
   // preference is not mutated — collapse is purely derived.
   const allowedMax = width - chrome - SPLITTER_WIDTH - MIN_DEVIN_WIDTH;
   if (allowedMax < MIN_PANE_WIDTH) {
-    const closed = computeBounds(windowSize, { ...layout, paneOpen: false });
+    const closed = computeBoundsBase(windowSize, { ...layout, paneOpen: false });
     return { ...closed, paneCollapsed: true };
   }
   const paneCollapsed = false;
@@ -255,6 +285,7 @@ export function computeBounds(
       width: Math.max(0, splitterX - chrome),
       height: docked.devinHeight,
     },
+    analyticsTabs: null,
     splitter: {
       x: splitterX,
       y: TITLE_BAR_HEIGHT,
