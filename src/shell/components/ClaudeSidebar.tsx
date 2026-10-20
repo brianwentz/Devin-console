@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ClaudeAgent, ClaudeSessionState, ClaudeSubagent } from '../../shared/ipc';
 import type { SessionTreeNode } from '../../core/sessionTree';
-import { workspaceEntries, workspaceListData } from '../../core/workspaceTree';
+import { relativeToWorkspace, workspaceEntries, workspaceListData } from '../../core/workspaceTree';
+import type { HostId } from '../../core/execHost';
 import type { Rect } from '../../core/layout';
 import { useShellState } from '../store';
 import { requestTerminal } from '../claude/viewRequests';
@@ -329,15 +330,27 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
         )}
       </>
     ),
-    meta: (s) => (
-      <>
-        {s.cwd ? basename(s.cwd) : ''}
-        {s.cwd && s.gitBranch ? ' · ' : ''}
-        {s.gitBranch ?? ''}
-        {(s.cwd || s.gitBranch) && s.updatedAt ? ' · ' : ''}
-        {s.updatedAt ? relativeTime(s.updatedAt, Date.now()) : ''}
-      </>
-    ),
+    meta: (s) => {
+      // Workspace rows show the sub-path below the workspace ('' on an exact
+      // match); a null return means the shell can't re-derive the match
+      // (e.g. the uncRoot test seam) — fall back to the basename.
+      const cwdSeg =
+        s.folder !== null && s.cwd
+          ? (relativeToWorkspace(s.folder, { host: s.host as HostId, cwd: s.cwd }) ??
+            basename(s.cwd))
+          : s.cwd
+            ? basename(s.cwd)
+            : '';
+      return (
+        <>
+          {cwdSeg}
+          {cwdSeg && s.gitBranch ? ' · ' : ''}
+          {s.gitBranch ?? ''}
+          {(cwdSeg || s.gitBranch) && s.updatedAt ? ' · ' : ''}
+          {s.updatedAt ? relativeTime(s.updatedAt, Date.now()) : ''}
+        </>
+      );
+    },
     title: (s) => s.title || 'Untitled session',
     titleClass: (s) => (s.missing ? 'italic text-[#8b9bb0]' : undefined),
     rowClass: (s, variant: 'tree' | 'flat') =>
