@@ -109,7 +109,16 @@ export function layoutState(): LayoutState {
     // The sessions column only occupies space on the Cloud surface.
     sessionsOpen: state.sessionsOpen && (state.surface === 'cloud' || state.surface === 'claude'),
     sessionsWidth: state.sessionsWidth,
+    analyticsTabs: state.surface === 'analytics',
   };
+}
+
+// Analytics surface: the hosted tenant view is shown only on the Devin tab;
+// the Claude tab is shell DOM (ClaudeAnalyticsPanel) over the same rect.
+export function analyticsHostedVisible(): boolean {
+  return (
+    state.surface === 'analytics' && (state.settings?.current.analytics.tab ?? 'devin') === 'devin'
+  );
 }
 
 // Sessions column toggle — unlike the pane, this is an in-window shell
@@ -265,7 +274,7 @@ export function lowerShell(): void {
   }
   windowRef.contentView.addChildView(shellView, 0);
   if (state.surface === 'cloud' && active) windowRef.contentView.addChildView(active);
-  if (state.surface === 'analytics' && analyticsView)
+  if (analyticsHostedVisible() && analyticsView)
     windowRef.contentView.addChildView(analyticsView);
   if (state.paneOpen && !state.paneCollapsed) addAtTop(tabManager?.activeView ?? null);
 }
@@ -295,7 +304,7 @@ function applyBounds(bounds: WindowBounds, size: { width: number; height: number
       view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     }
   }
-  if (state.surface === 'analytics') {
+  if (analyticsHostedVisible()) {
     ensureAnalyticsView().setBounds(nativeBounds(bounds.devin));
   } else if (state.analyticsView) {
     state.analyticsView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -316,7 +325,7 @@ export function applyLayout(): void {
       if (view === devinView && state.surface === 'cloud') ensureAttached(view);
       else detachView(view);
     }
-    if (state.surface === 'analytics') ensureAttached(state.analyticsView);
+    if (analyticsHostedVisible()) ensureAttached(state.analyticsView);
     else detachView(state.analyticsView);
     const activeTabView =
       state.paneOpen && !bounds.paneCollapsed ? tabManager.activeView : null;
