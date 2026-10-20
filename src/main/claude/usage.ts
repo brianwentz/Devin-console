@@ -19,6 +19,7 @@ import {
   monthKey,
   parseUsageResponse,
   previousMonthKey,
+  pruneFileCache,
   sumTotals,
   type UsageBuckets,
 } from '../../core/claudeUsage';
@@ -482,8 +483,12 @@ export class ClaudeUsageService {
     let files = 0;
     let skipped = 0;
     try {
+      // Every host's store root is resolved here, synchronously, before the
+      // first await: configDir() answers from the captured local value, so a
+      // concurrent withConfigDir swap (SDK store call) can't be observed.
       const tasks: { host: ExecHost; path: string; key: string }[] = [];
-      for (const host of hosts().list()) {
+      const scannedHosts = hosts().list();
+      for (const host of scannedHosts) {
         const dir = join(hosts().configDir(host), 'projects');
         for (const path of this.walkJsonl(dir)) {
           tasks.push({ host, path, key: `${host.id}:${path.slice(dir.length)}` });
@@ -573,6 +578,18 @@ export class ClaudeUsageService {
         scanning: null,
       };
       this.store.update((state) => ({ ...state, month: current, tokens }));
+      // Only `tasks` feed the totals, so stale keys never count — but prune
+      // them from the file (e.g. local: keys left by a pre-fix scan that read
+      // a WSL store as local) so the cache doesn't carry them forever.
+      const pruned = pruneFileCache(
+        this.cache.files,
+        scannedHosts.map((h) => h.id),
+        tasks.map((t) => t.key),
+      );
+      if (pruned.pruned > 0) {
+        this.cache.files = pruned.files;
+        log('claude', 'usage-cache-pruned', { detail: { count: pruned.pruned } });
+      }
       this.saveCache();
       log('claude', 'usage-scan', {
         detail: { files, changed, skipped, ms: Date.now() - start },

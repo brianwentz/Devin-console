@@ -26,6 +26,19 @@ export function wslHost(distro: string, home: string | null, mount = '/mnt'): Ex
   return { id: `wsl:${distro}`, kind: 'wsl', distro, home, mount };
 }
 
+/** The local host's Claude home: `CLAUDE_CONFIG_DIR` (trimmed, non-empty) else
+ * `<home>/.claude`. Pure so the registry can capture it once at startup —
+ * `withConfigDir` swaps the live env var for the SDK and must never leak
+ * through `configDir(LOCAL_HOST)`. */
+export function resolveLocalConfigDir(
+  env: { CLAUDE_CONFIG_DIR?: string | undefined },
+  home: string,
+  joinPath: (...parts: string[]) => string,
+): string {
+  const configured = env.CLAUDE_CONFIG_DIR?.trim();
+  return configured || joinPath(home, '.claude');
+}
+
 export interface HostCommand {
   file: string;
   args: string[];

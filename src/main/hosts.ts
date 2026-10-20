@@ -16,6 +16,7 @@ import {
   parseShellEnv,
   parseWslList,
   ptySpec,
+  resolveLocalConfigDir,
   spawnSpec,
   toHostPath as coreToHostPath,
   toWindowsPath as coreToWindowsPath,
@@ -99,8 +100,14 @@ export class HostsRegistry {
   private entries = new Map<HostId, WslEntry>();
   private configMutex: Promise<unknown> = Promise.resolve();
   private errorParts = new Map<string, Partial<Record<HostErrorPart, string>>>();
+  /** The local Claude home, captured once at construction. `withConfigDir`
+   * rewrites `process.env.CLAUDE_CONFIG_DIR` for the SDK while a store call
+   * runs, so reading the env var live would hand a WSL store to any caller
+   * that asks for the local host mid-swap (the usage scanner did). */
+  private readonly localConfigDirValue: string;
 
   constructor() {
+    this.localConfigDirValue = resolveLocalConfigDir(process.env, homedir(), join);
     this.ready = this.resolveWsl();
   }
 
@@ -712,15 +719,21 @@ export class HostsRegistry {
     return out;
   }
 
+  /** The local host's Claude home as captured at startup — never the value a
+   * `withConfigDir` swap has temporarily placed in `process.env`. */
+  localConfigDir(): string {
+    return this.localConfigDirValue;
+  }
+
   configDir(host: ExecHost): string {
-    if (!isWslHost(host)) {
-      return process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
-    }
+    if (!isWslHost(host)) return this.localConfigDirValue;
     const home = this.entries.get(host.id)?.host.home ?? this.overrides(host.id).home ?? null;
     return this.windowsPath(host, `${home ?? ''}/.claude`);
   }
 
-  /** Serialised `CLAUDE_CONFIG_DIR` swap around an SDK store call (§1.2). */
+  /** Serialised `CLAUDE_CONFIG_DIR` swap around an SDK store call (§1.2). The
+   * swap is only ever observable through `process.env` (the SDK reads it);
+   * `configDir()` keeps answering from the captured local value. */
   withConfigDir<T>(host: ExecHost, fn: () => Promise<T>): Promise<T> {
     const dir = this.configDir(host);
     const run = this.configMutex.then(async () => {
