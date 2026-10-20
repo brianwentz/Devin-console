@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import {
   aggregateUsageLines,
   emptyClaudeUsageState,
+  fileMayContainMonths,
   fileScanPlan,
   groupAccounts,
   emptyTotals,
@@ -97,13 +98,31 @@ export class ClaudeUsageService {
     return this.store.get();
   }
 
+  private hostChangePrev: (() => void) | null = null;
+  private hostChangeFn: (() => void) | null = null;
+
   start(): void {
     if (this.started) return;
     this.started = true;
     this.loadCache();
-    void this.fetchAll();
-    void this.scanAll();
-    this.schedule();
+    // Wait for the first distro enumeration so wsl hosts are in list() for
+    // the first pass; later probe completions poke a re-fetch via the
+    // host-change hook below.
+    void hosts()
+      .whenEnumerated()
+      .then(() => {
+        void this.fetchAll();
+        void this.scanAll();
+        this.schedule();
+      });
+    // Chain the single onStatusChange slot (claude sessions owns it): a host
+    // that becomes ready after the first pass gets fetched + scanned.
+    this.hostChangePrev = hosts().onStatusChange;
+    this.hostChangeFn = () => {
+      this.hostChangePrev?.();
+      this.poke('hosts');
+    };
+    hosts().onStatusChange = this.hostChangeFn;
   }
 
   setVisible(visible: boolean): void {
@@ -123,13 +142,15 @@ export class ClaudeUsageService {
     this.schedule();
   }
 
-  /** Debounced fetch trigger: app-driven turn end or a Stop hook event. */
-  poke(_reason: 'turn' | 'hook'): void {
+  /** Debounced fetch trigger: app-driven turn end, a Stop hook event, or a
+   * host becoming ready ('hosts' also rescans — a new store appeared). */
+  poke(reason: 'turn' | 'hook' | 'hosts'): void {
     if (!this.started) return;
     if (this.pokeTimer) return;
     this.pokeTimer = setTimeout(() => {
       this.pokeTimer = null;
       void this.fetchAll();
+      if (reason === 'hosts') void this.scanAll();
     }, POKE_DEBOUNCE_MS);
   }
 
@@ -138,6 +159,10 @@ export class ClaudeUsageService {
       if (t) clearTimeout(t);
     }
     this.fetchTimer = this.scanTimer = this.pokeTimer = null;
+    if (this.hostChangeFn && hosts().onStatusChange === this.hostChangeFn) {
+      hosts().onStatusChange = this.hostChangePrev;
+    }
+    this.hostChangeFn = null;
   }
 
   // --- cadence ---------------------------------------------------------------
@@ -189,7 +214,8 @@ export class ClaudeUsageService {
   private accountForHost(host: ExecHost): { email: string | null; organization: string | null } {
     const configDir = hosts().configDir(host);
     const file = testMode
-      ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE ?? null)
+      ? (process.env.DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE?.trim() ||
+        join(dirname(configDir), '.claude.json'))
       : join(dirname(configDir), '.claude.json');
     if (!file || !existsSync(file)) return { email: null, organization: null };
     try {
@@ -438,6 +464,7 @@ export class ClaudeUsageService {
     const months = new Set([current, previous]);
     let changed = 0;
     let files = 0;
+    let skipped = 0;
     try {
       const tasks: { host: ExecHost; path: string; key: string }[] = [];
       for (const host of hosts().list()) {
@@ -456,7 +483,17 @@ export class ClaudeUsageService {
         const stat = statSync(task.path);
         const plan = fileScanPlan(cached, stat.size, stat.mtimeMs);
         let buckets: UsageBuckets = cached?.buckets ?? {};
-        if (plan !== 'reuse') {
+        if (plan !== 'reuse' && !fileMayContainMonths(stat.mtimeMs, months)) {
+          // Older than the previous month — can't contain relevant lines;
+          // skip the read and pin it as fully consumed.
+          skipped += 1;
+          this.cache.files[task.key] = {
+            size: stat.size,
+            mtime: stat.mtimeMs,
+            offset: stat.size,
+            buckets: {},
+          };
+        } else if (plan !== 'reuse') {
           changed += 1;
           let offset = plan === 'append' && cached ? cached.offset : 0;
           // Line-aligned append: if the byte before the offset isn't a line
@@ -511,7 +548,9 @@ export class ClaudeUsageService {
       };
       this.store.update((state) => ({ ...state, month: current, tokens }));
       this.saveCache();
-      log('claude', 'usage-scan', { detail: { files, changed, ms: Date.now() - start } });
+      log('claude', 'usage-scan', {
+        detail: { files, changed, skipped, ms: Date.now() - start },
+      });
     } catch {
       /* stat failures mid-scan are non-fatal */
     }

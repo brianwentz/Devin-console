@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   aggregateUsageLines,
+  fileMayContainMonths,
   fileScanPlan,
   emptyClaudeUsageState,
   emptyTotals,
@@ -251,5 +252,52 @@ describe('groupAccounts', () => {
       hostIds: ['local', 'wsl:D'],
     });
     expect(groups[1]).toMatchObject({ key: 'host:wsl:E', hostIds: ['wsl:E'] });
+  });
+});
+
+describe('fileMayContainMonths (cold-scan gate)', () => {
+  const months = new Set(['2026-11', '2026-10']);
+  const at = (iso: string) => new Date(iso).getTime();
+  // Local-midnight boundary: 2026-10-01T00:00 local is the earliest point.
+  const prevStart = new Date(2026, 9, 1).getTime();
+  it('skips files older than the previous month; keeps recent ones', () => {
+    expect(fileMayContainMonths(prevStart - 1, months)).toBe(false);
+    expect(fileMayContainMonths(prevStart, months)).toBe(true);
+    expect(fileMayContainMonths(at('2026-10-05T10:00:00'), months)).toBe(true);
+    expect(fileMayContainMonths(at('2026-09-30T23:59:00'), months)).toBe(false);
+    expect(fileMayContainMonths(0, months)).toBe(false);
+    expect(fileMayContainMonths(0, new Set())).toBe(true);
+  });
+});
+
+describe('aggregateUsageLines zero-token models', () => {
+  it('drops all-zero usage lines (synthetic messages)', () => {
+    const lines = [
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'z1',
+        requestId: 'rz1',
+        timestamp: '2026-10-05T10:00:00.000Z',
+        message: {
+          role: 'assistant',
+          model: '<synthetic>',
+          usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'z2',
+        requestId: 'rz2',
+        timestamp: '2026-10-05T11:00:00.000Z',
+        message: {
+          role: 'assistant',
+          model: 'opus-5-5',
+          usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      }),
+    ];
+    const buckets = aggregateUsageLines(lines);
+    expect(Object.keys(buckets['2026-10']!.byModel)).toEqual(['opus-5-5']);
+    expect(buckets['2026-10']!.byDay['2026-10-05']).toEqual({ 'opus-5-5': 6 });
   });
 });

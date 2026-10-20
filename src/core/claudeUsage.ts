@@ -197,13 +197,16 @@ export function aggregateUsageLines(
       date.getDate(),
     ).padStart(2, '0')}`;
     const model = typeof parsed.message.model === 'string' ? parsed.message.model : 'unknown';
-    const bucket = (out[month] ??= { byModel: {}, byDay: {} });
-    addTotals((bucket.byModel[model] ??= emptyTotals()), usage);
     const perModel =
       (Number(usage.input_tokens) || 0) +
       (Number(usage.output_tokens) || 0) +
       (Number(usage.cache_read_input_tokens) || 0) +
       (Number(usage.cache_creation_input_tokens) || 0);
+    // Zero-token lines (e.g. `<synthetic>`) contribute nothing — drop the
+    // whole line rather than leaving an all-zero model row.
+    if (perModel === 0) continue;
+    const bucket = (out[month] ??= { byModel: {}, byDay: {} });
+    addTotals((bucket.byModel[model] ??= emptyTotals()), usage);
     const perDay = (bucket.byDay[day] ??= {});
     perDay[model] = (perDay[model] ?? 0) + perModel;
   }
@@ -282,6 +285,23 @@ export function fileScanPlan(
   if (prev.size === size && prev.mtime === mtime) return 'reuse';
   if (size > prev.size) return 'append';
   return 'full'; // shrunk or rewritten
+}
+
+/**
+ * Cold-scan gate: a file whose mtime is older than the start of the earliest
+ * month of interest can't contain lines from any requested month (line
+ * timestamps precede the file's last write) → skip reading it entirely.
+ */
+export function fileMayContainMonths(mtimeMs: number, months: Set<string>): boolean {
+  if (months.size === 0) return true;
+  let earliest: number | null = null;
+  for (const key of months) {
+    const [y, m] = key.split('-').map(Number);
+    if (!y || !m) continue;
+    const start = new Date(y, m - 1, 1).getTime(); // local midnight of the 1st
+    if (earliest === null || start < earliest) earliest = start;
+  }
+  return earliest === null || mtimeMs >= earliest;
 }
 
 /** Group per-host credentials into usage accounts: same email → one account. */
