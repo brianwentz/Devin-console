@@ -52,9 +52,27 @@ test('quiet (default): invisible + never activated; screenshot still renders; ge
     const events = await readEvents(logFile);
     expect(events.some((e) => e.event === 'window-quiet')).toBe(true);
 
-    // The window still renders — the screenshot must not be blank/tiny.
+    // The window still renders: a CDP screenshot succeeds, and the compositor
+    // output (capturePage → raw bitmap) has real dimensions and more than one
+    // colour. Pixel facts, not PNG byte counts — compression varies per machine.
     const shot = await shell.screenshot();
-    expect(shot.length).toBeGreaterThan(20_000);
+    expect(shot.length).toBeGreaterThan(0);
+    const render = await app.evaluate(async () => {
+      const contents = (globalThis as any).__devinworkspaces.getShellWebContents() as
+        Electron.WebContents;
+      const image = await contents.capturePage();
+      const { width, height } = image.getSize();
+      const bitmap = image.toBitmap();
+      const colours = new Set<number>();
+      // Sample every 97th pixel (BGRA) — enough to see chrome vs. content.
+      for (let i = 0; i < bitmap.length && colours.size < 3; i += 4 * 97) {
+        colours.add((bitmap[i]! << 16) | (bitmap[i + 1]! << 8) | bitmap[i + 2]!);
+      }
+      return { width, height, distinctColours: colours.size };
+    });
+    expect(render.width).toBeGreaterThan(1000);
+    expect(render.height).toBeGreaterThan(600);
+    expect(render.distinctColours).toBeGreaterThan(1);
 
     // Geometry still round-trips (the parked-window approach broke this).
     await app.evaluate(
