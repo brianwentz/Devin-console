@@ -941,7 +941,7 @@ export class ClaudeSessions {
 
   // One-shot (ux2 D8): legacy free-form registry folders → path-bound
   // workspaces. Runs once after the first successful refresh; the legacy
-  // fields are then stripped (serializeRegistry never writes them back).
+  // fields are then stripped (registryFileObject deletes them by name).
   private migratedLegacyFolders = false;
   private migrateLegacyFoldersOnce(storeComplete: boolean): void {
     if (this.migratedLegacyFolders) return;

@@ -266,9 +266,13 @@ describe('terminal dock settings (F5)', () => {
 
   it('rejects a terminal height below the minimum', () => {
     expect(SettingsPatchSchema.safeParse({ layout: { terminalHeight: 60 } }).success).toBe(false);
-    const { settings, dropped } = parseSettingsFile({ layout: { terminalHeight: 60 } });
-    expect(dropped).toEqual(['layout']);
-    expect(settings.layout.terminalHeight).toBe(280);
+    // ux3 S6: repair is leaf-granular inside structural blocks.
+    const { settings, dropped, invalid } = parseSettingsFile({
+      layout: { terminalOpen: true, terminalHeight: 60 },
+    });
+    expect(dropped).toEqual(['layout.terminalHeight']);
+    expect(invalid).toEqual({ 'layout.terminalHeight': 60 });
+    expect(settings.layout).toEqual({ terminalOpen: true, terminalHeight: 280 });
   });
 });
 
@@ -304,12 +308,13 @@ describe('routing.rules', () => {
       },
     };
     const { settings, dropped } = parseSettingsFile(oversized);
-    expect(dropped).toEqual(['routing']);
-    expect(settings.routing).toEqual({ allowExternal: true, rules: [] });
+    // ux3 S6: only the failing leaf is dropped; allowExternal survives.
+    expect(dropped).toEqual(['routing.rules']);
+    expect(settings.routing).toEqual({ allowExternal: false, rules: [] });
     const badRule = parseSettingsFile({
       routing: { rules: [{ id: 'x', kind: 'bogus', pattern: 'p', enabled: true }] },
     });
-    expect(badRule.dropped).toEqual(['routing']);
+    expect(badRule.dropped).toEqual(['routing.rules']);
     expect(badRule.settings.routing.rules).toEqual([]);
   });
 

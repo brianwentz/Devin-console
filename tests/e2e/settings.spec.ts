@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -457,5 +457,53 @@ test('a dirty draft is flushed on quit', async () => {
     tabs: { maxLiveTabs: number };
   };
   expect(persisted.tabs.maxLiveTabs).toBe(7);
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+});
+
+// ux3 S6: a build only rewrites what it understands — keys written by a
+// newer build (or an unknown value for a known key) come back out unchanged.
+test('settings.json keeps unknown keys and an invalid untouched value across a run', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(
+    join(profile, 'settings.json'),
+    JSON.stringify({
+      future: { x: 1 },
+      // showArchived is invalid here and has no Settings-page field, so the
+      // form commit below never touches it (the draft covers claude.model etc.).
+      claude: { futureField: true, showArchived: 'yes', model: 'opus-x' },
+      tabs: { keepAliveHours: 24, maxLiveTabs: 8 },
+    }),
+  );
+  const app = await launch(profile, logFile);
+  await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+  await expect
+    .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
+    .toBe(true);
+  // The invalid leaf fell back to its default in memory; the rest of the block survived.
+  const loaded = (await state(app)).settings;
+  expect(loaded.claude).toMatchObject({ showArchived: false, model: 'opus-x' });
+  await setInputValue(app, 'maxLiveTabsInput', '7');
+  await clickTab(app, 'passwords');
+  await waitForEvent(logFile, 'settings-commit');
+
+  await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+  await app.close().catch(() => undefined);
+
+  const persisted = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+  expect(persisted.tabs.maxLiveTabs).toBe(7);
+  expect(persisted.future).toEqual({ x: 1 });
+  expect(persisted.claude.futureField).toBe(true);
+  expect(persisted.claude.showArchived).toBe('yes');
+  expect(persisted.claude.model).toBe('opus-x');
+  const events = await readEvents(logFile);
+  const preserved = events.filter((e) => e.event === 'store-preserved');
+  expect(preserved.some((e) => (e.detail as any)?.store === 'settings')).toBe(true);
+  const settingsPreserved = preserved.find((e) => (e.detail as any)?.store === 'settings');
+  expect((settingsPreserved!.detail as any).keys).toEqual(
+    expect.arrayContaining(['future', 'claude.futureField']),
+  );
+  const repaired = events.find((e) => e.event === 'settings-repaired');
+  expect((repaired?.detail as any)).toMatchObject({ dropped: ['claude.showArchived'], preserved: true });
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
 });

@@ -37,6 +37,13 @@ import {
 } from '../../core/localModel';
 import { LinkScanner, type PrLinkContext } from '../../core/prLinks';
 import {
+  identityArray,
+  overlayKnown,
+  structural,
+  unknownPaths,
+  type PreserveSpec,
+} from '../../core/storePreserve';
+import {
   hostIdForPath as coreHostIdForPath,
   isWslHost,
   LOCAL_HOST,
@@ -85,6 +92,11 @@ type AgentHandle = {
 type SessionBinding = { workspace: string; remoteId: string; generation: number };
 
 type IndexEntry = { id: string; workspace: string; title: string; createdAt: string };
+// ux3 S6: local-sessions.json — `{ sessions: IndexEntry[] }`; entries matched
+// by id, unknown root keys and per-entry fields survive a save.
+const LOCAL_INDEX_PRESERVE_SPEC: PreserveSpec = structural({
+  sessions: identityArray('id', structural()),
+});
 
 export type HostCommand = { file: string; args: string[] };
 
@@ -190,6 +202,7 @@ export class DevinLocalHost {
   private readonly bindings = new Map<string, SessionBinding>();
   private readonly indexFile: string;
   private index: IndexEntry[] = [];
+  private indexRaw: unknown = undefined;
   private workspaces: string[];
   private readonly linkScanners = new Map<string, LinkScanner>();
   private readonly command: HostCommand | null;
@@ -1118,14 +1131,27 @@ export class DevinLocalHost {
     try {
       const raw = JSON.parse(readFileSync(this.indexFile, 'utf8')) as { sessions?: unknown };
       if (!raw || !Array.isArray(raw.sessions)) return [];
-      return raw.sessions.filter(
+      const index = raw.sessions.filter(
         (entry): entry is IndexEntry =>
           Boolean(entry) &&
           typeof entry === 'object' &&
           typeof (entry as IndexEntry).id === 'string' &&
           typeof (entry as IndexEntry).workspace === 'string' &&
           typeof (entry as IndexEntry).createdAt === 'string',
-      ).map((entry) => ({ ...entry, title: typeof entry.title === 'string' ? entry.title : '' }));
+      ).map(({ id, workspace, createdAt, title }) => ({
+        id,
+        workspace,
+        createdAt,
+        title: typeof title === 'string' ? title : '',
+      }));
+      // ux3 S6: keep the file as read; saveIndex overlays the in-memory index
+      // on it so unknown root keys / per-entry fields survive.
+      this.indexRaw = raw;
+      const preserved = unknownPaths(raw, { sessions: index }, LOCAL_INDEX_PRESERVE_SPEC);
+      if (preserved.length > 0) {
+        log('local', 'store-preserved', { detail: { store: 'local-sessions', keys: preserved } });
+      }
+      return index;
     } catch (error) {
       log('local', 'index-load-failed', { detail: { message: errorMessage(error) } });
       return [];
@@ -1135,8 +1161,10 @@ export class DevinLocalHost {
   private saveIndex(): void {
     const temporary = `${this.indexFile}.tmp`;
     try {
-      writeFileSync(temporary, JSON.stringify({ sessions: this.index }), 'utf8');
+      const out = overlayKnown(this.indexRaw, { sessions: this.index }, LOCAL_INDEX_PRESERVE_SPEC);
+      writeFileSync(temporary, JSON.stringify(out), 'utf8');
       renameSync(temporary, this.indexFile);
+      this.indexRaw = out;
     } catch (error) {
       log('local', 'index-save-failed', { detail: { message: errorMessage(error) } });
     }

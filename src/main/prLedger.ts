@@ -1,12 +1,27 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import {
+  overlayKnown,
+  replace,
+  structural,
+  unknownPaths,
+  type PreserveSpec,
+} from '../core/storePreserve';
 import { log } from './log';
 
 const PrLedgerSchema = z.object({
   version: z.literal(1),
   lastGoodAt: z.number(),
   seen: z.array(z.string()),
+});
+
+// ux3 S6: every known leaf is replaced; the passthrough is for unknown
+// top-level keys a newer build may add.
+const PR_LEDGER_PRESERVE_SPEC: PreserveSpec = structural({
+  version: replace,
+  lastGoodAt: replace,
+  seen: replace,
 });
 
 const MAX_SEEN = 500;
@@ -24,16 +39,23 @@ export class PrLedger {
   private urlSet = new Set<string>();
   private good = 0;
   private writtenGoodAt = 0;
+  private raw: unknown = undefined;
 
   constructor(userData: string) {
     this.file = join(userData, 'pr-ledger.json');
     try {
-      const parsed = PrLedgerSchema.safeParse(JSON.parse(readFileSync(this.file, 'utf8')));
+      const json = JSON.parse(readFileSync(this.file, 'utf8')) as unknown;
+      const parsed = PrLedgerSchema.safeParse(json);
       if (parsed.success) {
         this.urls = parsed.data.seen.slice(-MAX_SEEN);
         this.urlSet = new Set(this.urls);
         this.good = parsed.data.lastGoodAt;
         this.writtenGoodAt = parsed.data.lastGoodAt;
+        this.raw = json;
+        const preserved = unknownPaths(json, parsed.data, PR_LEDGER_PRESERVE_SPEC);
+        if (preserved.length > 0) {
+          log('shell', 'store-preserved', { detail: { store: 'pr-ledger', keys: preserved } });
+        }
       }
     } catch {
       // missing or corrupt -> empty ledger
@@ -65,10 +87,13 @@ export class PrLedger {
     this.writtenGoodAt = now;
     try {
       if (!existsSync(this.file)) mkdirSync(join(this.file, '..'), { recursive: true });
-      writeFileSync(
-        this.file,
-        JSON.stringify({ version: 1, lastGoodAt: this.good, seen: this.urls }),
+      const out = overlayKnown(
+        this.raw,
+        { version: 1, lastGoodAt: this.good, seen: this.urls },
+        PR_LEDGER_PRESERVE_SPEC,
       );
+      writeFileSync(this.file, JSON.stringify(out));
+      this.raw = out;
     } catch (error) {
       log('shell', 'pr-ledger-save-error', { detail: { message: String(error) } });
     }

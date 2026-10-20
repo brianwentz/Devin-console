@@ -16,6 +16,13 @@ import {
   type AppNotification,
   type NewNotification,
 } from '../core/notificationModel';
+import {
+  identityArray,
+  overlayKnown,
+  structural,
+  unknownPaths,
+  type PreserveSpec,
+} from '../core/storePreserve';
 import { IpcChannels } from '../shared/ipc';
 import { log } from './log';
 import { state } from './state';
@@ -39,6 +46,10 @@ const AppNotificationSchema = z.object({
 
 const SAVE_DEBOUNCE_MS = 300;
 
+// ux3 S6: notifications.json is an array of entries matched by id; unknown
+// per-entry fields survive a save (membership and order come from memory).
+const NOTIFICATIONS_PRESERVE_SPEC: PreserveSpec = identityArray('id', structural());
+
 // 'update'/'identity'/'auth' entries are runtime-only — never persisted.
 const RUNTIME_ONLY = new Set<AppNotification['kind']>(['update', 'identity', 'auth']);
 
@@ -50,17 +61,32 @@ export class NotificationStore {
   private list: AppNotification[] = [];
   private readonly file: string;
   private saveTimer: NodeJS.Timeout | null = null;
+  // ux3 S6: the file as read; writes overlay the in-memory list on it.
+  private raw: unknown = undefined;
 
   constructor(userData: string) {
     this.file = join(userData, 'notifications.json');
     try {
-      const parsed = AppNotificationSchema.array().safeParse(
-        JSON.parse(readFileSync(this.file, 'utf8')),
-      );
+      const json = JSON.parse(readFileSync(this.file, 'utf8')) as unknown;
+      const parsed = AppNotificationSchema.array().safeParse(json);
       this.list = parsed.success ? collapseSuperseded(parsed.data).slice(0, MAX_NOTIFICATIONS) : [];
+      if (parsed.success) {
+        this.raw = json;
+        const preserved = unknownPaths(json, parsed.data, NOTIFICATIONS_PRESERVE_SPEC);
+        if (preserved.length > 0) {
+          log('shell', 'store-preserved', { detail: { store: 'notifications', keys: preserved } });
+        }
+      }
     } catch {
       this.list = [];
     }
+  }
+
+  private fileContents(): string {
+    const stored = this.list.filter((item) => !RUNTIME_ONLY.has(item.kind)).slice(0, MAX_NOTIFICATIONS);
+    const out = overlayKnown(this.raw, stored, NOTIFICATIONS_PRESERVE_SPEC);
+    this.raw = out;
+    return JSON.stringify(out);
   }
 
   entries(): AppNotification[] {
@@ -193,8 +219,7 @@ export class NotificationStore {
       this.saveTimer = null;
       try {
         mkdirSync(join(this.file, '..'), { recursive: true });
-        const stored = this.list.filter((item) => !RUNTIME_ONLY.has(item.kind));
-        writeFileSync(this.file, JSON.stringify(stored.slice(0, MAX_NOTIFICATIONS)));
+        writeFileSync(this.file, this.fileContents());
       } catch (error) {
         log('shell', 'notifications-save-error', { detail: { message: String(error) } });
       }
@@ -209,8 +234,7 @@ export class NotificationStore {
     }
     try {
       mkdirSync(join(this.file, '..'), { recursive: true });
-      const stored = this.list.filter((item) => !RUNTIME_ONLY.has(item.kind));
-      writeFileSync(this.file, JSON.stringify(stored.slice(0, MAX_NOTIFICATIONS)));
+      writeFileSync(this.file, this.fileContents());
     } catch {
       // best effort at shutdown
     }

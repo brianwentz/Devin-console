@@ -139,7 +139,7 @@ variable that selects it.
 - `pane.open` + `pane.fraction` (0..1 share of the available width — px guards are derived in `computeBounds`, never persisted; `pane.width` migrates to
   fraction on load), `windowPlacements` (per-display-config window bounds/maximized), `layout.terminalOpen`/`layout.terminalHeight` (the dock's
   visibility is `terminalOpen ∧ dockSurface(surface)` — there is no per-surface opt-in key any more; `terminal.allSurfaces` was deleted in ux2 P0 and is
-  stripped as an unknown key on load), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
+  ignored on load — since ux3 S6 it stays in the file as unknown data rather than being stripped), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
 - `sessions.open`/`sessions.width`/`sessions.collapsedFolders` (Cloud session sidebar, below); `sessions.open` also drives the Settings checkbox
   `#sessionsColumnToggle` and applies to the `cloud`, `claude` and `local` surfaces (`computeBounds` reserves the column for all three);
   `sessions.maxLiveViews` (1..20, default 6) + `sessions.keepAliveHours` (0..168, default 24) — the Cloud view pool caps/idle TTL.
@@ -160,6 +160,26 @@ variable that selects it.
   `src/core/linkRules.ts`, RouteKind `'rule'` ranks after github/tenant; gh-tab decisions reached via a rule log `rule-tab`/`rule-tab-background` with
   `{ruleId, ruleKind}` detail — never the pattern; the `clipboard-sanitized-write` permission extends to rule-owned origins).
 - Claude keys (`claude.*`) are listed under Claude integration.
+
+### Stores preserve unknown data (ux3 S6)
+- Rule: a build may only rewrite what it understands in a user-data store; everything else in the file comes back out exactly as it went in, across
+  upgrades *and* downgrades. Applies to `settings.json`, `claude-sessions.json`, `local-sessions.json`, `notifications.json`, `pr-ledger.json`; caches
+  rebuilt from source (`cloud-cache.json`, `claude-usage-cache.json`, `prs.json`, `identity.json`) and the encrypted credential stores are exempt.
+- Mechanism: each store keeps the file as read (`raw`) and saves `overlayKnown(raw, inMemoryValue, spec)` (`src/core/storePreserve.ts`). A `PreserveSpec`
+  marks the structural parts — `object` (unknown keys survive), `record` / `array` with an `identity` key (membership from memory, unknown fields inside a
+  matched entry survive), `replace` (memory wins wholesale: scalars, plain arrays, records whose absence is a deletion such as `workspaceLabels`,
+  `hosts.overrides`, `windowPlacements`). Specs: `SETTINGS_PRESERVE_SPEC` (`src/core/settings.ts` — every `ZodObject` block + `notifications.kinds`;
+  `tests/unit/storePreserve.test.ts` introspects the zod schema and fails on drift), `REGISTRY_PRESERVE_SPEC` (`src/core/claudeRegistry.ts` — entries
+  record → per-entry object → `prs` by `url`), local index (`sessions` by `id`), notifications (top-level array by `id`), PR ledger (all leaves replace).
+- Invalid-but-known settings values are preserved, not repaired away: `parseSettingsFile` repairs at leaf granularity (`dropped: ['surface',
+  'claude.model']`, raw values in `invalid`), the default is used in memory, and `SettingsStore.save()` writes the raw value back unless that path was
+  *touched* this run — `merge()` touches every path in the validated patch (`key`, or `block.key` for structural blocks), `syncFromState()` touches
+  `pane`/`layout`/`sessions.open`/`sessions.width`/`surface`/`tabSnapshot` only once the live state differs from what was loaded. Note the Settings
+  page commits its whole draft, so a form commit touches every draft-covered path (e.g. `claude.model`).
+- Only named migrations delete: `migrateSettingsRaw` removes `hosts.defaultWslDistro` / `discardIdleMinutes` / `pane.width` / `notifications.enabled`
+  on the raw object before the overlay; `registryFileObject` removes the P4b `folders` / `entries[*].folder` once the in-memory registry has consumed
+  them and `prUrls` once read into `prs`. The overlay itself never deletes.
+- Each store logs `store-preserved {store, keys}` once at load when the file carried data this build does not know (keys capped at 50).
 
 ### Cloud session sidebar
 - Shell-rendered column right of the rail, `SessionSidebar.tsx`. Geometry in `computeBounds`: `leftChrome = RAIL + sessionsWidth + SPLITTER` when visible,
@@ -405,7 +425,8 @@ variable that selects it.
   case-insensitively after normalisation; a `\\wsl.localhost\D\…` workspace matches a `wsl:D` session by linux cwd, exact match — a sub-folder is Recent). IPC
   `claude:workspaceAdd|Reorder|Rename|Remove`; `newSession(cwd)` from a header passes the path through without the picker; `fork` files itself from the
   same cwd. The free-form folder registry (`claude:folderCreate|Rename|Delete|Reorder`, `claude:sessionMove`, `entry.folder`, the `folders` list) is
-  deleted — the loader still tolerates the legacy fields and `serializeRegistry` never writes them back. The one-shot migration (`migrateLegacyFolders`
+  deleted — the loader still tolerates the legacy fields and `registryFileObject` deletes them by name once the migration has consumed them (while
+  `legacyFolders` is still pending they are written back as `folders`, so a save before the migration can't lose them). The one-shot migration (`migrateLegacyFolders`
   → most-common `(host,cwd)` per folder → `toWindowsPath`, label = folder name when it differs from the basename) runs in `ClaudeSessions` after the
   first *complete* store refresh — a pass where any host's store fails skips it and retries next refresh — and drops folders whose members resolve to
   no session or an unresolvable host. Logs `claude-folders-migrated {converted,dropped}`.
@@ -647,7 +668,8 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `update-check` / `update-check-skipped` | `{ source }` / `{ source, reason: disabled\|in-flight\|throttled, sinceMs }`. |
 | `release-notes` | version/ok/status/length, never body. |
 | `settings-commit` / `settings-flush` | field names and counts only. |
-| `settings-repaired` / `settings-migrated` | `{ dropped }` key names / `{ from: 'hosts.defaultWslDistro' \| 'spike-state.json' }` — one-shot load-time migrations. |
+| `settings-repaired` / `settings-migrated` | `{ dropped: [dotted paths], preserved: true }` (invalid leaves defaulted in memory, raw value kept in the file until touched) / `{ from: 'hosts.defaultWslDistro' \| 'spike-state.json' }` — one-shot load-time migrations. |
+| `store-preserved` | `{ store: 'settings' \| 'claude-sessions' \| 'local-sessions' \| 'notifications' \| 'pr-ledger', keys: [dotted paths, ≤50] }` — once at load when the file carried data this build does not know (see "Stores preserve unknown data"). |
 | `analytics-refresh` / `analytics-view-created` / `analytics` | `mode: reload\|navigate`; `load-error`. |
 | `analytics-refresh-skipped` | `{ tab }` — surface re-entered on the Claude tab (nothing hosted to reload). |
 | `usage-fetch` | `{ ok, status, ms, stale, accounts }` — OAuth `/usage` fetch per account group (the bearer token is never logged). |
