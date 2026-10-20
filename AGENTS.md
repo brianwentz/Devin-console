@@ -208,7 +208,7 @@ variable that selects it.
   native context menus over `cloud:contextMenu` (test mode returns item descriptions instead of popping — `cloudMenuItems`/`cloudMenuClick` hooks,
   `cloudMutations()` records the fake backend's ops; shell applies optimistic edits via `src/core/sessionTree.ts` helpers, cleared on the next cloud
   update or lastError).
-- Settings keys: `sessions.open`/`sessions.width`/`sessions.collapsedFolders`, `sessions.maxLiveViews`, `sessions.keepAliveHours` (see Settings keys).
+- Settings keys: `sessions.open`/`sessions.width`/`sessions.collapsedFolders`, `sessions.maxLiveViews`, `sessions.keepAliveHours`, `sessions.sessionOrder` (manual row order per section, ux3 S1) (see Settings keys).
 
 ### Cloud view pool
 - `state.devinView` is a getter for `cloudViews().activeView()` (`src/main/cloudViews.ts`) — views are keyed by the session they display (`keyForUrl`,
@@ -417,7 +417,7 @@ variable that selects it.
   The claude GitHub-tab scope is `claude:<sessionId>` (`claudeScope`/`effectiveScope`).
 - Settings `claude.path` (Settings → Claude Code `#claudePathInput`; a non-empty path that doesn't resolve is flagged inline from `claude.cliPath === null`,
   not a commit error), `claude.autoArchiveDays` (0-365, 0 = off; `#claudeAutoArchiveInput`), `claude.showArchived`, `claude.collapsedFolders`,
-  `claude.workspaces`/`claude.workspaceLabels`/`claude.defaultWslDistro` (see Settings keys).
+  `claude.workspaces`/`claude.workspaceLabels`/`claude.defaultWslDistro`/`claude.sessionOrder` (see Settings keys).
   `preload.setSurface` guards on `SurfaceSchema` — new surfaces must be added to the schema.
 - Workspaces (ux2 P4b, plan D8 — landed): Claude folders became path-bound workspaces on the shared `WorkspaceSidebar` (`ClaudeSidebar` is the adapter;
   subagent rows, the background-agents section, host chip and activity dots survive through `renderRow`/`extraSections`/`rowOpts`). A session's folder is
@@ -655,6 +655,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `cloud-new-session-settled` / `cloud-new-session-skip` | skip reasons `{existing\|not-listed\|folder-gone}`. |
 | `cloud-org-change` | `{reason}`, no ids. |
 | `cloud-mutate` | `{op,ok,status}` only. |
+| `cloud-session-reorder` | `{ section: 'folder'\|'pinned'\|'recent'\|'participated', count }` — row drag in the Cloud sidebar persisted to `sessions.sessionOrder` (app-local, no server op). |
 | `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only. |
 | `pr-read` / `pr-dismiss` | `{ all, count }`. |
 | `prs-panel` / `prs-save-error` | PR panel open/close, store write failure. |
@@ -684,6 +685,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `session-delete` / `session-delete-all` | `{ workspace, requested, deleted, cancelled, failed }` (counts + path only). |
 | `workspace-add` / `workspace-remove` | `{ workspace }` (path only). |
 | `local-workspace-reorder` | `{ count }`. |
+| `local-session-reorder` | `{ section: 'folder'\|'pinned'\|'recent'\|'participated', count }` — row drag in the Local sidebar persisted to `local.sessionOrder`. |
 | `agents-autostart` | `{ count, skipped }` — configured workspaces autostart after window creation (fix/ux2-local-startup); UNC workspaces whose distro isn't enabled count as `skipped`; a missing CLI keeps `missing-cli`. |
 | `local-workspace-rename` / `local-session-copy-id` | No detail (label and id are never logged). |
 | `agent-restart` / `session-reclaim-error` / `terminal-session-release-error` / `terminal-session-locked` | Local terminal handoff. |
@@ -694,6 +696,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `claude-folders-migrated` | `{ converted, dropped }` — one-shot folder → workspace migration (P4b). |
 | `claude-workspace-add` | `{ host }` — `claude:workspaceAdd` (the path is never logged). |
 | `claude-workspace-reorder` | `{ count }`. |
+| `claude-session-reorder` | `{ section, count }` — row drag in the Claude sidebar persisted to `claude.sessionOrder`. |
 | `claude-workspace-rename` / `claude-workspace-remove` | No detail (paths and labels are never logged). |
 | `claude-query` | `{mode:new\|resume,ms}`. |
 | `claude-prompt` | `{length}`. |

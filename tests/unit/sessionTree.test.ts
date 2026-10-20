@@ -6,6 +6,7 @@ import {
   moveSession,
   removeFolder,
   renameFolder,
+  reorderSection,
   reorderFolders,
   setArchived,
 } from '../../src/core/sessionTree';
@@ -234,5 +235,109 @@ describe('optimistic mutations', () => {
   it('setArchived toggles the flag', () => {
     expect(setArchived(data(), 'a', true).sessions[0]!.isArchived).toBe(true);
     expect(setArchived(data(), 'a', false).sessions[0]!.isArchived).toBe(false);
+  });
+});
+
+describe('ux3 S1 — sectionOrder in buildSessionTree', () => {
+  const treeWith = (sessions: CloudSession[], sectionOrder: Record<string, string[]>) =>
+    buildSessionTree(
+      { sessions, folders: ['Alpha'], folderTotals: {} } as CloudListResult,
+      {
+        collapsedFolders: [],
+        currentSessionId: null,
+        sectionOrder,
+      },
+    );
+
+  it('stored ids keep their order; sessions not stored come first newest-first', () => {
+    const t = treeWith(
+      [
+        session({ id: 'a1', folder: 'Alpha', updatedAt: 100 }),
+        session({ id: 'a2', folder: 'Alpha', updatedAt: 300 }),
+        session({ id: 'a3', folder: 'Alpha', updatedAt: 200 }),
+      ],
+      { Alpha: ['a1', 'a2'] },
+    );
+    const alpha = t.sections.find((s) => s.name === 'Alpha')!;
+    // a3 is unstored → first despite the stored list ordering a1 before a2.
+    expect(alpha.nodes.map((n) => n.session.id)).toEqual(['a3', 'a1', 'a2']);
+  });
+
+  it('unknown stored ids are skipped', () => {
+    const t = treeWith(
+      [
+        session({ id: 'a1', folder: 'Alpha', updatedAt: 100 }),
+        session({ id: 'a2', folder: 'Alpha', updatedAt: 200 }),
+      ],
+      { Alpha: ['gone', 'a2', 'a1'] },
+    );
+    const alpha = t.sections.find((s) => s.name === 'Alpha')!;
+    expect(alpha.nodes.map((n) => n.session.id)).toEqual(['a2', 'a1']);
+  });
+
+  it('no stored order → identical to the default sort', () => {
+    const sessions = [
+      session({ id: 'a1', folder: 'Alpha', updatedAt: 100 }),
+      session({ id: 'a2', folder: 'Alpha', updatedAt: 300 }),
+      session({ id: 'a3', folder: 'Alpha', updatedAt: 200 }),
+    ];
+    const ordered = treeWith(sessions, { Alpha: [] });
+    const defaultTree = buildSessionTree(
+      { sessions, folders: ['Alpha'], folderTotals: {} } as CloudListResult,
+      { collapsedFolders: [], currentSessionId: null },
+    );
+    const ids = (t: typeof defaultTree, name: string) =>
+      t.sections.find((s) => s.name === name)!.nodes.map((n) => n.session.id);
+    expect(ids(ordered, 'Alpha')).toEqual(ids(defaultTree, 'Alpha'));
+  });
+
+  it('honours order in the pinned section', () => {
+    const t = treeWith(
+      [
+        session({ id: 'p1', isPinned: true, updatedAt: 100 }),
+        session({ id: 'p2', isPinned: true, updatedAt: 200 }),
+      ],
+      { pinned: ['p2', 'p1'] },
+    );
+    const pinned = t.sections.find((s) => s.name === 'pinned')!;
+    expect(pinned.nodes.map((n) => n.session.id)).toEqual(['p2', 'p1']);
+  });
+
+  it('honours order in a participated-named folder and in recent', () => {
+    const t = treeWith(
+      [
+        session({ id: 'x1', folder: 'participated', updatedAt: 100 }),
+        session({ id: 'x2', folder: 'participated', updatedAt: 200 }),
+        session({ id: 'r1', folder: null, updatedAt: 100 }),
+        session({ id: 'r2', folder: null, updatedAt: 200 }),
+      ],
+      { participated: ['x2', 'x1'], recent: ['r2', 'r1'] },
+    );
+    const part = t.sections.find((s) => s.name === 'participated')!;
+    expect(part.nodes.map((n) => n.session.id)).toEqual(['x2', 'x1']);
+    const recent = t.sections.find((s) => s.name === 'recent')!;
+    expect(recent.nodes.map((n) => n.session.id)).toEqual(['r2', 'r1']);
+  });
+});
+
+describe('reorderSection', () => {
+  const ids = ['a', 'b', 'c', 'd'];
+
+  it('moves before the target', () => {
+    expect(reorderSection(ids, 'd', 'a', 'before')).toEqual(['d', 'a', 'b', 'c']);
+  });
+
+  it('moves after the target, including past the last row', () => {
+    expect(reorderSection(ids, 'a', 'd', 'after')).toEqual(['b', 'c', 'd', 'a']);
+    expect(reorderSection(ids, 'c', 'd', 'after')).toEqual(['a', 'b', 'd', 'c']);
+  });
+
+  it('drag onto itself returns the same array identity', () => {
+    expect(reorderSection(ids, 'b', 'b', 'before')).toBe(ids);
+    expect(reorderSection(ids, 'b', 'b', 'after')).toBe(ids);
+  });
+
+  it('a missing target returns the same array identity', () => {
+    expect(reorderSection(ids, 'a', 'gone', 'before')).toBe(ids);
   });
 });

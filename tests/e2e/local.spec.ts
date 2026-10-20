@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { evaluateInShell, launchApp, readEvents, shellPage, state, waitForEvent, waitForEventCount } from './helpers';
+import { dndMove, evaluateInShell, launchApp, readEvents, shellPage, state, waitForEvent, waitForEventCount } from './helpers';
 
 // Mirrors LocalStateSchema in src/shared/ipc.ts (subset used by the assertions).
 type LocalState = {
@@ -1203,5 +1203,78 @@ test('Local startup: missing CLI leaves configured workspaces missing-cli withou
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });
     rmSync(wsA, { recursive: true, force: true });
+  }
+});
+
+// ux3 S1: drag a session row to reorder inside a workspace section.
+test('Local sidebar: session row drag reorders inside the section and persists', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-reorder-'));
+  const ws = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsR-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    FAKE_ACP_LIST: '1',
+  });
+  const rowOrder = () =>
+    evaluateInShell(
+      app,
+      `[...document.querySelectorAll('[data-reorder-row]')].map((e) => e.getAttribute('data-reorder-row'))`,
+    ) as Promise<string[]>;
+  try {
+    await waitForHooks(app);
+    const a = await addWorkspace(app, ws);
+    await expect.poll(async () => (await localState(app)).agents[a]?.status).toBe('ready');
+    const s1 = await newSession(app, a);
+    const s2 = await newSession(app, a);
+    const s3 = await newSession(app, a);
+    await setSurfaceLocal(app);
+    const shell = await shellPage(app);
+    await expect.poll(async () => (await rowOrder()).length).toBe(3);
+    expect(await rowOrder()).toEqual([s3, s2, s1]);
+
+    // drag the oldest (s1) above the newest (s3) → lands before it.
+    await dndMove(shell, `[data-session-id="${s1}"]`, `[data-session-id="${s3}"]`);
+    await expect.poll(async () => rowOrder()).toEqual([s1, s3, s2]);
+
+    // settings.json carries the full section list.
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)?.local
+            ?.sessionOrder?.[a],
+      )
+      .toEqual([s1, s3, s2]);
+    await waitForEvent(logFile, 'local-session-reorder');
+
+    // a brand-new session lists above the manually ordered ones.
+    const s4 = await newSession(app, a);
+    await expect.poll(async () => rowOrder()).toEqual([s4, s1, s3, s2]);
+
+    // relaunch preserves the manual order: without session/list support the
+    // sidebar files the persisted local-index sessions — their order survives.
+    await app.close();
+    const app2 = await launchApp(profile, join(profile, 'events2.jsonl'), join(profile, 'downloads'), fixtures, {
+      DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+      DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    });
+    try {
+      await waitForHooks(app2);
+      await app2.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('local'));
+      const order2 = () =>
+        evaluateInShell(
+          app2,
+          `[...document.querySelectorAll('[data-reorder-row]')].map((e) => e.getAttribute('data-reorder-row'))`,
+        ) as Promise<string[]>;
+      await expect.poll(async () => (await order2()).length).toBeGreaterThanOrEqual(3);
+      const rows = await order2();
+      const stored = rows.filter((id) => [s1, s3, s2].includes(id));
+      expect(stored).toEqual([s1, s3, s2]);
+    } finally {
+      await app2.close().catch(() => undefined);
+    }
+  } finally {
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
   }
 });

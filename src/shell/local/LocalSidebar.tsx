@@ -279,6 +279,7 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
         error={error}
         entries={entries}
         listData={listData}
+        sessionOrder={settings.local.sessionOrder}
         collapsed={collapsed}
         currentSessionId={selectedSessionId}
         rowOpts={rowOpts}
@@ -289,6 +290,9 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
         })}
         onToggle={toggleWorkspace}
         onReorder={(paths) => void window.devinworkspaces.localWorkspaceReorder(paths)}
+        onReorderSessions={(section, ids) =>
+          void window.devinworkspaces.localSessionReorder(section, ids)
+        }
         onRename={(path, label) => void window.devinworkspaces.localWorkspaceRename(path, label)}
         onNewSession={(path) => void newSession(path)}
         onAdd={() => void addWorkspace()}

@@ -45,7 +45,7 @@ import { prStore } from './prs';
 import { handleLink } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
 import { historyAction, navigationTarget } from './shortcuts';
-import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
+import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, SessionReorderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
 import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
@@ -279,14 +279,37 @@ export function setupIpc(): void {
   });
   guardedOn(IpcChannels.cloudFolderDelete, (_event, payload: unknown) => {
     const parsed = CloudFolderDeleteArg.safeParse(payload);
-    if (parsed.success) void cloudSessions().folderDelete(parsed.data.name);
+    if (parsed.success)
+      void cloudSessions()
+        .folderDelete(parsed.data.name)
+        .then(() => {
+          const order = { ...(state.settings?.current.sessions.sessionOrder ?? {}) };
+          if (!(parsed.data.name in order)) return;
+          delete order[parsed.data.name];
+          state.settings?.merge({ sessions: { sessionOrder: order } });
+        })
+        .catch(() => undefined);
   });
   guardedOn(IpcChannels.cloudFolderReorder, (_event, payload: unknown) => {
     const parsed = CloudFolderReorderArg.safeParse(payload);
     if (parsed.success) void cloudSessions().folderReorder(parsed.data.names);
   });
-  // ux3 S0: contract only — S1 wires the real reorder.
-  guardedOn(IpcChannels.cloudSessionReorder, () => undefined);
+  guardedOn(IpcChannels.cloudSessionReorder, (_event, payload: unknown) => {
+    const parsed = SessionReorderArg.safeParse(payload);
+    if (!parsed.success) return;
+    const { section, ids } = parsed.data;
+    const current = state.settings?.current.sessions.sessionOrder ?? {};
+    state.settings?.merge({
+      sessions: { sessionOrder: { ...current, [section]: ids } },
+    });
+    const kind =
+      section === 'pinned' || section === 'recent' || section === 'participated'
+        ? section
+        : 'folder';
+    log('cloud', 'cloud-session-reorder', {
+      detail: { section: kind, count: ids.length },
+    });
+  });
   guardedHandle(IpcChannels.dialogPickFolder, async (_event, payload: unknown) => {
     const parsed = DialogPickFolderArg.safeParse(payload);
     if (!parsed.success || !state.windowRef) return null;

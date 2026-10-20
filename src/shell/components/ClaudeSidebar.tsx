@@ -469,6 +469,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       statusExtra={statusExtra}
       entries={entries}
       listData={claudeData}
+      sessionOrder={state!.settings.claude.sessionOrder}
       collapsed={collapsedFolders}
       currentSessionId={state!.claudeSessionId}
       rowOpts={rowOpts}
@@ -479,6 +480,9 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       }}
       onToggle={toggleFolder}
       onReorder={(paths) => void window.devinworkspaces.claudeWorkspaceReorder(paths)}
+      onReorderSessions={(section, ids) =>
+        void window.devinworkspaces.claudeSessionReorder(section, ids)
+      }
       onRename={(path, label) => void window.devinworkspaces.claudeWorkspaceRename(path, label)}
       onNewSession={(path) => void window.devinworkspaces.claudeNewSession(path)}
       onAdd={() => void window.devinworkspaces.claudeWorkspaceAdd()}
