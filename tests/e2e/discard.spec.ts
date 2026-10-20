@@ -15,6 +15,7 @@ import {
   readEvents,
   state,
   waitForEvent,
+  waitForEventCount,
   waitForTabTitle,
   webContentsCount,
 } from './helpers';
@@ -166,6 +167,55 @@ test('keep-alive threshold is a persisted setting (hours) applied live', async (
     await evaluateInShell(app, `window.devinworkspaces.setSettings({ tabs: { keepAliveHours: 200 } })`);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect((await state(app)).settings.tabs.keepAliveHours).toBe(48);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+// Regression: a WebContentsView whose webContents is destroyed outside
+// discard()/close() (e.g. a deferred waitForBeforeUnload close finishing after
+// the 3 s probe timeout) must not leave a dangling view for attachActive to
+// re-add — the tab becomes discarded and reloads on activation.
+test('a tab whose webContents is destroyed out-of-band becomes discarded and reloads on activation instead of crashing', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-discard-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
+  try {
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+
+    const destroyOutOfBand = (id: string) =>
+      app.evaluate((_e, tabId: string) => {
+        (globalThis as any).__devinworkspaces.getTabWebContents(tabId)?.close();
+      }, id);
+
+    const a = await openTab(app, `${fixtures.githubUrl}/page/zombie-a`);
+    await waitForTabTitle(app, 'zombie-a');
+    const b = await openTab(app, `${fixtures.githubUrl}/page/zombie-b`);
+    await waitForTabTitle(app, 'zombie-b');
+    expect((await state(app)).tabs.activeId).toBe(b);
+
+    // Hide the GLOBAL scope so both tabs are inactive when destroyed.
+    await showSession(app, 'A');
+
+    await destroyOutOfBand(a);
+    await waitForEvent(logFile, 'webcontents-destroyed');
+    await expect.poll(async () => (await tabInfo(app, a))?.hasView, { timeout: 20_000 }).toBe(false);
+    expect((await tabInfo(app, a))?.discarded).toBe(true);
+
+    // Same for b — the scope's active tab; this is the production crash shape
+    // (attachActive re-adding a view with a dead webContents on scope return).
+    await destroyOutOfBand(b);
+    await waitForEventCount(logFile, 'webcontents-destroyed', 2);
+    await expect.poll(async () => (await tabInfo(app, b))?.hasView, { timeout: 20_000 }).toBe(false);
+    expect((await tabInfo(app, b))?.discarded).toBe(true);
+
+    // Back to GLOBAL: setScope -> attachActive on b must not throw, and both
+    // tabs reload (b via attachActive, a via preloadVisibleScope).
+    await showSession(app, null);
+    expect((await state(app)).tabs.activeId).toBe(b);
+    await expect.poll(async () => (await tabInfo(app, b))?.hasView, { timeout: 20_000 }).toBe(true);
+    await expect.poll(async () => (await tab(app, b))?.title, { timeout: 20_000 }).toBe('GitHub fixture: zombie-b');
+    await expect.poll(async () => (await tabInfo(app, a))?.hasView, { timeout: 20_000 }).toBe(true);
   } finally {
     await quit(app, profile);
   }

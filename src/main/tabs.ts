@@ -473,7 +473,11 @@ export class TabManager {
   ensureView(tabId: string): WebContentsView | null {
     const entry = this.entries.get(tabId);
     if (!entry) return null;
-    if (entry.view) return entry.view;
+    if (entry.view && !entry.view.webContents.isDestroyed()) return entry.view;
+    // A view left behind by an out-of-band webContents teardown (its 'destroyed'
+    // handler clears entry.view, but a race can leave it set) is dead weight —
+    // drop it so the bookkeeping below treats this as a restore.
+    entry.view = null;
 
     const view = new WebContentsView({
       webPreferences: {
@@ -557,6 +561,14 @@ export class TabManager {
     });
     contents.on('destroyed', () => {
       this.log('webcontents-destroyed', { id: tabId }, entry.url);
+      // Identity check: a later ensureView may already own a fresh view for this tab.
+      if (entry.view !== view) return;
+      if (this.parent.children.includes(view)) this.parent.removeChildView(view);
+      entry.view = null;
+      entry.discarded = true;
+      entry.loading = false;
+      if (this.activeViewId === tabId) this.activeViewId = null;
+      this.onChange();
     });
     this.onCreated(tabId, view);
     contents.loadURL(entry.url).catch((error: unknown) => {
@@ -569,7 +581,7 @@ export class TabManager {
   private attachActive(tabId: string): void {
     this.ensureView(tabId);
     const view = this.entries.get(tabId)?.view;
-    if (!view) return;
+    if (!view || view.webContents.isDestroyed()) return;
     if (this.parent.children.includes(view)) this.parent.removeChildView(view);
     this.parent.addChildView(view);
     view.setBounds(this.lastBounds ?? { x: 0, y: 0, width: 0, height: 0 });
