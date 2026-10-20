@@ -812,6 +812,25 @@ export class ClaudeSessions {
     });
   }
 
+  sessionReorder(section: string, ids: string[]): Promise<void> {
+    this.recordMutation('sessionReorder', { count: ids.length });
+    return this.mutate('sessionReorder', () => {
+      const current = state.settings?.current.claude.sessionOrder ?? {};
+      state.settings?.merge({
+        claude: { sessionOrder: { ...current, [section]: ids } },
+      });
+      applyLayout();
+      const kind =
+        section === 'pinned' || section === 'recent' || section === 'participated'
+          ? section
+          : 'folder';
+      log('claude', 'claude-session-reorder', {
+        detail: { section: kind, count: ids.length },
+      });
+      this.emit();
+    });
+  }
+
   workspaceRename(path: string, label: string): Promise<void> {
     this.recordMutation('workspaceRename', {});
     return this.mutate('workspaceRename', () => {
@@ -846,10 +865,13 @@ export class ClaudeSessions {
     const current = state.settings?.current.claude;
     const labels = { ...(current?.workspaceLabels ?? {}) };
     delete labels[normalized];
+    const order = { ...(current?.sessionOrder ?? {}) };
+    delete order[normalized];
     state.settings?.merge({
       claude: {
         workspaces: (current?.workspaces ?? []).filter((p) => p !== normalized),
         workspaceLabels: labels,
+        sessionOrder: order,
       },
     });
     applyLayout();

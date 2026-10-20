@@ -493,3 +493,103 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
     rmSync(uncRoot, { recursive: true, force: true });
   }
 });
+
+// ux3 S1: drag session rows to reorder inside 'recent' and 'pinned'.
+test('claude sidebar: session row drag reorders inside recent and pinned', async () => {
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
+    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await h.setSurface('claude');
+    const shell = await shellPage(app);
+    const rowOrder = (section: string) =>
+      evaluateInShell(
+        app,
+        `[...(([...document.querySelectorAll('[data-section-name]')]
+          .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(section)})
+          ?.closest('div.mb-px')
+          ?.querySelectorAll('[data-reorder-row]')) ?? [])]
+          .map((e) => e.getAttribute('data-reorder-row'))`,
+      ) as Promise<string[]>;
+    await expect.poll(async () => (await rowOrder('recent')).length).toBe(3);
+
+    // drag the last recent row above the first → order flips.
+    const before = await rowOrder('recent');
+    await dndMove(
+      shell,
+      `[data-session-id="${before[2]}"]`,
+      `[data-session-id="${before[0]}"]`,
+    );
+    const expected = [before[2], before[0], before[1]];
+    await expect.poll(async () => rowOrder('recent')).toEqual(expected);
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)?.claude
+            ?.sessionOrder?.recent,
+      )
+      .toEqual(expected);
+    await waitForEvent(join(profile, 'events.jsonl'), 'claude-session-reorder');
+
+    // pin UA + UB → they file under 'pinned'; reorder there too.
+    await shell.evaluate(
+      `window.devinworkspaces.claudeSessionPin(${JSON.stringify(UA)}, true)`,
+    );
+    await shell.evaluate(
+      `window.devinworkspaces.claudeSessionPin(${JSON.stringify(UB)}, true)`,
+    );
+    await expect.poll(async () => (await rowOrder('pinned')).length).toBe(2);
+    const pinOrder = await rowOrder('pinned');
+    await dndMove(
+      shell,
+      `[data-session-id="${pinOrder[1]}"]`,
+      `[data-session-id="${pinOrder[0]}"]`,
+    );
+    const expectedPin = [pinOrder[1], pinOrder[0]];
+    await expect.poll(async () => rowOrder('pinned')).toEqual(expectedPin);
+    await expect
+      .poll(
+        () =>
+          (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as any)?.claude
+            ?.sessionOrder?.pinned,
+      )
+      .toEqual(expectedPin);
+
+    // relaunch preserves the manual order.
+    await closeApp(app);
+    const secondApp = await launchApp(
+      profile,
+      join(profile, 'events2.jsonl'),
+      join(profile, 'downloads'),
+      fixtures,
+      { CLAUDE_CONFIG_DIR: claudeHome, DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' },
+    );
+    const h2 = hooks(secondApp);
+    try {
+      await expect.poll(async () => (await h2.claudeState()).status).toBe('ready');
+      await h2.setSurface('claude');
+      const rowOrder2 = (section: string) =>
+        evaluateInShell(
+          secondApp,
+          `[...(([...document.querySelectorAll('[data-section-name]')]
+            .find((e) => e.getAttribute('data-section-name') === ${JSON.stringify(section)})
+            ?.closest('div.mb-px')
+            ?.querySelectorAll('[data-reorder-row]')) ?? [])]
+            .map((e) => e.getAttribute('data-reorder-row'))`,
+        ) as Promise<string[]>;
+      await expect.poll(async () => (await rowOrder2('recent')).length).toBeGreaterThanOrEqual(1);
+      expect((await rowOrder2('recent')).filter((id) => expected.includes(id))).toEqual(
+        expected.filter((id) => id !== UA && id !== UB),
+      );
+      await expect.poll(async () => (await rowOrder2('pinned')).length).toBe(2);
+      expect(await rowOrder2('pinned')).toEqual(expectedPin);
+    } finally {
+      await closeApp(secondApp).catch(() => undefined);
+    }
+  } finally {
+    await closeApp(app).catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

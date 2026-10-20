@@ -50,9 +50,45 @@ export interface SessionTree<S extends SidebarSession = SidebarSession> {
 
 const PINNED = 'pinned';
 
+// Manual per-section order (ux3): ids not in the stored list come first,
+// newest-first as before, then the stored ids in stored order. Unknown ids
+// are skipped; sections without a stored list behave exactly as before.
+export function orderRoots<S extends { id: string; updatedAt: number }>(
+  sectionRoots: S[],
+  stored: string[] | undefined,
+  byUpdatedDesc: (a: S, b: S) => number,
+): S[] {
+  if (!stored) return sectionRoots.sort(byUpdatedDesc);
+  const kept = new Set(stored);
+  const byId = new Map(sectionRoots.map((s) => [s.id, s]));
+  const fresh = sectionRoots.filter((s) => !kept.has(s.id)).sort(byUpdatedDesc);
+  const ordered = stored.map((id) => byId.get(id)).filter((s): s is S => s !== undefined);
+  return [...fresh, ...ordered];
+}
+
+// Full id list of a section's roots after a drop: the dragged row removed and
+// re-inserted relative to the target. Drag onto itself returns the same array.
+export function reorderSection(
+  currentIds: string[],
+  draggedId: string,
+  targetId: string,
+  place: 'before' | 'after',
+): string[] {
+  if (draggedId === targetId) return currentIds;
+  const next = currentIds.filter((id) => id !== draggedId);
+  const index = next.indexOf(targetId);
+  if (index < 0) return currentIds;
+  next.splice(place === 'before' ? index : index + 1, 0, draggedId);
+  return next;
+}
+
 export function buildSessionTree<S extends SidebarSession>(
   result: SidebarListData<S>,
-  opts: { collapsedFolders: string[]; currentSessionId: string | null },
+  opts: {
+    collapsedFolders: string[];
+    currentSessionId: string | null;
+    sectionOrder?: Record<string, string[]>;
+  },
 ): SessionTree<S> {
   const collapsed = new Set(opts.collapsedFolders);
   const byId = new Map(result.sessions.map((s) => [s.id, s]));
@@ -98,7 +134,9 @@ export function buildSessionTree<S extends SidebarSession>(
       name,
       collapsed: collapsed.has(name),
       total,
-      nodes: sectionRoots.sort(byUpdatedDesc).map((s) => toNode(s, 0)),
+      nodes: orderRoots(sectionRoots, opts.sectionOrder?.[name], byUpdatedDesc).map((s) =>
+        toNode(s, 0),
+      ),
       hasMore: total !== null && total > sectionRoots.length,
     };
   };
@@ -145,46 +183,46 @@ export function buildSessionTree<S extends SidebarSession>(
 
 export type CloudListData = SidebarListData<CloudSessionState>;
 
-const withoutSessions = <S extends SidebarSession>(
-  data: SidebarListData<S>,
+const withoutSessions = <S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   patch: (s: S) => S,
-): SidebarListData<S> => ({
+): D => ({
   ...data,
   sessions: data.sessions.map(patch),
 });
 
-export function moveSession<S extends SidebarSession>(
-  data: SidebarListData<S>,
+export function moveSession<S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   id: string,
   folder: string | null,
-): SidebarListData<S> {
+): D {
   return withoutSessions(data, (s) =>
     s.id === id ? { ...s, folder, isPinned: folder === PINNED } : s,
   );
 }
 
-export function reorderFolders<S extends SidebarSession>(
-  data: SidebarListData<S>,
+export function reorderFolders<S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   names: string[],
-): SidebarListData<S> {
+): D {
   const next = names.filter((name) => name !== PINNED);
   const missing = data.folders.filter((name) => name !== PINNED && !next.includes(name));
   return { ...data, folders: [...next, ...missing] };
 }
 
-export function addFolder<S extends SidebarSession>(
-  data: SidebarListData<S>,
+export function addFolder<S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   name: string,
-): SidebarListData<S> {
+): D {
   if (data.folders.includes(name)) return data;
   return { ...data, folders: [...data.folders, name] };
 }
 
-export function renameFolder<S extends SidebarSession>(
-  data: SidebarListData<S>,
+export function renameFolder<S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   oldName: string,
   newName: string,
-): SidebarListData<S> {
+): D {
   if (oldName === newName) return data;
   const totals = { ...data.folderTotals };
   if (oldName in totals) {
@@ -199,10 +237,10 @@ export function renameFolder<S extends SidebarSession>(
   };
 }
 
-export function removeFolder<S extends SidebarSession>(
-  data: SidebarListData<S>,
+export function removeFolder<S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   name: string,
-): SidebarListData<S> {
+): D {
   const totals = { ...data.folderTotals };
   delete totals[name];
   return {
@@ -213,10 +251,10 @@ export function removeFolder<S extends SidebarSession>(
   };
 }
 
-export function setArchived<S extends SidebarSession>(
-  data: SidebarListData<S>,
+export function setArchived<S extends SidebarSession, D extends SidebarListData<S>>(
+  data: D,
   id: string,
   archived: boolean,
-): SidebarListData<S> {
+): D {
   return withoutSessions(data, (s) => (s.id === id ? { ...s, isArchived: archived } : s));
 }

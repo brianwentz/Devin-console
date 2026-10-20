@@ -12,3 +12,10 @@ export const SECTION_LABELS: Record<string, string> = {
 export const isEditableFolder = (name: string) => name !== 'pinned' && name !== 'participated';
 export const isMoveTarget = (section: { kind: string }) =>
   section.kind === 'folder' || section.kind === 'recent';
+
+// The SESSION_MIME payload is unreadable during dragover, so a bubbling
+// dragstart on the ReorderableRow wrapper records the drag here; cleared on
+// dragend. Cross-section row drags are refused by comparing `section`.
+export const dragState: { current: { id: string; section: string } | null } = {
+  current: null,
+};

@@ -90,8 +90,9 @@ export function setupClaude(): ClaudeSessions {
   handleResult(IpcChannels.claudeWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) =>
     sessions.workspaceReorder(paths),
   );
-  // ux3 S0: contract only — S1 wires the real reorder.
-  handleResult(IpcChannels.claudeSessionReorder, SessionReorderArg, () => null);
+  handleResult(IpcChannels.claudeSessionReorder, SessionReorderArg, ({ section, ids }) =>
+    sessions.sessionReorder(section, ids),
+  );
   handleResult(IpcChannels.claudeWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) =>
     sessions.workspaceRename(path, label),
   );

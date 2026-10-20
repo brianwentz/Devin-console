@@ -126,6 +126,13 @@ export function setupLocal(): void {
   handleResult(IpcChannels.localWorkspaceAdd, LocalWorkspaceArg, ({ path }) => requireHost().addWorkspace(path));
   handleResult(IpcChannels.localWorkspaceRemove, LocalWorkspaceArg, ({ path }) => {
     removeWorkspace(path);
+    const order = { ...(state.settings?.current.local.sessionOrder ?? {}) };
+    const normalized = resolve(path);
+    if (path in order || normalized in order) {
+      delete order[path];
+      delete order[normalized];
+      state.settings?.merge({ local: { sessionOrder: order } });
+    }
     return null;
   });
   handleResult(IpcChannels.localWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) => {
@@ -138,8 +145,21 @@ export function setupLocal(): void {
     log('local', 'local-workspace-reorder', { detail: { count: next.length } });
     return null;
   });
-  // ux3 S0: contract only — S1 wires the real reorder.
-  handleResult(IpcChannels.localSessionReorder, SessionReorderArg, () => null);
+  handleResult(IpcChannels.localSessionReorder, SessionReorderArg, ({ section, ids }) => {
+    const current = state.settings?.current.local.sessionOrder ?? {};
+    const prev = current[section] ?? [];
+    if (prev.length === ids.length && prev.every((id, i) => id === ids[i])) return null;
+    state.settings?.merge({ local: { sessionOrder: { ...current, [section]: ids } } });
+    applyLayout();
+    const kind =
+      section === 'pinned' || section === 'recent' || section === 'participated'
+        ? section
+        : 'folder';
+    log('local', 'local-session-reorder', {
+      detail: { section: kind, count: ids.length },
+    });
+    return null;
+  });
   handleResult(IpcChannels.localWorkspaceRename, WorkspaceRenameSchema, ({ path, label }) => {
     const normalized = resolve(path);
     const labels = state.settings?.current.local.workspaceLabels ?? {};
