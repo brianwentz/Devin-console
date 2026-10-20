@@ -21,6 +21,7 @@ import {
   newSession as newSessionEntry,
   resetHistory,
   sessionsFor,
+  setModes,
   setPermission,
   setTerminalOwned,
   startPrompt,
@@ -32,6 +33,7 @@ import {
   type AgentCapabilities,
   type LocalSession,
   type LocalState,
+  type SessionModes,
   type SessionUpdate,
   type StopReason,
 } from '../../core/localModel';
@@ -195,6 +197,9 @@ export interface DevinLocalHostOptions {
   // only — user messages and pty output are not scanned here).
   onPullRequestUrl?: (url: string, sessionId: string) => void;
   prLinkContext?: PrLinkContext;
+  // Getter (not a snapshot) so a settings change applies to the next session
+  // without restarting the app. null/'' = keep the agent's own default.
+  defaultMode?: () => string | null;
 }
 
 export class DevinLocalHost {
@@ -804,6 +809,59 @@ export class DevinLocalHost {
     return session;
   }
 
+  // Record the modes a session/new|load response advertised into the session,
+  // then apply the configured default — except on load, where the agent's
+  // persisted mode wins. Never throws: a failing setSessionMode just logs.
+  private async applyModes(
+    connection: ClientSideConnection,
+    uiSessionId: string,
+    remoteId: string,
+    modes: SessionModes | null | undefined,
+    source: 'new' | 'load' | 'rebind',
+  ): Promise<void> {
+    const available = modes?.availableModes.map((mode) => ({ id: mode.id, name: mode.name }));
+    if (modes && available) {
+      update((state) =>
+        setModes(state, uiSessionId, {
+          currentModeId: modes.currentModeId,
+          availableModes: available,
+        }),
+      );
+    }
+    if (source === 'load') return;
+    const modeId = this.options.defaultMode?.() ?? null;
+    if (!modeId) return;
+    if (!modes || !available) {
+      log('local', 'session-mode-unavailable', {
+        detail: { sessionId: uiSessionId, modeId, available: 0 },
+      });
+      return;
+    }
+    if (modeId === modes.currentModeId) return;
+    if (!available.some((mode) => mode.id === modeId)) {
+      log('local', 'session-mode-unavailable', {
+        detail: { sessionId: uiSessionId, modeId, available: available.length },
+      });
+      return;
+    }
+    try {
+      await withTimeout(
+        connection.setSessionMode({ sessionId: remoteId, modeId }),
+        INITIALIZE_TIMEOUT_MS,
+        'session/set_mode',
+      );
+    } catch (error) {
+      log('local', 'session-mode-error', {
+        detail: { sessionId: uiSessionId, modeId, message: errorMessage(error) },
+      });
+      return;
+    }
+    update((state) =>
+      setModes(state, uiSessionId, { currentModeId: modeId, availableModes: available }),
+    );
+    log('local', 'session-mode-set', { detail: { sessionId: uiSessionId, modeId, source } });
+  }
+
   async newSession(workspace: string): Promise<string> {
     const normalized = resolve(workspace);
     const handle = await this.ensureAgent(normalized);
@@ -831,6 +889,7 @@ export class DevinLocalHost {
       remoteId: response.sessionId,
       generation: handle.generation,
     });
+    await this.applyModes(connection, session.id, response.sessionId, response.modes, 'new');
     this.index.push({ id: session.id, workspace: normalized, title: '', createdAt });
     this.saveIndex();
     log('local', 'session-new', { detail: { workspace: normalized, sessionId: session.id } });
@@ -847,7 +906,7 @@ export class DevinLocalHost {
     if (existing && existing.generation === handle.generation) return existing;
     if (handle.capabilities.loadSession) {
       update((state) => resetHistory(state, session.id));
-      await Promise.race([
+      const response = await Promise.race([
         withTimeout(
           connection.loadSession({
             sessionId: session.id,
@@ -859,6 +918,7 @@ export class DevinLocalHost {
         ),
         handle.exit.promise,
       ]);
+      await this.applyModes(connection, session.id, session.id, response.modes, 'load');
       const binding = { workspace: session.workspace, remoteId: session.id, generation: handle.generation };
       this.bindings.set(session.id, binding);
       log('local', 'session-rebound', { detail: { sessionId: session.id, via: 'load' } });
@@ -875,6 +935,7 @@ export class DevinLocalHost {
       handle.exit.promise,
     ]);
     handle.remoteToUi.set(response.sessionId, session.id);
+    await this.applyModes(connection, session.id, response.sessionId, response.modes, 'rebind');
     const binding = { workspace: session.workspace, remoteId: response.sessionId, generation: handle.generation };
     this.bindings.set(session.id, binding);
     log('local', 'session-rebound', { detail: { sessionId: session.id, via: 'new', remoteId: response.sessionId } });
@@ -1108,7 +1169,7 @@ export class DevinLocalHost {
           );
       return resetHistory(next, sessionId);
     });
-    await Promise.race([
+    const response = await Promise.race([
       withTimeout(
         connection.loadSession({
           sessionId,
@@ -1120,6 +1181,7 @@ export class DevinLocalHost {
       ),
       handle.exit.promise,
     ]);
+    await this.applyModes(connection, sessionId, sessionId, response.modes, 'load');
     this.bindings.set(sessionId, { workspace: normalized, remoteId: sessionId, generation: handle.generation });
     log('local', 'session-load', { detail: { workspace: normalized, sessionId } });
   }

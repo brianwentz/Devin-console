@@ -271,6 +271,9 @@ const SessionOrderSchema = z.record(
 const LocalFields = {
   devinPath: z.string().nullable(),
   defaultWslDistro: z.string().max(128).nullable(),
+  // Free string: the mode list is agent-defined (devin acp advertises e.g.
+  // 'accept-edits'/'plan'). null = agent's own default.
+  defaultMode: z.string().min(1).max(64).nullable(),
   workspaceLabels: z.record(z.string(), z.string().max(128)),
   collapsedWorkspaces: z.array(z.string().max(1024)).max(200),
   sessionOrder: SessionOrderSchema,
@@ -441,6 +444,7 @@ export const SettingsObject = z.object({
     .object({
       devinPath: LocalFields.devinPath.default(null),
       defaultWslDistro: LocalFields.defaultWslDistro.default(null),
+      defaultMode: LocalFields.defaultMode.default(null),
       workspaceLabels: LocalFields.workspaceLabels.default({}),
       collapsedWorkspaces: LocalFields.collapsedWorkspaces.default([]),
       sessionOrder: LocalFields.sessionOrder.default({}),
@@ -449,6 +453,7 @@ export const SettingsObject = z.object({
     .default({
       devinPath: null,
       defaultWslDistro: null,
+      defaultMode: null,
       workspaceLabels: {},
       collapsedWorkspaces: [],
       sessionOrder: {},
@@ -1205,6 +1210,13 @@ const ChatSessionSchema = z.object({
   error: z.string().optional(),
   historySource: z.enum(['agent', 'local-index']),
   loaded: z.boolean(),
+  // ACP session modes advertised by session/new|load (agent-defined list).
+  modes: z
+    .object({
+      currentModeId: z.string(),
+      availableModes: z.array(z.object({ id: z.string(), name: z.string() })),
+    })
+    .optional(),
 });
 export type ChatSessionPublic = z.infer<typeof ChatSessionSchema>;
 

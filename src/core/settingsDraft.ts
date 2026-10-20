@@ -13,6 +13,17 @@ export const CLAUDE_PERMISSION_MODES = [
   'auto',
 ] as const satisfies readonly ClaudePermissionMode[];
 
+// Fallback option list for the local.defaultMode select — mirrors what
+// `devin acp` advertises; the UI prefers the union of modes live agents
+// report on their sessions and only uses this when none are known.
+export const DEVIN_LOCAL_MODES = [
+  { id: 'accept-edits', name: 'Code' },
+  { id: 'smart', name: 'Smart' },
+  { id: 'ask', name: 'Ask' },
+  { id: 'plan', name: 'Plan' },
+  { id: 'bypass', name: 'Bypass Permissions' },
+] as const;
+
 // Picker start-folder draft fields accept a Windows drive root, a UNC path, or
 // a POSIX-absolute path (a WSL home is valid for a UNC-rooted picker).
 export function isAbsolutePickerPath(value: string): boolean {
@@ -35,6 +46,8 @@ export interface SettingsDraft {
   terminalShell: string;
   devinPath: string;
   localDefaultWslDistro: string;
+  // '' = agent default (null in settings).
+  localDefaultMode: string;
   localPickerFolder: string;
   claudePath: string;
   claudeAutoArchiveDays: string;
@@ -73,6 +86,7 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   terminalShell: 'general',
   devinPath: 'local',
   localDefaultWslDistro: 'local',
+  localDefaultMode: 'local',
   localPickerFolder: 'local',
   claudePath: 'claude',
   claudeAutoArchiveDays: 'claude',
@@ -104,6 +118,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     terminalShell: settings.terminal.shell,
     devinPath: settings.local.devinPath ?? '',
     localDefaultWslDistro: settings.local.defaultWslDistro ?? '',
+    localDefaultMode: settings.local.defaultMode ?? '',
     localPickerFolder: settings.local.pickerFolder ?? '',
     claudePath: settings.claude.path ?? '',
     claudeAutoArchiveDays: String(settings.claude.autoArchiveDays),
@@ -142,6 +157,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     draft.terminalShell.trim() !== base.terminalShell ||
     draft.devinPath.trim() !== base.devinPath ||
     draft.localDefaultWslDistro !== base.localDefaultWslDistro ||
+    draft.localDefaultMode.trim() !== base.localDefaultMode ||
     draft.localPickerFolder.trim() !== base.localPickerFolder ||
     draft.claudePath.trim() !== base.claudePath ||
     Number(draft.claudeAutoArchiveDays) !== Number(base.claudeAutoArchiveDays) ||
@@ -251,6 +267,7 @@ export function validateDraft(
       local: {
         devinPath: draft.devinPath.trim() || null,
         defaultWslDistro: draft.localDefaultWslDistro || null,
+        defaultMode: draft.localDefaultMode.trim() || null,
         pickerFolder: localPickerFolder || null,
       },
       claude: {
@@ -281,6 +298,7 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'terminal.shell': 'terminalShell',
   'local.devinPath': 'devinPath',
   'local.defaultWslDistro': 'localDefaultWslDistro',
+  'local.defaultMode': 'localDefaultMode',
   'claude.path': 'claudePath',
   'claude.autoArchiveDays': 'claudeAutoArchiveDays',
   'claude.defaultPermissionMode': 'claudePermissionMode',
