@@ -391,15 +391,6 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
           Claude Code CLI not found — set the path in Settings
         </div>
       )}
-      {Object.entries(claude.hostErrors ?? {}).map(([id, message]) => (
-        <div
-          key={id}
-          data-host-error
-          className="px-3 pb-1.5 text-[11px] text-[#e0a03c] truncate"
-        >
-          {id === 'local' ? 'This PC' : id.replace(/^wsl:/, '')}: {message}
-        </div>
-      ))}
       {claude.lastError && (
         <div
           id="sessionsError"

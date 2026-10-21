@@ -129,6 +129,7 @@ variable that selects it.
 ## Layout & settings (F-features)
 
 ### Frame & shortcuts
+- Title-bar "Ag" tile `src/shell/components/icons/AgMark.tsx` mirrors the `scripts/make-icon.mjs` geometry — change both together.
 - Frame: `titleBarStyle: 'hidden'` + `titleBarOverlay` on the BaseWindow, `Menu.setApplicationMenu(null)`; the shell's `TitleBar.tsx` renders the drag
   region and the GitHub tab strip. Zoom (Ctrl+= / Ctrl+- / Ctrl+0) and detached DevTools (F12 / Ctrl+Shift+I, dev only) live in `src/main/shortcuts.ts`;
   Ctrl+` toggles the terminal dock — only on dock surfaces (`dockSurface(surface)` in `src/core/layout.ts`: `cloud | local | claude`; the predicate is
@@ -234,6 +235,7 @@ variable that selects it.
   `protected`). Log events `cloud-view-show|create|rekey|duplicate|discard|discard-cancelled|crashed` — kinds/counts/ids only.
 
 ### Pane toggle & splitter
+- The rail button `#paneToggle` is user-labelled "Linked Context" (Chromium icon `src/shell/components/icons/ChromiumIcon.tsx`); ids stay stable across label renames.
 - Pane toggle resizes the WINDOW, not the split: `setPaneOpen(open, source)` in `src/main/window.ts` is the single seam (rail, Ctrl+Shift+G,
   settings:set, test hooks, tab auto-open). Closing shrinks the window so the devin column keeps its exact px width; opening grows to the right where
   the pane px derives from `pane.fraction` as f/(1−f)·devin (fraction clamped to 0.95 for the ratio), capped at the display work area and never

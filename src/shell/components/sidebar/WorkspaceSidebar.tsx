@@ -57,7 +57,7 @@ export interface WorkspaceSidebarProps<S extends SidebarSession> {
   // Element ids are Local-flavoured by default; Claude passes its own.
   ids?: Partial<{ newSession: string; refresh: string; status: string }>;
   statusAttrs?: Record<string, string | undefined>;
-  // Extra lines under the status row (Claude: cliPath / hostErrors / lastError).
+  // Extra lines under the status row (Claude: cliPath / lastError).
   statusExtra?: ReactNode;
 }
 

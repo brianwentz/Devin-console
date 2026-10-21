@@ -52,7 +52,7 @@ export function LinksTab() {
   return (
     <div className="flex flex-col gap-5">
       <p className="text-xs text-[#7f8ca0] max-w-2xl">
-        Links matching these rules open as tabs in the GitHub pane instead of the system browser.
+        Links matching these rules open as tabs in the Linked Context pane instead of the system browser.
         GitHub and your Devin tenant are always handled first.
       </p>
       <label className="flex items-center gap-2 text-sm">

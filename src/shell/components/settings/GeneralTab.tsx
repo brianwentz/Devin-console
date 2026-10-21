@@ -109,6 +109,11 @@ function HostsBlock() {
           <span data-host-facts className="text-xs text-[#7f8ca0]">
             {facts(host)}
           </span>
+          {state.claude.hostErrors?.[host.id] && (
+            <span data-host-error className="text-xs text-[#e0a03c]">
+              {state.claude.hostErrors[host.id]}
+            </span>
+          )}
           {host.error ? (
             <span className="text-xs text-[#d08080]">{host.error}</span>
           ) : null}
@@ -143,7 +148,7 @@ export function GeneralTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <span className="text-sm text-[#aeb9c8]">GitHub pane</span>
+      <span className="text-sm text-[#aeb9c8]">Linked Context</span>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">
           Keep hidden GitHub tabs live for (hours, 0 = discard on switch)

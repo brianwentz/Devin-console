@@ -82,7 +82,7 @@ test('settings has eight tabs and switches panels', async () => {
       .toBe(true);
     expect(await shell(app, `Boolean(document.getElementById('tenantUrlInput'))`)).toBe(false);
     expect(await shell(app, `document.getElementById('settingsPanel-general').textContent`)).toContain(
-      'GitHub pane',
+      'Linked Context',
     );
 
     await clickTab(app, 'cloud');
