@@ -39,6 +39,8 @@ Agent Workspace — Electron desktop client (BaseWindow + WebContentsViews; the 
 - `npm run hosts:probe` — build then run `scripts/hosts-probe.ts` → `out/scripts/hosts-probe.cjs` → `docs/evidence/hosts-probe.json`; real-WSL
   measurements (enumeration/probe/env-capture vs plain env/argv round-trip/UNC timings/fs.watch EISDIR/inotify/hook reachability); exit 0 when
   `wsl.exe` or distros are absent.
+  `-- --soak <minutes> [--profile <dir>]` launches the built app on a temp copy of the profile and writes `soak` (host-exec/min by kind, background
+  claude-list/min, usage-scan files) into the same file — never run it against the real profile without saying so; test/FAKE_* env passes through.
 - `acp:contract` honours `AGENT_WORKSPACE_HOST=wsl:<distro>` — spawns `devin acp` through `spawnSpec` + captured env with cwd = distro home; evidence
   `docs/evidence/p4-acp-contract-wsl.jsonl`.
 - CI:

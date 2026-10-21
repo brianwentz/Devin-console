@@ -5,11 +5,35 @@
 // (127.0.0.1 + vEthernet). Evidence → docs/evidence/hosts-probe.json;
 // exit 0 even when wsl.exe or distros are absent (reported in the file).
 // Uses only core/execHost.ts — never src/main/** (that pulls Electron state).
+//
+// `--soak <minutes> [--profile <dir>]` instead launches the BUILT app (out/main.cjs)
+// against a throwaway COPY of the profile (default %APPDATA%\agent-workspace; the
+// source is never modified, the copy is deleted at the end) with its own event
+// log, waits N minutes, closes the app (kill after 15 s) and writes a `soak`
+// object into hosts-probe.json: host-exec total/by-kind/per-min (raw and after a
+// 60 s startup grace), `excludedLongLived` (kind 'spawn': chats/ptys/acp/inotify),
+// background claude-list (source watch|hosts) per min and usage-scan file counts
+// (the log has no per-host split, so usageScanFilesMax includes local files).
+// AGENT_WORKSPACE_TEST*/FAKE_* env in the caller's environment is passed through
+// (used to soak against the fake WSL). Counts only — no payloads are recorded.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, watch } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  watch,
+} from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { networkInterfaces } from 'node:os';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { networkInterfaces, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { summarizeSoak } from '../src/core/soak';
 import {
   hostIdForPath,
   isWslHost,
@@ -95,7 +119,71 @@ function curl(distro: string, url: string) {
   ).then((r) => ({ stdout: r.stdout.toString('utf8').trim(), code: r.code, ms: r.ms }));
 }
 
+function argValue(flag: string): string | undefined {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+async function soak(minutes: number): Promise<void> {
+  const source = resolve(
+    argValue('--profile') ?? join(process.env.APPDATA ?? tmpdir(), 'agent-workspace'),
+  );
+  const work = mkdtempSync(join(tmpdir(), 'aw-soak-'));
+  const profile = join(work, 'profile');
+  const eventLog = join(work, 'events.jsonl');
+  if (existsSync(source)) {
+    // Chromium runtime locks are not data and can be held open by a running app.
+    cpSync(source, profile, {
+      recursive: true,
+      filter: (src) => !/^(lockfile|Singleton.*|events(\.1)?\.jsonl)$/.test(src.split(/[\\/]/).pop() ?? ''),
+    });
+  } else mkdirSync(profile, { recursive: true });
+  const electronBin = createRequire(join(process.cwd(), 'package.json'))('electron') as string;
+  const startedAt = Date.now();
+  const child = spawn(electronBin, [process.cwd()], {
+    stdio: 'ignore',
+    env: { ...process.env, AGENT_WORKSPACE_USER_DATA: profile, AGENT_WORKSPACE_LOG: eventLog },
+  });
+  const exited = new Promise<void>((done) => child.once('exit', () => done()));
+  console.log(`soak: ${minutes} min, copy ${profile}, log ${eventLog}`);
+  await Promise.race([new Promise((r) => setTimeout(r, minutes * 60_000)), exited]);
+  const text = existsSync(eventLog) ? readFileSync(eventLog, 'utf8') : '';
+  if (child.exitCode === null) {
+    // Closing the process tree; the app does not need a graceful quit here.
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/t'], { windowsHide: true });
+    } else child.kill('SIGTERM');
+    const timer = setTimeout(() => {
+      if (process.platform === 'win32') {
+        spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
+      } else child.kill('SIGKILL');
+    }, 15_000);
+    await exited;
+    clearTimeout(timer);
+  }
+  const summary = summarizeSoak(text, startedAt, minutes);
+  const keepLog = join('docs', 'evidence', 'hosts-probe-soak-events.jsonl');
+  mkdirSync('docs/evidence', { recursive: true });
+  writeFileSync(keepLog, text);
+  rmSync(work, { recursive: true, force: true });
+  out.soak = {
+    ...summary,
+    startedAt: new Date(startedAt).toISOString(),
+    eventLog: resolve(keepLog),
+    sourceProfile: source,
+    graceNote: 'post-grace numbers exclude the first 60 s; background claude-list = source watch|hosts',
+  };
+  finish(true);
+}
+
 async function main(): Promise<void> {
+  const soakMinutes = argValue('--soak');
+  if (soakMinutes !== undefined) {
+    const n = Number(soakMinutes);
+    if (!(n > 0)) throw new Error('--soak needs a positive number of minutes');
+    await soak(n);
+    return;
+  }
   if (!wslExists()) {
     out.wsl = 'absent';
     finish();
@@ -318,10 +406,18 @@ async function main(): Promise<void> {
   finish();
 }
 
-function finish(): void {
+function finish(merge = false): void {
   mkdirSync('docs/evidence', { recursive: true });
   const file = join('docs', 'evidence', 'hosts-probe.json');
-  writeFileSync(file, JSON.stringify(out, null, 2));
+  let result: Record<string, unknown> = out;
+  if (merge && existsSync(file)) {
+    try {
+      result = { ...(JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>), soak: out.soak };
+    } catch {
+      /* unreadable previous evidence — write fresh */
+    }
+  }
+  writeFileSync(file, JSON.stringify(result, null, 2));
   console.log(`wrote ${file}`);
 }
 
