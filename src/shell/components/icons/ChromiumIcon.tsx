@@ -1,3 +1,4 @@
+// Chromium mark for the rail's Linked Context toggle — paths from Lucide's retired "chrome" icon (ISC), not shipped by lucide-react 1.55.
 export function ChromiumIcon({ size = 18, strokeWidth = 1.8 }: { size?: number; strokeWidth?: number }) {
   return (
     <svg

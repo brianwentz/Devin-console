@@ -1,4 +1,5 @@
 // Title-bar "Ag" tile — geometry mirrors scripts/make-icon.mjs (unit coords ×100); keep in sync.
+// The inset ring is shell-only; the "47" accent is omitted (make-icon draws it only at ≥48 px).
 export function AgMark({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true" data-ag-mark>
