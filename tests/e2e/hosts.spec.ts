@@ -700,17 +700,20 @@ test('the gh PR-state fallback never runs in a stopped distro', async () => {
   }
 });
 
-test('turning hooks off never touches a disabled distro over UNC; re-enabling removes our block', async () => {
+test('turning hooks off removes our block from a disabled, running distro', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const claudeDir = join(uncRoot, 'home', 'u', '.claude');
   mkdirSync(claudeDir, { recursive: true });
   const settingsFile = join(claudeDir, 'settings.json');
   writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
-  const { app } = await launchWithClaudeFixture(fixtures, {
+  // The UNC root is a different dir: a Windows-side write would land there.
+  const otherUnc = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: otherUnc,
     FAKE_WSL_ROOT: uncRoot,
   });
+  const logFile = join(profile, 'events.jsonl');
   const shell = await shellPage(app);
   const ours = () => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/');
   const helper = () =>
@@ -728,21 +731,23 @@ test('turning hooks off never touches a disabled distro over UNC; re-enabling re
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.locator('[data-host-enabled]').click();
     await expect.poll(() => hostState(app)).toBe('disabled');
+    // The disabled distro's helper channel is stopped...
+    await expect.poll(helper, { timeout: 10_000 }).not.toBe('ready');
 
-    // The disabled distro's helper is stopped: the opt-out cannot reach it and
-    // nothing falls back to a Windows-side write.
     await evaluateInShell(
       app,
       `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`,
     );
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    expect(ours()).toBe(true);
-
-    // Enabled again: the channel comes back and the opt-out lands through it.
-    await row.locator('[data-host-enabled]').click();
-    await expect.poll(helper, { timeout: 30_000 }).toBe('ready');
+    // ...so the opt-out runs the deployed helper once in --apply-hooks-off mode:
+    // our block embeds the bearer token and must go everywhere.
     await expect.poll(ours, { timeout: 15_000 }).toBe(false);
     expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+    const offs = (await readEvents(logFile)).filter((e) => e.event === 'host-hooks-off');
+    expect(offs.map((e) => e.detail)).toEqual([{ host: 'wsl:Fake', ok: true, code: 0 }]);
+    expect(existsSync(join(otherUnc, 'home', 'u', '.claude', 'settings.json'))).toBe(false);
+    // Still disabled, and the one-shot run did not restart the channel.
+    expect(await hostState(app)).toBe('disabled');
+    expect(await helper()).not.toBe('ready');
   } finally {
     await closeApp(app);
   }

@@ -53,11 +53,11 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 
 Add a workspace under `\\wsl.localhost\<distro>\…` on the **Local** or **Claude** surface and its sessions run inside that distro. Enable or disable distros under **Settings → General → Hosts**.
 
-- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings and lists background agents — all inside the distro, so nothing is read from Windows through `\\wsl.localhost`.
+- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings and lists background agents — all inside the distro rather than through the `\\wsl.localhost` network share. (Claude usage totals on the Analytics page still read the distro through that share for now; this moves inside the distro in a later update.)
 - The helper is copied to `~/.agent-workspace/` in the distro on first use (one file per app version; copies unused for a week are cleaned up). Deleting the folder is safe — it is copied again on the next start.
 - Without Node.js (or with a version older than 18) the distro's row says **Node 18 or newer is required** and that distro's sessions don't load. Install Node in the distro, then press **Re-check**.
 - The app never starts a stopped distro. While a distro is stopped its helper shows as **paused** and its sessions keep their last state; they refresh once the distro runs again. If the helper keeps failing the row shows it stopped — **Re-check** tries again.
-- Turning off *Report Claude Code sessions started from other terminals* removes the hook block from every running, enabled distro. A distro that is disabled at that moment is left alone and cleaned up the next time it is enabled.
+- Turning off *Report Claude Code sessions started from other terminals* removes the hook block from every running distro — also from one you disabled in the app while it keeps running. A stopped distro is never started for this; if it runs again while the app is open, it is cleaned up then. While the toggle is off, the app ignores reports from terminals it did not open itself.
 
 ## Where things live
 

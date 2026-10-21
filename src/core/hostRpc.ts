@@ -129,6 +129,45 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 export const LONG_REQUEST_TIMEOUT_MS = 60_000;
 /** Max messages per store.messages / store.subagentMessages page; callers page until a short page. */
 export const STORE_MESSAGES_PAGE = 500;
+/** Page cap for one history read (200 × 500 = 100 000 messages). */
+export const STORE_MAX_PAGES = 200;
+
+export class PagingError extends Error {
+  constructor(
+    readonly code: 'bad-page' | 'bad-paging' | 'too-many-pages',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'PagingError';
+  }
+}
+
+/**
+ * Reads every page (`fetch(offset, limit)`) until a short page. The remote
+ * side is not trusted to honour `offset`: a full page identical in its first
+ * item to the previous one, a non-array / oversized page, or more than
+ * `maxPages` full pages rejects with a PagingError instead of looping.
+ */
+export async function pageAll(
+  fetch: (offset: number, limit: number) => Promise<unknown[]>,
+  limit: number,
+  maxPages: number,
+): Promise<unknown[]> {
+  const out: unknown[] = [];
+  let previousHead: string | null = null;
+  for (let n = 0; n < maxPages; n++) {
+    const page = await fetch(out.length, limit);
+    if (!Array.isArray(page) || page.length > limit) throw new PagingError('bad-page', 'malformed page');
+    if (page.length > 0) {
+      const head = JSON.stringify(page[0]);
+      if (head === previousHead) throw new PagingError('bad-paging', 'page repeated: offset ignored');
+      previousHead = head;
+    }
+    out.push(...page);
+    if (page.length < limit) return out;
+  }
+  throw new PagingError('too-many-pages', `no short page within ${maxPages} pages`);
+}
 
 const LONG_METHODS: ReadonlySet<string> = new Set(['store.list', 'usage.scan']);
 

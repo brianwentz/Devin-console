@@ -298,6 +298,12 @@ describe('helperSpec', () => {
     const spec = helperSpec(UB, '/home/brian', '/usr/bin/fish', H);
     expect(spec.args.slice(-2)).toEqual(['test -f $argv[1]; or exit 86; exec node $argv --stdio', file]);
   });
+  it('the one-shot --apply-hooks-off mode reuses the launch line (exit 86 when missing)', () => {
+    const spec = helperSpec(UB, '/home/brian', '/bin/bash', H, '--apply-hooks-off');
+    expect(spec.args.slice(-2)).toEqual(['test -f "$0" || exit 86; exec node "$0" --apply-hooks-off', file]);
+    const fish = helperSpec(UB, '/home/brian', '/usr/bin/fish', H, '--apply-hooks-off');
+    expect(fish.args.slice(-2)).toEqual(['test -f $argv[1]; or exit 86; exec node $argv --apply-hooks-off', file]);
+  });
   it('has no ~ and no UNC; a home with a space is one argv element', () => {
     const spec = helperSpec(wslHost('U', '/home/a b'), '/home/a b', '/bin/bash', H);
     expect(spec.args.join('')).not.toMatch(/~|\\\\/);

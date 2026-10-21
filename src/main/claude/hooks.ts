@@ -22,6 +22,7 @@ import { ClaudeHookServer } from './hookServer';
 import { claudeUsage } from './usage';
 import { applyGlobalHooks } from './hooksInstall';
 import { hosts } from '../hosts';
+import { terminalHost } from '../local/terminalHost';
 import type { ClaudeSessions } from './sessions';
 
 export class ClaudeHooks {
@@ -144,11 +145,16 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
-      // Installs target enabled hosts only; the opt-out also cleans a
-      // disabled-but-running one (our block carries the token) — over the
-      // channel when it is up, else skipped (never a Stopped distro, never UNC).
+      // Installs target enabled hosts only (their channel must be ready). The
+      // opt-out also cleans a disabled-but-running one (our block carries the
+      // token): over the channel when it is up, else one `--apply-hooks-off`
+      // run of the deployed helper — never a Stopped distro, never UNC.
       if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
-      if (isWslHost(host) && hosts().channel(host)?.state !== 'ready') continue;
+      const channelReady = !isWslHost(host) || hosts().channel(host)?.state === 'ready';
+      // An enabled host's channel is (re)starting: its ready transition
+      // re-runs this apply — no one-shot spawn for it.
+      const listed = hosts().list().some((h) => h.id === host.id);
+      if (!channelReady && (enabled || listed)) continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,
@@ -160,9 +166,11 @@ export class ClaudeHooks {
         // Already written in this state; lastApplied is only recorded on success.
         result = { installed: enabled, error: null };
       } else {
-        result = isWslHost(host)
-          ? await this.applyOverChannel(host, enabled, info, addr)
-          : await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr);
+        result = !isWslHost(host)
+          ? await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr)
+          : channelReady
+            ? await this.applyOverChannel(host, enabled, info, addr)
+            : await this.removeOnce(host);
         if (result.error === null) this.lastApplied.set(host.id, key);
         else this.lastApplied.delete(host.id);
       }
@@ -175,6 +183,15 @@ export class ClaudeHooks {
     }
     this.hooks = { ...this.hooks, enabled, installed, error: firstError };
     this.owner.emit();
+  }
+
+  /** Opt-out with the channel down (a disabled, running distro). */
+  private async removeOnce(host: ExecHost): Promise<{ installed: boolean; error: string | null }> {
+    const r = await hosts().hooksOffOnce(host);
+    log('claude', 'claude-hooks-install', {
+      detail: { enabled: false, changed: r.ok, ok: r.ok, host: host.id, via: 'one-shot' },
+    });
+    return { installed: false, error: r.error };
   }
 
   /** hooks.apply in the distro; an RPC failure is reported like a write error. */
@@ -212,7 +229,24 @@ export class ClaudeHooks {
     this.hookServer?.listenOn(addr);
   }
 
+  /**
+   * Defence in depth for the opt-out: with `claude.hooksEnabled` off only the
+   * app's own claude ptys (their `--settings` block + token env) may report.
+   * The listener cannot tell the two block kinds apart (same URL and token),
+   * so the gate is by session: an open claude-kind pty for `session_id`.
+   */
+  private accepts(e: ClaudeHookEvent): boolean {
+    if (state.settings?.current.claude.hooksEnabled ?? false) return true;
+    return terminalHost
+      .list()
+      .some((t) => t.kind === 'claude' && t.sessionId === e.session_id && t.exitCode === null);
+  }
+
   private onEvent(e: ClaudeHookEvent): void {
+    if (!this.accepts(e)) {
+      log('claude', 'claude-hook-ignored', { detail: { event: e.event, reason: 'hooks-off' } });
+      return;
+    }
     // A turn just ended — utilization moved (Q4: terminal sessions too).
     if (e.event === 'Stop') claudeUsage().poke('hook');
     const next = applyHookEvent(this.activity, e);

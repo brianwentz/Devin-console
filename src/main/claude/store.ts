@@ -13,7 +13,7 @@ import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
-import { STORE_MESSAGES_PAGE } from '../../core/hostRpc';
+import { STORE_MAX_PAGES, STORE_MESSAGES_PAGE, pageAll } from '../../core/hostRpc';
 import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
@@ -301,15 +301,15 @@ export class ChannelBackend implements StoreBackend {
     return this.pages('store.subagentMessages', { sessionId: id, agentId });
   }
 
-  // A history can outgrow one 32 MB frame: page until a short page.
-  private async pages(method: string, params: Record<string, unknown>): Promise<unknown[]> {
-    const out: unknown[] = [];
-    for (;;) {
-      const page = await this.request<unknown>(method, { ...params, offset: out.length, limit: STORE_MESSAGES_PAGE });
-      if (!Array.isArray(page)) throw new HostRpcError('internal', `${method} returned no page`);
-      out.push(...page);
-      if (page.length < STORE_MESSAGES_PAGE) return out;
-    }
+  // A history can outgrow one 32 MB frame: page until a short page
+  // (core/hostRpc pageAll — a helper that ignores `offset` or never sends a
+  // short page rejects with a PagingError, never loops).
+  private pages(method: string, params: Record<string, unknown>): Promise<unknown[]> {
+    return pageAll(
+      (offset, limit) => this.request<unknown[]>(method, { ...params, offset, limit }),
+      STORE_MESSAGES_PAGE,
+      STORE_MAX_PAGES,
+    );
   }
 
   async transcriptPath(id: string): Promise<string | null> {

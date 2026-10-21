@@ -402,13 +402,22 @@ export function deriveHelperState(input: {
  * Helper launch: interactive login shell (full PATH/nvm/SSH_AUTH_SOCK) running
  * the deployed bundle on stdio. `$0` (fish: `$argv[1]`) is the bundle path, so
  * paths with spaces stay one argv element. Exit 86 = bundle missing.
+ * `--apply-hooks-off` is the one-shot opt-out run (no stdio protocol).
  */
-export function helperSpec(host: ExecHost, home: string, shell: string, hash: string): HostSpawnSpec {
+export type HelperMode = '--stdio' | '--apply-hooks-off';
+
+export function helperSpec(
+  host: ExecHost,
+  home: string,
+  shell: string,
+  hash: string,
+  mode: HelperMode = '--stdio',
+): HostSpawnSpec {
   if (host.kind !== 'wsl') throw new Error('helperSpec: not a wsl host');
   const line =
     shellFamily(shell) === 'fish'
-      ? `test -f $argv[1]; or exit ${HELPER_MISSING_EXIT}; exec node $argv --stdio`
-      : `test -f "$0" || exit ${HELPER_MISSING_EXIT}; exec node "$0" --stdio`;
+      ? `test -f $argv[1]; or exit ${HELPER_MISSING_EXIT}; exec node $argv ${mode}`
+      : `test -f "$0" || exit ${HELPER_MISSING_EXIT}; exec node "$0" ${mode}`;
   return {
     file: 'wsl.exe',
     args: ['-d', host.distro, '--cd', home, '-e', shell, '-ilc', line, helperPath(home, hash)],

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { applyHooks } from '../../../src/helper/hooks';
+import { applyHooks, hooksOffOnce } from '../../../src/helper/hooks';
 import { isOurHook } from '../../../src/core/claudeHooks';
 
 let dir: string;
@@ -88,5 +88,34 @@ describe('helper hooks.apply', () => {
     await applyHooks(dir, { enabled: true, port: 50001, token: 't' });
     expect(readFileSync(backupFile(), 'utf8')).toBe('legacy');
     expect(existsSync(`${settingsFile()}.devin-workspaces.bak`)).toBe(false);
+  });
+});
+
+describe('helper --apply-hooks-off (one-shot, no stdio protocol)', () => {
+  it('removes only our entries, exits 0 and writes a single count line to stderr', async () => {
+    writeFileSync(settingsFile(), ORIGINAL);
+    await applyHooks(dir, { enabled: true, port: 50001, token: 'tok-1' });
+    expect(ourCount(read())).toBeGreaterThan(0);
+    const err: string[] = [];
+    expect(await hooksOffOnce(dir, (line) => err.push(line))).toBe(0);
+    expect(ourCount(read())).toBe(0);
+    expect(JSON.stringify(read())).toContain('echo foreign');
+    expect(JSON.stringify(read())).not.toContain('tok-1');
+    expect(err).toEqual(['helper: hooks-off changed=1\n']);
+  });
+
+  it('a file without our block is left alone (changed=0)', async () => {
+    writeFileSync(settingsFile(), ORIGINAL);
+    const err: string[] = [];
+    expect(await hooksOffOnce(dir, (line) => err.push(line))).toBe(0);
+    expect(readFileSync(settingsFile(), 'utf8')).toBe(ORIGINAL);
+    expect(err).toEqual(['helper: hooks-off changed=0\n']);
+  });
+
+  it('an unparseable settings.json exits 1 without echoing its content', async () => {
+    writeFileSync(settingsFile(), '{ secret-ish not json');
+    const err: string[] = [];
+    expect(await hooksOffOnce(dir, (line) => err.push(line))).toBe(1);
+    expect(err).toEqual(['helper: hooks-off failed\n']);
   });
 });

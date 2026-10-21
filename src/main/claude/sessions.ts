@@ -248,7 +248,7 @@ export class ClaudeSessions {
     // Enumeration/probe completion re-publishes the host list; a new wsl host
     // also needs its store created, so refresh rather than emit only.
     hosts().onStatusChange = () => {
-      void this.refresh('hosts');
+      void this.refresh('hosts', this.statusRefreshHosts());
       // A host that just became ready gets its hooks block written now —
       // applyHooks skips hosts whose fs isn't reachable yet.
       this.hook.applyHooks();
@@ -466,15 +466,28 @@ export class ClaudeSessions {
     return agents;
   }
 
-  /** Disposes per-host pollers/stores whose host can no longer be touched:
-   * agents pollers for hosts that left hosts().list(), wsl stores for hosts
-   * that left it or are not fsReady (stopped / re-probing). Both are
-   * recreated lazily by the next refresh once the host is back. */
+  /** Hosts a status change must list: local (cheap), plus every ready WSL
+   * host whose store has not started watching yet (new, or created while the
+   * channel was down). A WSL store that already watches lists itself once on
+   * its channel's return (`resync`) — helper state flaps, env.get publishes
+   * and other hosts' changes never re-list it. A host that left list() drops
+   * out of any refresh. */
+  private statusRefreshHosts(): HostId[] {
+    const targets: HostId[] = ['local'];
+    for (const host of hosts().list()) {
+      if (!isWslHost(host) || !hosts().fsReady(host)) continue;
+      if (!this.stores.get(host.id)?.started) targets.push(host.id);
+    }
+    return targets;
+  }
+
+  /** Disposes per-host pollers/stores of hosts that left hosts().list(). A
+   * WSL store survives its channel going down (rows kept, subscription kept
+   * on the channel object); its resync re-subscribes and lists on ready. */
   private pruneHosts(): void {
     const listed = new Map(hosts().list().map((host) => [host.id, host]));
     for (const [id, store] of this.stores) {
-      const host = listed.get(id);
-      if (id === 'local' || (host && hosts().fsReady(host))) continue;
+      if (id === 'local' || listed.has(id)) continue;
       store.dispose();
       this.stores.delete(id);
     }
@@ -654,7 +667,13 @@ export class ClaudeSessions {
     log('claude', 'claude-select', { detail: { sessionId } });
     applyLayout();
     const chat = this.host;
-    if (chat && !chat.isLoaded(sessionId)) void chat.loadHistory(sessionId);
+    if (chat && !chat.isLoaded(sessionId)) {
+      // A WSL history read fails while the helper channel is down — surface it.
+      chat.loadHistory(sessionId).catch((error: unknown) => {
+        this.lastError = { op: 'loadHistory', message: error instanceof Error ? error.message : String(error) };
+        this.emit();
+      });
+    }
   }
 
   // --- Terminal tab (one-writer handoff) -------------------------------------

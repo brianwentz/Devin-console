@@ -619,6 +619,73 @@ test('deleted WSL transcript removes its row', async () => {
   }
 });
 
+const storeListsFor = async (logFile: string, host: string) =>
+  (await readEvents(logFile)).filter(
+    (e) => e.event === 'claude-store-list' && (e.detail as { host?: string }).host === host,
+  ).length;
+
+test('a respawned helper is re-subscribed: one store list after ready, then appends patch', async () => {
+  const { app, logFile, transcript } = await launchStore();
+  try {
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 30_000 }).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const listsBefore = await storeListsFor(logFile, HOST);
+    const readyBefore = (await helperEvents(logFile)).filter((e) => e.state === 'ready').length;
+    expect(await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), HOST)).toBe(
+      true,
+    );
+    await expect
+      .poll(async () => (await helperEvents(logFile)).filter((e) => e.state === 'ready').length, { timeout: 30_000 })
+      .toBeGreaterThan(readyBefore);
+    // The returning host is listed in full exactly once (the store's resync)...
+    await expect.poll(() => storeListsFor(logFile, HOST), { timeout: 15_000 }).toBe(listsBefore + 1);
+    // ...and the new helper got watch.subscribe again: an append patches the row.
+    const patches = (await patchesOf(logFile)).length;
+    appendFileSync(
+      transcript,
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'After respawn', sessionId: STORE_ID })}\n`,
+    );
+    await expect.poll(async () => (await wslRow(app, STORE_ID))?.title, { timeout: 15_000 }).toBe('After respawn');
+    expect((await patchesOf(logFile)).length).toBeGreaterThan(patches);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await storeListsFor(logFile, HOST)).toBe(listsBefore + 1);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test("one distro's helper flapping never re-lists another distro", async () => {
+  const OTHER = 'wsl:Second';
+  const { app, logFile } = await launchStore({ FAKE_WSL_DISTROS: 'Fake:Running:default,Second:Running' });
+  const channel = (id: string) =>
+    app.evaluate((_e, h: string) => (globalThis as any).__agentworkspace.hostChannelState(h)?.state ?? null, id);
+  try {
+    await expect.poll(() => channel(HOST), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(() => channel(OTHER), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(() => storeListsFor(logFile, OTHER), { timeout: 15_000 }).toBeGreaterThan(0);
+    // Let start-up (env.get publishes, hooks) settle.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const other = await storeListsFor(logFile, OTHER);
+    for (let i = 0; i < 2; i++) {
+      const readyBefore = (await helperEvents(logFile)).filter((e) => e.host === HOST && e.state === 'ready').length;
+      await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), HOST);
+      await expect
+        .poll(async () => (await helperEvents(logFile)).filter((e) => e.host === HOST && e.state === 'ready').length, {
+          timeout: 30_000,
+        })
+        .toBeGreaterThan(readyBefore);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await storeListsFor(logFile, OTHER)).toBe(other);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('WSL history loads via store.messages', async () => {
   const { app } = await launchStore();
   try {

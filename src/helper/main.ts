@@ -19,7 +19,7 @@ import {
   type RpcResponse,
 } from '../core/hostRpc';
 import { agentsHandlers } from './agents';
-import { hooksHandlers } from './hooks';
+import { hooksHandlers, hooksOffOnce } from './hooks';
 import { RpcError, safeMessage, type Handler } from './params';
 import { changePayload, storeHandlers, type StoreChanged } from './store';
 import { ProjectsWatcher, type WatchChange } from './watch';
@@ -253,3 +253,12 @@ function run(): void {
 }
 
 if (process.argv.includes('--stdio')) run();
+else if (process.argv.includes('--apply-hooks-off')) {
+  // One-shot opt-out (no stdio protocol): exit 0/1, a count line on stderr.
+  const home = process.env.HOME || homedir();
+  const configDir = process.env.CLAUDE_CONFIG_DIR || join(home, '.claude');
+  void hooksOffOnce(configDir, (line) => process.stderr.write(line)).then(
+    (code) => process.exit(code),
+    () => process.exit(1),
+  );
+}

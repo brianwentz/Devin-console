@@ -116,6 +116,20 @@ const helperLaunch = (file: string, cwd: string): number => {
   return STAY_ALIVE;
 };
 
+// One-shot helper mode (`… exec node "$0" --apply-hooks-off`): runs to
+// completion with the helper env, stderr passed through, exit code returned.
+const helperOnce = (file: string, mode: string, cwd: string): number => {
+  const local = linuxFile(file);
+  if (!existsSync(local)) return 86;
+  const result = spawnSync(process.env.FAKE_WSL_NODE ?? process.execPath, [local, mode], {
+    cwd,
+    env: helperEnv(),
+    stdio: ['ignore', 'inherit', 'inherit'],
+    windowsHide: true,
+  });
+  return result.status ?? 1;
+};
+
 // Helper deploy: `mkdir -p "$1" && cat > "$1/.tmp.$$" && mv … "$1/$2"` with the bundle on stdin.
 const helperDeploy = (dir: string, name: string): number => {
   const target = join(linuxToLocal(dir), name);
@@ -212,6 +226,8 @@ const shInteractive = (tail: string[], cwd: string): number => {
   const posargs = cIdx === -1 ? tail : tail.slice(cIdx + 2);
 
   if (cmd.startsWith('test -f ') && cmd.includes('exit 86;')) {
+    const mode = /exec node "?\$(?:0|argv)"? (--[a-z-]+)$/.exec(cmd)?.[1] ?? '--stdio';
+    if (mode !== '--stdio') return helperOnce(posargs[0] ?? '', mode, cwd);
     return helperLaunch(posargs[0] ?? '', cwd);
   }
   if (cmd.includes('__DW_ENV__')) {

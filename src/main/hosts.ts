@@ -33,6 +33,7 @@ import {
   deriveHelperState,
   helperDeploySpec,
   helperSpec,
+  HELPER_MISSING_EXIT,
   sanitizeEnv,
   NODE_MARKER,
   statusesChanged,
@@ -843,6 +844,40 @@ export class HostsRegistry {
     if (live.length) await new Promise((resolveWait) => setTimeout(resolveWait, 300));
     // Every channel — one halted moments earlier still has its child in the grace.
     for (const entry of this.entries.values()) entry.channel?.killStopped();
+  }
+
+  /**
+   * Hooks opt-out for a host whose channel is down — a distro disabled in the
+   * app but still running (syncChannel stops its helper). One `wsl.exe` run of
+   * the deployed bundle in `--apply-hooks-off` mode (same core/hooksApply.ts as
+   * `hooks.apply`); re-reads the distro table first and never runs on a
+   * Stopped distro. Exit 86 (bundle gone) → deploy once and retry.
+   */
+  async hooksOffOnce(host: ExecHost): Promise<{ ok: boolean; error: string | null }> {
+    if (!isWslHost(host) || this.quitting) return { ok: false, error: 'not a wsl host' };
+    const entry = this.entries.get(host.id);
+    const bundle = helperBundle();
+    const home = entry?.host.home;
+    if (!entry || !bundle || !home) return { ok: false, error: 'helper unavailable' };
+    const helperState = entry.status.helper?.state;
+    if (helperState === 'node-missing' || helperState === 'unsupported-node') {
+      return { ok: false, error: 'node unavailable' };
+    }
+    await this.distros.refreshFresh();
+    if (this.quitting || this.distros.failed || !this.fsSafe(host)) return { ok: false, error: 'distro unavailable' };
+    const spec = helperSpec(entry.host, home, entry.status.shell ?? '/bin/bash', bundle.hash, '--apply-hooks-off');
+    const run = () =>
+      this.runWsl(spec.args, { kind: 'exec', host: host.id, timeout: 30_000, requireSuccess: false });
+    try {
+      let result = await run();
+      if (result.code === HELPER_MISSING_EXIT && (await this.deployHelper(entry))) result = await run();
+      const ok = result.code === 0;
+      log('host', 'host-hooks-off', { detail: { host: host.id, ok, code: result.code } });
+      return { ok, error: ok ? null : `hooks removal failed (exit ${result.code ?? 'unknown'})` };
+    } catch (error) {
+      log('host', 'host-hooks-off', { detail: { host: host.id, ok: false, code: null } });
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   /** Test hooks: kill the live helper / read the channel state. */
