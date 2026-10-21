@@ -13,13 +13,18 @@ export type SoakSummary = {
   excludedLongLived: number;
   hostExecPerMin: number;
   hostExecPerMinPostGrace: number;
-  hostExecPerMinPostGraceExclSpawn: number;
-  claudeListTotal: number;
-  wslClaudeListPerMin: number;
-  wslClaudeListPerMinPostGrace: number;
+  hostExecPerMinPostGraceExclLongLived: number;
+  /**
+   * claude-list events with source watch|hosts (not user/startup driven). Each re-list
+   * lists every enabled host incl. WSL over UNC, so this is the re-list cadence, not a WSL-only count.
+   */
+  backgroundRelistsTotal: number;
+  backgroundRelistsPerMin: number;
+  backgroundRelistsPerMinPostGrace: number;
   usageScans: number;
-  /** Max `files` over usage-scan events; the log carries no per-host split, so this includes local files. */
+  /** Max `files` over usage-scan events (local + wsl). */
   usageScanFilesMax: number;
+  /** Max `wslFiles` over usage-scan events; null when no event carries the field (older builds). */
   wslUsageScanFiles: number | null;
 };
 
@@ -43,6 +48,25 @@ export function parseEventLines(text: string): Parsed[] {
   return out;
 }
 
+/** Keeps only the counted events with detail reduced to non-sensitive count fields. */
+export function reduceEventLog(text: string): string {
+  const keep = ['kind', 'source', 'host', 'count', 'files', 'wslFiles', 'ms'];
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith('{')) continue;
+    try {
+      const rec = JSON.parse(line) as { ts?: string; event?: string; detail?: Record<string, unknown> };
+      if (!rec.event || !['host-exec', 'claude-list', 'usage-scan'].includes(rec.event)) continue;
+      const detail: Record<string, unknown> = {};
+      for (const k of keep) if (rec.detail && k in rec.detail) detail[k] = rec.detail[k];
+      out.push(JSON.stringify({ ts: rec.ts, event: rec.event, detail }));
+    } catch {
+      /* partial line */
+    }
+  }
+  return out.join('\n') + (out.length ? '\n' : '');
+}
+
 export function summarizeSoak(
   lines: string,
   startedAtMs: number,
@@ -62,6 +86,7 @@ export function summarizeSoak(
   let listsPost = 0;
   let scans = 0;
   let scanFilesMax = 0;
+  let wslFilesMax: number | null = null;
   for (const e of events) {
     const post = e.ts >= graceEnd;
     if (e.event === 'host-exec') {
@@ -82,6 +107,8 @@ export function summarizeSoak(
       scans += 1;
       const files = e.detail.files;
       if (typeof files === 'number') scanFilesMax = Math.max(scanFilesMax, files);
+      const wsl = e.detail.wslFiles;
+      if (typeof wsl === 'number') wslFilesMax = Math.max(wslFilesMax ?? 0, wsl);
     }
   }
   return {
@@ -92,12 +119,12 @@ export function summarizeSoak(
     excludedLongLived: byKind[LONG_LIVED_KIND] ?? 0,
     hostExecPerMin: rate(execTotal, minutes),
     hostExecPerMinPostGrace: rate(execPost, postMin),
-    hostExecPerMinPostGraceExclSpawn: rate(execPostNoSpawn, postMin),
-    claudeListTotal: lists,
-    wslClaudeListPerMin: rate(lists, minutes),
-    wslClaudeListPerMinPostGrace: rate(listsPost, postMin),
+    hostExecPerMinPostGraceExclLongLived: rate(execPostNoSpawn, postMin),
+    backgroundRelistsTotal: lists,
+    backgroundRelistsPerMin: rate(lists, minutes),
+    backgroundRelistsPerMinPostGrace: rate(listsPost, postMin),
     usageScans: scans,
     usageScanFilesMax: scanFilesMax,
-    wslUsageScanFiles: null,
+    wslUsageScanFiles: wslFilesMax,
   };
 }

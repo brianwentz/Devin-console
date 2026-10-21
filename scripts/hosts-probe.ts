@@ -12,13 +12,19 @@
 // log, waits N minutes, closes the app (kill after 15 s) and writes a `soak`
 // object into hosts-probe.json: host-exec total/by-kind/per-min (raw and after a
 // 60 s startup grace), `excludedLongLived` (kind 'spawn': chats/ptys/acp/inotify),
-// background claude-list (source watch|hosts) per min and usage-scan file counts
-// (the log has no per-host split, so usageScanFilesMax includes local files).
+// background re-lists (claude-list source watch|hosts) per min and usage-scan file counts
+// (usage-scan `wslFiles` max; null on builds that do not emit it).
+// `--label <name>` (default 'run') writes soak[label] and keeps other labels; the
+// reduced log (host-exec/claude-list/usage-scan counts only) is
+// docs/evidence/hosts-probe-soak-<label>.jsonl. The app runs with
+// AGENT_WORKSPACE_SKIP_HOOKS_INSTALL=1 so the real settings.json files are never written.
+// A pre-P0 build does not emit host-exec (its host-exec numbers are 0/absent): compare
+// backgroundRelists and usage-scan for the old build.
 // AGENT_WORKSPACE_TEST*/FAKE_* env in the caller's environment is passed through
 // (used to soak against the fake WSL). Counts only — no payloads are recorded.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
-  cpSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -33,7 +39,7 @@ import { createServer, type Server } from 'node:http';
 import { createRequire } from 'node:module';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { summarizeSoak } from '../src/core/soak';
+import { reduceEventLog, summarizeSoak } from '../src/core/soak';
 import {
   hostIdForPath,
   isWslHost,
@@ -124,56 +130,117 @@ function argValue(flag: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-async function soak(minutes: number): Promise<void> {
-  const source = resolve(
-    argValue('--profile') ?? join(process.env.APPDATA ?? tmpdir(), 'agent-workspace'),
-  );
-  const work = mkdtempSync(join(tmpdir(), 'aw-soak-'));
-  const profile = join(work, 'profile');
-  const eventLog = join(work, 'events.jsonl');
-  if (existsSync(source)) {
-    // Chromium runtime locks are not data and can be held open by a running app.
-    cpSync(source, profile, {
-      recursive: true,
-      filter: (src) => !/^(lockfile|Singleton.*|events(\.1)?\.jsonl)$/.test(src.split(/[\\/]/).pop() ?? ''),
-    });
-  } else mkdirSync(profile, { recursive: true });
-  const electronBin = createRequire(join(process.cwd(), 'package.json'))('electron') as string;
-  const startedAt = Date.now();
-  const child = spawn(electronBin, [process.cwd()], {
-    stdio: 'ignore',
-    env: { ...process.env, AGENT_WORKSPACE_USER_DATA: profile, AGENT_WORKSPACE_LOG: eventLog },
-  });
-  const exited = new Promise<void>((done) => child.once('exit', () => done()));
-  console.log(`soak: ${minutes} min, copy ${profile}, log ${eventLog}`);
-  await Promise.race([new Promise((r) => setTimeout(r, minutes * 60_000)), exited]);
-  const text = existsSync(eventLog) ? readFileSync(eventLog, 'utf8') : '';
-  if (child.exitCode === null) {
-    // Closing the process tree; the app does not need a graceful quit here.
-    if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/pid', String(child.pid), '/t'], { windowsHide: true });
-    } else child.kill('SIGTERM');
-    const timer = setTimeout(() => {
-      if (process.platform === 'win32') {
-        spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
-      } else child.kill('SIGKILL');
-    }, 15_000);
-    await exited;
-    clearTimeout(timer);
+const SKIP_DIRS = new Set(
+  [
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'DawnCache',
+    'DawnGraphiteCache',
+    'DawnWebGPUCache',
+    'Crashpad',
+    'Service Worker',
+    'blob_storage',
+    'Shared Dictionary',
+  ].map((n) => n.toLowerCase()),
+);
+const SKIP_FILE = /^(lock|lockfile|singleton.*|events(\.1)?\.jsonl|.*\.log)$/i;
+
+/** Copies the profile minus Chromium cache/state; per-file EBUSY/EPERM is counted, not fatal. */
+function copyProfile(src: string, dest: string, stats: { copied: number; skipped: number }): void {
+  mkdirSync(dest, { recursive: true });
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(src, { withFileTypes: true });
+  } catch {
+    stats.skipped += 1;
+    return;
   }
-  const summary = summarizeSoak(text, startedAt, minutes);
-  const keepLog = join('docs', 'evidence', 'hosts-probe-soak-events.jsonl');
-  mkdirSync('docs/evidence', { recursive: true });
-  writeFileSync(keepLog, text);
-  rmSync(work, { recursive: true, force: true });
-  out.soak = {
-    ...summary,
-    startedAt: new Date(startedAt).toISOString(),
-    eventLog: resolve(keepLog),
-    sourceProfile: source,
-    graceNote: 'post-grace numbers exclude the first 60 s; background claude-list = source watch|hosts',
-  };
-  finish(true);
+  for (const entry of entries) {
+    const from = join(src, entry.name);
+    const to = join(dest, entry.name);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+      copyProfile(from, to, stats);
+    } else if (entry.isFile()) {
+      if (SKIP_FILE.test(entry.name)) continue;
+      try {
+        copyFileSync(from, to);
+        stats.copied += 1;
+      } catch {
+        stats.skipped += 1;
+      }
+    }
+  }
+}
+
+function killTree(child: ChildProcess, force: boolean): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(child.pid), '/t', ...(force ? ['/f'] : [])], {
+      windowsHide: true,
+    });
+  } else child.kill(force ? 'SIGKILL' : 'SIGTERM');
+}
+
+async function soak(minutes: number): Promise<void> {
+  const customProfile = argValue('--profile');
+  const source = resolve(customProfile ?? join(process.env.APPDATA ?? tmpdir(), 'agent-workspace'));
+  const label = argValue('--label') ?? 'run';
+  const work = mkdtempSync(join(tmpdir(), 'aw-soak-'));
+  let child: ChildProcess | null = null;
+  try {
+    const profile = join(work, 'profile');
+    const eventLog = join(work, 'events.jsonl');
+    const copy = { copied: 0, skipped: 0 };
+    const copyStart = Date.now();
+    if (existsSync(source)) copyProfile(source, profile, copy);
+    else mkdirSync(profile, { recursive: true });
+    const copyMs = Date.now() - copyStart;
+    console.log(`soak copy: ${copy.copied} files, ${copy.skipped} skipped, ${copyMs} ms`);
+    const electronBin = createRequire(join(process.cwd(), 'package.json'))('electron') as string;
+    const startedAt = Date.now();
+    child = spawn(electronBin, [process.cwd()], {
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        AGENT_WORKSPACE_USER_DATA: profile,
+        AGENT_WORKSPACE_LOG: eventLog,
+        // userData is the only thing redirected; never let the soaked app rewrite the real hooks files.
+        AGENT_WORKSPACE_SKIP_HOOKS_INSTALL: '1',
+      },
+    });
+    const exited = new Promise<void>((done) => child!.once('exit', () => done()));
+    console.log(`soak: ${minutes} min, label ${label}`);
+    await Promise.race([new Promise((r) => setTimeout(r, minutes * 60_000)), exited]);
+    const text = existsSync(eventLog) ? readFileSync(eventLog, 'utf8') : '';
+    if (child.exitCode === null) {
+      killTree(child, false);
+      const timer = setTimeout(() => killTree(child!, true), 15_000);
+      await exited;
+      clearTimeout(timer);
+    }
+    const summary = summarizeSoak(text, startedAt, minutes);
+    mkdirSync('docs/evidence', { recursive: true });
+    const keepLog = join('docs', 'evidence', `hosts-probe-soak-${label.replace(/[^\w.-]/g, '_')}.jsonl`);
+    writeFileSync(keepLog, reduceEventLog(text));
+    const previous = (out.soak ?? {}) as Record<string, unknown>;
+    out.soak = {
+      ...previous,
+      [label]: {
+        ...summary,
+        startedAt: new Date(startedAt).toISOString(),
+        profile: customProfile ? 'custom' : 'default',
+        copy: { ...copy, ms: copyMs },
+        reducedLog: keepLog,
+        graceNote:
+          'post-grace numbers exclude the first 60 s; backgroundRelists = claude-list source watch|hosts',
+      },
+    };
+    finish(true);
+  } finally {
+    if (child && child.exitCode === null) killTree(child, true);
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 async function main(): Promise<void> {
@@ -412,7 +479,8 @@ function finish(merge = false): void {
   let result: Record<string, unknown> = out;
   if (merge && existsSync(file)) {
     try {
-      result = { ...(JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>), soak: out.soak };
+      const prev = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      result = { ...prev, soak: { ...((prev.soak ?? {}) as object), ...(out.soak as object) } };
     } catch {
       /* unreadable previous evidence — write fresh */
     }
@@ -421,4 +489,7 @@ function finish(merge = false): void {
   console.log(`wrote ${file}`);
 }
 
-void main();
+main().catch((error) => {
+  console.error(String(error));
+  process.exit(1);
+});

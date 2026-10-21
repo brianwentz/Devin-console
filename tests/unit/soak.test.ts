@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summarizeSoak } from '../../src/core/soak';
+import { reduceEventLog, summarizeSoak } from '../../src/core/soak';
 
 const t0 = Date.parse('2026-01-01T00:00:00Z');
 const line = (offsetS: number, event: string, detail: object) =>
@@ -14,7 +14,7 @@ describe('summarizeSoak', () => {
       line(90, 'claude-list', { source: 'watch', count: 1 }),
       line(100, 'claude-list', { source: 'shell', count: 1 }),
       line(110, 'claude-list', { source: 'hosts', count: 1 }),
-      line(120, 'usage-scan', { files: 3 }),
+      line(120, 'usage-scan', { files: 3, wslFiles: 0 }),
       'not json',
       line(-10, 'host-exec', { host: 'x', kind: 'enum' }),
     ].join('\n');
@@ -24,9 +24,23 @@ describe('summarizeSoak', () => {
     expect(s.excludedLongLived).toBe(1);
     expect(s.hostExecPerMin).toBe(1);
     expect(s.hostExecPerMinPostGrace).toBe(1);
-    expect(s.hostExecPerMinPostGraceExclSpawn).toBe(0.5);
-    expect(s.claudeListTotal).toBe(2);
-    expect(s.wslClaudeListPerMinPostGrace).toBe(1);
+    expect(s.hostExecPerMinPostGraceExclLongLived).toBe(0.5);
+    expect(s.backgroundRelistsTotal).toBe(2);
+    expect(s.backgroundRelistsPerMinPostGrace).toBe(1);
     expect(s.usageScanFilesMax).toBe(3);
+    expect(s.wslUsageScanFiles).toBe(0);
+  });
+
+  it('reports null wslUsageScanFiles when the field is absent and reduces the log', () => {
+    const text = [
+      line(1, 'usage-scan', { files: 4 }),
+      line(2, 'host-exec', { host: 'wsl:A', kind: 'exec', secret: 'x' }),
+      line(3, 'other', {}),
+    ].join('\n');
+    expect(summarizeSoak(text, t0, 2).wslUsageScanFiles).toBeNull();
+    const reduced = reduceEventLog(text);
+    expect(reduced).not.toContain('secret');
+    expect(reduced).not.toContain('other');
+    expect(reduced.trim().split('\n')).toHaveLength(2);
   });
 });

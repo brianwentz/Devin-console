@@ -14,6 +14,7 @@ import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
 import type { HostId } from '../../core/execHost';
+import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
@@ -40,6 +41,7 @@ export class ClaudeHooks {
   private applyDirty = false;
   // Per host: the key of the last successful settings.json write.
   private readonly lastApplied = new Map<HostId, string>();
+  private skipLogged = false;
 
   constructor(
     private readonly owner: ClaudeSessions,
@@ -112,6 +114,16 @@ export class ClaudeHooks {
     const info = this.hookServer?.info();
     const enabled = state.settings?.current.claude.hooksEnabled ?? false;
     if (!info) return;
+    // Soak/measurement runs redirect only userData; never touch the real settings.json files.
+    if (process.env.AGENT_WORKSPACE_SKIP_HOOKS_INSTALL === '1') {
+      if (!this.skipLogged) {
+        this.skipLogged = true;
+        log('claude', 'claude-hooks-install-skipped');
+      }
+      this.hooks = { ...this.hooks, enabled, installed: false, error: null };
+      this.owner.emit();
+      return;
+    }
     // The opt-in applies to every enabled host's settings.json — for a wsl
     // host the file lives under \wsl.localhost\<D>\<home>\.claude and the
     // URLs point at that host's reachable address (loopback in mirrored

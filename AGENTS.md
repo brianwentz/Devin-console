@@ -85,6 +85,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_AUTOFILL_DISMISS_MS` | test mode (P5) | Shortens its 10 s auto-dismiss. |
 | `AGENT_WORKSPACE_TEST_RELEASES_URL` | test mode | Overrides the GitHub API base used by the release-notes fetcher (`src/main/releases.ts`). |
 | `AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD` | test mode | e.g. `node out/fixtures/fakeAuthStatus.cjs` — replaces the `devin auth status` spawn used for service-user identity resolution; the fake reads `FAKE_AUTH_STATUS_EXIT` / `FAKE_AUTH_STATUS_USER_ID` / `FAKE_AUTH_STATUS_ORG_ID`. |
+| `AGENT_WORKSPACE_SKIP_HOOKS_INSTALL` | always | `1` = `HooksController` never calls `applyGlobalHooks` on any host (state `installed:false`, `error:null`) and logs `claude-hooks-install-skipped` once; set by `hosts:probe --soak` so a measurement run cannot rewrite the real `<configDir>/settings.json`. |
 | `AGENT_WORKSPACE_LOCAL_AGENT_CMD` | test mode | e.g. `node out/fixtures/fakeAcpAgent.cjs` — replaces the `devin acp` spawn with a full command; the fake agent reads `FAKE_ACP_LIST=1` / `FAKE_ACP_LOAD=1` / `FAKE_ACP_DELETE=1` / `FAKE_ACP_LINK_URL` / `FAKE_ACP_USAGE=1` (emits a `usage_update` mid-prompt and `usage` on the prompt response) / `FAKE_ACP_PROMPT_DELAY_MS` (stalls the prompt so the thinking indicator is observable) / `FAKE_ACP_MODES=1` (advertises `modes` on session/new+load and implements `session/set_mode` → `current_mode_update`) / `FAKE_ACP_MODE_LOG` (file the fake appends `<sessionId> <modeId>` to per set_mode call). |
 | `DEVIN_CLI` | always (scripts) | Overrides the binary for `acp:probe` / `acp:contract`. |
 | `AGENT_WORKSPACE_TEST_TERMINAL_CMD` | test mode | e.g. `node out/fixtures/fakePty.cjs` — replaces the command the embedded terminal spawns — for `devin`-kind (Local panel), `shell`-kind (dock) and claude-kind ptys (the fake pty echoes argv → `-r <id>` assertable, and `env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set`; `tests/fixtures/fakePty.ts` echoes stdin with control bytes escaped as `\xNN`). |
@@ -729,7 +730,8 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `analytics-refresh` / `analytics-view-created` / `analytics` | `mode: reload\|navigate`; `load-error`. |
 | `analytics-refresh-skipped` | `{ tab }` — surface re-entered on the Claude tab (nothing hosted to reload). |
 | `usage-fetch` | `{ ok, status, ms, stale, accounts, skippedHosts }` — OAuth `/usage` fetch per account group (the bearer token is never logged); `skippedHosts` = hosts not probed-ready or past `HOST_FS_BUDGET_MS`. |
-| `usage-scan` | `{ files, changed, skipped, skippedHosts, ms }` — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
+| `usage-scan` | `{ files, wslFiles, changed, skipped, skippedHosts, ms }` (`wslFiles` = scanned files on wsl hosts; 0 now that WSL hosts are skipped) — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
+| `claude-hooks-install-skipped` | No detail — `AGENT_WORKSPACE_SKIP_HOOKS_INSTALL=1` suppressed the hooks install (once per run). |
 | `usage-scan-host-timeout` | `{ host, ms }` — a ready host's projects walk exceeded `HOST_FS_BUDGET_MS` (wedged UNC); the host lands in `skippedHosts` for that pass. |
 | `usage-cache-load` | `{ files }` — `userData/claude-usage-cache.json` loaded. |
 | `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. pre-S7 `local:` keys from a WSL store). |

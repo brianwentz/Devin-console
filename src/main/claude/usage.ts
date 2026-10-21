@@ -710,7 +710,14 @@ export class ClaudeUsageService {
       }
       this.saveCache();
       log('claude', 'usage-scan', {
-        detail: { files, changed, skipped, skippedHosts, ms: Date.now() - start },
+        detail: {
+          files,
+          wslFiles: tasks.filter((t) => isWslHost(t.host)).length,
+          changed,
+          skipped,
+          skippedHosts,
+          ms: Date.now() - start,
+        },
       });
     } catch {
       /* stat failures mid-scan are non-fatal */
