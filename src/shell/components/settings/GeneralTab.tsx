@@ -4,6 +4,17 @@ import { useShellState } from '../../store';
 import { FieldError, fieldInputClass } from './fields';
 import { inputClass } from './styles';
 
+const HELPER_LABELS: Record<string, string> = {
+  absent: 'not deployed',
+  starting: 'starting',
+  ready: 'ready',
+  reconnecting: 'reconnecting',
+  degraded: 'stopped after repeated failures — use Re-check',
+  'node-missing': 'needs Node',
+  'unsupported-node': 'needs a newer Node',
+};
+const helperLabel = (state: string): string => HELPER_LABELS[state] ?? state;
+
 function HostsBlock() {
   const state = useShellState();
   const { draft } = useSettingsDraft();
@@ -114,6 +125,18 @@ function HostsBlock() {
               {state.claude.hostErrors[host.id]}
             </span>
           )}
+          {host.helper ? (
+            <span data-host-helper={host.helper.state} className="text-xs text-[#7f8ca0]">
+              {`helper ${helperLabel(host.helper.state)}`}
+            </span>
+          ) : null}
+          {host.helper?.state === 'node-missing' || host.helper?.state === 'unsupported-node' ? (
+            <span id={`hostHelperHint-${host.id}`} className="text-xs text-[#d0a060]">
+              {host.helper.state === 'unsupported-node' && host.node
+                ? `Node 18 or newer is required in this distro for the Agent Workspace helper (found ${host.node}).`
+                : 'Node 18 or newer is required in this distro for the Agent Workspace helper.'}
+            </span>
+          ) : null}
           {host.error ? (
             <span className="text-xs text-[#d08080]">{host.error}</span>
           ) : null}

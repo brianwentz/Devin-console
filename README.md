@@ -38,6 +38,8 @@ Because the build is not notarized, the Mac app does not auto-update: check the 
 
 Everything works out of the box except: the **Devin Local** surface and the terminal's `devin` tab need the [Devin CLI](https://devin.ai) (`devin` on PATH); the **Claude** surface needs the Claude Code CLI; and running sessions *inside* WSL distros is optional — without WSL everything stays on the Windows host.
 
+For a WSL distro the app runs a small helper inside the distro (it is copied to `~/.agent-workspace/` in that distro on first use and started with the distro's own Node.js), so **Node.js 18 or newer must be installed in the distro**. Without it the distro's row under **Settings → General → Hosts** says the helper needs Node. The helper is only started for distros that are already running — the app never boots a stopped distro — and if it keeps failing the row shows it stopped; **Re-check** tries again.
+
 ## Getting started
 
 - The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin Cloud → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.

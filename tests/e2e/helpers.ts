@@ -85,6 +85,7 @@ export type PublicState = {
     hooks: 'ok' | 'unreachable' | 'untested';
     inotify: boolean;
     gh: boolean;
+    helper?: import('../../src/shared/ipc').HostStatus['helper'];
   }>;
   // P5
   notifications: {

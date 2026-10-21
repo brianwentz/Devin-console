@@ -10,6 +10,11 @@ import {
   onStartFailed,
   onTick,
   resetBreaker,
+  HELLO_DEADLINE_MS,
+  SILENCE_KILL_MS,
+  SILENCE_PING_MS,
+  livenessAction,
+  requestTimeoutMs,
 } from '../../src/core/hostRpc';
 
 describe('LineDecoder', () => {
@@ -124,5 +129,33 @@ describe('breaker', () => {
     expect(stable.failures).toBe(0);
     expect(stable.nextAttemptAt).toBeNull();
     expect(stable.open).toBe(false);
+  });
+});
+
+describe('liveness and timeouts', () => {
+  it('pings only after the silence window, once per quiet spell', () => {
+    expect(livenessAction(14_999, 0, false, SILENCE_PING_MS, SILENCE_KILL_MS)).toBe('none');
+    expect(livenessAction(15_000, 0, false, SILENCE_PING_MS, SILENCE_KILL_MS)).toBe('ping');
+    expect(livenessAction(20_000, 0, true, SILENCE_PING_MS, SILENCE_KILL_MS)).toBe('none');
+  });
+
+  it('kills after 45 s with no frame at all, ping outstanding or not', () => {
+    expect(livenessAction(44_999, 0, true, SILENCE_PING_MS, SILENCE_KILL_MS)).toBe('none');
+    expect(livenessAction(45_000, 0, true, SILENCE_PING_MS, SILENCE_KILL_MS)).toBe('kill');
+    expect(livenessAction(45_000, 0, false, SILENCE_PING_MS, SILENCE_KILL_MS)).toBe('kill');
+  });
+
+  it('constants match the protocol table', () => {
+    expect(SILENCE_PING_MS).toBe(15_000);
+    expect(SILENCE_KILL_MS).toBe(45_000);
+    expect(HELLO_DEADLINE_MS).toBe(20_000);
+  });
+
+  it('request timeout is 10 s except store.list / usage.scan (60 s)', () => {
+    expect(requestTimeoutMs('ping')).toBe(10_000);
+    expect(requestTimeoutMs('env.get')).toBe(10_000);
+    expect(requestTimeoutMs('store.messages')).toBe(10_000);
+    expect(requestTimeoutMs('store.list')).toBe(60_000);
+    expect(requestTimeoutMs('usage.scan')).toBe(60_000);
   });
 });

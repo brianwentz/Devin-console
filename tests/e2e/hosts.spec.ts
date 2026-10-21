@@ -338,6 +338,12 @@ test('a local transcript change re-lists only the local host', async () => {
         timeout: 30_000,
       })
       .toBe('ready');
+    // WSL work is gated on the helper channel (fsReady), which lands after the probe.
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.helper?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
     // Positive control: a full refresh lists both hosts.
     await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh());
     await expect

@@ -26,7 +26,9 @@
 //                                 missing, else a piped child
 //                                 (FAKE_WSL_NODE ?? this node) running the file
 //                                 with HOME and CLAUDE_CONFIG_DIR under
-//                                 FAKE_WSL_ROOT; stdio piped through;
+//                                 FAKE_WSL_ROOT, the canned env, FAKE_* knobs
+//                                 and FAKE_WSL_HELPER=1; stdio piped through
+//                                 (drained before the fake exits);
 //                                 FAKE_WSL_HELPER_HANG=1 stops forwarding the
 //                                 child's stdout after its first line
 //   inotifywait …                 exit 127 unless FAKE_WSL_INOTIFY=1 → fs.watch
@@ -54,12 +56,32 @@ const linuxFile = (p: string): string => join(ROOT, ...p.split('/').filter(Boole
 
 // Helper launch: `test -f <file> || exit 86; exec node <file> --stdio` — piped
 // (async) child so the NDJSON channel stays open.
+// The helper's env stands in for the distro's login env (what env.get
+// returns): the canned env, the Windows basics node needs, the FAKE_* knobs,
+// and FAKE_WSL_HELPER=1 so specs can tell env.get apart from the -ilc capture.
+// Never the whole Windows env — spawnSpec replays it as argv.
+const WIN_BASICS = new Set(['SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'PATH', 'PATHEXT', 'COMSPEC', 'USERPROFILE']);
+const helperEnv = (): Record<string, string> => {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && (WIN_BASICS.has(key.toUpperCase()) || key.startsWith('FAKE_'))) env[key] = value;
+  }
+  const { PATH: _linuxPath, ...canned } = cannedEnv();
+  return {
+    ...env,
+    ...canned,
+    HOME: linuxFile(HOME),
+    CLAUDE_CONFIG_DIR: linuxFile(`${HOME}/.claude`),
+    FAKE_WSL_HELPER: '1',
+  };
+};
+
 const helperLaunch = (file: string, cwd: string): number => {
   const local = linuxFile(file);
   if (!existsSync(local)) return 86;
   const child = spawn(process.env.FAKE_WSL_NODE ?? process.execPath, [local, '--stdio'], {
     cwd,
-    env: { ...process.env, HOME: linuxFile(HOME), CLAUDE_CONFIG_DIR: linuxFile(`${HOME}/.claude`) },
+    env: helperEnv(),
     stdio: 'pipe',
     windowsHide: true,
   });
@@ -79,7 +101,11 @@ const helperLaunch = (file: string, cwd: string): number => {
   child.stderr.pipe(process.stderr);
   process.stdin.pipe(child.stdin);
   child.stdin.on('error', () => undefined);
-  child.once('exit', (code) => process.exit(code ?? 1));
+  // A nonexistent FAKE_WSL_NODE: the launch dies like `exec` of a missing binary.
+  child.once('error', () => process.stdout.write('', () => process.exit(127)));
+  // 'close' fires after the child's stdout is fully read; then let our own
+  // stdout drain (async pipes on Windows) so trailing frames aren't dropped.
+  child.once('close', (code) => process.stdout.write('', () => process.exit(code ?? 1)));
   process.on('SIGTERM', () => child.kill('SIGTERM'));
   return STAY_ALIVE;
 };
@@ -292,8 +318,10 @@ const main = (): number => {
     if (delay > 0) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
     }
-    const name = /helper-[0-9a-f]{12}[.]mjs/.exec(tail[1] ?? '')?.[0];
-    const present = name !== undefined && existsSync(linuxFile(`${HOME}/.agent-workspace/${name}`));
+    // `test -f "$HOME/…"` or a quoted resolved home `test -f '/srv/h/…'`.
+    const m = /test -f (?:"([^"]*)"|'([^']*)')/.exec(tail[1] ?? '');
+    const checked = (m?.[1] ?? m?.[2])?.replace(/^\$HOME/, HOME);
+    const present = checked !== undefined && existsSync(linuxFile(checked));
     process.stdout.write(`${HOME}\nu\n/bin/bash\n${present ? 'HELPER_PRESENT\n' : ''}`);
     return 0;
   }

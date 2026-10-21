@@ -204,6 +204,13 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
         detail: { message: error instanceof Error ? error.message : String(error) },
       });
     }
+    // Helper channels (after their consumers): stdin EOF — the helper exits on
+    // it — then a kill after a short grace.
+    try {
+      await hosts().stopChannels();
+    } catch {
+      // never veto the quit sequence
+    }
     notificationsFlush();
     prsFlush();
     savePlacementNow();

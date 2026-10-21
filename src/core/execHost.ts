@@ -191,6 +191,17 @@ export function mergeShellEnv(
   return out;
 }
 
+/** The helper's `env.get` result → a spawnable env: string values under valid
+ * keys only, minus WSL_ENV_DENYLIST. */
+export function sanitizeEnv(raw: unknown): Record<string, string> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && ENV_KEY.test(key)) env[key] = value;
+  }
+  return mergeShellEnv(env, {});
+}
+
 const kvPairs = (env: Record<string, string>): string[] =>
   Object.keys(env)
     .sort()
@@ -335,10 +346,22 @@ export function helperPath(home: string, hash: string): string {
   return `${home.replace(/\/+$/, '')}/${HELPER_DIR}/${helperFileName(hash)}`;
 }
 
-/** The existing probe line (home / user / login shell) plus, when a bundle exists, the presence check — no extra spawn. */
-export function probeLine(hash: string | null): string {
+/** POSIX single-quoting: the string stays one shell word, no expansion. */
+export function posixQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The existing probe line (home / user / login shell) plus, when a bundle
+ * exists, the presence check — no extra spawn. `home` is the resolved home
+ * (a `hosts.overrides[id].home`) when known before the probe; deploy and launch
+ * build their paths from the same value, so all three agree. Null = `$HOME`.
+ */
+export function probeLine(hash: string | null, home: string | null = null): string {
   const base = 'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7';
-  return hash === null ? base : `${base}; if test -f "$HOME/${HELPER_DIR}/${helperFileName(hash)}"; then echo ${HELPER_PRESENT}; fi`;
+  if (hash === null) return base;
+  const file = home ? posixQuote(helperPath(home, hash)) : `"$HOME/${HELPER_DIR}/${helperFileName(hash)}"`;
+  return `${base}; if test -f ${file}; then echo ${HELPER_PRESENT}; fi`;
 }
 
 /** Probe line output: `$HOME`, user, login shell. The presence token is not a shell. */

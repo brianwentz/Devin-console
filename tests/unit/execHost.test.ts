@@ -12,6 +12,8 @@ import {
   parseHelperPresent,
   parseProbeOutput,
   probeLine,
+  posixQuote,
+  sanitizeEnv,
   hostIdForPath,
   isFsReady,
   isWslHost,
@@ -320,6 +322,29 @@ describe('helper probe', () => {
     expect(probeLine('abcdef012345')).toContain(
       'if test -f "$HOME/.agent-workspace/helper-abcdef012345.mjs"; then echo HELPER_PRESENT; fi',
     );
+  });
+  it('probeLine checks under the resolved (override) home — the same path deploy and launch use', () => {
+    const line = probeLine('abcdef012345', '/srv/my home');
+    expect(line).toContain(`if test -f '/srv/my home/.agent-workspace/helper-abcdef012345.mjs'; then echo HELPER_PRESENT; fi`);
+    expect(line).not.toContain('"$HOME/.agent-workspace');
+    // helperSpec / helperDeploySpec build their paths from the same home.
+    const host = wslHost('D', '/srv/my home');
+    expect(helperSpec(host, '/srv/my home', '/bin/bash', 'abcdef012345').args.at(-1)).toBe(
+      '/srv/my home/.agent-workspace/helper-abcdef012345.mjs',
+    );
+    expect(helperDeploySpec(host, '/srv/my home', 'abcdef012345').args.at(-2)).toBe('/srv/my home/.agent-workspace');
+    expect(probeLine('abcdef012345', null)).toBe(probeLine('abcdef012345'));
+  });
+  it('posixQuote single-quotes and escapes embedded quotes', () => {
+    expect(posixQuote('/home/u')).toBe(`'/home/u'`);
+    expect(posixQuote(`/home/o'neil`)).toBe(`'/home/o'\\''neil'`);
+  });
+  it('sanitizeEnv keeps string values with valid keys and drops WSL-provided vars', () => {
+    expect(
+      sanitizeEnv({ PATH: '/usr/bin', WSL_INTEROP: '/run/x', 'ProgramFiles(x86)': 'C:\\', N: 1, HOME: '/home/u' }),
+    ).toEqual({ PATH: '/usr/bin', HOME: '/home/u' });
+    expect(sanitizeEnv(null)).toEqual({});
+    expect(sanitizeEnv([1, 2])).toEqual({});
   });
   it('the presence token never becomes the shell', () => {
     expect(parseProbeOutput('/home/u\nu\nHELPER_PRESENT\n')).toEqual({ home: '/home/u', shell: undefined });

@@ -119,3 +119,33 @@ export function onTick(s: BreakerState, now: number): BreakerState {
   }
   return s;
 }
+
+// --- channel liveness (main-process HostChannel) ------------------------------
+
+export const SILENCE_PING_MS = 15_000;
+export const SILENCE_KILL_MS = 45_000;
+export const HELLO_DEADLINE_MS = 20_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+export const LONG_REQUEST_TIMEOUT_MS = 60_000;
+
+const LONG_METHODS: ReadonlySet<string> = new Set(['store.list', 'usage.scan']);
+
+export function requestTimeoutMs(method: string): number {
+  return LONG_METHODS.has(method) ? LONG_REQUEST_TIMEOUT_MS : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+export type LivenessAction = 'none' | 'ping' | 'kill';
+
+/** Any frame counts as life: one ping after `silenceMs` of quiet, a kill after `killMs` with no frame at all. */
+export function livenessAction(
+  now: number,
+  lastFrameAt: number,
+  pingOutstanding: boolean,
+  silenceMs: number,
+  killMs: number,
+): LivenessAction {
+  const quiet = now - lastFrameAt;
+  if (quiet >= killMs) return 'kill';
+  if (quiet >= silenceMs && !pingOutstanding) return 'ping';
+  return 'none';
+}

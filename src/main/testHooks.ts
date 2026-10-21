@@ -126,6 +126,9 @@ export function registerTestHooks(): void {
       hostStatus: (id: string) => hosts().status(id as HostId),
       hostRefresh: (id?: string) => hosts().refresh(id as HostId | undefined),
       hostShellEnvKeys: (id: string) => hosts().shellEnvKeys(id as HostId),
+      // Helper channel: kill the live child (reconnect path) / lifecycle snapshot.
+      hostHelperKill: (id: string) => hosts().killHelper(id),
+      hostChannelState: (id: string) => hosts().channelInfo(id),
       // Holds a `withConfigDir` swap open for `ms` so a spec can race it
       // against readers of `configDir()` (the usage scanner); resolves to the
       // env value seen mid-swap vs the registry's answer for the local host.
