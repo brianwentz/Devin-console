@@ -21,8 +21,8 @@ import {
 import { agentsHandlers } from './agents';
 import { hooksHandlers } from './hooks';
 import { RpcError, safeMessage, type Handler } from './params';
-import { changePayload, storeHandlers } from './store';
-import { ProjectsWatcher } from './watch';
+import { changePayload, storeHandlers, type StoreChanged } from './store';
+import { ProjectsWatcher, type WatchChange } from './watch';
 
 export const TOUCH_INTERVAL_MS = 3_600_000;
 export const CLEANUP_AGE_MS = 7 * 24 * 3_600_000;
@@ -100,6 +100,50 @@ export async function dispatch(handlers: Record<string, Handler>, id: number, me
   }
 }
 
+/**
+ * `store.changed` sender: payloads (which await getSessionInfo per id) are
+ * built and written strictly in flush order, so a slow earlier flush can never
+ * land after — and overwrite — a newer one. A failed payload is dropped.
+ */
+export function createChangeNotifier(
+  write: (msg: RpcNotification) => void,
+  payload: (change: WatchChange) => Promise<StoreChanged>,
+): (change: WatchChange) => void {
+  let queue: Promise<void> = Promise.resolve();
+  return (change) => {
+    queue = queue
+      .then(() => payload(change))
+      .then(
+        (params) => write({ method: 'store.changed', params }),
+        () => undefined,
+      );
+  };
+}
+
+/**
+ * Last-resort handlers. stdout stays frames-only, so both report a count line
+ * on stderr (never the error text — it can carry paths). A stray rejection
+ * keeps the helper serving; an uncaught exception leaves state unknown, so
+ * exit non-zero and let the channel respawn.
+ */
+export function installProcessHandlers(
+  proc: NodeJS.Process,
+  writeErr: (line: string) => void,
+  exit: (code: number) => void,
+): void {
+  let rejections = 0;
+  let exceptions = 0;
+  proc.on('unhandledRejection', () => {
+    rejections++;
+    writeErr(`helper: unhandledRejection=${rejections}\n`);
+  });
+  proc.on('uncaughtException', () => {
+    exceptions++;
+    writeErr(`helper: uncaughtException=${exceptions}\n`);
+    exit(1);
+  });
+}
+
 function run(): void {
   const self = process.argv[1] ? resolve(process.argv[1]) : '';
   const selfName = basename(self);
@@ -117,15 +161,16 @@ function run(): void {
     process.stdout.write(line);
   };
 
+  // Replaced by the draining exit below once the watcher exists.
+  let exitWith = (code: number): void => process.exit(code);
+  installProcessHandlers(process, (line) => process.stderr.write(line), (code) => exitWith(code));
+
   let subscribed = false;
+  const notify = createChangeNotifier(write, (change) => changePayload(projectsDir, change));
   const watcher = new ProjectsWatcher({
     projectsDir,
     onChange: (change) => {
-      if (!subscribed) return;
-      void changePayload(projectsDir, change).then(
-        (params) => write({ method: 'store.changed', params }),
-        () => undefined,
-      );
+      if (subscribed) notify(change);
     },
   });
   try {
@@ -142,14 +187,14 @@ function run(): void {
     home,
     watchMode: watcher.mode,
   };
-  write({ method: 'hello', params: hello });
-
   // Only a deployed helper-<hash>.mjs manages its directory — a dev run of
   // out/helper/agent-workspace-helper.mjs must not touch its neighbours.
+  // Before hello (a few sync syscalls), so a ready channel implies a fresh mtime.
   if (hash) {
     startSelfTouch(self);
     cleanupOldHelpers(dirname(self), selfName);
   }
+  write({ method: 'hello', params: hello });
 
   const handlers: Record<string, Handler> = {
     ping: () => ({ t: Date.now() }),
@@ -172,6 +217,7 @@ function run(): void {
     process.stdout.write('', () => process.exit(code));
     setTimeout(() => process.exit(code), 500).unref();
   };
+  exitWith = exit;
   const maybeExit = (): void => {
     if (ending && inFlight === 0) exit(0);
   };

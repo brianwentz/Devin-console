@@ -48,6 +48,12 @@ const isDir = (p: string): boolean => {
 
 const JSONL = '.jsonl';
 
+/** The path disappeared under us (ENOENT/ENOTDIR) — skip it; anything else (ENOSPC, EMFILE, …) is a real watch failure. */
+const isGone = (error: unknown): boolean => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+};
+
 export class ProjectsWatcher {
   mode: WatchMode = 'watch';
   private readonly watchers = new Map<string, FSWatcher>();
@@ -91,22 +97,35 @@ export class ProjectsWatcher {
   private attachRoot(): void {
     if (this.stopped || this.mode === 'poll') return;
     if (!isDir(this.opts.projectsDir)) {
-      // No projects/ yet (fresh install): look again shortly.
-      this.retryTimer = setTimeout(() => {
-        this.retryTimer = null;
-        try {
-          this.attachRoot();
-        } catch {
-          this.toPoll();
-        }
-      }, RETRY_ROOT_MS);
-      this.retryTimer.unref?.();
+      this.retryRoot();
       return;
     }
-    this.watchDir('', this.opts.projectsDir, (name) => this.onRootEvent(name));
-    for (const entry of readdirSync(this.opts.projectsDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) this.attachProject(entry.name, false);
+    try {
+      this.watchDir('', this.opts.projectsDir, (name) => this.onRootEvent(name));
+      for (const entry of readdirSync(this.opts.projectsDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) this.attachProject(entry.name, false);
+      }
+    } catch (error) {
+      if (!isGone(error)) throw error;
+      // projects/ vanished mid-attach: start over once it is back.
+      this.closeWatchers();
+      this.known.clear();
+      this.retryRoot();
     }
+  }
+
+  // No projects/ yet (fresh install) or it just vanished: look again shortly.
+  private retryRoot(): void {
+    if (this.retryTimer) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      try {
+        this.attachRoot();
+      } catch {
+        this.toPoll();
+      }
+    }, RETRY_ROOT_MS);
+    this.retryTimer.unref?.();
   }
 
   private watchDir(key: string, abs: string, onName: (name: string) => void): void {
@@ -121,8 +140,9 @@ export class ProjectsWatcher {
     if (this.stopped || this.mode === 'poll') return;
     try {
       fn();
-    } catch {
-      this.toPoll();
+    } catch (error) {
+      // A path that vanished between event and stat is a race, not a broken watcher.
+      if (!isGone(error)) this.toPoll();
     }
   }
 
@@ -136,12 +156,7 @@ export class ProjectsWatcher {
   }
 
   private detach(key: string): void {
-    for (const [k, w] of this.watchers) {
-      if (k === key || k.startsWith(`${key}/`)) {
-        w.close();
-        this.watchers.delete(k);
-      }
-    }
+    this.closeUnder(key);
     if (!key.includes('/')) {
       for (const id of this.known.get(key) ?? []) this.pendingRemoved.add(id);
       this.known.delete(key);
@@ -160,15 +175,34 @@ export class ProjectsWatcher {
 
   private attachProject(project: string, emitExisting: boolean): void {
     const abs = join(this.opts.projectsDir, project);
-    this.watchDir(project, abs, (name) => this.onProjectEvent(project, name));
     const ids = new Set<string>();
-    this.known.set(project, ids);
-    for (const entry of readdirSync(abs, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith(JSONL)) {
-        ids.add(entry.name.slice(0, -JSONL.length));
-        if (emitExisting) this.queueFile(`${project}/${entry.name}`);
-      } else if (entry.isDirectory()) {
-        this.maybeAttachSubagents(project, entry.name);
+    try {
+      this.watchDir(project, abs, (name) => this.onProjectEvent(project, name));
+      this.known.set(project, ids);
+      for (const entry of readdirSync(abs, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith(JSONL)) {
+          ids.add(entry.name.slice(0, -JSONL.length));
+          if (emitExisting) this.queueFile(`${project}/${entry.name}`);
+        } else if (entry.isDirectory()) {
+          this.maybeAttachSubagents(project, entry.name);
+        }
+      }
+    } catch (error) {
+      if (!isGone(error)) throw error;
+      // Created then removed before we got to it: nothing to watch.
+      this.closeUnder(project);
+      this.known.delete(project);
+      for (const f of [...this.pendingFiles]) if (f.startsWith(`${project}/`)) this.pendingFiles.delete(f);
+    }
+  }
+
+  private closeUnder(key: string): void {
+    for (const [k, w] of this.watchers) {
+      if (k === key || k.startsWith(`${key}/`)) {
+        try {
+          w.close();
+        } catch {}
+        this.watchers.delete(k);
       }
     }
   }
@@ -204,9 +238,13 @@ export class ProjectsWatcher {
     if (this.watchers.has(key)) return;
     const abs = join(this.opts.projectsDir, project, id, 'subagents');
     if (!isDir(abs)) return;
-    this.watchDir(key, abs, (name) => {
-      if (name.endsWith(JSONL)) this.queueFile(`${key}/${name}`);
-    });
+    try {
+      this.watchDir(key, abs, (name) => {
+        if (name.endsWith(JSONL)) this.queueFile(`${key}/${name}`);
+      });
+    } catch (error) {
+      if (!isGone(error)) throw error;
+    }
   }
 
   private closeWatchers(): void {

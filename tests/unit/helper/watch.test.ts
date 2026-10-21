@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProjectsWatcher, type WatchChange } from '../../../src/helper/watch';
@@ -108,6 +108,44 @@ describe('helper watch', () => {
     appendFileSync(join(projects(), 'C--work-alpha', SESSION_A, 'subagents', 'agent-fixture01.jsonl'), '\n');
     const c = await until(() => raw.find((x) => x.files.length > 0));
     expect(c.files).toEqual([`C--work-alpha/${SESSION_A}/subagents/agent-fixture01.jsonl`]);
+  });
+
+  it('an ENOENT race on a vanishing dir is skipped; mode stays watch', async () => {
+    const enoent = (p: string): never => {
+      throw Object.assign(new Error(`ENOENT: no such file or directory, watch '${p}'`), { code: 'ENOENT' });
+    };
+    // -home-u-race "vanishes" between isDir and watch — at scan time and when it appears later.
+    mkdirSync(join(projects(), '-home-u-race'));
+    const { payloads } = startWatching({
+      watchFn: ((p: string, o: { persistent: boolean }, l: (e: string, n: string | null) => void) =>
+        p.includes('-home-u-race') ? enoent(p) : watch(p, o, l)) as never,
+    });
+    expect(watcher!.mode).toBe('watch');
+    await settle(100);
+    mkdirSync(join(projects(), '-home-u-race2'));
+    await settle(300);
+    expect(watcher!.mode).toBe('watch');
+    // The other dirs are still watched.
+    appendFileSync(join(projects(), 'C--work-alpha', `${SESSION_A}.jsonl`), '\n');
+    await until(() => payloads.find((x) => x.files.includes(`C--work-alpha/${SESSION_A}.jsonl`)));
+    expect(watcher!.mode).toBe('watch');
+  });
+
+  it('ENOSPC on a new project dir switches to poll', async () => {
+    const { raw } = startWatching({
+      watchFn: ((p: string, o: { persistent: boolean }, l: (e: string, n: string | null) => void) => {
+        if (p.includes('-home-u-full')) {
+          throw Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), { code: 'ENOSPC' });
+        }
+        return watch(p, o, l);
+      }) as never,
+      pollMs: 50,
+    });
+    expect(watcher!.mode).toBe('watch');
+    await settle(100);
+    mkdirSync(join(projects(), '-home-u-full'));
+    await until(() => (watcher!.mode === 'poll' ? true : undefined));
+    expect(raw).toBeDefined();
   });
 
   it('a watch error falls back to the 5 s stat poll with watchMode poll', async () => {

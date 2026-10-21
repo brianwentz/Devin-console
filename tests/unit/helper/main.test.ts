@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { LineDecoder } from '../../../src/core/hostRpc';
-import { CLEANUP_AGE_MS, TOUCH_INTERVAL_MS, cleanupOldHelpers, hashFromPath, startSelfTouch } from '../../../src/helper/main';
+import { EventEmitter } from 'node:events';
+import {
+  CLEANUP_AGE_MS,
+  TOUCH_INTERVAL_MS,
+  cleanupOldHelpers,
+  createChangeNotifier,
+  hashFromPath,
+  installProcessHandlers,
+  startSelfTouch,
+} from '../../../src/helper/main';
 import { SESSION_A, copyClaudeHome } from './fixtureHome';
 
 const ROOT = resolve(__dirname, '../../..');
@@ -137,6 +146,58 @@ describe('helper main (built bundle)', () => {
 });
 
 describe('helper main (modules)', () => {
+  it('store.changed notifications go out in flush order even when an earlier payload is slow', async () => {
+    const written: string[][] = [];
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const notify = createChangeNotifier(
+      (msg) => written.push((msg.params as { files: string[] }).files),
+      async (change) => {
+        if (change.files[0] === 'p/first.jsonl') await slow;
+        return { files: change.files, sessions: [], removed: change.removed };
+      },
+    );
+    notify({ files: ['p/first.jsonl'], removed: [] });
+    notify({ files: ['p/second.jsonl'], removed: [] });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(written).toEqual([]);
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(written).toEqual([['p/first.jsonl'], ['p/second.jsonl']]);
+  });
+
+  it('a failed payload does not stall the queue', async () => {
+    const written: string[][] = [];
+    const notify = createChangeNotifier(
+      (msg) => written.push((msg.params as { files: string[] }).files),
+      async (change) => {
+        if (change.files[0] === 'p/bad.jsonl') throw new Error('boom');
+        return { files: change.files, sessions: [], removed: [] };
+      },
+    );
+    notify({ files: ['p/bad.jsonl'], removed: [] });
+    notify({ files: ['p/ok.jsonl'], removed: [] });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(written).toEqual([['p/ok.jsonl']]);
+  });
+
+  it('process handlers: unhandledRejection is counted and served on; uncaughtException exits non-zero', () => {
+    const proc = new EventEmitter();
+    const stderr: string[] = [];
+    const exits: number[] = [];
+    installProcessHandlers(proc as unknown as NodeJS.Process, (s) => stderr.push(s), (code) => exits.push(code));
+    expect(proc.listenerCount('unhandledRejection')).toBe(1);
+    expect(proc.listenerCount('uncaughtException')).toBe(1);
+    proc.emit('unhandledRejection', new Error('secret /home/u/path'), Promise.resolve());
+    proc.emit('unhandledRejection', new Error('again'), Promise.resolve());
+    expect(exits).toEqual([]);
+    expect(stderr).toEqual(['helper: unhandledRejection=1\n', 'helper: unhandledRejection=2\n']);
+    proc.emit('uncaughtException', new Error('fatal /home/u/x'));
+    expect(stderr[2]).toBe('helper: uncaughtException=1\n');
+    expect(exits).toEqual([1]);
+    expect(stderr.join('')).not.toContain('/home/u');
+  });
+
   it('hashFromPath reads the deployed filename', () => {
     expect(hashFromPath('/home/u/.agent-workspace/helper-0123456789ab.mjs')).toBe('0123456789ab');
     expect(hashFromPath('/x/agent-workspace-helper.mjs')).toBeNull();
