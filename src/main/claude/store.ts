@@ -18,6 +18,7 @@ import {
 import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
+import { testMode } from '../state';
 import { loadSdk } from './sdk';
 
 const WATCH_DEBOUNCE_MS = 250;
@@ -27,6 +28,11 @@ const POLL_MS = 30_000;
 // change check every WSL_CHANGE_CHECK_MS.
 const HOT_POLL_MS = 2_000;
 export const WSL_CHANGE_CHECK_MS = 300_000;
+
+function wslChangeCheckMs(): number {
+  const override = testMode ? Number(process.env.AGENT_WORKSPACE_TEST_WSL_CHANGE_CHECK_MS) : NaN;
+  return Number.isFinite(override) && override > 0 ? Math.max(100, override) : WSL_CHANGE_CHECK_MS;
+}
 // The change check also stats this many of the most recently listed
 // transcripts so appends (which leave the project dir mtime alone) count.
 const APPEND_CHECK_COUNT = 5;
@@ -263,7 +269,7 @@ export class ClaudeStore {
     });
     this.pollTimer = setInterval(() => {
       void this.changeCheck();
-    }, WSL_CHANGE_CHECK_MS);
+    }, wslChangeCheckMs());
     this.pollTimer.unref?.();
   }
 
@@ -298,7 +304,14 @@ export class ClaudeStore {
     }
   }
 
+  // A wsl host that left the enabled list or stopped is never touched over
+  // UNC (that boots the distro); the controller disposes the store as well.
+  private hostUsable(): boolean {
+    return !isWslHost(this.host) || hosts().fsReady(this.host);
+  }
+
   private async changeCheck(): Promise<void> {
+    if (!this.hostUsable()) return;
     const next = await this.changeMtimes();
     if (!next) return;
     const prev = this.changeSnapshot;
@@ -315,7 +328,7 @@ export class ClaudeStore {
   // The 2 s hot tick is async (UNC stats don't block the loop); a slow tick
   // never overlaps the next one.
   private async hotTick(): Promise<void> {
-    if (this.hotTickInFlight || !this.visible()) return;
+    if (this.hotTickInFlight || !this.visible() || !this.hostUsable()) return;
     this.hotTickInFlight = true;
     try {
       const hot = this.hotIds();

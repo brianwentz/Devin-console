@@ -37,7 +37,10 @@ export function mergeRefreshHosts(
   return new Set([...a, ...b]);
 }
 
-/** Claude CLI project dir name for a cwd (every non-alphanumeric character → '-'). */
+/** Claude CLI project dir name for a cwd (every non-alphanumeric character → '-').
+ * Not modelled: the CLI truncates names over ~200 chars and appends a hash, so
+ * very long cwds miss the direct lookup and the change check's append stats
+ * (they fall back to the full scan / dir mtimes). */
 export function projectDirName(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }

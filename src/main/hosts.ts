@@ -326,10 +326,17 @@ export class HostsRegistry {
   /** Enabled ExecHosts: local first, then each enabled wsl distro. */
   list(): ExecHost[] {
     const hosts: ExecHost[] = [LOCAL_HOST];
-    for (const { name } of this.enabledDistros()) {
-      hosts.push(this.entryFor(name, false).host);
+    for (const { name, stopped } of this.enabledDistros()) {
+      hosts.push(this.entryFor(name, stopped).host);
     }
     return hosts;
+  }
+
+  /** The cached enumeration reports the distro Stopped. Implicit work (probe,
+   * env capture, background exec, UNC fs) must not touch it — any of those
+   * boots the distro. */
+  private enumStopped(id: HostId): boolean {
+    return this.enumerate().some((row) => `wsl:${row.name}` === id && row.state === 'Stopped');
   }
 
   /** Enabled hosts plus every host we've seen this run — used by the hooks
@@ -344,6 +351,10 @@ export class HostsRegistry {
   /** True when main-process fs may touch the host's config dir: local always,
    * a wsl host only once its probe is `ready` (UNC on a hung distro blocks). */
   fsReady(host: ExecHost): boolean {
+    if (!isWslHost(host)) return true;
+    // A stale `ready` entry outlives disabling or stopping the distro.
+    if (this.enumStopped(host.id)) return false;
+    if (!this.enabledDistros().some((d) => `wsl:${d.name}` === host.id)) return false;
     return isFsReady(host, this.entries.get(host.id)?.status.state);
   }
 
@@ -394,7 +405,12 @@ export class HostsRegistry {
         continue;
       }
       const entry = this.entryFor(row.name, row.state === 'Stopped');
-      statuses.push(entry.status);
+      // A distro stopped since its probe reports stopped, not its stale state.
+      statuses.push(
+        row.state === 'Stopped' && entry.status.state !== 'probing'
+          ? { ...entry.status, state: 'stopped' }
+          : entry.status,
+      );
       // Lazily probe each enabled, running distro once per app run.
       if (row.state !== 'Stopped' && !entry.probed && !entry.probing) {
         void this.probe(entry);
@@ -480,11 +496,12 @@ export class HostsRegistry {
       if (claudePath) {
         try {
           const home = entry.host.home ?? '/';
-          const out = await this.execOn(entry.host, {
-            file: claudePath,
-            args: ['--version'],
-            cwd: home,
-          });
+          const out = await this.execOn(
+            entry.host,
+            { file: claudePath, args: ['--version'], cwd: home },
+            PROBE_TIMEOUT_MS,
+            { explicit: true },
+          );
           version = out.trim().split(/\s+/)[0] ?? null;
         } catch {
           version = null;
@@ -664,11 +681,17 @@ export class HostsRegistry {
 
   // --- env + spawn -------------------------------------------------------------
 
-  /** The cached §1.4 environment; re-captures when stale (call before spawns). */
-  async shellEnv(host: ExecHost): Promise<Record<string, string> | null> {
+  /** The cached §1.4 environment; re-captures when stale (call before spawns).
+   * `explicit` = a user action (chat prompt, agent start) that may boot a
+   * Stopped distro; otherwise a Stopped distro gets its cached env only. */
+  async shellEnv(
+    host: ExecHost,
+    opts?: { explicit?: boolean },
+  ): Promise<Record<string, string> | null> {
     if (!isWslHost(host)) return null;
     const entry = this.entries.get(host.id);
     if (!entry) return null;
+    if (!opts?.explicit && this.enumStopped(host.id)) return entry.env;
     if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
     if (!entry.probed && !entry.probing) await this.probe(entry);
     else if (entry.probing) await entry.probing;
@@ -734,9 +757,18 @@ export class HostsRegistry {
     return child;
   }
 
-  /** execFile-style run returning stdout (probes, agents, gh). */
-  async execOn(host: ExecHost, cmd: HostCommand, timeout = PROBE_TIMEOUT_MS): Promise<string> {
-    await this.shellEnv(host);
+  /** execFile-style run returning stdout (probes, agents, gh). Refuses a
+   * Stopped distro unless `explicit` (see shellEnv). */
+  async execOn(
+    host: ExecHost,
+    cmd: HostCommand,
+    timeout = PROBE_TIMEOUT_MS,
+    opts?: { explicit?: boolean },
+  ): Promise<string> {
+    if (isWslHost(host) && !opts?.explicit && this.enumStopped(host.id)) {
+      throw new Error('distro is stopped');
+    }
+    await this.shellEnv(host, opts);
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
     if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'exec' } });
@@ -852,9 +884,16 @@ export class HostsRegistry {
     const targets = id
       ? [...this.entries.values()].filter((e) => e.host.id === id)
       : this.enabledDistros().map((d) => this.entryFor(d.name, d.stopped));
+    const booted = targets.some((entry) => this.enumStopped(entry.host.id));
     for (const entry of targets) {
       entry.probed = false;
       await this.probe(entry);
+    }
+    // The explicit probe started a Stopped distro — re-read its state so the
+    // cached row stops gating it.
+    if (booted) {
+      this.distros = null;
+      await this.enumerateAsync();
     }
     // An explicit refresh always republishes, even when nothing changed, so
     // consumers retry work that failed earlier (e.g. the hooks write).

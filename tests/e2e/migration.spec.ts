@@ -118,6 +118,11 @@ test('migrates a legacy devin-workspaces profile, partitions and claude hooks', 
         (await readEvents(logFile)).some((e) => e.event === 'claude-hooks-backup-migrated'),
       )
       .toBe(true);
+    // Claude log details never carry a configDir path.
+    const backupMigrated = (await readEvents(logFile)).find(
+      (e) => e.event === 'claude-hooks-backup-migrated',
+    );
+    expect(JSON.stringify(backupMigrated?.detail ?? {})).not.toContain('settings.json');
   } finally {
     await closeApp(app);
     rmSync(root, { recursive: true, force: true });

@@ -368,7 +368,7 @@ export class DevinLocalHost {
     const execHost = this.hostFor(workspace);
     if (isWslHost(execHost)) {
       // Prime probe + env capture before checking devin presence.
-      await hosts().shellEnv(execHost);
+      await hosts().shellEnv(execHost, { explicit: true });
       if (!hosts().status(execHost.id)?.devin.path) {
         const message = `${execHost.distro}: ${INSTALL_GUIDANCE}`;
         update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: message }));
@@ -429,7 +429,7 @@ export class DevinLocalHost {
     if (isWslHost(execHost)) {
       // Through `wsl.exe -d D --cd <linux ws> -e /usr/bin/env …` so the agent
       // runs inside the distro with the captured shell env.
-      await hosts().shellEnv(execHost);
+      await hosts().shellEnv(execHost, { explicit: true });
       child = hosts().spawnOn(execHost, {
         file: hosts().status(execHost.id)?.devin.path ?? 'devin',
         args: ['acp'],

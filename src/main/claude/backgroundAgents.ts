@@ -40,6 +40,9 @@ export class ClaudeBackgroundAgents {
   // through the host bridge and return raw stdout.
   private readonly execList: (() => Promise<string>) | undefined;
   private readonly execStop: ((agentId: string) => Promise<void>) | undefined;
+  // False → the tick spawns nothing (wsl host not ready/stopped/no claude).
+  private readonly eligible: () => boolean;
+  private skipped = false;
   private agents: ClaudeAgent[] = [];
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
@@ -53,12 +56,14 @@ export class ClaudeBackgroundAgents {
     hostId?: HostId;
     execList?: () => Promise<string>;
     execStop?: (agentId: string) => Promise<void>;
+    eligible?: () => boolean;
   }) {
     this.cliPath = opts.cliPath;
     this.onChange = opts.onChange;
     this.hostId = opts.hostId ?? 'local';
     this.execList = opts.execList;
     this.execStop = opts.execStop;
+    this.eligible = opts.eligible ?? (() => true);
   }
 
   start(): void {
@@ -75,6 +80,12 @@ export class ClaudeBackgroundAgents {
 
   list(): ClaudeAgent[] {
     return this.agents;
+  }
+
+  /** Host status changed: a tick skipped while ineligible runs now. */
+  poke(): void {
+    if (!this.running || this.inFlight || !this.skipped || !this.eligible()) return;
+    void this.refresh('timer');
   }
 
   private schedule(): void {
@@ -101,6 +112,12 @@ export class ClaudeBackgroundAgents {
       this.dirty = source;
       return;
     }
+    if (!this.eligible()) {
+      this.skipped = true;
+      this.schedule();
+      return;
+    }
+    this.skipped = false;
     this.inFlight = true;
     const t0 = Date.now();
     this.lastStartedAt = t0;

@@ -23,6 +23,10 @@
 // backgroundRelists and usage-scan for the old build.
 // AGENT_WORKSPACE_TEST*/FAKE_* env in the caller's environment is passed through
 // (used to soak against the fake WSL). Counts only — no payloads are recorded.
+// Caveats: `ptySpawnSpec`/`ghSpec` log host-exec when the spec is built, not when it
+// is spawned (a refused open still counts — overcounts, safe for a budget check); the
+// profile copy carries secrets/credentials, so the notifier and Devin Local autostart
+// run too (their spawns land in excludedLongLived).
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   copyFileSync,

@@ -378,7 +378,7 @@ export class ClaudeSessions {
   private agentsForHost(host: ExecHost): ClaudeBackgroundAgents {
     let agents = this.backgroundAgents.get(host.id);
     if (!agents) {
-      agents = new ClaudeBackgroundAgents({
+      const poller: ClaudeBackgroundAgents = new ClaudeBackgroundAgents({
         cliPath: () => this.cliPath,
         hostId: host.id,
         ...(isWslHost(host)
@@ -405,18 +405,45 @@ export class ClaudeSessions {
                     3_000,
                   )
                   .then(() => undefined),
+              // Each wsl poll is a wsl.exe spawn: only for a listed, running,
+              // probed distro that has claude (status changes poke it).
+              eligible: () =>
+                hosts().fsReady(host) && Boolean(hosts().status(host.id)?.claude.path),
             }
           : {}),
         onChange: (agents) => {
+          // A poll that finished after its host was dropped must not re-add rows.
+          if (this.backgroundAgents.get(host.id) !== poller) return;
           this.agentsByHost.set(host.id, agents);
           this.agents = [...this.agentsByHost.values()].flat();
           this.emit();
         },
       });
+      agents = poller;
       this.backgroundAgents.set(host.id, agents);
       if (this.started) agents.start();
     }
     return agents;
+  }
+
+  /** Disposes per-host pollers/stores whose host can no longer be touched:
+   * agents pollers for hosts that left hosts().list(), wsl stores for hosts
+   * that left it or are not fsReady (stopped / re-probing). Both are
+   * recreated lazily by the next refresh once the host is back. */
+  private pruneHosts(): void {
+    const listed = new Map(hosts().list().map((host) => [host.id, host]));
+    for (const [id, store] of this.stores) {
+      const host = listed.get(id);
+      if (id === 'local' || (host && hosts().fsReady(host))) continue;
+      store.dispose();
+      this.stores.delete(id);
+    }
+    for (const [id, agents] of this.backgroundAgents) {
+      if (listed.has(id)) continue;
+      agents.dispose();
+      this.backgroundAgents.delete(id);
+      if (this.agentsByHost.delete(id)) this.agents = [...this.agentsByHost.values()].flat();
+    }
   }
 
   refreshAgents(): Promise<void> {
@@ -470,8 +497,13 @@ export class ClaudeSessions {
       let storeComplete = true;
       const skippedHosts: HostId[] = [];
       let listedHosts = 0;
+      this.pruneHosts();
       for (const host of hosts().list()) {
-        if (this.started) this.agentsForHost(host).start();
+        if (this.started) {
+          const agents = this.agentsForHost(host);
+          agents.start();
+          agents.poke();
+        }
         if (filter && !filter.has(host.id)) {
           // Not part of this change: reuse its rows rather than re-list it
           // (a wsl list is a UNC/9P walk). Partial pass → no migration.

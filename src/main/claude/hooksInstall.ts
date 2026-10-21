@@ -29,7 +29,7 @@ export async function applyGlobalHooks(
   try {
     if ((await exists(legacyBackup)) && !(await exists(backup))) {
       await rename(legacyBackup, backup);
-      log('claude', 'claude-hooks-backup-migrated', { detail: { file } });
+      log('claude', 'claude-hooks-backup-migrated');
     }
   } catch {
     // best-effort; a second backup is harmless
