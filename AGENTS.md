@@ -101,7 +101,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_HELPER_SILENCE_MS` | test mode | Replaces the helper channel's 15 s silence-before-ping; the kill threshold becomes 3x this value (the 15 s / 45 s ratio). |
 | `AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS` | test mode | Replaces every `BACKOFF_MS` step (60 s / 120 s) of the helper channel's respawn backoff; the breaker still opens on the 3rd failed start. |
 | `AGENT_WORKSPACE_TEST_ENUM_TIMEOUT_MS` | test mode | Replaces the 10 s timeout of `wsl -l -v` (a timeout is the only enumeration failure besides a spawn error). |
-| `AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS` | test mode | Replaces the 60 s base of the failed-enumeration backoff (doubles per consecutive failure, capped at 5x the base). |
+| `AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS` | test mode | Replaces the 60 s base of the failed-enumeration backoff (doubles per consecutive failure, capped at 5x the base; the cold-start ladder is base/6 capped at the base). `hostsHelper.spec.ts` defaults it to 300. |
 | `AGENT_WORKSPACE_TEST_ENUM_FRESH_MS` | test mode | Replaces the 60 s `ENUM_FRESH_MS` after which background WSL work re-reads the distro table first (`hosts().backgroundReady`). |
 | `AGENT_WORKSPACE_TEST_WSL_CHANGE_CHECK_MS` | test mode | Replaces the 300 s `WSL_CHANGE_CHECK_MS` interval of the wsl store change check (`src/main/claude/store.ts`, min 100 ms). |
 | `AGENT_WORKSPACE_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
@@ -597,7 +597,8 @@ variable that selects it.
 - Enumeration cache (`src/core/hostEnum.ts`): only a timeout or spawn error fails a `wsl -l -v` (`enumOutcome`); a prompt non-zero exit — no distros
   installed, or the inbox wsl.exe stub without the WSL feature — is an empty, successful, normally cached list (output text is never parsed: it is
   localized). A failure keeps the previous rows, sets `failed` and does not sync channels (running helpers keep running, nothing is reset); focus and
-  `backgroundReady` treat it as fresh for a backoff of 60 s doubling to 5 min (`failureBackoffMs`), reset on success; the helper `canSpawn` gate still
+  `backgroundReady` treat it as fresh for a backoff of 60 s doubling to 5 min (`failureBackoffMs`) — 10 s doubling to 60 s while no list has
+  succeeded yet this run (cold start) — reset on success; `invalidate()` (`hosts:refresh`) also resets the failure count; the helper `canSpawn` gate still
   runs its own fresh list per spawn attempt and refuses while failed. `host-list` carries `ok`; a throwing post-list sync logs `host-list-error {kind}`
   and never rejects the refresh. No `wsl.exe` / WSL disabled = an empty successful list.
 - Never log env values or filesystem paths under hosts — `host-list`/`host-probe`/`host-env`/`host-spawn` carry ids, counts, ms only. Test hooks: `hosts`, `hostStatus(id)`, `hostRefresh(id?)`, `hostShellEnvKeys(id)`.

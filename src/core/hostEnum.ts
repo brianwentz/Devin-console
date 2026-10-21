@@ -9,10 +9,16 @@
 export const ENUM_FAILURE_BACKOFF_MS = 60_000;
 export const ENUM_FAILURE_BACKOFF_MAX_MS = 300_000;
 
-/** Backoff after the n-th consecutive failed list (n ≥ 1). */
-export function failureBackoffMs(n: number, baseMs = ENUM_FAILURE_BACKOFF_MS): number {
-  const max = Math.max(baseMs, ENUM_FAILURE_BACKOFF_MAX_MS * (baseMs / ENUM_FAILURE_BACKOFF_MS));
-  return Math.min(baseMs * 2 ** Math.max(0, n - 1), max);
+/**
+ * Backoff after the n-th consecutive failed list (n ≥ 1): 60 s doubling to
+ * 5 min. `coldStart` (no list has succeeded yet this run — the first start
+ * often races a booting VM): 10 s doubling to 60 s. Both scale with `baseMs`.
+ */
+export function failureBackoffMs(n: number, baseMs = ENUM_FAILURE_BACKOFF_MS, coldStart = false): number {
+  const scale = baseMs / ENUM_FAILURE_BACKOFF_MS;
+  const step = 2 ** Math.max(0, n - 1);
+  if (coldStart) return Math.min((baseMs / 6) * step, baseMs);
+  return Math.min(baseMs * step, ENUM_FAILURE_BACKOFF_MAX_MS * scale);
 }
 
 /**
@@ -33,6 +39,7 @@ export class EnumerationCache<R> {
   private okAt: number | null = null;
   private failAt: number | null = null;
   private failures = 0;
+  private everOk = false;
   failed = false;
   completed = false;
   private seq = 0;
@@ -49,15 +56,18 @@ export class EnumerationCache<R> {
   /** No re-run due: a success within `maxAgeMs`, or a failure still inside its backoff. */
   isFresh(maxAgeMs: number): boolean {
     if (this.failed) {
-      return this.failAt !== null && this.now() - this.failAt < failureBackoffMs(this.failures, this.backoffBaseMs);
+      const backoff = failureBackoffMs(this.failures, this.backoffBaseMs, !this.everOk);
+      return this.failAt !== null && this.now() - this.failAt < backoff;
     }
     return this.okAt !== null && this.now() - this.okAt < maxAgeMs;
   }
 
-  /** Forget freshness and the failure backoff (hosts:refresh) — rows stay. */
+  /** Forget freshness and the failure backoff, count included (hosts:refresh
+   * during an outage restarts at the base step) — rows stay. */
   invalidate(): void {
     this.okAt = null;
     this.failAt = null;
+    this.failures = 0;
   }
 
   /** Runs an enumeration, or joins the one in flight. Never rejects. */
@@ -69,6 +79,7 @@ export class EnumerationCache<R> {
         this.rows = rows;
         this.okAt = this.now();
         this.failed = false;
+        this.everOk = true;
         this.failures = 0;
         this.failAt = null;
         this.settle(seq, true);

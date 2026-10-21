@@ -124,6 +124,10 @@ describe('EnumerationCache', () => {
     const { calls, run } = controllable();
     let now = 0;
     const cache = new EnumerationCache<Row>(run, () => now, undefined, 60_000);
+    // Past cold start: one success first.
+    const first = cache.refresh();
+    calls[0]!.resolve([]);
+    await first;
     const fail = async () => {
       const p = cache.refresh();
       calls[calls.length - 1]!.reject(new Error('timeout'));
@@ -176,5 +180,61 @@ describe('EnumerationCache', () => {
     expect(calls).toHaveLength(2);
     calls[1]!.resolve([]);
     await expect(q).resolves.toBeUndefined();
+  });
+
+  it('cold start: before any success the failure backoff is 10 s doubling, capped at 60 s', async () => {
+    const { calls, run } = controllable();
+    let now = 0;
+    const cache = new EnumerationCache<Row>(run, () => now);
+    const windows: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const p = cache.refresh();
+      calls[calls.length - 1]!.reject(new Error('timeout'));
+      await p;
+      const failAt = now;
+      let w = 0;
+      while (cache.isFresh(300)) {
+        w += 1_000;
+        now = failAt + w;
+      }
+      windows.push(w);
+    }
+    expect(windows).toEqual([10_000, 20_000, 40_000, 60_000, 60_000]);
+    // After the first success the normal ladder applies.
+    const ok = cache.refresh();
+    calls[calls.length - 1]!.resolve([]);
+    await ok;
+    const p = cache.refresh();
+    calls[calls.length - 1]!.reject(new Error('timeout'));
+    await p;
+    const failAt = now;
+    now = failAt + 59_999;
+    expect(cache.isFresh(300)).toBe(true);
+    now = failAt + 60_000;
+    expect(cache.isFresh(300)).toBe(false);
+  });
+
+  it('failureBackoffMs cold-start ladder', () => {
+    expect([1, 2, 3, 4, 5].map((n) => failureBackoffMs(n, undefined, true))).toEqual([10_000, 20_000, 40_000, 60_000, 60_000]);
+  });
+
+  it('invalidate() also resets the failure count (refresh during an outage restarts at the base)', async () => {
+    const { calls, run } = controllable();
+    let now = 0;
+    const cache = new EnumerationCache<Row>(run, () => now);
+    const ok = cache.refresh();
+    calls[0]!.resolve([]);
+    await ok;
+    for (let i = 0; i < 3; i++) {
+      const p = cache.refresh();
+      calls[calls.length - 1]!.reject(new Error('timeout'));
+      await p;
+    }
+    cache.invalidate();
+    const p = cache.refresh();
+    calls[calls.length - 1]!.reject(new Error('timeout'));
+    await p;
+    now += 60_000;
+    expect(cache.isFresh(300)).toBe(false); // base 60 s step, not 480 s
   });
 });

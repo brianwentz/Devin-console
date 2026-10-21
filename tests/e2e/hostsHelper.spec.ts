@@ -50,6 +50,19 @@ const helperEvents = async (logFile: string) =>
     .filter((e) => e.event === 'host-helper')
     .map((e) => e.detail as { host: string; state: string; reason?: string });
 
+// The log of the most recent launch: a failing test appends its host-list
+// `ok` sequence (load flakes are usually a failed/slow enumeration).
+let lastLogFile: string | null = null;
+
+async function withListTrace(error: unknown): Promise<unknown> {
+  if (!lastLogFile || !(error instanceof Error)) return error;
+  const seq = (await readEvents(lastLogFile).catch(() => []))
+    .filter((e) => e.event === 'host-list')
+    .map((e) => (e.detail as { ok?: boolean }).ok);
+  error.message += `\nhost-list ok sequence: ${JSON.stringify(seq)}`;
+  return error;
+}
+
 async function launch(env: Record<string, string>) {
   const root = env.FAKE_WSL_ROOT ?? mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
   const spawnLog = join(root, 'spawn.log');
@@ -58,9 +71,13 @@ async function launch(env: Record<string, string>) {
     FAKE_WSL_ROOT: root,
     FAKE_WSL_SPAWN_LOG: spawnLog,
     AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '300',
+    // One failed list under load must not block re-enumeration for the
+    // production 60 s backoff; backoff tests set their own value.
+    AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
     ...env,
   });
-  return { app, profile, root, spawnLog, logFile: join(profile, 'events.jsonl') };
+  lastLogFile = join(profile, 'events.jsonl');
+  return { app, profile, root, spawnLog, logFile: lastLogFile };
 }
 
 test('deploy then hello → helper ready', async () => {
@@ -78,6 +95,8 @@ test('deploy then hello → helper ready', async () => {
     expect(events.some((e) => e.state === 'ready' && e.reason === 'hello')).toBe(true);
     // Log detail is ids / enums only.
     for (const e of events) expect(Object.keys(e).sort()).toEqual(['host', 'reason', 'state']);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -88,6 +107,8 @@ test('bundle already present → no deploy', async () => {
   const first = await launch({ FAKE_WSL_ROOT: root });
   try {
     await expect.poll(() => helperState(first.app), { timeout: 30_000 }).toBe('ready');
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(first.app);
   }
@@ -97,6 +118,8 @@ test('bundle already present → no deploy', async () => {
     await expect.poll(() => helperState(second.app), { timeout: 30_000 }).toBe('ready');
     const deploys = (await readEvents(second.logFile)).filter((e) => e.event === 'host-helper-deploy');
     expect(deploys).toEqual([]);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(second.app);
   }
@@ -114,6 +137,8 @@ test('killed helper reconnects', async () => {
       .toBe(true);
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(before + 1);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -139,6 +164,8 @@ test('FAKE_WSL_HELPER_HANG → killed after silence → reconnect', async () => 
     // Hello-then-silence is a failed start every time: the breaker ends it.
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('degraded');
     expect(launches(spawnLog)).toBe(3);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -157,6 +184,8 @@ test('three failed starts → degraded, no further spawns', async () => {
     // hosts:refresh closes the breaker and tries again.
     await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostRefresh(id), HOST);
     await expect.poll(() => launches(spawnLog), { timeout: 10_000 }).toBeGreaterThan(3);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -179,6 +208,8 @@ test('helper file deleted while ready → exit 86 on respawn → redeploy → re
     expect((await helperEvents(logFile)).some((e) => e.reason === 'redeploy')).toBe(true);
     // Only the kill counted; the 86 itself did not.
     expect(await channelState(app)).toMatchObject({ failures: 1, open: false });
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -209,6 +240,8 @@ test('stopped distro is not respawned', async () => {
     writeFileSync(distros, 'Fake:Running:default');
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -231,6 +264,8 @@ test('FAKE_WSL_NO_NODE → node-missing + #hostHelperHint', async () => {
       'data-host-helper',
       'node-missing',
     );
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -269,6 +304,8 @@ test('env.get feeds spawnOn — no -ilc env-capture spawn after ready', async ()
       (e) => e.event === 'host-env' && (e.detail as { source?: string }).source === 'channel',
     );
     expect(channelEnv.length).toBeGreaterThanOrEqual(1);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -318,6 +355,8 @@ test('a helper killed by a distro stop is not respawned into the stopped distro'
     await flipAndEnumerate(app, distros, 'Fake:Running:default');
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -337,6 +376,8 @@ test('a degraded helper resets when its distro stops and runs again', async () =
     await new Promise((resolve) => setTimeout(resolve, 500));
     await flipAndEnumerate(app, distros, 'Fake:Running:default');
     await expect.poll(() => launches(spawnLog), { timeout: 15_000 }).toBeGreaterThan(3);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -353,6 +394,8 @@ test("Settings shows a stopped distro's helper as paused", async () => {
     await expect(helper).toContainText('ready', { timeout: 10_000 });
     await flipAndEnumerate(app, distros, 'Fake:Stopped:default');
     await expect(helper).toContainText('paused (distro stopped)', { timeout: 15_000 });
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -372,7 +415,7 @@ test('a timed-out wsl -l -v keeps the hosts and the live helper; backs off; the 
   const { app, spawnLog, logFile } = await launch(
     flipEnv(root, distros, {
       AGENT_WORKSPACE_TEST_ENUM_TIMEOUT_MS: '1000',
-      AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '4000',
+      AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '8000',
     }),
   );
   const listOutcomes = async () =>
@@ -407,13 +450,15 @@ test('a timed-out wsl -l -v keeps the hosts and the live helper; backs off; the 
       .toBe(true);
     expect(launches(spawnLog)).toBe(n);
     expect((await hostRow(app))?.state).toBe('ready');
-    // The VM recovers; once the (doubled, 8 s) backoff has passed the next
+    // The VM recovers; once the (doubled, 16 s) backoff has passed the next
     // background check re-lists and brings the helper back.
     writeFileSync(distros, 'Fake:Running:default');
-    await new Promise((resolve) => setTimeout(resolve, 8_500));
+    await new Promise((resolve) => setTimeout(resolve, 16_500));
     await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
@@ -442,6 +487,8 @@ test('no installed distros (wsl -l exits non-zero) is a cached empty list: focus
     expect(await enumRuns(logFile)).toBe(runs);
     expect((await readEvents(logFile)).some((e) => e.event === 'host-list' && (e.detail as { ok?: boolean }).ok === false)).toBe(false);
     expect((await state(app)).hosts.map((h) => h.id)).toEqual(['local']);
+  } catch (error) {
+    throw await withListTrace(error);
   } finally {
     await closeApp(app);
   }
