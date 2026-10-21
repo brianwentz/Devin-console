@@ -224,11 +224,24 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
 
 test('a WSL transcript change does not trigger a full claude-list', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  // inotify mode: events carry file names; the projects dir must exist before
+  // the watch (rooted at projects/) starts.
+  const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
+  mkdirSync(projectDir, { recursive: true });
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_INOTIFY: '1',
+    FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const logFile = join(profile, 'events.jsonl');
+  const inotifyEvents = async () =>
+    (await readEvents(logFile)).filter(
+      (e) =>
+        e.event === 'claude-watch' &&
+        (e.detail as { mode?: string; events?: number } | undefined)?.mode === 'inotify' &&
+        ((e.detail as { events?: number }).events ?? 0) > 0,
+    ).length;
   const watchLists = async () =>
     (await readEvents(logFile)).filter(
       (e) =>
@@ -247,11 +260,13 @@ test('a WSL transcript change does not trigger a full claude-list', async () => 
       `${uncRoot}\\home\\u\\proj`,
     )) as string;
     // Not terminal-owned: a transcript append must not re-list over the UNC.
-    const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
-    mkdirSync(projectDir, { recursive: true });
     const before = await watchLists();
+    const seen = await inotifyEvents();
     writeFileSync(join(projectDir, `${id}.jsonl`), '{"type":"user"}\n');
+    // Positive control: the change reached the store watcher...
+    await expect.poll(inotifyEvents, { timeout: 10_000 }).toBeGreaterThan(seen);
     await new Promise((resolve) => setTimeout(resolve, 5_000));
+    // ...but did not trigger a full list.
     expect(await watchLists()).toBe(before);
   } finally {
     await closeApp(app);

@@ -198,9 +198,15 @@ export class ClaudeStore {
         this.watchTimer = null;
         const files = [...changed];
         changed.clear();
+        log('claude', 'claude-watch', {
+          detail: { mode: 'inotify', host: this.host.id, events: files.length },
+        });
         this.onChange(files);
       }, WATCH_DEBOUNCE_MS);
     });
+    // File-bearing events are history-only (see watchAction), so sessions
+    // created outside the app still surface through the dir-mtime check.
+    this.startChangeCheck();
     const fallback = () => {
       if (this.inotify !== child) return;
       this.inotify = null;
@@ -213,9 +219,8 @@ export class ClaudeStore {
 
   // Windows-side <configDir>/projects → the linux path inside the distro.
   private projectsDirLinux(): string {
-    const dir = this.projectsDir.replace(/\\/g, '/');
-    const m = /^\/{2}[^/]+\/[^/]+(\/.*)$/.exec(dir);
-    return m && m[1] ? m[1] : dir;
+    // hostPath also honours the test UNC-root seam.
+    return hosts().hostPath(this.host, this.projectsDir);
   }
 
   // wsl without inotify. fs.watch fails over the UNC and a full SDK list there
@@ -224,7 +229,18 @@ export class ClaudeStore {
   // the terminal-owned (hot) transcripts only, reported as <encoded-cwd>/<id>.jsonl
   // relative paths - the shape fs.watch emits, so onTranscriptFiles parses them.
   private startTieredPoll(): void {
+    if (this.hotTimer) return;
     log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 0 } });
+    this.startChangeCheck();
+    this.hotTimer = setInterval(() => {
+      void this.hotTick();
+    }, HOT_POLL_MS);
+    this.hotTimer.unref?.();
+  }
+
+  // Shared by inotify and poll-only wsl modes; a no-op when already running.
+  private startChangeCheck(): void {
+    if (this.pollTimer) return;
     void this.dirMtimes().then((m) => {
       this.dirMtimeSnapshot ??= m;
     });
@@ -232,10 +248,6 @@ export class ClaudeStore {
       void this.changeCheck();
     }, WSL_CHANGE_CHECK_MS);
     this.pollTimer.unref?.();
-    this.hotTimer = setInterval(() => {
-      void this.hotTick();
-    }, HOT_POLL_MS);
-    this.hotTimer.unref?.();
   }
 
   // projectDir -> mtimeMs; null when the projects dir can't be read.
