@@ -23,6 +23,7 @@ import { claudeUsage } from './usage';
 import { applyGlobalHooks } from './hooksInstall';
 import { hosts } from '../hosts';
 import { terminalHost } from '../local/terminalHost';
+import { hooksOffDue, hooksOffFailed, type HooksOffBackoff } from '../../core/hooksOffBackoff';
 import type { ClaudeSessions } from './sessions';
 
 export class ClaudeHooks {
@@ -42,6 +43,9 @@ export class ClaudeHooks {
   private applyDirty = false;
   // Per host: the key of the last successful settings.json write.
   private readonly lastApplied = new Map<HostId, string>();
+  // Per host: failed `--apply-hooks-off` runs (60 s doubling to 1 h) and the
+  // error they reported — status changes inside the window spawn nothing.
+  private readonly offBackoff = new Map<HostId, HooksOffBackoff & { error: string | null }>();
   private skipLogged = false;
 
   constructor(
@@ -118,6 +122,11 @@ export class ClaudeHooks {
     });
   }
 
+  /** The hooks setting changed: a failing one-shot may run again at once. */
+  resetOffBackoff(): void {
+    this.offBackoff.clear();
+  }
+
   /** Drop the lastApplied gate (explicit hosts refresh) so the next apply re-writes. */
   forgetApplied(id?: HostId): void {
     if (id) this.lastApplied.delete(id);
@@ -187,7 +196,11 @@ export class ClaudeHooks {
 
   /** Opt-out with the channel down (a disabled, running distro). */
   private async removeOnce(host: ExecHost): Promise<{ installed: boolean; error: string | null }> {
+    const backoff = this.offBackoff.get(host.id);
+    if (!hooksOffDue(backoff, Date.now())) return { installed: false, error: backoff?.error ?? null };
     const r = await hosts().hooksOffOnce(host);
+    if (r.ok) this.offBackoff.delete(host.id);
+    else this.offBackoff.set(host.id, { ...hooksOffFailed(backoff, Date.now()), error: r.error });
     log('claude', 'claude-hooks-install', {
       detail: { enabled: false, changed: r.ok, ok: r.ok, host: host.id, via: 'one-shot' },
     });

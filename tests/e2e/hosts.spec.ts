@@ -753,6 +753,58 @@ test('turning hooks off removes our block from a disabled, running distro', asyn
   }
 });
 
+test('a failing hooks-off one-shot backs off: repeated status changes do not re-run it', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const claudeDir = join(uncRoot, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const shell = await shellPage(app);
+  const offs = async () =>
+    (await readEvents(logFile))
+      .filter((e) => e.event === 'host-hooks-off')
+      .map((e) => (e.detail as { ok: boolean }).ok);
+  const helper = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.hostChannelState('wsl:Fake')?.state ?? null);
+  try {
+    await expect.poll(helper, { timeout: 30_000 }).toBe('ready');
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+    await expect
+      .poll(() => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/'), { timeout: 15_000 })
+      .toBe(true);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    const row = shell.locator('[data-host-id="wsl:Fake"]');
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await row.locator('[data-host-enabled]').click();
+    await expect.poll(() => hostState(app)).toBe('disabled');
+    // Hand-broken file: every removal run exits 1.
+    writeFileSync(settingsFile, '{ not json');
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`);
+    await expect.poll(offs, { timeout: 15_000 }).toEqual([false]);
+    // Status-driven applies (what every host status change runs) inside the
+    // 60 s backoff spawn nothing more.
+    for (let i = 0; i < 5; i++) {
+      await app.evaluate(() => (globalThis as any).__agentworkspace.claudeApplyHooks());
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await offs()).toEqual([false]);
+    // A hooks setting change resets the backoff: the next opt-out runs again.
+    writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`);
+    await expect.poll(offs, { timeout: 15_000 }).toEqual([false, true]);
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('Devin Local autostart skips a workspace on a stopped distro', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const spawnLog = join(uncRoot, 'spawn.log');

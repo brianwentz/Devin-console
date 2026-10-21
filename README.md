@@ -57,7 +57,7 @@ Add a workspace under `\\wsl.localhost\<distro>\…` on the **Local** or **Claud
 - The helper is copied to `~/.agent-workspace/` in the distro on first use (one file per app version; copies unused for a week are cleaned up). Deleting the folder is safe — it is copied again on the next start.
 - Without Node.js (or with a version older than 18) the distro's row says **Node 18 or newer is required** and that distro's sessions don't load. Install Node in the distro, then press **Re-check**.
 - The app never starts a stopped distro. While a distro is stopped its helper shows as **paused** and its sessions keep their last state; they refresh once the distro runs again. If the helper keeps failing the row shows it stopped — **Re-check** tries again.
-- Turning off *Report Claude Code sessions started from other terminals* removes the hook block from every running distro — also from one you disabled in the app while it keeps running. A stopped distro is never started for this; if it runs again while the app is open, it is cleaned up then. While the toggle is off, the app ignores reports from terminals it did not open itself.
+- Turning off *Report Claude Code sessions started from other terminals* removes the hook block from every running, enabled distro, and also from a running distro you disabled since the app started. A distro that was already disabled when the app started is cleaned up when you enable it again; until then the app ignores the reports it sends. A stopped distro is never started for this. While the toggle is off, the app ignores reports from terminals it did not open itself.
 
 ## Where things live
 

@@ -1225,6 +1225,7 @@ export class ClaudeSessions {
       this.emit();
     }
     if (previous.claude.hooksEnabled !== next.claude.hooksEnabled) {
+      this.hook.resetOffBackoff();
       this.hook.applyHooks();
       this.emit();
     }
