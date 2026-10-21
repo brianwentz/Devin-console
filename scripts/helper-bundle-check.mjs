@@ -35,6 +35,9 @@ console.log('HELPER_CHECK ' + JSON.stringify(results))
 process.exit(Object.values(results).every((r) => r.ok) ? 0 : 1)
 `
 
+// Only a failure to fetch the Node runtime counts as "skipped"; anything else (load error, crash, timeout) is a real failure.
+const DOWNLOAD_FAILURE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|E404|ECONNRESET|npm ERR! network|npm error network/
+
 function run(cmd, args) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', shell: cmd === 'npx' && process.platform === 'win32', timeout: 240_000 })
   return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') }
@@ -62,10 +65,14 @@ try {
     const res = run(r.cmd, [...r.pre, bundle, home])
     console.error(`${r.label}: exit ${res.code} ${res.out.slice(0, 1200)}`)
     if (res.code === 0 && res.out.includes('HELPER_CHECK')) passed.push(r.label)
-    else if (r.pre.length && !res.out.includes('HELPER_CHECK')) skipped.push(r.label)
+    else if (r.pre.length && !res.out.includes('HELPER_CHECK') && DOWNLOAD_FAILURE.test(res.out)) skipped.push(r.label)
     else failed = true
   }
   if (!passed.length) failed = true
+  if (skipped.length) {
+    if (process.env.CI) failed = true
+    else console.error(`WARNING: ${skipped.join(', ')} not verified (runtime download failed); the Node 18 floor is unproven.`)
+  }
   console.log(`helper-bundle-check ${failed ? 'FAIL' : 'OK'}: ${(size / 1024).toFixed(0)} KB, passed [${passed.join(', ')}]${skipped.length ? `, skipped [${skipped.join(', ')}]` : ''}`)
 } catch (e) {
   failed = true
