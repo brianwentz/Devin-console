@@ -94,6 +94,8 @@ test('a session created under the UNC root runs on the wsl host', async () => {
 test('settings hosts block lists the distro; the checkbox disables it', async () => {
   const { app } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_NO_CLAUDE: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const shell = await shellPage(app);
   try {
@@ -103,11 +105,27 @@ test('settings hosts block lists the distro; the checkbox disables it', async ()
         { timeout: 30_000 },
       )
       .toBe('ready');
+    // The per-host problem text belongs to Settings, never the Claude column.
+    await expect
+      .poll(async () => {
+        await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh());
+        const snap = (await app.evaluate(() =>
+          (globalThis as any).__agentworkspace.claudeState(),
+        )) as { hostErrors?: Record<string, string> };
+        return snap.hostErrors?.['wsl:Fake'] ?? '';
+      }, { timeout: 30_000 })
+      .toContain('Claude Code not found');
+    await shell.locator('#claudeButton').click();
+    await expect(shell.locator('[data-sidebar="claude"]')).toBeVisible({ timeout: 10_000 });
+    await expect(shell.locator('[data-sidebar="claude"] [data-host-error]')).toHaveCount(0);
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     const row = shell.locator('[data-host-id="wsl:Fake"]');
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row.locator('[data-host-state]')).toHaveText('ready');
     await expect(row.locator('[data-host-facts]')).toContainText('shell env');
+    await expect(row.locator('[data-host-error]')).toContainText('Claude Code not found', {
+      timeout: 15_000,
+    });
 
     await row.locator('[data-host-enabled]').click();
     await expect

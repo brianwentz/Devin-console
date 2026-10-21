@@ -109,6 +109,11 @@ function HostsBlock() {
           <span data-host-facts className="text-xs text-[#7f8ca0]">
             {facts(host)}
           </span>
+          {state.claude.hostErrors?.[host.id] && (
+            <span data-host-error className="text-xs text-[#e0a03c]">
+              {state.claude.hostErrors[host.id]}
+            </span>
+          )}
           {host.error ? (
             <span className="text-xs text-[#d08080]">{host.error}</span>
           ) : null}
