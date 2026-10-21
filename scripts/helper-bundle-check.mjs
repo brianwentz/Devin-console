@@ -1,9 +1,10 @@
 // Feasibility check: the Claude Agent SDK store functions bundle into ONE ESM file (<= 3 MB, target node18)
 // that runs under plain Node 18/20/24 against a temp copy of tests/fixtures/claude-home.
+// Each runner that passes also drives the real built helper (out/helper, so `npm run build` first) over NDJSON stdio.
 // Node majors other than the running one are fetched with `npx -y node@<major>`; a failed download is reported as skipped.
 import { build } from 'esbuild'
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,9 +39,51 @@ process.exit(Object.values(results).every((r) => r.ok) ? 0 : 1)
 // Only a failure to fetch the Node runtime counts as "skipped"; anything else (load error, crash, timeout) is a real failure.
 const DOWNLOAD_FAILURE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|E404|ECONNRESET|npm ERR! network|npm error network/
 
-function run(cmd, args) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', shell: cmd === 'npx' && process.platform === 'win32', timeout: 240_000 })
-  return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') }
+function run(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', shell: cmd === 'npx' && process.platform === 'win32', timeout: 240_000, ...opts })
+  return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? ''), stdout: r.stdout ?? '' }
+}
+
+// The real built helper (out/helper, from `npm run build`), deployed under its
+// helper-<hash>.mjs name and driven over NDJSON stdio until stdin EOF.
+const BUILT_DIR = join(root, 'out', 'helper')
+const A_ID = '11111111-0000-4000-8000-00000000000a'
+const REQUESTS = [
+  { id: 1, method: 'ping', params: {} },
+  { id: 2, method: 'store.list', params: {} },
+  { id: 3, method: 'store.messages', params: { sessionId: A_ID, offset: 0, limit: 500 } },
+  { id: 4, method: 'store.listSubagents', params: { sessionId: A_ID } },
+  { id: 5, method: 'store.transcriptPath', params: { sessionId: A_ID } },
+  { id: 6, method: 'env.get', params: {} },
+  { id: 7, method: 'watch.subscribe', params: {} },
+  { id: 8, method: 'no.such', params: {} },
+]
+function checkBuilt(r, work, hash) {
+  const home = join(work, `built-${r.label.replace(/\W/g, '')}`)
+  const cfg = join(home, '.claude')
+  mkdirSync(join(home, '.agent-workspace'), { recursive: true })
+  cpSync(join(root, 'tests', 'fixtures', 'claude-home'), cfg, { recursive: true })
+  const file = join(home, '.agent-workspace', `helper-${hash}.mjs`)
+  cpSync(join(BUILT_DIR, 'agent-workspace-helper.mjs'), file)
+  const res = run(r.cmd, [...r.pre, file, '--stdio'], {
+    input: REQUESTS.map((q) => JSON.stringify(q)).join('\n') + '\n',
+    env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: cfg },
+  })
+  const frames = res.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l))
+  const byId = new Map(frames.filter((f) => typeof f.id === 'number').map((f) => [f.id, f]))
+  const problems = []
+  const hello = frames[0]
+  if (hello?.method !== 'hello' || hello.params?.protocol !== 1 || hello.params?.hash !== hash) problems.push('hello')
+  if (typeof byId.get(1)?.result?.t !== 'number') problems.push('ping')
+  if (!(byId.get(2)?.result?.length >= 3)) problems.push('store.list')
+  if (!(byId.get(3)?.result?.length > 0)) problems.push('store.messages')
+  if (!byId.get(4)?.result?.includes?.('fixture01')) problems.push('store.listSubagents')
+  if (typeof byId.get(5)?.result?.path !== 'string') problems.push('store.transcriptPath')
+  if (byId.get(6)?.result?.env?.CLAUDE_CONFIG_DIR !== cfg) problems.push('env.get')
+  if (!byId.get(7)?.result) problems.push('watch.subscribe')
+  if (byId.get(8)?.error?.code !== 'unknown-method') problems.push('unknown-method')
+  if (res.code !== 0) problems.push(`exit ${res.code}`)
+  return { problems, out: res.out }
 }
 
 const work = mkdtempSync(join(tmpdir(), 'helper-bundle-check-'))
@@ -55,6 +98,14 @@ try {
   })
   const size = statSync(bundle).size
   if (size > MAX_BYTES) { failed = true; console.error(`bundle ${size} bytes exceeds ${MAX_BYTES}`) }
+  let builtHash = null
+  try {
+    builtHash = JSON.parse(readFileSync(join(BUILT_DIR, 'helper-hash.json'), 'utf8')).hash
+    if (statSync(join(BUILT_DIR, 'agent-workspace-helper.mjs')).size >= MAX_BYTES) { failed = true; console.error('built helper exceeds 3 MB') }
+  } catch {
+    failed = true
+    console.error('out/helper is missing - run `npm run build` first')
+  }
 
   const runners = [{ label: `node${process.versions.node.split('.')[0]}(local)`, cmd: process.execPath, pre: [] }]
   for (const m of NODE_MAJORS) runners.push({ label: `node${m}`, cmd: 'npx', pre: ['-y', `node@${m}`] })
@@ -65,8 +116,13 @@ try {
     const res = run(r.cmd, [...r.pre, bundle, home])
     console.error(`${r.label}: exit ${res.code} ${res.out.slice(0, 1200)}`)
     if (res.code === 0 && res.out.includes('HELPER_CHECK')) passed.push(r.label)
-    else if (r.pre.length && !res.out.includes('HELPER_CHECK') && DOWNLOAD_FAILURE.test(res.out)) skipped.push(r.label)
-    else failed = true
+    else if (r.pre.length && !res.out.includes('HELPER_CHECK') && DOWNLOAD_FAILURE.test(res.out)) { skipped.push(r.label); continue }
+    else { failed = true; continue }
+    if (builtHash) {
+      const b = checkBuilt(r, work, builtHash)
+      console.error(`${r.label}: built helper ${b.problems.length ? `FAIL [${b.problems.join(', ')}] ${b.out.slice(0, 1200)}` : 'OK'}`)
+      if (b.problems.length) { failed = true; passed.pop() }
+    }
   }
   if (!passed.length) failed = true
   if (skipped.length) {

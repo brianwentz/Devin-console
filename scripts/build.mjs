@@ -4,6 +4,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build as viteBuild } from 'vite';
+import { buildHelper } from './build-helper.mjs';
 
 await mkdir('out', { recursive: true });
 await mkdir('out/scripts', { recursive: true });
@@ -30,6 +31,9 @@ if (missing.length > 0) {
 }
 
 await Promise.all([
+  // In-distro helper (ESM, SDK inlined, < 3 MB) + out/helper/helper-hash.json;
+  // throws — failing the build — over the size budget.
+  buildHelper('out/helper').then((r) => console.log(`helper ${r.hash} ${(r.bytes / 1024).toFixed(0)} KB`)),
   build({
     entryPoints: ['src/main/index.ts'],
     bundle: true,
