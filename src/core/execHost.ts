@@ -3,6 +3,8 @@
 // reached through wsl.exe. No node/electron imports; path strings are
 // manipulated by hand so behaviour is identical on every platform.
 
+import type { HostStatus } from '../shared/ipc';
+
 export type HostId = 'local' | `wsl:${string}`;
 
 export type ExecHost =
@@ -296,4 +298,40 @@ export function parseWslList(text: string): WslDistroRow[] {
     }
   }
   return out;
+}
+
+const SEMVER_LINE = /^\d+\.\d+\.\d+/;
+
+/**
+ * Parses the probe line's output (`$HOME`, user, login shell, node version or
+ * `NONODE`). The node token is the last line, so a missing getent answer
+ * can't shift it into the shell slot; a legacy three-line answer has no node.
+ */
+export function parseProbeOutput(out: string): {
+  home: string | undefined;
+  shell: string | undefined;
+  node: string | null;
+} {
+  const lines = out.trim().split('\n').map((l) => l.trim());
+  let node: string | null = null;
+  const last = lines[lines.length - 1] ?? '';
+  if (lines.length >= 3 && (last === 'NONODE' || SEMVER_LINE.test(last))) {
+    node = last === 'NONODE' ? null : last;
+    lines.pop();
+  }
+  return { home: lines[0] || undefined, shell: lines[2] || undefined, node };
+}
+
+/** Structural comparison of host status lists — ignores probe timestamps and env-capture timings so a re-probe that learned nothing new doesn't republish. */
+export function statusesChanged(prev: HostStatus[] | null, next: HostStatus[]): boolean {
+  if (prev === null) return true;
+  const norm = (rows: HostStatus[]): string =>
+    JSON.stringify(
+      rows.map((row) => ({
+        ...row,
+        probedAt: null,
+        shellEnv: row.shellEnv ? { ok: row.shellEnv.ok, count: row.shellEnv.count } : null,
+      })),
+    );
+  return norm(prev) !== norm(next);
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -52,6 +52,8 @@ function hooks(app: ElectronApplication) {
       >,
     claudeHooksSettingsPath: () =>
       evaluate(() => (globalThis as any).__agentworkspace.claudeHooksSettingsPath()) as Promise<string>,
+    hostRefresh: () =>
+      evaluate(() => (globalThis as any).__agentworkspace.hostRefresh()) as Promise<void>,
     claudePostHook: (event: string, body: unknown) =>
       app.evaluate(
         (_e, a: { event: string; body: unknown }) =>
@@ -360,6 +362,44 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
     const removed = readFileSync(settingsFile, 'utf8');
     expect(removed).not.toContain('/agent-workspace/hook/');
     expect(removed).toContain('echo foreign');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('hooks apply is gated: unchanged refreshes leave settings.json alone, a failed apply retries', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await expect.poll(async () => await h.claudeHookInfo()).not.toBeNull();
+    const settingsFile = await h.claudeHooksSettingsPath();
+
+    // A failed apply: a directory squatting on the tmp path makes the write fail.
+    mkdirSync(`${settingsFile}.tmp`);
+    await evaluateInShell(
+      app,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`,
+    );
+    await expect.poll(async () => (await h.claudeState()).hooks.error).not.toBeNull();
+    expect((await h.claudeState()).hooks.installed).toBe(false);
+
+    // The next refresh retries (lastApplied is only recorded on success).
+    rmSync(`${settingsFile}.tmp`, { recursive: true, force: true });
+    await h.hostRefresh();
+    await expect.poll(async () => (await h.claudeState()).hooks.installed).toBe(true);
+    expect((await h.claudeState()).hooks.error).toBeNull();
+
+    // Unchanged settings: further refreshes never touch the file.
+    const before = statSync(settingsFile).mtimeMs;
+    await h.hostRefresh();
+    await h.hostRefresh();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(statSync(settingsFile).mtimeMs).toBe(before);
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });

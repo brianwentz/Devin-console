@@ -84,6 +84,11 @@ export function settingsFlagJson(port: number, envVar: string, addr?: string): s
   );
 }
 
+/** Identity of one host's hooks write: an unchanged key means settings.json is already in the desired state, so the UNC round-trip is skipped. */
+export function hooksApplyKey(hostId: string, enabled: boolean, block: unknown): string {
+  return JSON.stringify([hostId, enabled, block]);
+}
+
 const serialise = (obj: unknown): string => `${JSON.stringify(obj, null, 2)}\n`;
 
 function parseSettings(settingsJson: string | null): { settings: JsonObject } | { error: string } {

@@ -16,13 +16,18 @@ const execFileAsync = promisify(execFile);
 
 const FOCUSED_MS = 15_000;
 const UNFOCUSED_MS = 60_000;
+// Each wsl poll is a wsl.exe spawn — keep it far rarer than the local one.
+const WSL_FOCUSED_MS = 120_000;
+const WSL_UNFOCUSED_MS = 300_000;
 
-function pollMs(): number {
+function pollMs(wsl: boolean): number {
   if (testMode && process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS) {
     const ms = Math.max(50, Number(process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS) || 0);
     return ms;
   }
-  return state.windowRef?.isFocused() ? FOCUSED_MS : UNFOCUSED_MS;
+  const focused = state.windowRef?.isFocused() ?? false;
+  if (wsl) return focused ? WSL_FOCUSED_MS : WSL_UNFOCUSED_MS;
+  return focused ? FOCUSED_MS : UNFOCUSED_MS;
 }
 
 export class ClaudeBackgroundAgents {
@@ -76,7 +81,7 @@ export class ClaudeBackgroundAgents {
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.refresh('timer');
-    }, pollMs());
+    }, pollMs(this.hostId !== 'local'));
     this.timer.unref?.();
   }
 

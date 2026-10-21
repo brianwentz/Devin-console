@@ -34,7 +34,7 @@ import type {
 } from '../../shared/ipc';
 import { ClaudeUsageStateSchema, IpcChannels } from '../../shared/ipc';
 import { hosts } from '../hosts';
-import type { ExecHost } from '../../core/execHost';
+import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { notifyShell } from '../window';
 import { createPushedStore } from '../pushedStore';
@@ -575,15 +575,19 @@ export class ClaudeUsageService {
     let skipped = 0;
     try {
       // configDir() answers from the captured local value, so a concurrent
-      // withConfigDir swap (SDK store call) can't be observed. Wsl hosts
-      // whose probe isn't ready are never touched; each ready host's walk is
-      // raced against HOST_FS_BUDGET_MS and lands in skippedHosts on timeout.
+      // withConfigDir swap (SDK store call) can't be observed. Wsl hosts are
+      // never walked: reading transcripts over \wsl.localhost (9P) overloads
+      // the distro VM, so their token totals are paused (wslTotalsPaused).
+      // Each remaining host's walk is raced against HOST_FS_BUDGET_MS and
+      // lands in skippedHosts on timeout.
       const tasks: { host: ExecHost; path: string; key: string }[] = [];
       const skippedHosts = hosts()
         .list()
         .filter((h) => !hosts().fsReady(h))
         .map((h) => h.id);
-      const scannedHosts = hosts().readyList();
+      const readyHosts = hosts().readyList();
+      const scannedHosts = readyHosts.filter((h) => !isWslHost(h));
+      const wslTotalsPaused = readyHosts.some(isWslHost);
       const collect = async (host: ExecHost): Promise<{ host: ExecHost; path: string; key: string }[]> => {
         const dir = join(hosts().configDir(host), 'projects');
         const found: { host: ExecHost; path: string; key: string }[] = [];
@@ -690,13 +694,14 @@ export class ClaudeUsageService {
         scannedAt: new Date(this.now()).toISOString(),
         scanning: null,
       };
-      this.store.update((state) => ({ ...state, month: current, tokens }));
+      this.store.update((state) => ({ ...state, month: current, wslTotalsPaused, tokens }));
       // Only `tasks` feed the totals, so stale keys never count — but prune
       // them from the file (e.g. local: keys left by a pre-fix scan that read
       // a WSL store as local) so the cache doesn't carry them forever.
       const pruned = pruneFileCache(
         this.cache.files,
-        scannedHosts.map((h) => h.id),
+        // Every ready host, wsl included, so keys cached by pre-pause builds drop out.
+        readyHosts.map((h) => h.id),
         tasks.map((t) => t.key),
       );
       if (pruned.pruned > 0) {

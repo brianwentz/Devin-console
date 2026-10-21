@@ -17,6 +17,8 @@ export const HostStatusSchema = z.object({
   probedAt: z.string().nullable(),
   home: z.string().nullable(),
   shell: z.string().nullable(),
+  /** Node version from the probe line; null when the distro has no Node. */
+  node: z.string().nullable(),
   claude: z.object({ path: z.string().nullable(), version: z.string().nullable() }),
   devin: z.object({ path: z.string().nullable() }),
   shellEnv: z.object({ ok: z.boolean(), count: z.number().int(), ms: z.number() }).nullable(),
@@ -385,6 +387,8 @@ export const ClaudeUsageStateSchema = z.object({
   accounts: z.array(ClaudeUsageAccountSchema), // [] → per-token plan / not signed in
   perToken: z.boolean(), // no OAuth creds on any host
   month: z.string(), // 'yyyy-mm' (local)
+  /** A WSL host is ready but its transcripts are not scanned (UNC reads are paused); token totals cover this PC only. */
+  wslTotalsPaused: z.boolean(),
   tokens: z.object({
     total: ClaudeTokenTotalsSchema,
     byModel: z.record(z.string(), ClaudeTokenTotalsSchema),

@@ -7,6 +7,8 @@
 //                                 FAKE_WSL_ROOT/C (created if missing)
 //   /usr/bin/env K=V… cmd         applies the leading assignments
 //   /bin/sh -c 'echo $HOME;id…'   the probe line → FAKE_WSL_HOME, u, /bin/bash
+//                                 + node version 22.12.0, or NONODE with
+//                                 FAKE_WSL_NO_NODE=1
 //                                 (sleeps FAKE_WSL_PROBE_DELAY_MS first)
 //   <shell> -ilc 'cmd' [posargs]  __DW_ENV__ capture → canned env -0
 //                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER);
@@ -222,7 +224,8 @@ const main = (): number => {
     if (delay > 0) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
     }
-    process.stdout.write(`${HOME}\nu\n/bin/bash\n`);
+    const node = process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : '22.12.0';
+    process.stdout.write(`${HOME}\nu\n/bin/bash\n${node}\n`);
     return 0;
   }
   if (/bash|zsh|fish|sh$/.test(file) && tail.some((a) => /^-[a-z]*c$/.test(a))) {

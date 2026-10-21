@@ -16,6 +16,7 @@ import { setupLocal, localHost } from './local/ipc';
 import { setupClaude } from './claude/ipc';
 import { claudeHost } from './claude/host';
 import { claudeSessions } from './claude/sessions';
+import { hosts } from './hosts';
 import { claudeUsage } from './claude/usage';
 import { autoOpenLocalPr } from './local/prAutoOpen';
 import { terminalHost } from './local/terminalHost';
@@ -442,6 +443,7 @@ async function createWindow(): Promise<void> {
   state.windowRef.on('focus', () => {
     notifier.onWindowFocus();
     claudeSessions().onWindowFocus();
+    hosts().onWindowFocus();
     updateOnWindowFocus();
   });
   state.windowRef.on('close', (event) => {

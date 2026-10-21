@@ -192,6 +192,7 @@ export class ClaudeSessions {
     setClaudeHost(this.host);
     // One agents poller per host; local keeps the PATH/CLI resolution,
     // wsl hosts run `claude agents` through the host bridge.
+    hosts().start();
     for (const host of hosts().list()) this.agentsForHost(host).start();
     terminalHost.claudeGate = {
       onOpen: (id) => this.beginTerminal(id),

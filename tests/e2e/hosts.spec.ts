@@ -19,7 +19,7 @@ test.afterAll(async () => {
 });
 
 test('a running fake distro is enumerated, probed and env-captured', async () => {
-  const { app } = await launchWithClaudeFixture(fixtures, {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     FAKE_WSL_ENV_MARKER: '1',
   });
@@ -36,6 +36,15 @@ test('a running fake distro is enumerated, probed and env-captured', async () =>
     expect(host?.shellEnv?.count).toBeGreaterThan(0);
     expect(host?.claude.path).toBeTruthy();
     expect(host?.shell).toBe('/bin/bash');
+    // Node version rides the existing probe spawn.
+    expect(host?.node).toBe('22.12.0');
+    // Every wsl.exe call is counted: enumeration, probe and env capture all logged.
+    const kinds = new Set(
+      (await readEvents(join(profile, 'events.jsonl')))
+        .filter((e) => e.event === 'host-exec')
+        .map((e) => (e.detail as { kind: string }).kind),
+    );
+    expect([...kinds]).toEqual(expect.arrayContaining(['enum', 'probe', 'env']));
     const keys = (await app.evaluate(() =>
       (globalThis as any).__agentworkspace.hostShellEnvKeys('wsl:Fake'),
     )) as string[];

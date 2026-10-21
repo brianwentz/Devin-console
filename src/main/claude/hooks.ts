@@ -8,11 +8,12 @@ import {
   type ActivityState,
   type ClaudeHookEvent,
 } from '../../core/claudeActivity';
-import { settingsFlagJson } from '../../core/claudeHooks';
+import { buildHooksBlock, hooksApplyKey, settingsFlagJson } from '../../core/claudeHooks';
 import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
+import type { HostId } from '../../core/execHost';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
@@ -35,6 +36,10 @@ export class ClaudeHooks {
   // notificationsForHookEvent).
   private readonly recentPermission = new Map<string, number>();
   private activityTimer: NodeJS.Timeout | null = null;
+  private applying = false;
+  private applyDirty = false;
+  // Per host: the key of the last successful settings.json write.
+  private readonly lastApplied = new Map<HostId, string>();
 
   constructor(
     private readonly owner: ClaudeSessions,
@@ -75,16 +80,38 @@ export class ClaudeHooks {
 
   // Global opt-in: (re)write our hook block into <configDir>/settings.json so
   // external terminals report activity too; off removes exactly our entries.
+  // Fire-and-forget and coalesced: one run in flight plus one dirty follow-up,
+  // so a burst of host-status changes never stacks UNC round-trips.
   applyHooks(): void {
-    const info = this.hookServer?.info();
     const enabled = state.settings?.current.claude.hooksEnabled ?? false;
     this.hooks = { ...this.hooks, enabled };
-    if (!info) {
+    if (!this.hookServer?.info()) {
       if (enabled) {
         this.hooks = { ...this.hooks, installed: false, error: 'hook listener unavailable' };
       }
       return;
     }
+    if (this.applying) {
+      this.applyDirty = true;
+      return;
+    }
+    this.applying = true;
+    void (async () => {
+      try {
+        do {
+          this.applyDirty = false;
+          await this.applyOnce();
+        } while (this.applyDirty);
+      } finally {
+        this.applying = false;
+      }
+    })();
+  }
+
+  private async applyOnce(): Promise<void> {
+    const info = this.hookServer?.info();
+    const enabled = state.settings?.current.claude.hooksEnabled ?? false;
+    if (!info) return;
     // The opt-in applies to every enabled host's settings.json — for a wsl
     // host the file lives under \wsl.localhost\<D>\<home>\.claude and the
     // URLs point at that host's reachable address (loopback in mirrored
@@ -95,13 +122,21 @@ export class ClaudeHooks {
       // A wsl host whose probe isn't ready gets skipped — touching its
       // settings.json over UNC could block the loop for the SMB timeout.
       if (!hosts().fsReady(host)) continue;
-      const result = applyGlobalHooks(
-        hosts().configDir(host),
+      const addr = hosts().hookAddrFor(host.id) ?? undefined;
+      const key = hooksApplyKey(
+        host.id,
         enabled,
-        info.port,
-        info.token,
-        hosts().hookAddrFor(host.id) ?? undefined,
+        buildHooksBlock({ port: info.port, auth: { kind: 'token', token: info.token }, ...(addr ? { addr } : {}) }),
       );
+      let result: { installed: boolean; error: string | null };
+      if (this.lastApplied.get(host.id) === key) {
+        // Already written in this state; lastApplied is only recorded on success.
+        result = { installed: enabled, error: null };
+      } else {
+        result = await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr);
+        if (result.error === null) this.lastApplied.set(host.id, key);
+        else this.lastApplied.delete(host.id);
+      }
       if (host.id === 'local') {
         installed = result.installed;
         firstError = result.error;
@@ -110,6 +145,7 @@ export class ClaudeHooks {
       if (result.error && !firstError) firstError = result.error;
     }
     this.hooks = { ...this.hooks, enabled, installed, error: firstError };
+    this.owner.emit();
   }
 
   /** Expose the listener on a non-loopback address (NAT-mode WSL reachability). */

@@ -24,6 +24,8 @@ import {
   type ExecHost,
   type HostCommand,
   type HostId,
+  parseProbeOutput,
+  statusesChanged,
 } from '../core/execHost';
 import type { HostStatus, Settings } from '../shared/ipc';
 import { log } from './log';
@@ -36,7 +38,7 @@ import { sdkTargetCliVersion } from './claude/sdk';
 const execFileAsync = promisify(execFile);
 
 const ENUM_CACHE_MS = 5 * 60_000;
-const ENV_CACHE_MS = 60_000;
+const ENV_CACHE_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_MARKER = '__DW_ENV__';
 const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
@@ -70,6 +72,7 @@ const localStatus = (): HostStatus => {
     probedAt: null,
     home: null,
     shell: null,
+    node: null,
     claude: {
       path: resolveClaudePath(state.settings?.current.claude.path ?? null),
       version: null,
@@ -83,6 +86,9 @@ const localStatus = (): HostStatus => {
   localStatusCache = { at: Date.now(), status };
   return status;
 };
+
+/** Every `wsl.exe` invocation logs `host-exec {host, kind}` so a soak can count them. */
+type WslExecKind = 'enum' | 'probe' | 'env' | 'exec' | 'spawn';
 
 type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store';
 
@@ -98,7 +104,9 @@ export class HostsRegistry {
    * binary is needed, never on the publish path. */
   private ready: Promise<void>;
   private distros: { at: number; rows: ReturnType<typeof parseWslList> } | null = null;
-  private enumInFlight = false;
+  private enumInFlight: Promise<void> | null = null;
+  private started = false;
+  private lastPublished: HostStatus[] | null = null;
   private enumWaiters: Array<() => void> = [];
   private entries = new Map<HostId, WslEntry>();
   private configMutex: Promise<unknown> = Promise.resolve();
@@ -152,7 +160,7 @@ export class HostsRegistry {
   // already printed, and the marker-validated output is still usable).
   private runWsl(
     args: string[],
-    opts: { timeout?: number; requireSuccess?: boolean } = {},
+    opts: { kind: WslExecKind; host: string; timeout?: number; requireSuccess?: boolean },
   ): Promise<WslRun> {
     const timeout = opts.timeout ?? PROBE_TIMEOUT_MS;
     const requireSuccess = opts.requireSuccess ?? true;
@@ -164,6 +172,7 @@ export class HostsRegistry {
           return;
         }
         const [file, ...prefix] = cmd;
+        log('host', 'host-exec', { detail: { host: opts.host, kind: opts.kind } });
         const child = spawn(file!, [...prefix, ...args], {
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
@@ -192,20 +201,42 @@ export class HostsRegistry {
     });
   }
 
-  private async execWsl(args: string[], timeout = PROBE_TIMEOUT_MS): Promise<string> {
-    const { stdout } = await this.runWsl(args, { timeout });
+  private async execWsl(args: string[], kind: WslExecKind, host: string): Promise<string> {
+    const { stdout } = await this.runWsl(args, { kind, host });
     return stdout.toString('utf8');
   }
 
   // --- enumeration -----------------------------------------------------------
 
-  /** Cached distro rows ([] until the first async `-l -v` lands). Never
-   * blocks: a stale cache kicks off an async enumeration and the completion
-   * re-publishes via onStatusChange. */
+  /** Cached distro rows ([] until the first async `-l -v` lands). Read paths
+   * (statuses/list/enabledDistros) never spawn: enumeration runs at start, on
+   * a 5-minute interval, on window focus once the cache is stale, and on
+   * refresh(). */
   enumerate(): ReturnType<typeof parseWslList> {
-    if (this.distros && Date.now() - this.distros.at < ENUM_CACHE_MS) return this.distros.rows;
-    if (!this.enumInFlight) void this.enumerateAsync();
     return this.distros?.rows ?? [];
+  }
+
+  /** Kicks the first enumeration and the periodic re-enumeration. Idempotent. */
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    void this.enumerateAsync();
+    const timer = setInterval(() => void this.enumerateAsync(), ENUM_CACHE_MS);
+    timer.unref?.();
+  }
+
+  /** Window focus: re-enumerate only when the cache has gone stale. */
+  onWindowFocus(): void {
+    if (!this.started) return;
+    if (!this.distros || Date.now() - this.distros.at >= ENUM_CACHE_MS) void this.enumerateAsync();
+  }
+
+  /** Fires onStatusChange only when the status rows changed structurally. */
+  private publish(): void {
+    const next = this.statuses();
+    if (!statusesChanged(this.lastPublished, next)) return;
+    this.lastPublished = next;
+    this.onStatusChange?.();
   }
 
   /** Resolves once at least one enumeration has landed (immediately when a
@@ -213,18 +244,24 @@ export class HostsRegistry {
    * maps UNC workspaces to distros wait without re-probing. */
   whenEnumerated(): Promise<void> {
     if (this.distros) return Promise.resolve();
-    if (!this.enumInFlight) void this.enumerateAsync();
+    void this.enumerateAsync();
     return new Promise((resolveWait) => this.enumWaiters.push(resolveWait));
   }
 
-  private async enumerateAsync(): Promise<void> {
-    this.enumInFlight = true;
+  private enumerateAsync(): Promise<void> {
+    this.enumInFlight ??= this.runEnumeration().finally(() => {
+      this.enumInFlight = null;
+    });
+    return this.enumInFlight;
+  }
+
+  private async runEnumeration(): Promise<void> {
     try {
       const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
       let rows: ReturnType<typeof parseWslList> = [];
       if (wslEnabled) {
         try {
-          const { stdout } = await this.runWsl(['-l', '-v']);
+          const { stdout } = await this.runWsl(['-l', '-v'], { kind: 'enum', host: 'all' });
           rows = parseWslList(stdout.toString('utf16le'));
         } catch {
           rows = [];
@@ -232,9 +269,8 @@ export class HostsRegistry {
       }
       this.distros = { at: Date.now(), rows };
       log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0 } });
-      this.onStatusChange?.();
+      this.publish();
     } finally {
-      this.enumInFlight = false;
       const waiters = this.enumWaiters;
       this.enumWaiters = [];
       for (const wake of waiters) wake();
@@ -266,6 +302,7 @@ export class HostsRegistry {
           probedAt: null,
           home: null,
           shell: null,
+          node: null,
           claude: { path: null, version: null },
           devin: { path: null },
           shellEnv: null,
@@ -343,6 +380,7 @@ export class HostsRegistry {
             probedAt: null,
             home: null,
             shell: null,
+            node: null,
             claude: { path: null, version: null },
             devin: { path: null },
             shellEnv: null,
@@ -389,20 +427,27 @@ export class HostsRegistry {
       const overrides = this.overrides(id);
       try {
         // home / user / login shell in one sh call.
-        const out = await this.execWsl([
-          '-d',
-          distro,
-          '-e',
-          '/bin/sh',
-          '-c',
-          'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7',
-        ]);
-        const [home, , shell] = out.trim().split('\n');
-        entry.host = { ...entry.host, home: overrides.home ?? home?.trim() ?? null };
+        // The node token rides the same spawn — no extra wsl.exe call.
+        const out = await this.execWsl(
+          [
+            '-d',
+            distro,
+            '-e',
+            '/bin/sh',
+            '-c',
+            'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7; ' +
+              'command -v node >/dev/null && node -p process.versions.node || echo NONODE',
+          ],
+          'probe',
+          id,
+        );
+        const parsed = parseProbeOutput(out);
+        entry.host = { ...entry.host, home: overrides.home ?? parsed.home ?? null };
         entry.status = {
           ...entry.status,
           home: entry.host.home,
-          shell: overrides.shell ?? shell?.trim() ?? '/bin/bash',
+          shell: overrides.shell ?? parsed.shell ?? '/bin/bash',
+          node: parsed.node,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -422,7 +467,7 @@ export class HostsRegistry {
       // CLI resolution under the captured PATH; settings overrides win.
       const resolve = async (bin: string): Promise<string | null> => {
         try {
-          const out = await this.execWsl(['-d', distro, '-e', shell, '-ilc', `command -v ${bin}`]);
+          const out = await this.execWsl(['-d', distro, '-e', shell, '-ilc', `command -v ${bin}`], 'probe', id);
           return out.trim().split('\n')[0]?.trim() || null;
         } catch {
           return null;
@@ -481,7 +526,7 @@ export class HostsRegistry {
       entry.probed = true;
     })().finally(() => {
       entry.probing = null;
-      this.onStatusChange?.();
+      this.publish();
     });
     await entry.probing;
   }
@@ -495,7 +540,7 @@ export class HostsRegistry {
       // exit code ignored: an rc file may exit non-zero after printing.
       const { stdout } = await this.runWsl(
         ['-d', entry.host.distro, '-e', shell, '-ilc', cmd],
-        { requireSuccess: false },
+        { kind: 'env', host: id, requireSuccess: false },
       );
       const env = parseShellEnv(stdout, ENV_MARKER);
       if (env === null) {
@@ -539,20 +584,24 @@ export class HostsRegistry {
     const port = this.hookPort?.();
     if (!port) return 'untested';
     const curl = (addr: string) =>
-      this.execWsl([
-        '-d',
-        entry.host.distro,
-        '-e',
-        'curl',
-        '-s',
-        '-m',
-        '2',
-        '-o',
-        '/dev/null',
-        '-w',
-        '%{http_code}',
-        `http://${addr}:${port}${HOOK_HEALTH_PATH}`,
-      ]).then((code) => ['200', '401', '404'].includes(code.trim()));
+      this.execWsl(
+        [
+          '-d',
+          entry.host.distro,
+          '-e',
+          'curl',
+          '-s',
+          '-m',
+          '2',
+          '-o',
+          '/dev/null',
+          '-w',
+          '%{http_code}',
+          `http://${addr}:${port}${HOOK_HEALTH_PATH}`,
+        ],
+        'probe',
+        entry.host.id,
+      ).then((code) => ['200', '401', '404'].includes(code.trim()));
     try {
       if (await curl('127.0.0.1')) return 'ok';
     } catch {
@@ -657,6 +706,7 @@ export class HostsRegistry {
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
     const t0 = Date.now();
+    if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'spawn' } });
     const child = spawn(applied.file, applied.args, {
       cwd: spec.cwd ?? homedir(),
       env: host.kind === 'local' ? { ...process.env, ...cmd.env } : process.env,
@@ -682,6 +732,7 @@ export class HostsRegistry {
     await this.shellEnv(host);
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
+    if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'exec' } });
     const { stdout } = await execFileAsync(applied.file, applied.args, {
       cwd: spec.cwd ?? homedir(),
       env: host.kind === 'local' ? { ...process.env, ...cmd.env } : process.env,
@@ -697,6 +748,7 @@ export class HostsRegistry {
     const shell = isWslHost(host) ? (this.entries.get(host.id)?.status.shell ?? null) : null;
     const spec = ptySpec(host, cmd, shell);
     const applied = this.applyWslCmd(spec);
+    if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'spawn' } });
     return { file: applied.file, args: applied.args, cwd: spec.cwd };
   }
 
@@ -781,7 +833,7 @@ export class HostsRegistry {
       ? [...new Set([...base, distro])]
       : base.filter((name) => name !== distro);
     state.settings?.merge({ hosts: { wslDistros: next } });
-    this.distros = null;
+    this.publish();
   }
 
   /** hosts:refresh — re-enumerate and re-probe. */
@@ -795,6 +847,10 @@ export class HostsRegistry {
       entry.probed = false;
       await this.probe(entry);
     }
+    // An explicit refresh always republishes, even when nothing changed, so
+    // consumers retry work that failed earlier (e.g. the hooks write).
+    this.lastPublished = null;
+    this.publish();
   }
 
   /** `gh` invocation for a host: wsl → wsl.exe-wrapped with the captured env;
