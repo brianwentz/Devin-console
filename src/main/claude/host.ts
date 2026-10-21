@@ -435,7 +435,7 @@ export class ClaudeHost {
     const execHost = this.hostFor(id);
     if (isWslHost(execHost)) {
       // Prime the §1.4 env cache so spawnOn uses the captured shell env.
-      await hosts().shellEnv(execHost);
+      await hosts().shellEnv(execHost, { explicit: true });
     }
     const options = {
       cwd: session.cwd || undefined,

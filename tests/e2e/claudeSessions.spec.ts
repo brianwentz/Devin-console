@@ -760,3 +760,29 @@ test('claude sidebar: dragging a subagent child row does not reorder its parent'
     rmSync(profile, { recursive: true, force: true });
   }
 });
+
+test('entering the claude surface re-lists once per 60 s', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures);
+  const logFile = join(profile, 'events.jsonl');
+  const surfaceLists = async () =>
+    (await readEvents(logFile)).filter(
+      (e) =>
+        e.event === 'claude-list' &&
+        (e.detail as { source?: string } | undefined)?.source === 'surface',
+    ).length;
+  try {
+    await waitForEvent(logFile, 'claude-list');
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('cloud'));
+    expect(await surfaceLists()).toBe(0);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    await expect.poll(surfaceLists, { timeout: 10_000 }).toBe(1);
+    // A second entry inside the 60 s window is throttled.
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('cloud'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await surfaceLists()).toBe(1);
+  } finally {
+    await closeApp(app).catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

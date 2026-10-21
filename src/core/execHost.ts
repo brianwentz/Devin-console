@@ -3,6 +3,8 @@
 // reached through wsl.exe. No node/electron imports; path strings are
 // manipulated by hand so behaviour is identical on every platform.
 
+import type { HostStatus } from '../shared/ipc';
+
 export type HostId = 'local' | `wsl:${string}`;
 
 export type ExecHost =
@@ -296,4 +298,43 @@ export function parseWslList(text: string): WslDistroRow[] {
     }
   }
   return out;
+}
+
+const SEMVER_LINE = /^\d+\.\d+\.\d+/;
+
+/** Second marker the env-capture command prints after `env -0`, followed by the node version or `NONODE`. */
+export const NODE_MARKER = '__DW_NODE__';
+
+/** Probe line output: `$HOME`, user, login shell. */
+export function parseProbeOutput(out: string): { home: string | undefined; shell: string | undefined } {
+  const lines = out.trim().split('\n').map((l) => l.trim());
+  return { home: lines[0] || undefined, shell: lines[2] || undefined };
+}
+
+/**
+ * Node version from the env-capture output (`…env -0; printf "\0<marker>\0";
+ * command -v node && node -p process.versions.node || echo NONODE`). Null for
+ * `NONODE`, a missing marker (capture failed or an old shell) or junk.
+ */
+export function parseNodeVersion(stdout: Uint8Array | string, marker: string = NODE_MARKER): string | null {
+  const text = typeof stdout === 'string' ? stdout : new TextDecoder('utf-8').decode(stdout);
+  const sep = `\0${marker}\0`;
+  const at = text.lastIndexOf(sep);
+  if (at === -1) return null;
+  const token = text.slice(at + sep.length).trim().split(/\s+/).pop() ?? '';
+  return SEMVER_LINE.test(token) ? token : null;
+}
+
+/** Structural comparison of host status lists — ignores probe timestamps and env-capture timings so a re-probe that learned nothing new doesn't republish. */
+export function statusesChanged(prev: HostStatus[] | null, next: HostStatus[]): boolean {
+  if (prev === null) return true;
+  const norm = (rows: HostStatus[]): string =>
+    JSON.stringify(
+      rows.map((row) => ({
+        ...row,
+        probedAt: null,
+        shellEnv: row.shellEnv ? { ok: row.shellEnv.ok, count: row.shellEnv.count } : null,
+      })),
+    );
+  return norm(prev) !== norm(next);
 }

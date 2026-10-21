@@ -33,12 +33,16 @@ export class ClaudePrTracking {
     prTitles.onChange = this.onCacheChange;
     // Prefer the PR-owning session's host for the `gh` fallback — on this
     // machine gh is authenticated inside WSL, not on Windows.
-    prTitles.ghResolver = (url: string) => {
+    prTitles.ghResolver = async (url: string) => {
       const entry = Object.values(this.owner.registry.entries).find((e) =>
         e.prs.some((pr) => pr.url === url),
       );
       const hostId = (entry?.host ?? 'local') as HostId;
       if (hostId === 'local') return null;
+      // A background refresh: re-read a stale enumeration before spawning
+      // into the distro (ghSpec itself refuses a stopped/disabled one).
+      const host = hosts().hostById(hostId);
+      if (!host || !(await hosts().backgroundReady(host))) return null;
       return hosts().ghSpec(hostId);
     };
     this.prRefreshTimer = setInterval(() => {

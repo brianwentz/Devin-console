@@ -78,6 +78,7 @@ export type PublicState = {
     probedAt: string | null;
     home: string | null;
     shell: string | null;
+    node: string | null;
     claude: { path: string | null; version: string | null };
     devin: { path: string | null };
     shellEnv: { ok: boolean; count: number; ms: number } | null;

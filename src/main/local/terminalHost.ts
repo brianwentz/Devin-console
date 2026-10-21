@@ -189,6 +189,7 @@ export class TerminalHost {
         return [];
       }
       const [file, ...prefix] = cmd;
+      log('host', 'host-exec', { detail: { host: 'all', kind: 'enum' } });
       const result = spawnSync(file!, [...prefix, '-l', '-q'], { encoding: 'utf16le', windowsHide: true });
       const raw = result.stdout ?? '';
       this.wslDistrosCache = raw

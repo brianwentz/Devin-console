@@ -8,11 +8,13 @@ import {
   type ActivityState,
   type ClaudeHookEvent,
 } from '../../core/claudeActivity';
-import { settingsFlagJson } from '../../core/claudeHooks';
+import { buildHooksBlock, hooksApplyKey, settingsFlagJson } from '../../core/claudeHooks';
 import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
+import type { HostId } from '../../core/execHost';
+import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
@@ -35,6 +37,11 @@ export class ClaudeHooks {
   // notificationsForHookEvent).
   private readonly recentPermission = new Map<string, number>();
   private activityTimer: NodeJS.Timeout | null = null;
+  private applying = false;
+  private applyDirty = false;
+  // Per host: the key of the last successful settings.json write.
+  private readonly lastApplied = new Map<HostId, string>();
+  private skipLogged = false;
 
   constructor(
     private readonly owner: ClaudeSessions,
@@ -75,14 +82,59 @@ export class ClaudeHooks {
 
   // Global opt-in: (re)write our hook block into <configDir>/settings.json so
   // external terminals report activity too; off removes exactly our entries.
+  // Fire-and-forget and coalesced: one run in flight plus one dirty follow-up,
+  // so a burst of host-status changes never stacks UNC round-trips.
   applyHooks(): void {
-    const info = this.hookServer?.info();
     const enabled = state.settings?.current.claude.hooksEnabled ?? false;
     this.hooks = { ...this.hooks, enabled };
-    if (!info) {
+    if (!this.hookServer?.info()) {
       if (enabled) {
         this.hooks = { ...this.hooks, installed: false, error: 'hook listener unavailable' };
       }
+      return;
+    }
+    if (this.applying) {
+      this.applyDirty = true;
+      return;
+    }
+    this.applying = true;
+    void (async () => {
+      try {
+        do {
+          this.applyDirty = false;
+          await this.applyOnce();
+        } while (this.applyDirty);
+      } finally {
+        this.applying = false;
+      }
+    })().catch((error: unknown) => {
+      this.hooks = {
+        ...this.hooks,
+        installed: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      this.owner.emit();
+    });
+  }
+
+  /** Drop the lastApplied gate (explicit hosts refresh) so the next apply re-writes. */
+  forgetApplied(id?: HostId): void {
+    if (id) this.lastApplied.delete(id);
+    else this.lastApplied.clear();
+  }
+
+  private async applyOnce(): Promise<void> {
+    const info = this.hookServer?.info();
+    const enabled = state.settings?.current.claude.hooksEnabled ?? false;
+    if (!info) return;
+    // Soak/measurement runs redirect only userData; never touch the real settings.json files.
+    if (process.env.AGENT_WORKSPACE_SKIP_HOOKS_INSTALL === '1') {
+      if (!this.skipLogged) {
+        this.skipLogged = true;
+        log('claude', 'claude-hooks-install-skipped');
+      }
+      this.hooks = { ...this.hooks, enabled, installed: false, error: null };
+      this.owner.emit();
       return;
     }
     // The opt-in applies to every enabled host's settings.json — for a wsl
@@ -92,16 +144,26 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
-      // A wsl host whose probe isn't ready gets skipped — touching its
-      // settings.json over UNC could block the loop for the SMB timeout.
-      if (!hosts().fsReady(host)) continue;
-      const result = applyGlobalHooks(
-        hosts().configDir(host),
+      // A wsl host whose probe isn't ready (or that is Stopped) gets skipped —
+      // touching its settings.json over UNC could block the loop for the SMB
+      // timeout or boot it. Installs target enabled hosts only; the opt-out
+      // also cleans a disabled-but-running one (our block carries the token).
+      if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
+      const addr = hosts().hookAddrFor(host.id) ?? undefined;
+      const key = hooksApplyKey(
+        host.id,
         enabled,
-        info.port,
-        info.token,
-        hosts().hookAddrFor(host.id) ?? undefined,
+        buildHooksBlock({ port: info.port, auth: { kind: 'token', token: info.token }, ...(addr ? { addr } : {}) }),
       );
+      let result: { installed: boolean; error: string | null };
+      if (this.lastApplied.get(host.id) === key) {
+        // Already written in this state; lastApplied is only recorded on success.
+        result = { installed: enabled, error: null };
+      } else {
+        result = await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr);
+        if (result.error === null) this.lastApplied.set(host.id, key);
+        else this.lastApplied.delete(host.id);
+      }
       if (host.id === 'local') {
         installed = result.installed;
         firstError = result.error;
@@ -110,6 +172,7 @@ export class ClaudeHooks {
       if (result.error && !firstError) firstError = result.error;
     }
     this.hooks = { ...this.hooks, enabled, installed, error: firstError };
+    this.owner.emit();
   }
 
   /** Expose the listener on a non-loopback address (NAT-mode WSL reachability). */

@@ -388,12 +388,20 @@ function applyBounds(bounds: WindowBounds, size: { width: number; height: number
   tabManager?.setBounds(paneVisible ? nativeBounds(bounds.ghTab) : null);
 }
 
+// The surface the last applyLayout ran with — detects entering 'claude'.
+let layoutSurface: string | null = null;
+
 export function applyLayout(): void {
   // Shutdown IPC churn must not restack views whose webContents are being torn
   // down (same rule as raiseShell/lowerShell).
   if (state.shuttingDown) return;
   const { windowRef, shellView, devinView, tabManager } = state;
   if (!windowRef || !shellView || !devinView || !tabManager) return;
+  // Every surface change lands here, whichever path set state.surface.
+  if (state.surface !== layoutSurface) {
+    layoutSurface = state.surface;
+    if (layoutSurface === 'claude') claudeSessions().onSurfaceEnter();
+  }
   syncScope();
   const bounds = computeBounds(windowRef.getContentBounds(), layoutState());
   applyBounds(bounds, windowRef.getContentBounds());

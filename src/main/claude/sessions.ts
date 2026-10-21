@@ -30,6 +30,12 @@ import {
 } from '../../core/workspaceTree';
 import { claudeScope } from '../../core/tabModel';
 import { LOCAL_HOST, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
+import {
+  hotIdsForHost,
+  mergeRefreshHosts,
+  throttleDue,
+  watchAction,
+} from '../../core/claudeWatchPolicy';
 import { ClaudeContextMenu, type MenuAction } from './contextMenu';
 import { ClaudeHooks } from './hooks';
 import { ClaudePrTracking } from './prTracking';
@@ -53,6 +59,7 @@ import { getChatState } from './chatState';
 import { titleFromPrompt } from '../../core/localModel';
 
 const execFileAsync = promisify(execFile);
+const SURFACE_REFRESH_MIN_MS = 60_000;
 
 export class ClaudeSessions {
   private stores = new Map<HostId, ClaudeStore>();
@@ -75,7 +82,8 @@ export class ClaudeSessions {
   // `claude --version` vs the SDK manifest target — powers the header warning badge.
   versions: ClaudeState['versions'] = { cli: null, sdkTarget: null, mismatch: false };
   private refreshInFlight = false;
-  private refreshDirty: string | null = null;
+  private refreshDirty: { source: string; hosts: Set<string> | null } | null = null;
+  private lastSurfaceRefreshAt: number | null = null;
   private started = false;
   private restoredSelection = false;
   private lastSnapshotJson = '';
@@ -121,15 +129,15 @@ export class ClaudeSessions {
         // Lazy: a wsl host's home lands on the first probe.
         configDir: () => hosts().configDir(host),
         onChange: (files) => {
-          void this.refresh('watch');
+          // Only this host's rows can have changed; the others keep theirs.
+          if (watchAction(host, files) === 'refresh') void this.refresh('watch', [host.id]);
           this.onTranscriptFiles(files);
         },
       });
+      // Only this host's terminal-owned sessions — another host's ids never
+      // resolve here and would cost a UNC scan on every tick.
       store.hot(
-        () =>
-          Object.values(getChatState().sessions)
-            .filter((s) => s.terminalOwned)
-            .map((s) => s.id),
+        () => hotIdsForHost(Object.values(getChatState().sessions), host.id),
         () => state.surface === 'claude',
       );
       this.stores.set(host.id, store);
@@ -191,6 +199,7 @@ export class ClaudeSessions {
     setClaudeHost(this.host);
     // One agents poller per host; local keeps the PATH/CLI resolution,
     // wsl hosts run `claude agents` through the host bridge.
+    hosts().start();
     for (const host of hosts().list()) this.agentsForHost(host).start();
     terminalHost.claudeGate = {
       onOpen: (id) => this.beginTerminal(id),
@@ -199,6 +208,9 @@ export class ClaudeSessions {
     };
     hosts().hookPort = () => this.hook.info()?.port ?? null;
     hosts().hookAddrBind = (addr) => this.hook.listenOn(addr);
+    // The Settings refresh button re-writes the hooks block even when the
+    // gate key is unchanged (repairs a hand-edited settings.json).
+    hosts().onExplicitRefresh = (id) => this.hook.forgetApplied(id);
     // Enumeration/probe completion re-publishes the host list; a new wsl host
     // also needs its store created, so refresh rather than emit only.
     hosts().onStatusChange = () => {
@@ -354,6 +366,11 @@ export class ClaudeSessions {
     return this.hook.settingsPath();
   }
 
+  /** Re-run the gated hooks apply (test hook; same path as a host status change). */
+  applyHooks(): void {
+    this.hook.applyHooks();
+  }
+
   agentsList(): ClaudeAgent[] {
     return this.agents;
   }
@@ -361,7 +378,7 @@ export class ClaudeSessions {
   private agentsForHost(host: ExecHost): ClaudeBackgroundAgents {
     let agents = this.backgroundAgents.get(host.id);
     if (!agents) {
-      agents = new ClaudeBackgroundAgents({
+      const poller: ClaudeBackgroundAgents = new ClaudeBackgroundAgents({
         cliPath: () => this.cliPath,
         hostId: host.id,
         ...(isWslHost(host)
@@ -388,18 +405,48 @@ export class ClaudeSessions {
                     3_000,
                   )
                   .then(() => undefined),
+              // Each wsl poll is a wsl.exe spawn: only for a listed, running,
+              // probed distro that has claude (status changes poke it).
+              // backgroundReady re-reads a stale enumeration first (a distro
+              // that stopped mid-run must not be booted by this tick).
+              eligible: async () =>
+                (await hosts().backgroundReady(host)) &&
+                Boolean(hosts().status(host.id)?.claude.path),
             }
           : {}),
         onChange: (agents) => {
+          // A poll that finished after its host was dropped must not re-add rows.
+          if (this.backgroundAgents.get(host.id) !== poller) return;
           this.agentsByHost.set(host.id, agents);
           this.agents = [...this.agentsByHost.values()].flat();
           this.emit();
         },
       });
+      agents = poller;
       this.backgroundAgents.set(host.id, agents);
       if (this.started) agents.start();
     }
     return agents;
+  }
+
+  /** Disposes per-host pollers/stores whose host can no longer be touched:
+   * agents pollers for hosts that left hosts().list(), wsl stores for hosts
+   * that left it or are not fsReady (stopped / re-probing). Both are
+   * recreated lazily by the next refresh once the host is back. */
+  private pruneHosts(): void {
+    const listed = new Map(hosts().list().map((host) => [host.id, host]));
+    for (const [id, store] of this.stores) {
+      const host = listed.get(id);
+      if (id === 'local' || (host && hosts().fsReady(host))) continue;
+      store.dispose();
+      this.stores.delete(id);
+    }
+    for (const [id, agents] of this.backgroundAgents) {
+      if (listed.has(id)) continue;
+      agents.dispose();
+      this.backgroundAgents.delete(id);
+      if (this.agentsByHost.delete(id)) this.agents = [...this.agentsByHost.values()].flat();
+    }
   }
 
   refreshAgents(): Promise<void> {
@@ -412,6 +459,17 @@ export class ClaudeSessions {
     for (const agents of this.backgroundAgents.values()) agents.onWindowFocus();
   }
 
+  /** The surface just became 'claude' (applyLayout seam): one full re-list,
+   * at most every SURFACE_REFRESH_MIN_MS — the wsl stores only notice new
+   * sessions/appends on their 300 s change check otherwise. */
+  onSurfaceEnter(): void {
+    if (!this.started) return;
+    const now = Date.now();
+    if (!throttleDue(this.lastSurfaceRefreshAt, now, SURFACE_REFRESH_MIN_MS)) return;
+    this.lastSurfaceRefreshAt = now;
+    void this.refresh('surface');
+  }
+
   agentStop(agentId: string): Promise<void> {
     this.recordMutation('agentStop', { agentId });
     const hostId = (this.agents.find((a) => a.id === agentId)?.host ?? 'local') as HostId;
@@ -421,9 +479,15 @@ export class ClaudeSessions {
   // --- refresh -------------------------------------------------------------
   // Coalesced like cloudSessions.list: one in-flight store.list() plus at
   // most one dirty follow-up.
-  async refresh(source: string): Promise<void> {
+  // `onlyHosts` limits the re-list (watch-sourced: only the store that saw the
+  // change); every other host keeps its previous rows. Omitted = every host.
+  async refresh(source: string, onlyHosts?: readonly HostId[]): Promise<void> {
+    const filter: Set<string> | null = onlyHosts ? new Set(onlyHosts) : null;
     if (this.refreshInFlight) {
-      this.refreshDirty = source;
+      this.refreshDirty = {
+        source,
+        hosts: this.refreshDirty ? mergeRefreshHosts(this.refreshDirty.hosts, filter) : filter,
+      };
       return;
     }
     this.refreshInFlight = true;
@@ -435,8 +499,21 @@ export class ClaudeSessions {
       let localError: unknown = null;
       let storeComplete = true;
       const skippedHosts: HostId[] = [];
+      let listedHosts = 0;
+      this.pruneHosts();
       for (const host of hosts().list()) {
-        if (this.started) this.agentsForHost(host).start();
+        if (this.started) {
+          const agents = this.agentsForHost(host);
+          agents.start();
+          agents.poke();
+        }
+        if (filter && !filter.has(host.id)) {
+          // Not part of this change: reuse its rows rather than re-list it
+          // (a wsl list is a UNC/9P walk). Partial pass → no migration.
+          storeComplete = false;
+          list.push(...this.storeSessions.filter((s) => s.host === host.id));
+          continue;
+        }
         if (!hosts().fsReady(host)) {
           // Probe not ready: UNC fs would block — keep the previous rows so
           // the sidebar doesn't empty during a transient re-probe.
@@ -448,6 +525,7 @@ export class ClaudeSessions {
         try {
           // A host that became ready mid-run starts its watcher now.
           if (this.started) this.storeForHost(host).start();
+          listedHosts += 1;
           list.push(...(await this.storeForHost(host).list()));
           hosts().setError(host.id, 'store', null);
         } catch (error) {
@@ -492,7 +570,7 @@ export class ClaudeSessions {
         }
       }
       log('claude', 'claude-list', {
-        detail: { count: list.length, skippedHosts, ms: Date.now() - t0, source },
+        detail: { count: list.length, skippedHosts, listedHosts, ms: Date.now() - t0, source },
       });
       this.emit();
     } catch (error) {
@@ -504,9 +582,9 @@ export class ClaudeSessions {
     } finally {
       this.refreshInFlight = false;
       if (this.refreshDirty) {
-        const source = this.refreshDirty;
+        const { source, hosts: dirtyHosts } = this.refreshDirty;
         this.refreshDirty = null;
-        void this.refresh(source);
+        void this.refresh(source, dirtyHosts ? ([...dirtyHosts] as HostId[]) : undefined);
       }
     }
   }

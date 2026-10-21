@@ -2,14 +2,18 @@
 // `node out/fixtures/fakeWsl.cjs`, so argv starts at process.argv[2]).
 // Implements just the surface hosts.ts exercises:
 //   -l -v / -l -q                 UTF-16LE distro table from FAKE_WSL_DISTROS
-//                                 ("Fake:Running:default,Other:Stopped")
+//                                 ("Fake:Running:default,Other:Stopped");
+//                                 FAKE_WSL_DISTROS_FILE (same syntax, read per
+//                                 call) wins when it exists — flips mid-run
 //   -d D [--cd C] -e argv…        run argv locally; linux cwd C maps onto
 //                                 FAKE_WSL_ROOT/C (created if missing)
 //   /usr/bin/env K=V… cmd         applies the leading assignments
 //   /bin/sh -c 'echo $HOME;id…'   the probe line → FAKE_WSL_HOME, u, /bin/bash
 //                                 (sleeps FAKE_WSL_PROBE_DELAY_MS first)
 //   <shell> -ilc 'cmd' [posargs]  __DW_ENV__ capture → canned env -0
-//                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER);
+//                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER),
+//                                 then __DW_NODE__ + 22.12.0 (NONODE when
+//                                 FAKE_WSL_NO_NODE=1);
 //                                 `command -v <bin>` → canned PATH answers;
 //                                 'exec "$0" "$@"'/'exec $argv' → run the argv
 //   inotifywait …                 exit 127 unless FAKE_WSL_INOTIFY=1 → fs.watch
@@ -18,7 +22,7 @@
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, watch } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, watch } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = process.env.FAKE_WSL_ROOT ?? '.';
@@ -136,7 +140,8 @@ const shInteractive = (tail: string[], cwd: string): number => {
     const body = Object.entries(cannedEnv())
       .map(([k, v]) => `${k}=${v}`)
       .join('\0');
-    process.stdout.write(`\0__DW_ENV__\0${body}\0`);
+    const node = process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : '22.12.0';
+    process.stdout.write(`\0__DW_ENV__\0${body}\0\0__DW_NODE__\0${node}\n`);
     return 0;
   }
   if (cmd.includes('command -v')) {
@@ -157,8 +162,14 @@ const shInteractive = (tail: string[], cwd: string): number => {
   return runLocal([cmd, ...posargs], cwd, {});
 };
 
+const distroSpec = (): string => {
+  const file = process.env.FAKE_WSL_DISTROS_FILE;
+  if (file && existsSync(file)) return readFileSync(file, 'utf8').trim();
+  return process.env.FAKE_WSL_DISTROS ?? '';
+};
+
 const listV = (): number => {
-  const spec = process.env.FAKE_WSL_DISTROS ?? '';
+  const spec = distroSpec();
   const rows = spec
     .split(',')
     .filter(Boolean)
@@ -172,7 +183,7 @@ const listV = (): number => {
 };
 
 const listQ = (): number => {
-  const names = (process.env.FAKE_WSL_DISTROS ?? '')
+  const names = distroSpec()
     .split(',')
     .filter(Boolean)
     .map((entry) => entry.split(':')[0]!);

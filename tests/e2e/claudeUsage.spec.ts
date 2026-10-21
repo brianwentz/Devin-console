@@ -52,6 +52,7 @@ function hooks(app: ElectronApplication) {
         }[];
         perToken: boolean;
         month: string;
+        wslTotalsPaused: boolean;
         tokens: {
           total: { input: number; output: number; cacheRead: number; cacheWrite: number; messages: number };
           byModel: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; messages: number }>;
@@ -240,7 +241,7 @@ test('usage: TEST_NOW in November → empty month, previousMonthTotal = October'
   }
 });
 
-test('usage: fake WSL host contributes byHost + joins the same account', async () => {
+test('usage: WSL totals are paused — no wsl byHost bucket, the account still joins', async () => {
   const fixtures = await startFixtureServers();
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
@@ -285,8 +286,15 @@ test('usage: fake WSL host contributes byHost + joins the same account', async (
     const state = await h.usage();
     expect(state.accounts).toHaveLength(1);
     expect(state.accounts[0]!.hosts.sort()).toEqual(['local', 'wsl:Fake']);
-    expect(state.tokens.byHost['wsl:Fake']).toMatchObject({ input: 7, messages: 1 });
-    expect(state.tokens.total.input).toBe(OCT_TOTAL.input + 7);
+    // The distro's transcripts are never read over UNC any more.
+    expect(state.tokens.byHost['wsl:Fake']).toBeUndefined();
+    expect(state.tokens.total.input).toBe(OCT_TOTAL.input);
+    expect(state.wslTotalsPaused).toBe(true);
+    const shell = await shellPage(app);
+    await shell.locator('#analyticsButton').click();
+    await shell.locator('#analyticsTab-claude').click();
+    await expect(shell.locator('#claudeWslTotalsPaused')).toBeVisible();
+    await expect(shell.locator('#claudeWslTotalsPaused')).toContainText('paused');
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
@@ -301,7 +309,7 @@ test('usage: fake WSL host contributes byHost + joins the same account', async (
 // otherwise a scan racing the swap reads the WSL store as `local` (observed:
 // 2,148 `local:` cache keys carrying Linux-home paths, byHost.local identical
 // to the distro's).
-test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart', async () => {
+test('usage: scan racing a withConfigDir swap does not pollute the local bucket', async () => {
   const fixtures = await startFixtureServers();
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
@@ -358,15 +366,15 @@ test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart',
     // The swap was really active (the SDK would have seen the distro store).
     expect(during.envDuring).toBe(wslClaude);
 
-    // Each host's bucket equals the totals of its own seeded files (pre-fix:
-    // byHost.local === byHost['wsl:Fake'] — the local store was never read).
-    expect(state.tokens.byHost.local).not.toEqual(state.tokens.byHost['wsl:Fake']);
+    // The local bucket equals the totals of the local seeded files only
+    // (pre-fix: it carried the distro's store while the swap was held). The
+    // distro itself is not scanned — its totals are paused.
     expect(state.tokens.byHost.local).toMatchObject({
       input: OCT_TOTAL.input,
       messages: OCT_TOTAL.messages,
     });
-    expect(state.tokens.byHost['wsl:Fake']).toMatchObject({ input: 7, messages: 1 });
-    expect(state.tokens.total.input).toBe(OCT_TOTAL.input + 7);
+    expect(state.tokens.byHost['wsl:Fake']).toBeUndefined();
+    expect(state.tokens.total.input).toBe(OCT_TOTAL.input);
 
     // The registry kept answering with the startup value throughout, and the
     // swap was restored afterwards.
@@ -381,7 +389,7 @@ test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart',
     const localKeys = keys.filter((k) => k.startsWith('local:'));
     expect(localKeys.length).toBeGreaterThan(0);
     expect(localKeys.filter((k) => k.includes(WSL_PROJECT))).toEqual([]);
-    expect(keys.filter((k) => k.startsWith('wsl:Fake:') && k.includes(WSL_PROJECT))).toHaveLength(1);
+    expect(keys.filter((k) => k.startsWith('wsl:'))).toEqual([]);
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });

@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { closeApp, evaluateInShell, launchWithClaudeFixture, shellPage } from './helpers';
+import { closeApp, evaluateInShell, launchWithClaudeFixture, readEvents, shellPage } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §3.5: the Phase 4 hook listener + global settings install + chat-derived
@@ -52,6 +52,10 @@ function hooks(app: ElectronApplication) {
       >,
     claudeHooksSettingsPath: () =>
       evaluate(() => (globalThis as any).__agentworkspace.claudeHooksSettingsPath()) as Promise<string>,
+    hostRefresh: () =>
+      evaluate(() => (globalThis as any).__agentworkspace.hostRefresh()) as Promise<void>,
+    claudeApplyHooks: () =>
+      evaluate(() => (globalThis as any).__agentworkspace.claudeApplyHooks()) as Promise<void>,
     claudePostHook: (event: string, body: unknown) =>
       app.evaluate(
         (_e, a: { event: string; body: unknown }) =>
@@ -360,6 +364,93 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
     const removed = readFileSync(settingsFile, 'utf8');
     expect(removed).not.toContain('/agent-workspace/hook/');
     expect(removed).toContain('echo foreign');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('hooks apply is gated: unchanged refreshes leave settings.json alone, a failed apply retries', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await expect.poll(async () => await h.claudeHookInfo()).not.toBeNull();
+    const settingsFile = await h.claudeHooksSettingsPath();
+
+    // A failed apply: a directory squatting on the tmp path makes the write fail.
+    mkdirSync(`${settingsFile}.tmp`);
+    await evaluateInShell(
+      app,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`,
+    );
+    await expect.poll(async () => (await h.claudeState()).hooks.error).not.toBeNull();
+    expect((await h.claudeState()).hooks.installed).toBe(false);
+
+    // The next refresh retries (lastApplied is only recorded on success).
+    rmSync(`${settingsFile}.tmp`, { recursive: true, force: true });
+    await h.hostRefresh();
+    await expect.poll(async () => (await h.claudeState()).hooks.installed).toBe(true);
+    expect((await h.claudeState()).hooks.error).toBeNull();
+
+    // Unchanged settings: further status-driven applies (what enumeration and
+    // probe changes run) never re-apply. applyGlobalHooks would log
+    // claude-hooks-install even for a no-op write, so the event count (not
+    // just the mtime) proves the lastApplied gate skipped it.
+    const installs = async () =>
+      (await readEvents(logFile)).filter((e) => e.event === 'claude-hooks-install').length;
+    const before = statSync(settingsFile).mtimeMs;
+    const installsBefore = await installs();
+    await h.claudeApplyHooks();
+    await h.claudeApplyHooks();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await installs()).toBe(installsBefore);
+    expect(statSync(settingsFile).mtimeMs).toBe(before);
+
+    // An explicit hosts refresh (Settings → Refresh) bypasses the gate, so a
+    // hand-removed block is repaired.
+    writeFileSync(settingsFile, '{}\n');
+    await h.hostRefresh();
+    await expect
+      .poll(() => readFileSync(settingsFile, 'utf8'), { timeout: 5_000 })
+      .toContain('/agent-workspace/hook/');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('AGENT_WORKSPACE_SKIP_HOOKS_INSTALL leaves settings.json untouched and never installs', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_SKIP_HOOKS_INSTALL: '1',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const h = hooks(app);
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await expect.poll(async () => await h.claudeHookInfo()).not.toBeNull();
+    const settingsFile = await h.claudeHooksSettingsPath();
+    const original = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo foreign' }] }] } });
+    writeFileSync(settingsFile, original);
+    await evaluateInShell(
+      app,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`,
+    );
+    await h.hostRefresh();
+    await expect
+      .poll(async () => (await readEvents(logFile)).some((e) => e.event === 'claude-hooks-install-skipped'))
+      .toBe(true);
+    expect((await h.claudeState()).hooks.installed).toBe(false);
+    expect((await readEvents(logFile)).filter((e) => e.event === 'claude-hooks-install')).toHaveLength(0);
+    expect((await readEvents(logFile)).filter((e) => e.event === 'claude-hooks-install-skipped')).toHaveLength(1);
+    expect(readFileSync(settingsFile, 'utf8')).toBe(original);
+    expect(existsSync(`${settingsFile}.agent-workspace.bak`)).toBe(false);
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });

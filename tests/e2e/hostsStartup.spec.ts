@@ -98,11 +98,12 @@ test('a slow-probing distro never blocks window creation or the first passes', a
         { timeout: 30_000 },
       )
       .not.toContain('wsl:Slow');
-    // And the seeded transcript reached the token totals.
+    // The seeded distro transcript is never read over UNC: totals are paused.
     const usage = (await app.evaluate(() =>
       (globalThis as any).__agentworkspace.claudeUsageState(),
-    )) as { tokens: { byHost: Record<string, unknown> } };
-    expect(usage.tokens.byHost['wsl:Slow']).toBeTruthy();
+    )) as { wslTotalsPaused: boolean; tokens: { byHost: Record<string, unknown> } };
+    expect(usage.tokens.byHost['wsl:Slow']).toBeUndefined();
+    expect(usage.wslTotalsPaused).toBe(true);
   } finally {
     await closeApp(app);
   }

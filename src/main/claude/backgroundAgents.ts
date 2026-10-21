@@ -1,13 +1,14 @@
 // Background-agent poller: `claude agents --json --all` on a focus-aware
 // cadence (15 s focused / 60 s unfocused, plus an immediate poll on focus and
-// after stop). Output parses through the tolerant core/claudeAgents.ts
+// after stop; wsl hosts poll 120 s / 300 s and re-poll on focus only when the
+// last poll started ≥ 60 s ago). Output parses through the tolerant core/claudeAgents.ts
 // parser — the item shape comes from `claude agents --json --all` output
 // (docs/evidence/claude-agents-probe.json). Logs counts only.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ClaudeAgent, HostId } from '../../shared/ipc';
-import { parseAgentsJson } from '../../core/claudeAgents';
+import { focusRefreshDue, parseAgentsJson } from '../../core/claudeAgents';
 import { log } from '../log';
 import { state, testMode } from '../state';
 import { resolveClaudePath } from './claudePath';
@@ -16,13 +17,18 @@ const execFileAsync = promisify(execFile);
 
 const FOCUSED_MS = 15_000;
 const UNFOCUSED_MS = 60_000;
+// Each wsl poll is a wsl.exe spawn — keep it far rarer than the local one.
+const WSL_FOCUSED_MS = 120_000;
+const WSL_UNFOCUSED_MS = 300_000;
 
-function pollMs(): number {
+function pollMs(wsl: boolean): number {
   if (testMode && process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS) {
     const ms = Math.max(50, Number(process.env.AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS) || 0);
     return ms;
   }
-  return state.windowRef?.isFocused() ? FOCUSED_MS : UNFOCUSED_MS;
+  const focused = state.windowRef?.isFocused() ?? false;
+  if (wsl) return focused ? WSL_FOCUSED_MS : WSL_UNFOCUSED_MS;
+  return focused ? FOCUSED_MS : UNFOCUSED_MS;
 }
 
 export class ClaudeBackgroundAgents {
@@ -34,11 +40,15 @@ export class ClaudeBackgroundAgents {
   // through the host bridge and return raw stdout.
   private readonly execList: (() => Promise<string>) | undefined;
   private readonly execStop: ((agentId: string) => Promise<void>) | undefined;
+  // False → the tick spawns nothing (wsl host not ready/stopped/no claude).
+  private readonly eligible: () => boolean | Promise<boolean>;
+  private skipped = false;
   private agents: ClaudeAgent[] = [];
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
   private dirty: 'timer' | 'focus' | 'manual' | 'mutate' | null = null;
   private running = false;
+  private lastStartedAt: number | null = null;
 
   constructor(opts: {
     cliPath: () => string | null;
@@ -46,12 +56,14 @@ export class ClaudeBackgroundAgents {
     hostId?: HostId;
     execList?: () => Promise<string>;
     execStop?: (agentId: string) => Promise<void>;
+    eligible?: () => boolean | Promise<boolean>;
   }) {
     this.cliPath = opts.cliPath;
     this.onChange = opts.onChange;
     this.hostId = opts.hostId ?? 'local';
     this.execList = opts.execList;
     this.execStop = opts.execStop;
+    this.eligible = opts.eligible ?? (() => true);
   }
 
   start(): void {
@@ -70,18 +82,27 @@ export class ClaudeBackgroundAgents {
     return this.agents;
   }
 
+  /** Host status changed: a tick skipped while ineligible runs now. */
+  poke(): void {
+    if (!this.running || this.inFlight || !this.skipped) return;
+    void this.refresh('timer');
+  }
+
   private schedule(): void {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.refresh('timer');
-    }, pollMs());
+    }, pollMs(this.hostId !== 'local'));
     this.timer.unref?.();
   }
 
   onWindowFocus(): void {
-    if (this.running && !this.inFlight) void this.refresh('focus');
+    if (!this.running || this.inFlight) return;
+    // A wsl poll is a wsl.exe spawn — alt-tabbing must not fire one per focus.
+    if (!focusRefreshDue(this.hostId, this.lastStartedAt, Date.now())) return;
+    void this.refresh('focus');
   }
 
   async refresh(
@@ -92,7 +113,22 @@ export class ClaudeBackgroundAgents {
       return;
     }
     this.inFlight = true;
+    let eligible: boolean;
+    try {
+      eligible = await this.eligible();
+    } catch {
+      eligible = false;
+    }
+    if (!eligible) {
+      this.skipped = true;
+      this.inFlight = false;
+      this.dirty = null;
+      this.schedule();
+      return;
+    }
+    this.skipped = false;
     const t0 = Date.now();
+    this.lastStartedAt = t0;
     try {
       let stdout: string;
       if (this.execList) {

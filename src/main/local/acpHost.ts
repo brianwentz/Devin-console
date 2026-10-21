@@ -349,7 +349,17 @@ export class DevinLocalHost {
         const skipped: string[] = [];
         for (const workspace of this.workspaces) {
           const execHost = this.hostFor(workspace);
-          if (isWslHost(execHost)) targets.push(workspace);
+          if (isWslHost(execHost) && hosts().isStopped(execHost.id)) {
+            // Autostart is implicit: never boot a Stopped distro. A user
+            // action (selecting a session, prompting) starts it explicitly.
+            skipped.push(workspace);
+            update((state) =>
+              upsertAgent(state, workspace, {
+                status: 'stopped',
+                error: `${execHost.distro} is stopped — select a session to start it`,
+              }),
+            );
+          } else if (isWslHost(execHost)) targets.push(workspace);
           else if (coreHostIdForPath(workspace) !== 'local') skipped.push(workspace); // distro not enabled
           else if (this.command) targets.push(workspace);
           else skipped.push(workspace); // missing-cli — set by the constructor
@@ -368,7 +378,7 @@ export class DevinLocalHost {
     const execHost = this.hostFor(workspace);
     if (isWslHost(execHost)) {
       // Prime probe + env capture before checking devin presence.
-      await hosts().shellEnv(execHost);
+      await hosts().shellEnv(execHost, { explicit: true });
       if (!hosts().status(execHost.id)?.devin.path) {
         const message = `${execHost.distro}: ${INSTALL_GUIDANCE}`;
         update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: message }));
@@ -429,7 +439,7 @@ export class DevinLocalHost {
     if (isWslHost(execHost)) {
       // Through `wsl.exe -d D --cd <linux ws> -e /usr/bin/env …` so the agent
       // runs inside the distro with the captured shell env.
-      await hosts().shellEnv(execHost);
+      await hosts().shellEnv(execHost, { explicit: true });
       child = hosts().spawnOn(execHost, {
         file: hosts().status(execHost.id)?.devin.path ?? 'devin',
         args: ['acp'],

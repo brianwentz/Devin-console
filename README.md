@@ -45,7 +45,7 @@ Everything works out of the box except: the **Devin Local** surface and the term
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Notifications**.
-- The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit.
+- The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals cover this PC only for now — totals for WSL distros are paused.
 
 ## Where things live
 

@@ -6,19 +6,38 @@
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, readdir, stat as statFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { basename, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
+import {
+  appendsChanged,
+  dirsChanged,
+  missFresh,
+  newestTranscripts,
+  projectDirName,
+} from '../../core/claudeWatchPolicy';
 import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
+import { testMode } from '../state';
 import { loadSdk } from './sdk';
 
 const WATCH_DEBOUNCE_MS = 250;
 const POLL_MS = 30_000;
-// WSL tiered polling: hot transcripts every 2 s while the Claude surface is
-// visible (fs.watch does not work over the wsl UNC), full scan every 30 s.
+// WSL polling (fs.watch does not work over the wsl UNC): terminal-owned
+// transcripts every 2 s while the Claude surface is visible, project-dir
+// change check every WSL_CHANGE_CHECK_MS.
 const HOT_POLL_MS = 2_000;
-const HOT_COUNT = 20;
+export const WSL_CHANGE_CHECK_MS = 300_000;
+
+function wslChangeCheckMs(): number {
+  const override = testMode ? Number(process.env.AGENT_WORKSPACE_TEST_WSL_CHANGE_CHECK_MS) : NaN;
+  return Number.isFinite(override) && override > 0 ? Math.max(100, override) : WSL_CHANGE_CHECK_MS;
+}
+// The change check also stats this many of the most recently listed
+// transcripts so appends (which leave the project dir mtime alone) count.
+const APPEND_CHECK_COUNT = 5;
+
+type ChangeSnapshot = { dirs: Map<string, number>; files: Map<string, number> };
 
 export class ClaudeStore {
   private configDirFn: string | (() => string);
@@ -28,11 +47,15 @@ export class ClaudeStore {
   private watchTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hotTimer: NodeJS.Timeout | null = null;
-  private hotIds: () => string[] = () => [];
+  private hotIds: () => { id: string; cwd: string | null }[] = () => [];
   private visible: () => boolean = () => false;
   private inotify: ChildProcess | null = null;
-  // abs path → last known mtime, recomputed on the 30 s full-scan tick
-  private hotPaths = new Map<string, number>();
+  // hot session id -> resolved transcript path + last known mtime
+  private hotPaths = new Map<string, { path: string; mtime: number }>();
+  // hot id -> time its transcript lookup last missed; skipped for one change-check period
+  private hotMisses = new Map<string, number>();
+  private changeSnapshot: ChangeSnapshot | null = null;
+  private lastRows: ClaudeStoreSession[] = [];
   private hotTickInFlight = false;
   private started = false;
   private watchRestarts = 0;
@@ -48,8 +71,8 @@ export class ClaudeStore {
     this.onChange = opts.onChange;
   }
 
-  /** Sessions whose transcripts get the 2 s hot-stat tier; visible() gates it. */
-  hot(ids: () => string[], visible: () => boolean): void {
+  /** This host's sessions whose transcripts get the 2 s hot-stat tier; visible() gates it. */
+  hot(ids: () => { id: string; cwd: string | null }[], visible: () => boolean): void {
     this.hotIds = ids;
     this.visible = visible;
   }
@@ -71,7 +94,7 @@ export class ClaudeStore {
   async list(): Promise<ClaudeStoreSession[]> {
     const sdk = await loadSdk();
     const infos = await this.run(() => sdk.listSessions({ includeProgrammatic: true }));
-    return infos.map((info) => ({
+    const rows = infos.map((info) => ({
       id: info.sessionId,
       host: this.host.id,
       // The SDK already resolves title precedence: custom title →
@@ -84,6 +107,8 @@ export class ClaudeStore {
       lastModified: info.lastModified,
       fileSize: info.fileSize ?? null,
     }));
+    this.lastRows = rows;
+    return rows;
   }
 
   async rename(id: string, title: string): Promise<void> {
@@ -160,6 +185,7 @@ export class ClaudeStore {
     }
     const [file, ...prefix] = wsl;
     const projects = this.projectsDirLinux();
+    log('host', 'host-exec', { detail: { host: this.host.id, kind: 'spawn' } });
     const child = spawn(
       file!,
       [
@@ -195,9 +221,15 @@ export class ClaudeStore {
         this.watchTimer = null;
         const files = [...changed];
         changed.clear();
+        log('claude', 'claude-watch', {
+          detail: { mode: 'inotify', host: this.host.id, events: files.length },
+        });
         this.onChange(files);
       }, WATCH_DEBOUNCE_MS);
     });
+    // File-bearing events are history-only (see watchAction), so sessions
+    // created outside the app still surface through the dir-mtime check.
+    this.startChangeCheck();
     const fallback = () => {
       if (this.inotify !== child) return;
       this.inotify = null;
@@ -210,107 +242,154 @@ export class ClaudeStore {
 
   // Windows-side <configDir>/projects → the linux path inside the distro.
   private projectsDirLinux(): string {
-    const dir = this.projectsDir.replace(/\\/g, '/');
-    const m = /^\/{2}[^/]+\/[^/]+(\/.*)$/.exec(dir);
-    return m && m[1] ? m[1] : dir;
+    // hostPath also honours the test UNC-root seam.
+    return hosts().hostPath(this.host, this.projectsDir);
   }
 
-  // Tiered polling (wsl without inotify): the 30 s full-scan tick recomputes
-  // the recent-20 ∪ hot-id path set once; the 2 s tick only stats that cached
-  // set and reports changed transcripts as <encoded-cwd>/<id>.jsonl relative
-  // paths — the same shape fs.watch emits, so onTranscriptFiles parses them.
+  // wsl without inotify. fs.watch fails over the UNC and a full SDK list there
+  // costs seconds, so: a cheap project-dir mtime check every WSL_CHANGE_CHECK_MS
+  // (onChange([]) -> full refresh only when a dir changed), plus a 2 s stat of
+  // the terminal-owned (hot) transcripts only, reported as <encoded-cwd>/<id>.jsonl
+  // relative paths - the shape fs.watch emits, so onTranscriptFiles parses them.
   private startTieredPoll(): void {
-    log('claude', 'claude-watch', {
-      detail: { mode: 'poll-tiered', host: this.host.id, events: 0 },
-    });
-    void this.recomputeHotPaths();
-    this.startPoll(() => {
-      void this.recomputeHotPaths();
-    });
+    if (this.hotTimer) return;
+    log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 0 } });
+    this.startChangeCheck();
     this.hotTimer = setInterval(() => {
       void this.hotTick();
     }, HOT_POLL_MS);
     this.hotTimer.unref?.();
   }
 
+  // Shared by inotify and poll-only wsl modes; a no-op when already running.
+  private startChangeCheck(): void {
+    if (this.pollTimer) return;
+    void this.changeMtimes().then((m) => {
+      this.changeSnapshot ??= m;
+    });
+    this.pollTimer = setInterval(() => {
+      void this.changeCheck();
+    }, wslChangeCheckMs());
+    this.pollTimer.unref?.();
+  }
+
+  // projectDir -> mtimeMs, plus <projectDir>/<id>.jsonl -> mtimeMs for the
+  // newest APPEND_CHECK_COUNT listed transcripts (≤5 extra stats per check;
+  // a project dir not in the readdir result is skipped, never searched).
+  // null when the projects dir can't be read.
+  private async changeMtimes(): Promise<ChangeSnapshot | null> {
+    try {
+      const dirs = new Map<string, number>();
+      for (const project of await readdir(this.projectsDir)) {
+        try {
+          dirs.set(project, (await statFile(join(this.projectsDir, project))).mtimeMs);
+        } catch {
+          /* removed between readdir and stat */
+        }
+      }
+      const files = new Map<string, number>();
+      for (const { id, cwd } of newestTranscripts(this.lastRows, APPEND_CHECK_COUNT)) {
+        const project = projectDirName(cwd);
+        if (!dirs.has(project)) continue;
+        const key = `${project}/${id}.jsonl`;
+        try {
+          files.set(key, (await statFile(join(this.projectsDir, project, `${id}.jsonl`))).mtimeMs);
+        } catch {
+          /* removed since the last list */
+        }
+      }
+      return { dirs, files };
+    } catch {
+      return null;
+    }
+  }
+
+  // A wsl host that left the enabled list or stopped is never touched over
+  // UNC (that boots the distro); the controller disposes the store as well.
+  private hostUsable(): boolean {
+    return !isWslHost(this.host) || hosts().fsReady(this.host);
+  }
+
+  private async changeCheck(): Promise<void> {
+    // Re-reads a stale enumeration first: a distro stopped since the last
+    // pass is never readdir-ed over UNC (that boots it).
+    if (isWslHost(this.host) && !(await hosts().backgroundReady(this.host))) return;
+    const next = await this.changeMtimes();
+    if (!next) return;
+    const prev = this.changeSnapshot;
+    const changed =
+      dirsChanged(prev?.dirs ?? null, next.dirs) || appendsChanged(prev?.files ?? null, next.files);
+    this.changeSnapshot = next;
+    if (!changed) return;
+    // A dir/file change may be the transcript a missed hot id was waiting for.
+    this.hotMisses.clear();
+    log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 1 } });
+    this.onChange([]);
+  }
+
   // The 2 s hot tick is async (UNC stats don't block the loop); a slow tick
   // never overlaps the next one.
   private async hotTick(): Promise<void> {
-    if (this.hotTickInFlight || !this.visible()) return;
+    if (this.hotTickInFlight || !this.visible() || !this.hostUsable()) return;
     this.hotTickInFlight = true;
     try {
-      // Hot ids whose transcript appeared since the last recompute get
-      // resolved lazily — a new file counts as changed immediately.
-      const known = new Set([...this.hotPaths.keys()].map((p) => basename(p, '.jsonl')));
-      for (const id of this.hotIds()) {
-        if (known.has(id)) continue;
-        const path = await this.transcriptFor(id);
-        if (!path) continue;
-        try {
-          this.hotPaths.set(path, (await statFile(path)).mtimeMs - 1);
-        } catch {
-          /* gone already */
-        }
+      const hot = this.hotIds();
+      const ids = hot.map((h) => h.id);
+      for (const id of [...this.hotPaths.keys()]) {
+        if (!ids.includes(id)) this.hotPaths.delete(id);
+      }
+      for (const id of [...this.hotMisses.keys()]) {
+        if (!ids.includes(id)) this.hotMisses.delete(id);
       }
       const changed: string[] = [];
-      for (const [path, prev] of this.hotPaths) {
+      for (const { id, cwd } of hot) {
+        let entry = this.hotPaths.get(id);
+        if (!entry) {
+          // Resolved once per id; a new file counts as changed immediately.
+          // The cwd-derived path is one access; the full scan is a readdir +
+          // one access per project dir over UNC, so an id whose scan missed
+          // waits one change-check period (or a reported dir change).
+          let path = cwd ? await this.directTranscript(id, cwd) : null;
+          if (!path && !missFresh(this.hotMisses.get(id), Date.now(), WSL_CHANGE_CHECK_MS)) {
+            path = await this.transcriptFor(id);
+            if (!path) this.hotMisses.set(id, Date.now());
+          }
+          if (!path) continue;
+          this.hotMisses.delete(id);
+          entry = { path, mtime: -1 };
+          this.hotPaths.set(id, entry);
+        }
         let mtime: number | null = null;
         try {
-          mtime = (await statFile(path)).mtimeMs;
+          mtime = (await statFile(entry.path)).mtimeMs;
         } catch {
           /* gone between ticks */
         }
-        if (mtime === null || mtime === prev) continue;
-        this.hotPaths.set(path, mtime);
-        changed.push(relative(this.projectsDir, path));
+        if (mtime === null || mtime === entry.mtime) continue;
+        entry.mtime = mtime;
+        changed.push(relative(this.projectsDir, entry.path));
       }
       if (changed.length > 0) {
         log('claude', 'claude-watch', {
-          detail: { mode: 'poll-tiered', host: this.host.id, events: changed.length },
+          detail: { mode: 'poll-wsl', host: this.host.id, events: changed.length },
         });
         this.onChange(changed);
       }
     } catch {
-      /* transient stat failures — next tick retries */
+      /* transient stat failures - next tick retries */
     } finally {
       this.hotTickInFlight = false;
     }
   }
 
-  // Full readdir scan: the 20 most recent transcripts plus any hot (e.g.
-  // terminal-owned) ids, keyed abs-path → mtime. Runs on the 30 s tick and
-  // once at watcher start.
-  private async recomputeHotPaths(): Promise<void> {
-    await this.run(async () => {
-      try {
-        const files: { path: string; mtime: number }[] = [];
-        for (const project of await readdir(this.projectsDir)) {
-          const dir = join(this.projectsDir, project);
-          for (const name of await readdir(dir)) {
-            if (!name.endsWith('.jsonl')) continue;
-            const path = join(dir, name);
-            try {
-              files.push({ path, mtime: (await statFile(path)).mtimeMs });
-            } catch {
-              /* transient */
-            }
-          }
-        }
-        const hot = new Set(this.hotIds());
-        const next = new Map<string, number>();
-        for (const file of files.sort((a, b) => b.mtime - a.mtime).slice(0, HOT_COUNT)) {
-          next.set(file.path, file.mtime);
-        }
-        for (const file of files) {
-          if (hot.has(basename(file.path, '.jsonl')) && !next.has(file.path)) {
-            next.set(file.path, file.mtime);
-          }
-        }
-        this.hotPaths = next;
-      } catch {
-        /* no projects dir yet */
-      }
-    });
+  private async directTranscript(id: string, cwd: string): Promise<string | null> {
+    const candidate = join(this.projectsDir, projectDirName(cwd), `${id}.jsonl`);
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      return null;
+    }
   }
 
   private async transcriptFor(id: string): Promise<string | null> {
@@ -370,7 +449,7 @@ export class ClaudeStore {
     }
   }
 
-  private startPoll(onTick?: () => void): void {
+  private startPoll(): void {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(() => {
       void (async () => {
@@ -386,7 +465,6 @@ export class ClaudeStore {
           return;
         }
         if (dirExists) {
-          onTick?.();
           this.onChange([]);
         }
       })();
