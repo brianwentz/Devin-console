@@ -33,6 +33,19 @@ export function enumOutcome(code: number | null): 'ok' | 'empty' | 'failed' {
   return code === 0 ? 'ok' : 'empty';
 }
 
+/**
+ * The helper channel's pre-spawn decision from a fresh `wsl -l -v`. A
+ * non-Running/absent row refuses and *holds* the channel (the next good list
+ * that reports it Running resets the breaker — the distro came back). A FAILED
+ * list also refuses, but says nothing about the distro: no hold, so a
+ * flapping `-l -v` never resets the breaker (the channel restarts with its
+ * breaker intact once a list succeeds).
+ */
+export function helperSpawnGate(listFailed: boolean, live: boolean): { ok: boolean; hold: boolean } {
+  if (listFailed) return { ok: false, hold: false };
+  return { ok: live, hold: !live };
+}
+
 export class EnumerationCache<R> {
   rows: R[] = [];
   /** Completion time of the last successful run; null = none yet / invalidated. */

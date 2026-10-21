@@ -23,7 +23,6 @@ export const HostStatusSchema = z.object({
   devin: z.object({ path: z.string().nullable() }),
   shellEnv: z.object({ ok: z.boolean(), count: z.number().int(), ms: z.number() }).nullable(),
   hooks: z.enum(['ok', 'unreachable', 'untested']),
-  inotify: z.boolean(),
   gh: z.boolean(),
   /** In-distro helper (WSL only); absent while no helper bundle ships or for the local host. */
   helper: z

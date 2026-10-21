@@ -14,6 +14,11 @@ import {
   SILENCE_KILL_MS,
   SILENCE_PING_MS,
   livenessAction,
+  livenessTick,
+  isCrashLoop,
+  CRASH_LOOP_EXITS,
+  CRASH_LOOP_WINDOW_MS,
+  CLOCK_JUMP_TICKS,
   requestTimeoutMs,
 } from '../../src/core/hostRpc';
 
@@ -157,5 +162,105 @@ describe('liveness and timeouts', () => {
     expect(requestTimeoutMs('store.messages')).toBe(10_000);
     expect(requestTimeoutMs('store.list')).toBe(60_000);
     expect(requestTimeoutMs('usage.scan')).toBe(60_000);
+  });
+});
+
+describe('R26 clock jump (sleep/resume)', () => {
+  const TICK = 1_000;
+  it('a tick gap > 3 ticks is a clock jump: the silence clock restarts, no kill', () => {
+    const r = livenessTick(
+      { lastTickAt: 1_000, lastFrameAt: 0, pingOutstanding: true },
+      1_000 + 600_000,
+      SILENCE_PING_MS,
+      SILENCE_KILL_MS,
+      TICK,
+    );
+    expect(r.jumped).toBe(true);
+    expect(r.action).toBe('none');
+    expect(r.clock).toEqual({ lastTickAt: 601_000, lastFrameAt: 601_000, pingOutstanding: false });
+  });
+
+  it('after a jump the ping-then-kill ladder decides', () => {
+    let c = livenessTick(
+      { lastTickAt: 0, lastFrameAt: 0, pingOutstanding: false },
+      600_000,
+      SILENCE_PING_MS,
+      SILENCE_KILL_MS,
+      TICK,
+    ).clock;
+    let t = 600_000;
+    const actions: string[] = [];
+    while (t < 600_000 + SILENCE_KILL_MS) {
+      t += TICK;
+      const r = livenessTick(c, t, SILENCE_PING_MS, SILENCE_KILL_MS, TICK);
+      expect(r.jumped).toBe(false);
+      if (r.action !== 'none') actions.push(`${r.action}@${t - 600_000}`);
+      c = { ...r.clock, pingOutstanding: r.action === 'ping' ? true : r.clock.pingOutstanding };
+    }
+    expect(actions).toEqual([`ping@${SILENCE_PING_MS}`, `kill@${SILENCE_KILL_MS}`]);
+  });
+
+  it('exactly 3 ticks of gap is not a jump; the first tick (no lastTickAt) never is', () => {
+    expect(CLOCK_JUMP_TICKS).toBe(3);
+    const atLimit = livenessTick(
+      { lastTickAt: 0, lastFrameAt: 0, pingOutstanding: false },
+      3 * TICK,
+      SILENCE_PING_MS,
+      SILENCE_KILL_MS,
+      TICK,
+    );
+    expect(atLimit.jumped).toBe(false);
+    const first = livenessTick(
+      { lastTickAt: null, lastFrameAt: 0, pingOutstanding: false },
+      SILENCE_KILL_MS,
+      SILENCE_PING_MS,
+      SILENCE_KILL_MS,
+      TICK,
+    );
+    expect(first.jumped).toBe(false);
+    expect(first.action).toBe('kill');
+  });
+});
+
+describe('R26 stable crash loop', () => {
+  const stableExit = (s: ReturnType<typeof resetBreaker>, at: number) => onExit(onReady(s, at - STABLE_MS - 1), at);
+
+  it('3 stable exits within 10 min open the breaker as a crash loop', () => {
+    expect(CRASH_LOOP_EXITS).toBe(3);
+    expect(CRASH_LOOP_WINDOW_MS).toBe(600_000);
+    let s = resetBreaker();
+    s = stableExit(s, 100_000);
+    expect(s.open).toBe(false);
+    s = stableExit(s, 200_000);
+    expect(s.open).toBe(false);
+    expect(isCrashLoop(s)).toBe(false);
+    s = stableExit(s, 300_000);
+    expect(s.open).toBe(true);
+    expect(isCrashLoop(s)).toBe(true);
+  });
+
+  it('stable exits spread beyond the window never open it', () => {
+    let s = resetBreaker();
+    for (let i = 1; i <= 10; i++) {
+      s = stableExit(s, i * 300_001);
+      expect(s.open).toBe(false);
+    }
+  });
+
+  it('failed starts in between keep the stable-exit history; resetBreaker clears it', () => {
+    let s = stableExit(resetBreaker(), 100_000);
+    s = onStartFailed(s, 110_000);
+    s = stableExit(s, 250_000);
+    s = stableExit(s, 400_000);
+    expect(isCrashLoop(s)).toBe(true);
+    expect(isCrashLoop(resetBreaker())).toBe(false);
+    expect(resetBreaker().stableExits).toEqual([]);
+  });
+
+  it('a failed-start-opened breaker is not a crash loop', () => {
+    let s = resetBreaker();
+    for (let i = 0; i < 3; i++) s = onStartFailed(s, i);
+    expect(s.open).toBe(true);
+    expect(isCrashLoop(s)).toBe(false);
   });
 });

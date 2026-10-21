@@ -609,6 +609,7 @@ test('a distro that stops mid-run gets no background work after the next tick', 
     FAKE_WSL_DISTROS_FILE: distros,
     AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
     AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '500',
+    AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
   });
   const logFile = join(profile, 'events.jsonl');
   const work = async () =>
@@ -620,10 +621,21 @@ test('a distro that stops mid-run gets no background work after the next tick', 
   try {
     await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
     await expect.poll(() => agentPolls(logFile, 'wsl:Fake'), { timeout: 30_000 }).toBeGreaterThan(1);
-    // `wsl --terminate Fake` / a VM crash: nothing else in the app changes.
+    // `wsl --terminate Fake` / a VM crash: the helper dies with the distro.
     writeFileSync(distros, 'Fake:Stopped:default');
-    // The next background tick re-reads the (stale) enumeration first.
-    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('stopped');
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), 'wsl:Fake');
+    // The agents tick itself never re-lists (it rides the channel); the
+    // periodic / focus re-list notices the stop.
+    // Re-triggered per attempt: one list may land inside a failure backoff.
+    await expect
+      .poll(
+        async () => {
+          await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
+          return hostState(app);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe('stopped');
     await new Promise((resolve) => setTimeout(resolve, 500));
     const baseline = await work();
     await new Promise((resolve) => setTimeout(resolve, 3_000));
@@ -651,9 +663,7 @@ test('the gh PR-state fallback never runs in a stopped distro', async () => {
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
     FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '300',
-    // The agents tick also re-reads the table, so the stop is noticed even
-    // when the gh path itself doesn't re-enumerate.
-    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
+    AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
   });
   const logFile = join(profile, 'events.jsonl');
   const ghRuns = () =>
@@ -686,8 +696,18 @@ test('the gh PR-state fallback never runs in a stopped distro', async () => {
 
     writeFileSync(distros, 'Fake:Stopped:default');
     // A background PR-state refresh re-reads the enumeration; it never probes.
+    // (The periodic re-list stands in when the refresh itself reaches no gh.)
     await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefreshPrStates());
-    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('stopped');
+    // Re-triggered per attempt: one list may land inside a failure backoff.
+    await expect
+      .poll(
+        async () => {
+          await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
+          return hostState(app);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe('stopped');
     const gh = ghRuns();
     const execs = await hostExecs(logFile, 'wsl:Fake');
     const titles = await prTitleEvents();

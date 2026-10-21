@@ -313,12 +313,17 @@ describe('helperSpec', () => {
 });
 
 describe('helperDeploySpec', () => {
-  it('passes the dir and file name as $1 and $2', () => {
-    const spec = helperDeploySpec(UB, '/home/brian/', 'abcdef012345');
+  it('passes the dir, file name and byte count as $1, $2 and $3', () => {
+    const spec = helperDeploySpec(UB, '/home/brian/', 'abcdef012345', 123456);
     expect(spec.file).toBe('wsl.exe');
     expect(spec.args.slice(0, 5)).toEqual(['-d', 'Ubuntu-22.04', '-e', '/bin/sh', '-c']);
-    expect(spec.args[5]).toBe('mkdir -p "$1" && cat > "$1/.tmp.$$" && mv "$1/.tmp.$$" "$1/$2"');
-    expect(spec.args.slice(6)).toEqual(['sh', '/home/brian/.agent-workspace', 'helper-abcdef012345.mjs']);
+    expect(spec.args.slice(6)).toEqual(['sh', '/home/brian/.agent-workspace', 'helper-abcdef012345.mjs', '123456']);
+  });
+  it('only moves the tmp file into place when its size matches $3; a short stdin fails and leaves nothing', () => {
+    const line = helperDeploySpec(UB, '/home/brian', 'abcdef012345', 10).args[5];
+    expect(line).toBe(
+      'mkdir -p "$1" && cat > "$1/.tmp.$$" && test "$(wc -c < "$1/.tmp.$$")" -eq "$3" && mv "$1/.tmp.$$" "$1/$2" || { rm -f "$1/.tmp.$$"; exit 1; }',
+    );
   });
 });
 
@@ -338,7 +343,7 @@ describe('helper probe', () => {
     expect(helperSpec(host, '/srv/my home', '/bin/bash', 'abcdef012345').args.at(-1)).toBe(
       '/srv/my home/.agent-workspace/helper-abcdef012345.mjs',
     );
-    expect(helperDeploySpec(host, '/srv/my home', 'abcdef012345').args.at(-2)).toBe('/srv/my home/.agent-workspace');
+    expect(helperDeploySpec(host, '/srv/my home', 'abcdef012345', 1).args.at(-3)).toBe('/srv/my home/.agent-workspace');
     expect(probeLine('abcdef012345', null)).toBe(probeLine('abcdef012345'));
   });
   it('posixQuote single-quotes and escapes embedded quotes', () => {

@@ -425,8 +425,13 @@ export function helperSpec(
   };
 }
 
-/** Deploy: bundle on stdin, written atomically (tmp + mv) to `$1/$2`. */
-export function helperDeploySpec(host: ExecHost, home: string, hash: string): HostSpawnSpec {
+/**
+ * Deploy: bundle on stdin, written atomically (tmp + mv) to `$1/$2`. `cat`
+ * exits 0 on a short stdin (the writer was killed mid-pipe), so the tmp file
+ * only moves into place when its size equals `$3` (the bundle's byte count);
+ * otherwise it is removed and the run exits 1.
+ */
+export function helperDeploySpec(host: ExecHost, home: string, hash: string, bytes: number): HostSpawnSpec {
   if (host.kind !== 'wsl') throw new Error('helperDeploySpec: not a wsl host');
   return {
     file: 'wsl.exe',
@@ -436,10 +441,11 @@ export function helperDeploySpec(host: ExecHost, home: string, hash: string): Ho
       '-e',
       '/bin/sh',
       '-c',
-      'mkdir -p "$1" && cat > "$1/.tmp.$$" && mv "$1/.tmp.$$" "$1/$2"',
+      'mkdir -p "$1" && cat > "$1/.tmp.$$" && test "$(wc -c < "$1/.tmp.$$")" -eq "$3" && mv "$1/.tmp.$$" "$1/$2" || { rm -f "$1/.tmp.$$"; exit 1; }',
       'sh',
       `${home.replace(/\/+$/, '')}/${HELPER_DIR}`,
       helperFileName(hash),
+      String(bytes),
     ],
     cwd: null,
   };

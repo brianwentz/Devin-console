@@ -56,6 +56,7 @@ function make(
     maxFrameBytes?: number;
     canSpawn?: () => Promise<boolean>;
     expectedHash?: string;
+    bundlePreexisting?: () => boolean;
   } = {},
 ) {
   const children: FakeChild[] = [];
@@ -455,5 +456,105 @@ describe('HostChannel fix round 1', () => {
     channel.start();
     last().hello('abcdef012345');
     expect(channel.state).toBe('ready');
+  });
+});
+
+describe('HostChannel R26', () => {
+  const stable = (child: FakeChild) => {
+    child.hello();
+    for (let t = 0; t < 70_000; t += 10_000) {
+      vi.advanceTimersByTime(10_000);
+      child.send({ method: 'store.changed', params: {} });
+    }
+  };
+
+  it('sleep/resume: the first tick after a wall-clock jump does not kill; ping-then-kill decides', () => {
+    const { channel, children, last, logs } = make();
+    channel.start();
+    const child = last();
+    child.hello();
+    vi.advanceTimersByTime(5_000);
+    // Laptop sleeps 10 min: timers don't run, the wall clock jumps.
+    vi.setSystemTime(Date.now() + 600_000);
+    vi.advanceTimersByTime(100);
+    expect(child.killed).toBe(false);
+    expect(children).toHaveLength(1);
+    expect(logs.some((l) => l.event === 'host-helper-wake')).toBe(true);
+    // The helper answers its ping after the silence window → stays up.
+    vi.advanceTimersByTime(15_000);
+    const ping = child
+      .requests()
+      .filter((r) => r.method === 'ping')
+      .pop();
+    expect(ping).toBeDefined();
+    child.send({ id: ping!.id, result: {} });
+    vi.advanceTimersByTime(20_000);
+    expect(child.killed).toBe(false);
+    expect(channel.state).toBe('ready');
+  });
+
+  it('sleep/resume: a helper that stays silent after the wake is killed only after the full ladder', () => {
+    const { channel, last } = make();
+    channel.start();
+    const child = last();
+    child.hello();
+    vi.setSystemTime(Date.now() + 600_000);
+    vi.advanceTimersByTime(100);
+    expect(child.killed).toBe(false);
+    vi.advanceTimersByTime(44_000);
+    expect(child.killed).toBe(false);
+    vi.advanceTimersByTime(1_100);
+    expect(child.killed).toBe(true);
+  });
+
+  it('three stable crashes within 10 min → degraded (crash-loop); reset() restarts', () => {
+    const { channel, children, last, logs } = make();
+    channel.start();
+    for (let i = 0; i < 3; i++) {
+      stable(last());
+      last().exit(1);
+    }
+    expect(channel.state).toBe('degraded');
+    expect(
+      logs.some((l) => l.event === 'host-helper' && l.detail.state === 'degraded' && l.detail.reason === 'crash-loop'),
+    ).toBe(true);
+    expect(children).toHaveLength(3);
+    vi.advanceTimersByTime(3_600_000);
+    expect(children).toHaveLength(3);
+    channel.reset();
+    expect(children).toHaveLength(4);
+    expect(channel.state).toBe('starting');
+  });
+
+  it('a pre-existing bundle that dies before hello is redeployed once per run', async () => {
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last } = make({ redeploy, bundlePreexisting: () => true });
+    channel.start();
+    last().exit(1); // truncated file: node fails to parse it
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    expect(channel.info().failures).toBe(0);
+    last().hello();
+    expect(channel.state).toBe('ready');
+    // Never again this run: a later early death counts as a failure.
+    last().exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(channel.info().failures).toBe(1);
+  });
+
+  it('no early redeploy for a fresh deploy or a hello timeout (a wedged VM)', () => {
+    const redeploy = vi.fn(async () => true);
+    const fresh = make({ redeploy, bundlePreexisting: () => false });
+    fresh.channel.start();
+    fresh.last().exit(1);
+    expect(redeploy).not.toHaveBeenCalled();
+    const hung = make({ redeploy, bundlePreexisting: () => true });
+    hung.channel.start();
+    vi.advanceTimersByTime(20_100);
+    expect(hung.last().killed).toBe(true);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(hung.channel.info().failures).toBe(1);
   });
 });

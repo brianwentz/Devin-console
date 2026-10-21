@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EnumerationCache, enumOutcome, failureBackoffMs } from '../../src/core/hostEnum';
+import { EnumerationCache, enumOutcome, failureBackoffMs, helperSpawnGate } from '../../src/core/hostEnum';
 
 type Row = { name: string; state: 'Running' | 'Stopped' };
 
@@ -236,5 +236,18 @@ describe('EnumerationCache', () => {
     await p;
     now += 60_000;
     expect(cache.isFresh(300)).toBe(false); // base 60 s step, not 480 s
+  });
+});
+
+describe('helperSpawnGate (R26 #4)', () => {
+  it('a Running row spawns', () => {
+    expect(helperSpawnGate(false, true)).toEqual({ ok: true, hold: false });
+  });
+  it('a non-Running / absent row refuses and holds (the next good list resets the breaker)', () => {
+    expect(helperSpawnGate(false, false)).toEqual({ ok: false, hold: true });
+  });
+  it('a FAILED list refuses without holding: a flapping `-l -v` must not reset the breaker', () => {
+    expect(helperSpawnGate(true, true)).toEqual({ ok: false, hold: false });
+    expect(helperSpawnGate(true, false)).toEqual({ ok: false, hold: false });
   });
 });

@@ -442,13 +442,12 @@ export class ClaudeSessions {
                     3_000,
                   )
                   .then(() => undefined),
-              // Only for a listed, running distro whose channel is ready and
-              // that has claude (status changes poke it). backgroundReady
-              // re-reads a stale enumeration first (a distro that stopped
-              // mid-run must not be woken by this tick).
+              // Only while the channel is ready and the distro has claude
+              // (status changes poke it). The poll is an RPC over that live
+              // channel — it cannot boot a distro, and a stopped distro kills
+              // the channel — so it never re-runs `wsl -l -v` (E1.3).
               eligible: async () =>
-                (await hosts().backgroundReady(host)) &&
-                Boolean(hosts().status(host.id)?.claude.path),
+                hosts().fsReady(host) && Boolean(hosts().status(host.id)?.claude.path),
             }
           : {}),
         onChange: (agents) => {

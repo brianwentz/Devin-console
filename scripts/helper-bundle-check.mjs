@@ -39,8 +39,12 @@ process.exit(Object.values(results).every((r) => r.ok) ? 0 : 1)
 // Only a failure to fetch the Node runtime counts as "skipped"; anything else (load error, crash, timeout) is a real failure.
 const DOWNLOAD_FAILURE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|E404|ECONNRESET|npm ERR! network|npm error network/
 
+// shell:true joins argv with spaces unquoted — a temp path with a space would split.
+const shellQuote = (a) => (/[\s"&|<>^()%!]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a)
+
 function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', shell: cmd === 'npx' && process.platform === 'win32', timeout: 240_000, ...opts })
+  const shell = cmd === 'npx' && process.platform === 'win32'
+  const r = spawnSync(cmd, shell ? args.map(shellQuote) : args, { encoding: 'utf8', shell, timeout: 240_000, ...opts })
   return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? ''), stdout: r.stdout ?? '' }
 }
 

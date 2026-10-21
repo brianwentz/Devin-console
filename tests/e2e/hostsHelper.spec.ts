@@ -81,10 +81,12 @@ async function launch(env: Record<string, string>) {
 }
 
 test('deploy then hello → helper ready', async () => {
-  const { app, root, logFile } = await launch({});
+  const { app, root, logFile, spawnLog } = await launch({});
   try {
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(existsSync(deployedFile(root))).toBe(true);
+    // R26 #10: the probe no longer resolves inotifywait (the helper watches).
+    expect(spawnLines(spawnLog).filter((argv) => argv.some((a) => a.includes('inotifywait')))).toEqual([]);
     const deploys = (await readEvents(logFile)).filter((e) => e.event === 'host-helper-deploy');
     expect(deploys).toHaveLength(1);
     expect(deploys[0]!.detail).toMatchObject({ host: HOST, ok: true });
@@ -215,6 +217,33 @@ test('helper file deleted while ready → exit 86 on respawn → redeploy → re
   }
 });
 
+// R26 #3: an earlier run's deploy was cut short (cat saw EOF, exit 0) — the
+// probe reports the file present, node can't parse it, no hello. The first
+// pre-hello exit redeploys once (the size-gated deploy) instead of degrading.
+test('a truncated bundle from an interrupted deploy is redeployed once → ready', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const built = readFileSync(join(process.cwd(), 'out/helper/agent-workspace-helper.mjs'));
+  mkdirSync(join(root, 'home', 'u', '.agent-workspace'), { recursive: true });
+  writeFileSync(deployedFile(root), built.subarray(0, Math.floor(built.length / 2)));
+  const { app, spawnLog, logFile } = await launch({ FAKE_WSL_ROOT: root });
+  const deploys = async () =>
+    (await readEvents(logFile))
+      .filter((e) => e.event === 'host-helper-deploy')
+      .map((e) => (e.detail as { ok: boolean }).ok);
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    expect(await deploys()).toEqual([true]);
+    expect(readFileSync(deployedFile(root)).length).toBe(built.length);
+    expect(launches(spawnLog)).toBe(2);
+    expect((await helperEvents(logFile)).some((e) => e.reason === 'redeploy')).toBe(true);
+    expect(await channelState(app)).toMatchObject({ failures: 0, open: false });
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('stopped distro is not respawned', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
   const distros = join(root, 'distros.txt');
@@ -222,13 +251,16 @@ test('stopped distro is not respawned', async () => {
   const { app, spawnLog } = await launch({
     FAKE_WSL_ROOT: root,
     FAKE_WSL_DISTROS_FILE: distros,
-    // Background ticks re-read the table, so the stop is noticed promptly.
     AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '300',
+    // Background polls ride the channel and never re-list (R26 #2).
     AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
   });
   try {
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    // `wsl --terminate`: the table says Stopped and the helper dies with the
+    // distro; the respawn gate's fresh list notices the stop.
     writeFileSync(distros, 'Fake:Stopped:default');
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), HOST);
     await expect.poll(async () => (await hostRow(app))?.state, { timeout: 15_000 }).toBe('stopped');
     await expect.poll(() => helperState(app), { timeout: 10_000 }).toBe('reconnecting');
     expect((await channelState(app))?.running).toBe(false);
@@ -238,6 +270,7 @@ test('stopped distro is not respawned', async () => {
     expect(await helperState(app)).toBe('reconnecting');
     // Some other actor boots it: the next enumeration resets and starts again.
     writeFileSync(distros, 'Fake:Running:default');
+    await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
   } catch (error) {
@@ -327,8 +360,8 @@ test('env.get feeds spawnOn — no -ilc env-capture spawn after ready', async ()
 // focus #2) and a degraded channel resets when its distro comes back (R19a).
 const flipAndEnumerate = async (app: ElectronApplication, distros: string, spec: string) => {
   writeFileSync(distros, spec);
-  // The agents poll's backgroundReady re-reads the (stale) table.
-  await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+  // A background check re-reads the (stale) table.
+  await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
 };
 
 const flipEnv = (root: string, distros: string, extra: Record<string, string> = {}) => ({
@@ -448,7 +481,7 @@ test('a timed-out wsl -l -v keeps the hosts and the live helper; backs off; the 
     const runs = await enumRuns(logFile);
     for (let i = 0; i < 5; i++) {
       await focusWindow(app);
-      await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+      await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(await enumRuns(logFile)).toBe(runs);
@@ -466,7 +499,7 @@ test('a timed-out wsl -l -v keeps the hosts and the live helper; backs off; the 
     // background check re-lists and brings the helper back.
     writeFileSync(distros, 'Fake:Running:default');
     await new Promise((resolve) => setTimeout(resolve, 16_500));
-    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+    await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
   } catch (error) {
@@ -777,6 +810,33 @@ test('Reveal transcript on a WSL session calls showItemInFolder with the \\\\wsl
     await expect
       .poll(revealed, { timeout: 10_000 })
       .toEqual([join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj', `${STORE_ID}.jsonl`)]);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+// R26 #2 / E1.3: the agents poll is an RPC over a live channel — it never
+// re-runs `wsl -l -v` (the 5-minute interval is the only background list).
+test('agents polls over the channel cause no extra wsl -l -v', async () => {
+  const { app, logFile } = await launch({
+    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
+    AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '300',
+  });
+  const polls = async () =>
+    (await readEvents(logFile)).filter(
+      (e) => e.event === 'claude-agents' && (e.detail as { host?: string } | undefined)?.host === HOST,
+    ).length;
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(polls, { timeout: 15_000 }).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const runs = await enumRuns(logFile);
+    const before = await polls();
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    expect(await polls()).toBeGreaterThan(before + 3);
+    expect(await enumRuns(logFile)).toBe(runs);
   } catch (error) {
     throw await withListTrace(error);
   } finally {

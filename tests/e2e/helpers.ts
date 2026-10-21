@@ -83,7 +83,6 @@ export type PublicState = {
     devin: { path: string | null };
     shellEnv: { ok: boolean; count: number; ms: number } | null;
     hooks: 'ok' | 'unreachable' | 'untested';
-    inotify: boolean;
     gh: boolean;
     helper?: import('../../src/shared/ipc').HostStatus['helper'];
   }>;

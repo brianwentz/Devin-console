@@ -21,8 +21,10 @@
 //                                 'exec "$0" "$@"'/'exec $argv' → run the argv
 //   probe line + HELPER_PRESENT   prints the token when the bundle file named in
 //                                 the line exists under FAKE_WSL_ROOT<home>
-//   /bin/sh -c 'mkdir -p "$1" …' sh <dir> <name>
-//                                 helper deploy: stdin → <ROOT><dir>/<name>
+//   /bin/sh -c 'mkdir -p "$1" …' sh <dir> <name> <bytes>
+//                                 helper deploy: stdin → <ROOT><dir>/<name>;
+//                                 a stdin shorter/longer than <bytes> writes
+//                                 nothing and exits 1 (the size gate)
 //   <shell> -ilc 'test -f "$0" || exit 86; exec node "$0" --stdio' <file>
 //                                 helper launch: exit 86 when the mapped file is
 //                                 missing, else a piped child
@@ -130,11 +132,14 @@ const helperOnce = (file: string, mode: string, cwd: string): number => {
   return result.status ?? 1;
 };
 
-// Helper deploy: `mkdir -p "$1" && cat > "$1/.tmp.$$" && mv … "$1/$2"` with the bundle on stdin.
-const helperDeploy = (dir: string, name: string): number => {
+// Helper deploy: `mkdir -p "$1" && cat > tmp && test <size> -eq "$3" && mv … "$1/$2"`
+// with the bundle on stdin; a size mismatch leaves no file and exits 1.
+const helperDeploy = (dir: string, name: string, bytes: string | undefined): number => {
   const target = join(linuxToLocal(dir), name);
   mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, readFileSync(0));
+  const data = readFileSync(0);
+  if (bytes === undefined || data.length !== Number(bytes)) return 1;
+  writeFileSync(target, data);
   return 0;
 };
 
@@ -339,7 +344,7 @@ const main = (): number => {
     return 0;
   }
   if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('mkdir -p "$1"')) {
-    return helperDeploy(tail[3] ?? '', tail[4] ?? '');
+    return helperDeploy(tail[3] ?? '', tail[4] ?? '', tail[5]);
   }
   if (/bash|zsh|fish|sh$/.test(file) && tail.some((a) => /^-[a-z]*c$/.test(a))) {
     return shInteractive(tail, cwd);

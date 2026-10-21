@@ -15,7 +15,8 @@ import {
   SILENCE_KILL_MS,
   SILENCE_PING_MS,
   encodeFrame,
-  livenessAction,
+  isCrashLoop,
+  livenessTick,
   onExit,
   onReady,
   onStartFailed,
@@ -61,6 +62,10 @@ export interface HostChannelOptions {
   canSpawn?: () => Promise<boolean>;
   /** The deployed bundle's hash; a hello carrying another one is a stale helper. */
   expectedHash?: string;
+  /** True when the probe found the bundle already on disk (no deploy this run):
+   * a child that exits before hello may be running a truncated file — the
+   * first such exit redeploys once per run before counting failures. */
+  bundlePreexisting?: () => boolean;
   log?: (event: string, detail: Record<string, unknown>) => void;
 }
 
@@ -86,7 +91,8 @@ type Reason =
   | 'reset'
   | 'breaker'
   | 'distro-unavailable'
-  | 'hash-mismatch';
+  | 'hash-mismatch'
+  | 'crash-loop';
 
 const methodTag = (method: string): string => method.slice(0, 64);
 
@@ -102,6 +108,7 @@ export class HostChannel {
   private nextId = 0;
   private pending = new Map<number, Pending>();
   private lastFrameAt = 0;
+  private lastTickAt: number | null = null;
   private pingOutstanding = false;
   private helloTimer: ReturnType<typeof setTimeout> | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -119,6 +126,8 @@ export class HostChannel {
   /** hello hash mismatch: redeploy once per run, then degraded. */
   private hashRedeployUsed = false;
   private hashRedeployPending = false;
+  /** Pre-existing bundle died before hello: redeploy once per run. */
+  private earlyRedeployUsed = false;
   /** Children stop() ended stdin on that have not exited yet (quit kills them). */
   private stopping = new Set<ChildProcess>();
   private notificationFns = new Map<string, Set<(params: unknown) => void>>();
@@ -417,6 +426,7 @@ export class HostChannel {
     this.watchModeValue = hello.watchMode === 'poll' || hello.watchMode === 'watch' ? hello.watchMode : null;
     this.afterRedeploy = false;
     this.breaker = onReady(this.breaker, Date.now());
+    this.lastTickAt = Date.now();
     this.tickTimer = setInterval(() => this.tick(), this.tickMs);
     this.tickTimer.unref?.();
     this.setState('ready', 'hello');
@@ -449,8 +459,21 @@ export class HostChannel {
   private tick(): void {
     if (!this.child || !this.helloInfo) return;
     const now = Date.now();
+    const step = livenessTick(
+      { lastTickAt: this.lastTickAt, lastFrameAt: this.lastFrameAt, pingOutstanding: this.pingOutstanding },
+      now,
+      this.silenceMs,
+      this.killMs,
+      this.tickMs,
+    );
+    if (step.jumped) {
+      this.log('host-helper-wake', { host: this.host.id, gapMs: now - (this.lastTickAt ?? now) });
+    }
+    this.lastTickAt = step.clock.lastTickAt;
+    this.lastFrameAt = step.clock.lastFrameAt;
+    this.pingOutstanding = step.clock.pingOutstanding;
     this.breaker = onTick(this.breaker, now);
-    const action = livenessAction(now, this.lastFrameAt, this.pingOutstanding, this.silenceMs, this.killMs);
+    const action = step.action;
     if (action === 'ping') {
       this.pingOutstanding = true;
       this.request('ping', {}, { timeoutMs: this.killMs }).catch(() => undefined);
@@ -466,13 +489,29 @@ export class HostChannel {
     this.attempt++;
     const code = this.exitCode;
     const reason: Reason = this.endReason ?? 'exit';
+    const helloSeen = this.helloInfo !== null;
     this.detach();
     this.rejectAll('exited', 'helper channel closed');
     if (this.stopped) return;
     const now = Date.now();
     const hashRedeploy = this.hashRedeployPending;
     this.hashRedeployPending = false;
-    if (hashRedeploy || (code === HELPER_MISSING_EXIT && this.opts.redeploy && !this.afterRedeploy)) {
+    // A child that exited on its own before hello (not a hello timeout: a
+    // wedged VM gets no extra wsl.exe run) on a bundle we did not write this
+    // run may be a truncated deploy from an earlier run.
+    const earlyRedeploy =
+      reason === 'exit' &&
+      !helloSeen &&
+      !this.earlyRedeployUsed &&
+      !this.afterRedeploy &&
+      Boolean(this.opts.redeploy) &&
+      this.opts.bundlePreexisting?.() === true;
+    if (earlyRedeploy) this.earlyRedeployUsed = true;
+    if (
+      hashRedeploy ||
+      earlyRedeploy ||
+      (code === HELPER_MISSING_EXIT && this.opts.redeploy && !this.afterRedeploy)
+    ) {
       this.afterRedeploy = true;
       this.redeploying = true;
       this.setState('starting', 'redeploy');
@@ -498,7 +537,7 @@ export class HostChannel {
 
   private scheduleRespawn(now: number, reason: Reason): void {
     if (this.breaker.open) {
-      this.setState('degraded', reason);
+      this.setState('degraded', isCrashLoop(this.breaker) ? 'crash-loop' : reason);
       return;
     }
     const at = this.breaker.nextAttemptAt;

@@ -125,6 +125,8 @@ export function registerTestHooks(): void {
       hosts: () => hosts().statuses(),
       hostStatus: (id: string) => hosts().status(id as HostId),
       hostRefresh: (id?: string) => hosts().refresh(id as HostId | undefined),
+      // The background-check re-list (stale-only, inside the failure backoff).
+      hostEnumerateIfStale: () => hosts().enumerateIfStale(),
       hostShellEnvKeys: (id: string) => hosts().shellEnvKeys(id as HostId),
       // Helper channel: kill the live child (reconnect path) / lifecycle snapshot.
       hostHelperKill: (id: string) => hosts().killHelper(id),

@@ -83,22 +83,29 @@ export function encodeFrame(msg: RpcRequest | RpcResponse | RpcNotification): st
   return JSON.stringify(msg) + '\n';
 }
 
+/** A helper that keeps crashing after a stable start: this many stable exits
+ * inside the window open the breaker (`crash-loop`) instead of respawning ~1/min forever. */
+export const CRASH_LOOP_EXITS = 3;
+export const CRASH_LOOP_WINDOW_MS = 600_000;
+
 export type BreakerState = {
   failures: number;
   open: boolean;
   nextAttemptAt: number | null;
   readySince: number | null;
+  /** Times of recent stable exits (inside CRASH_LOOP_WINDOW_MS); only resetBreaker() clears them. */
+  stableExits: number[];
 };
 
 export function resetBreaker(): BreakerState {
-  return { failures: 0, open: false, nextAttemptAt: null, readySince: null };
+  return { failures: 0, open: false, nextAttemptAt: null, readySince: null, stableExits: [] };
 }
 
 export function onStartFailed(s: BreakerState, now: number): BreakerState {
   const failures = s.failures + 1;
   const backoff = BACKOFF_MS[failures - 1];
-  if (backoff === undefined) return { failures, open: true, nextAttemptAt: null, readySince: null };
-  return { failures, open: false, nextAttemptAt: now + backoff, readySince: null };
+  if (backoff === undefined) return { failures, open: true, nextAttemptAt: null, readySince: null, stableExits: s.stableExits };
+  return { failures, open: false, nextAttemptAt: now + backoff, readySince: null, stableExits: s.stableExits };
 }
 
 export function onReady(s: BreakerState, now: number): BreakerState {
@@ -110,7 +117,16 @@ export function onReady(s: BreakerState, now: number): BreakerState {
 export function onExit(s: BreakerState, now: number): BreakerState {
   if (s.open) return s;
   if (s.readySince === null || now - s.readySince < STABLE_MS) return onStartFailed(s, now);
-  return resetBreaker();
+  const stableExits = [...s.stableExits.filter((t) => now - t < CRASH_LOOP_WINDOW_MS), now];
+  if (stableExits.length >= CRASH_LOOP_EXITS) {
+    return { failures: 0, open: true, nextAttemptAt: null, readySince: null, stableExits };
+  }
+  return { ...resetBreaker(), stableExits };
+}
+
+/** The breaker was opened by repeated stable exits (not by failed starts). */
+export function isCrashLoop(s: BreakerState): boolean {
+  return s.open && s.stableExits.length >= CRASH_LOOP_EXITS;
 }
 
 export function onTick(s: BreakerState, now: number): BreakerState {
@@ -189,4 +205,30 @@ export function livenessAction(
   if (quiet >= killMs) return 'kill';
   if (quiet >= silenceMs && !pingOutstanding) return 'ping';
   return 'none';
+}
+
+/** A tick gap above this many tick intervals means the process was suspended (sleep/resume). */
+export const CLOCK_JUMP_TICKS = 3;
+
+export type LivenessClock = { lastTickAt: number | null; lastFrameAt: number; pingOutstanding: boolean };
+
+/**
+ * One watchdog tick. After a wall-clock jump (the machine slept: no tick ran
+ * for more than CLOCK_JUMP_TICKS intervals) the silence clock restarts at
+ * `now` — the helper cannot have answered while we were suspended, and an
+ * immediate kill would respawn into the post-wake window where WSL hangs.
+ * The normal ping-then-kill ladder then decides.
+ */
+export function livenessTick(
+  clock: LivenessClock,
+  now: number,
+  silenceMs: number,
+  killMs: number,
+  tickMs: number,
+): { action: LivenessAction; clock: LivenessClock; jumped: boolean } {
+  if (clock.lastTickAt !== null && now - clock.lastTickAt > CLOCK_JUMP_TICKS * tickMs) {
+    return { action: 'none', clock: { lastTickAt: now, lastFrameAt: now, pingOutstanding: false }, jumped: true };
+  }
+  const action = livenessAction(now, clock.lastFrameAt, clock.pingOutstanding, silenceMs, killMs);
+  return { action, clock: { ...clock, lastTickAt: now }, jumped: false };
 }

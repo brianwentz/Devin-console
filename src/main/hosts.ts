@@ -47,7 +47,7 @@ import { resolveDevinPath } from './local/acpHost';
 import { sdkTargetCliVersion } from './claude/sdk';
 import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 import { HostChannel, type HelperStatus } from './hostChannel';
-import { EnumerationCache, enumOutcome } from '../core/hostEnum';
+import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,6 +95,9 @@ interface WslEntry {
   channelEnvInFlight: Promise<Record<string, string> | null> | null;
   /** The channel was stopped because the distro left Running/enabled; the next eligible sync resets the breaker. */
   channelHeld: boolean;
+  /** The probe found the bundle on disk and this run has not (re)deployed it —
+   * it may be a truncated file from an earlier run's interrupted deploy. */
+  helperPreexisting: boolean;
 }
 
 function testNumber(name: string): number | null {
@@ -124,7 +127,6 @@ const localStatus = (): HostStatus => {
     devin: { path: resolveDevinPath(state.settings?.current.local.devinPath) },
     shellEnv: null,
     hooks: 'untested',
-    inotify: false,
     gh: true,
   };
   localStatusCache = { at: Date.now(), status };
@@ -383,7 +385,6 @@ export class HostsRegistry {
           devin: { path: null },
           shellEnv: null,
           hooks: 'untested',
-          inotify: false,
           gh: false,
         },
         probed: false,
@@ -395,6 +396,7 @@ export class HostsRegistry {
         channelEnv: null,
         channelEnvInFlight: null,
         channelHeld: false,
+        helperPreexisting: false,
       };
       this.entries.set(id, entry);
     }
@@ -422,15 +424,21 @@ export class HostsRegistry {
     return this.enumStopped(id as HostId);
   }
 
-  /** Gate for recurring background WSL work: re-enumerates first when the
-   * cached table is older than ENUM_FRESH_MS (`wsl -l -v` never boots a
-   * distro; concurrent callers share the in-flight run), then fsReady. */
+  /** Gate for background work that spawns its own `wsl.exe` (the gh PR-state
+   * fallback): re-enumerates first when the cached table is older than
+   * ENUM_FRESH_MS (`wsl -l -v` never boots a distro; concurrent callers share
+   * the in-flight run), then fsReady. Work over the helper channel uses
+   * fsReady alone — it never re-lists. */
   async backgroundReady(host: ExecHost): Promise<boolean> {
     if (!isWslHost(host)) return true;
-    if (!this.distros.isFresh(enumFreshMs())) {
-      await this.enumerateAsync();
-    }
+    await this.enumerateIfStale();
     return this.fsReady(host);
+  }
+
+  /** Re-runs `wsl -l -v` only when the cached table is older than
+   * ENUM_FRESH_MS (a failed list stays inside its backoff). */
+  async enumerateIfStale(): Promise<void> {
+    if (!this.distros.isFresh(enumFreshMs())) await this.enumerateAsync();
   }
 
   /** Enabled hosts plus every host we've seen this run — used by the hooks
@@ -503,7 +511,6 @@ export class HostsRegistry {
             devin: { path: null },
             shellEnv: null,
             hooks: 'untested',
-            inotify: false,
             gh: false,
           });
         }
@@ -565,6 +572,10 @@ export class HostsRegistry {
         );
         const parsed = parseProbeOutput(out);
         helperPresent = parseHelperPresent(out);
+        // Only the first look counts: once a channel exists, any later deploy
+        // was ours (size-gated), so a re-probe never re-flags the file.
+        if (!helperPresent) entry.helperPreexisting = false;
+        else if (!entry.channel) entry.helperPreexisting = true;
         entry.host = { ...entry.host, home: overrides.home ?? parsed.home ?? null };
         entry.status = {
           ...entry.status,
@@ -606,7 +617,6 @@ export class HostsRegistry {
       const claudePath = overrides.claudePath ?? (await resolve('claude'));
       const devinPath = overrides.devinPath ?? (await resolve('devin'));
       const gh = (await resolve('gh')) !== null;
-      const inotify = (await resolve('inotifywait')) !== null;
       let version: string | null = null;
       if (claudePath) {
         try {
@@ -643,7 +653,6 @@ export class HostsRegistry {
         claude: { path: claudePath, version },
         devin: { path: devinPath },
         hooks,
-        inotify,
         gh,
         ...(helper ? { helper } : {}),
       };
@@ -697,9 +706,10 @@ export class HostsRegistry {
     try {
       const data = await readFile(bundle.file);
       bytes = data.length;
-      const spec = helperDeploySpec(entry.host, home, bundle.hash);
+      const spec = helperDeploySpec(entry.host, home, bundle.hash, data.length);
       await this.runWsl(spec.args, { kind: 'exec', host: entry.host.id, timeout: 30_000, input: data });
       ok = true;
+      entry.helperPreexisting = false;
     } catch {
       ok = false;
     }
@@ -757,16 +767,18 @@ export class HostsRegistry {
 
   /** The channel's pre-spawn gate: a fresh `wsl -l -v` (never boots a distro)
    * — a helper killed by `wsl --terminate`/`--shutdown` must not respawn into
-   * (and thereby boot) the stopped distro. False holds the channel until an
-   * enumeration reports it Running again. */
+   * (and thereby boot) the stopped distro. A non-Running row holds the
+   * channel until an enumeration reports it Running again (breaker reset); a
+   * failed list refuses without holding (`helperSpawnGate`). */
   private async canSpawnHelper(entry: WslEntry): Promise<boolean> {
     if (this.quitting) return false;
     // Never an in-flight list that started before this request (it may
     // predate a `wsl --terminate`); a failed list refuses too.
     await this.distros.refreshFresh();
-    const ok = !this.quitting && !this.distros.failed && this.distroLive(entry);
-    if (!ok) entry.channelHeld = true;
-    return ok;
+    if (this.quitting) return false;
+    const gate = helperSpawnGate(this.distros.failed, this.distroLive(entry));
+    if (gate.hold) entry.channelHeld = true;
+    return gate.ok;
   }
 
   private createChannel(entry: WslEntry, hash: string): HostChannel {
@@ -777,6 +789,7 @@ export class HostsRegistry {
       backoffMs,
       redeploy: () => this.deployHelper(entry),
       canSpawn: () => this.canSpawnHelper(entry),
+      bundlePreexisting: () => entry.helperPreexisting,
       expectedHash: hash,
       log: (event, detail) => log('host', event, { detail }),
     });
