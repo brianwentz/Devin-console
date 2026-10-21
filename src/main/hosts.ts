@@ -46,6 +46,7 @@ import { resolveDevinPath } from './local/acpHost';
 import { sdkTargetCliVersion } from './claude/sdk';
 import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 import { HostChannel, type HelperStatus } from './hostChannel';
+import { EnumerationCache } from '../core/hostEnum';
 
 const execFileAsync = promisify(execFile);
 
@@ -145,8 +146,11 @@ export class HostsRegistry {
   /** Resolves once the async `wsl.exe` lookup settles; awaited where the
    * binary is needed, never on the publish path. */
   private ready: Promise<void>;
-  private distros: { at: number; rows: ReturnType<typeof parseWslList> } | null = null;
-  private enumInFlight: Promise<void> | null = null;
+  private readonly distros = new EnumerationCache<ReturnType<typeof parseWslList>[number]>(
+    () => this.listDistros(),
+    Date.now,
+    (ok) => this.onEnumerated(ok),
+  );
   private started = false;
   private quitting = false;
   private lastPublished: HostStatus[] | null = null;
@@ -261,7 +265,7 @@ export class HostsRegistry {
    * a 5-minute interval, on window focus once the cache is stale, and on
    * refresh(). */
   enumerate(): ReturnType<typeof parseWslList> {
-    return this.distros?.rows ?? [];
+    return this.distros.rows;
   }
 
   /** Kicks the first enumeration and the periodic re-enumeration. Idempotent. */
@@ -276,7 +280,7 @@ export class HostsRegistry {
   /** Window focus: re-enumerate only when the cache has gone stale. */
   onWindowFocus(): void {
     if (!this.started) return;
-    if (!this.distros || Date.now() - this.distros.at >= ENUM_CACHE_MS) void this.enumerateAsync();
+    if (!this.distros.isFresh(ENUM_CACHE_MS)) void this.enumerateAsync();
   }
 
   /** Fires onStatusChange only when the status rows changed structurally. */
@@ -291,33 +295,33 @@ export class HostsRegistry {
    * list — even an empty one — is already cached). Lets startup work that
    * maps UNC workspaces to distros wait without re-probing. */
   whenEnumerated(): Promise<void> {
-    if (this.distros) return Promise.resolve();
+    if (this.distros.completed) return Promise.resolve();
     void this.enumerateAsync();
     return new Promise((resolveWait) => this.enumWaiters.push(resolveWait));
   }
 
   private enumerateAsync(): Promise<void> {
-    this.enumInFlight ??= this.runEnumeration().finally(() => {
-      this.enumInFlight = null;
-    });
-    return this.enumInFlight;
+    return this.distros.refresh();
   }
 
-  private async runEnumeration(): Promise<void> {
+  /** One `wsl -l -v`; rejects on failure/timeout (the cache keeps the previous
+   * rows). No WSL at all (or disabled) is an empty, successful list. */
+  private async listDistros(): Promise<ReturnType<typeof parseWslList>> {
+    const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
+    if (!wslEnabled) return [];
+    await this.ready;
+    if (!this.wslCmd()) return [];
+    const { stdout } = await this.runWsl(['-l', '-v'], { kind: 'enum', host: 'all' });
+    return parseWslList(stdout.toString('utf16le'));
+  }
+
+  private onEnumerated(ok: boolean): void {
     try {
-      const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
-      let rows: ReturnType<typeof parseWslList> = [];
-      if (wslEnabled) {
-        try {
-          const { stdout } = await this.runWsl(['-l', '-v'], { kind: 'enum', host: 'all' });
-          rows = parseWslList(stdout.toString('utf16le'));
-        } catch {
-          rows = [];
-        }
-      }
-      this.distros = { at: Date.now(), rows };
-      log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0 } });
-      for (const entry of this.entries.values()) this.syncChannel(entry);
+      const rows = this.distros.rows;
+      log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0, ok } });
+      // A failed list says nothing about the distros: running channels keep
+      // running (their own liveness handles a dead VM) and nothing resets.
+      if (ok) for (const entry of this.entries.values()) this.syncChannel(entry);
       this.publish();
     } finally {
       const waiters = this.enumWaiters;
@@ -400,7 +404,7 @@ export class HostsRegistry {
    * distro; concurrent callers share the in-flight run), then fsReady. */
   async backgroundReady(host: ExecHost): Promise<boolean> {
     if (!isWslHost(host)) return true;
-    if (!this.distros || Date.now() - this.distros.at >= enumFreshMs()) {
+    if (!this.distros.isFresh(enumFreshMs())) {
       await this.enumerateAsync();
     }
     return this.fsReady(host);
@@ -734,8 +738,10 @@ export class HostsRegistry {
    * enumeration reports it Running again. */
   private async canSpawnHelper(entry: WslEntry): Promise<boolean> {
     if (this.quitting) return false;
-    await this.enumerateAsync();
-    const ok = !this.quitting && this.distroLive(entry);
+    // Never an in-flight list that started before this request (it may
+    // predate a `wsl --terminate`); a failed list refuses too.
+    await this.distros.refreshFresh();
+    const ok = !this.quitting && !this.distros.failed && this.distroLive(entry);
     if (!ok) entry.channelHeld = true;
     return ok;
   }
@@ -810,11 +816,11 @@ export class HostsRegistry {
     this.quitting = true;
     const live = [...this.entries.values()].filter((e) => e.channel?.running);
     for (const entry of live) entry.channel!.stop();
-    if (!live.length) return;
     // Give the EOFs a moment to land, then kill what is left: stop()'s grace
     // timer is unref'd and would not fire before the process exits.
-    await new Promise((resolveWait) => setTimeout(resolveWait, 300));
-    for (const entry of live) entry.channel!.killStopped();
+    if (live.length) await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+    // Every channel — one halted moments earlier still has its child in the grace.
+    for (const entry of this.entries.values()) entry.channel?.killStopped();
   }
 
   /** Test hooks: kill the live helper / read the channel state. */
@@ -1183,8 +1189,8 @@ export class HostsRegistry {
   async refresh(id?: string): Promise<void> {
     // Explicit only — enumerations and probes never call this.
     this.onExplicitRefresh?.(id as HostId | undefined);
-    this.distros = null;
-    await this.enumerateAsync();
+    this.distros.invalidate();
+    await this.distros.refreshFresh();
     const targets = id
       ? [...this.entries.values()].filter((e) => e.host.id === id)
       : this.enabledDistros().map((d) => this.entryFor(d.name, d.stopped));
@@ -1198,8 +1204,8 @@ export class HostsRegistry {
     // The explicit probe started a Stopped distro — re-read its state so the
     // cached row stops gating it.
     if (booted) {
-      this.distros = null;
-      await this.enumerateAsync();
+      this.distros.invalidate();
+      await this.distros.refreshFresh();
     }
     // An explicit refresh always republishes, even when nothing changed, so
     // consumers retry work that failed earlier (e.g. the hooks write).

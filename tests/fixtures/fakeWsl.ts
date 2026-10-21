@@ -4,7 +4,8 @@
 //   -l -v / -l -q                 UTF-16LE distro table from FAKE_WSL_DISTROS
 //                                 ("Fake:Running:default,Other:Stopped");
 //                                 FAKE_WSL_DISTROS_FILE (same syntax, read per
-//                                 call) wins when it exists — flips mid-run
+//                                 call) wins when it exists — flips mid-run;
+//                                 a spec of `FAIL` makes `-l` exit 1
 //   -d D [--cd C] -e argv…        run argv locally; linux cwd C maps onto
 //                                 FAKE_WSL_ROOT/C (created if missing)
 //   /usr/bin/env K=V… cmd         applies the leading assignments
@@ -279,6 +280,8 @@ const listQ = (): number => {
 const main = (): number => {
   const args = process.argv.slice(2);
   if (args[0] === '-l' || args[0] === '--list') {
+    // A distro spec of `FAIL` simulates a failing/timed-out `wsl -l` (VM wedged).
+    if (distroSpec() === 'FAIL') return 1;
     return args.includes('-v') ? listV() : listQ();
   }
   if (args[0] !== '-d') return 1;

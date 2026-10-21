@@ -357,3 +357,38 @@ test("Settings shows a stopped distro's helper as paused", async () => {
     await closeApp(app);
   }
 });
+
+test('a failing wsl -l -v keeps the hosts and the live helper; the respawn gate refuses', async () => {
+  const { root, distros } = flipRoot();
+  const { app, spawnLog, logFile } = await launch(flipEnv(root, distros));
+  const listOutcomes = async () =>
+    (await readEvents(logFile))
+      .filter((e) => e.event === 'host-list')
+      .map((e) => (e.detail as { ok?: boolean }).ok);
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    const n = launches(spawnLog);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await flipAndEnumerate(app, distros, 'FAIL');
+    await expect.poll(async () => (await listOutcomes()).includes(false), { timeout: 15_000 }).toBe(true);
+    // The host row survives and the running helper is left alone.
+    expect((await hostRow(app))?.state).toBe('ready');
+    expect(await helperState(app)).toBe('ready');
+    // While the latest list failed, a dead helper is not respawned.
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), HOST);
+    await expect
+      .poll(async () => (await helperEvents(logFile)).some((e) => e.reason === 'distro-unavailable'), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    expect(launches(spawnLog)).toBe(n);
+    expect((await hostRow(app))?.state).toBe('ready');
+    // The list recovers: the next good enumeration brings the helper back.
+    await flipAndEnumerate(app, distros, 'Fake:Running:default');
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    expect(launches(spawnLog)).toBe(n + 1);
+  } finally {
+    await closeApp(app);
+  }
+});
