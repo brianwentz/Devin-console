@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EnumerationCache } from '../../src/core/hostEnum';
+import { EnumerationCache, enumOutcome, failureBackoffMs } from '../../src/core/hostEnum';
 
 type Row = { name: string; state: 'Running' | 'Stopped' };
 
@@ -73,6 +73,9 @@ describe('EnumerationCache', () => {
     await second; // never throws
     expect(cache.rows).toEqual([{ name: 'D', state: 'Running' }]);
     expect(cache.failed).toBe(true);
+    // Not re-run inside the failure backoff; stale once it has passed.
+    expect(cache.isFresh(60_000)).toBe(true);
+    now = 2_000 + 60_000;
     expect(cache.isFresh(60_000)).toBe(false);
     // A later good run clears the failure.
     const third = cache.refresh();
@@ -115,5 +118,63 @@ describe('EnumerationCache', () => {
     cache.invalidate();
     expect(cache.isFresh(60_000)).toBe(false);
     expect(cache.rows).toEqual([{ name: 'D', state: 'Running' }]);
+  });
+
+  it('a failed cache stays "fresh" for the failure backoff, then re-runs; success resets it', async () => {
+    const { calls, run } = controllable();
+    let now = 0;
+    const cache = new EnumerationCache<Row>(run, () => now, undefined, 60_000);
+    const fail = async () => {
+      const p = cache.refresh();
+      calls[calls.length - 1]!.reject(new Error('timeout'));
+      await p;
+    };
+    await fail();
+    expect(cache.isFresh(300)).toBe(true); // within 60 s: no re-run on focus / backgroundReady
+    now = 59_999;
+    expect(cache.isFresh(300)).toBe(true);
+    now = 60_000;
+    expect(cache.isFresh(300)).toBe(false);
+    await fail(); // 2nd failure at 60 s → 120 s window
+    now = 60_000 + 119_999;
+    expect(cache.isFresh(300)).toBe(true);
+    now = 60_000 + 120_000;
+    expect(cache.isFresh(300)).toBe(false);
+    expect(cache.failed).toBe(true);
+    const ok = cache.refresh();
+    calls[calls.length - 1]!.resolve([]);
+    await ok;
+    expect(cache.failed).toBe(false);
+    await fail();
+    now += 60_000;
+    expect(cache.isFresh(300)).toBe(false); // back to the 60 s base
+  });
+
+  it('failureBackoffMs: 60 s doubling, capped at 5 min', () => {
+    expect([1, 2, 3, 4, 5, 9].map((n) => failureBackoffMs(n))).toEqual([60_000, 120_000, 240_000, 300_000, 300_000, 300_000]);
+    expect(failureBackoffMs(2, 1_000)).toBe(2_000);
+  });
+
+  it('enumOutcome: only a timeout/kill fails; a prompt non-zero exit is an empty list', () => {
+    expect(enumOutcome(0)).toBe('ok');
+    expect(enumOutcome(1)).toBe('empty');
+    expect(enumOutcome(-1)).toBe('empty');
+    expect(enumOutcome(4294967295)).toBe('empty');
+    expect(enumOutcome(null)).toBe('failed');
+  });
+
+  it('a throwing onSettled never makes refresh() reject', async () => {
+    const { calls, run } = controllable();
+    const cache = new EnumerationCache<Row>(run, Date.now, () => {
+      throw new Error('listener bug');
+    });
+    const p = cache.refresh();
+    calls[0]!.resolve([]);
+    await expect(p).resolves.toBeUndefined();
+    expect(cache.completed).toBe(true);
+    const q = cache.refresh();
+    expect(calls).toHaveLength(2);
+    calls[1]!.resolve([]);
+    await expect(q).resolves.toBeUndefined();
   });
 });

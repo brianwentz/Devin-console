@@ -358,9 +358,23 @@ test("Settings shows a stopped distro's helper as paused", async () => {
   }
 });
 
-test('a failing wsl -l -v keeps the hosts and the live helper; the respawn gate refuses', async () => {
+const enumRuns = async (logFile: string) =>
+  (await readEvents(logFile)).filter(
+    (e) => e.event === 'host-exec' && (e.detail as { kind?: string }).kind === 'enum',
+  ).length;
+const focusWindow = (app: ElectronApplication) =>
+  app.evaluate(({ BaseWindow }) => {
+    BaseWindow.getAllWindows()[0]?.emit('focus');
+  });
+
+test('a timed-out wsl -l -v keeps the hosts and the live helper; backs off; the respawn gate refuses', async () => {
   const { root, distros } = flipRoot();
-  const { app, spawnLog, logFile } = await launch(flipEnv(root, distros));
+  const { app, spawnLog, logFile } = await launch(
+    flipEnv(root, distros, {
+      AGENT_WORKSPACE_TEST_ENUM_TIMEOUT_MS: '1000',
+      AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '4000',
+    }),
+  );
   const listOutcomes = async () =>
     (await readEvents(logFile))
       .filter((e) => e.event === 'host-list')
@@ -369,25 +383,65 @@ test('a failing wsl -l -v keeps the hosts and the live helper; the respawn gate 
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     const n = launches(spawnLog);
     await new Promise((resolve) => setTimeout(resolve, 400));
+    // A wedged VM: `wsl -l -v` hangs until the 1 s test timeout kills it.
     await flipAndEnumerate(app, distros, 'FAIL');
     await expect.poll(async () => (await listOutcomes()).includes(false), { timeout: 15_000 }).toBe(true);
     // The host row survives and the running helper is left alone.
     expect((await hostRow(app))?.state).toBe('ready');
     expect(await helperState(app)).toBe('ready');
-    // While the latest list failed, a dead helper is not respawned.
+    // Inside the failure backoff, focus and background checks don't re-run the list.
+    const runs = await enumRuns(logFile);
+    for (let i = 0; i < 5; i++) {
+      await focusWindow(app);
+      await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(await enumRuns(logFile)).toBe(runs);
+    // While the latest list failed, a dead helper is not respawned (the gate
+    // runs its own fresh list, which fails too).
     await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), HOST);
     await expect
       .poll(async () => (await helperEvents(logFile)).some((e) => e.reason === 'distro-unavailable'), {
         timeout: 15_000,
       })
       .toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
     expect(launches(spawnLog)).toBe(n);
     expect((await hostRow(app))?.state).toBe('ready');
-    // The list recovers: the next good enumeration brings the helper back.
-    await flipAndEnumerate(app, distros, 'Fake:Running:default');
+    // The VM recovers; once the (doubled, 8 s) backoff has passed the next
+    // background check re-lists and brings the helper back.
+    writeFileSync(distros, 'Fake:Running:default');
+    await new Promise((resolve) => setTimeout(resolve, 8_500));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('no installed distros (wsl -l exits non-zero) is a cached empty list: focus does not re-run it', async () => {
+  const { app, logFile } = await launch({ FAKE_WSL_DISTROS: 'NONE' });
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await readEvents(logFile)).some(
+            (e) => e.event === 'host-list' && (e.detail as { ok?: boolean }).ok === true,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const runs = await enumRuns(logFile);
+    expect(runs).toBeGreaterThanOrEqual(1);
+    for (let i = 0; i < 5; i++) {
+      await focusWindow(app);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await enumRuns(logFile)).toBe(runs);
+    expect((await readEvents(logFile)).some((e) => e.event === 'host-list' && (e.detail as { ok?: boolean }).ok === false)).toBe(false);
+    expect((await state(app)).hosts.map((h) => h.id)).toEqual(['local']);
   } finally {
     await closeApp(app);
   }

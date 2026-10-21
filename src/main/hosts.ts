@@ -46,7 +46,7 @@ import { resolveDevinPath } from './local/acpHost';
 import { sdkTargetCliVersion } from './claude/sdk';
 import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 import { HostChannel, type HelperStatus } from './hostChannel';
-import { EnumerationCache } from '../core/hostEnum';
+import { EnumerationCache, enumOutcome } from '../core/hostEnum';
 
 const execFileAsync = promisify(execFile);
 
@@ -139,6 +139,8 @@ interface WslRun {
   stdout: Buffer;
   stderr: Buffer;
   code: number | null;
+  /** Killed by the timeout (code may still be set on Windows). */
+  timedOut: boolean;
 }
 
 export class HostsRegistry {
@@ -150,6 +152,7 @@ export class HostsRegistry {
     () => this.listDistros(),
     Date.now,
     (ok) => this.onEnumerated(ok),
+    testNumber('AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS') ?? undefined,
   );
   private started = false;
   private quitting = false;
@@ -231,7 +234,9 @@ export class HostsRegistry {
         }
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
+        let timedOut = false;
         const timer = setTimeout(() => {
+          timedOut = true;
           child.kill('SIGKILL');
         }, timeout);
         timer.unref?.();
@@ -247,7 +252,7 @@ export class HostsRegistry {
             reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
             return;
           }
-          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code });
+          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, timedOut });
         });
       });
     });
@@ -304,30 +309,47 @@ export class HostsRegistry {
     return this.distros.refresh();
   }
 
-  /** One `wsl -l -v`; rejects on failure/timeout (the cache keeps the previous
-   * rows). No WSL at all (or disabled) is an empty, successful list. */
+  /** One `wsl -l -v`. Rejects only on a timeout or spawn error (the cache
+   * keeps the previous rows and backs off); a prompt non-zero exit — no
+   * distros installed, or the inbox stub without the WSL feature — is an
+   * empty, successful list (`enumOutcome`; output text is never parsed). No
+   * wsl.exe at all, or WSL disabled, is empty too. */
   private async listDistros(): Promise<ReturnType<typeof parseWslList>> {
     const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
     if (!wslEnabled) return [];
     await this.ready;
     if (!this.wslCmd()) return [];
-    const { stdout } = await this.runWsl(['-l', '-v'], { kind: 'enum', host: 'all' });
-    return parseWslList(stdout.toString('utf16le'));
+    const timeout = testNumber('AGENT_WORKSPACE_TEST_ENUM_TIMEOUT_MS') ?? PROBE_TIMEOUT_MS;
+    const { stdout, code, timedOut } = await this.runWsl(['-l', '-v'], {
+      kind: 'enum',
+      host: 'all',
+      timeout,
+      requireSuccess: false,
+    });
+    const outcome = enumOutcome(timedOut ? null : code);
+    if (outcome === 'failed') throw new Error('wsl -l -v timed out');
+    return outcome === 'ok' ? parseWslList(stdout.toString('utf16le')) : [];
   }
 
   private onEnumerated(ok: boolean): void {
     try {
-      const rows = this.distros.rows;
-      log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0, ok } });
-      // A failed list says nothing about the distros: running channels keep
-      // running (their own liveness handles a dead VM) and nothing resets.
-      if (ok) for (const entry of this.entries.values()) this.syncChannel(entry);
-      this.publish();
+      this.applyEnumeration(ok);
+    } catch (error) {
+      log('host', 'host-list-error', { detail: { kind: error instanceof Error ? error.name : typeof error } });
     } finally {
       const waiters = this.enumWaiters;
       this.enumWaiters = [];
       for (const wake of waiters) wake();
     }
+  }
+
+  private applyEnumeration(ok: boolean): void {
+    const rows = this.distros.rows;
+    log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0, ok } });
+    // A failed list says nothing about the distros: running channels keep
+    // running (their own liveness handles a dead VM) and nothing resets.
+    if (ok) for (const entry of this.entries.values()) this.syncChannel(entry);
+    this.publish();
   }
 
   /** Enabled wsl distros: explicit settings list, else Running or default. */
