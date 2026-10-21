@@ -302,24 +302,27 @@ export function parseWslList(text: string): WslDistroRow[] {
 
 const SEMVER_LINE = /^\d+\.\d+\.\d+/;
 
-/**
- * Parses the probe line's output (`$HOME`, user, login shell, node version or
- * `NONODE`). The node token is the last line, so a missing getent answer
- * can't shift it into the shell slot; a legacy three-line answer has no node.
- */
-export function parseProbeOutput(out: string): {
-  home: string | undefined;
-  shell: string | undefined;
-  node: string | null;
-} {
+/** Second marker the env-capture command prints after `env -0`, followed by the node version or `NONODE`. */
+export const NODE_MARKER = '__DW_NODE__';
+
+/** Probe line output: `$HOME`, user, login shell. */
+export function parseProbeOutput(out: string): { home: string | undefined; shell: string | undefined } {
   const lines = out.trim().split('\n').map((l) => l.trim());
-  let node: string | null = null;
-  const last = lines[lines.length - 1] ?? '';
-  if (lines.length >= 3 && (last === 'NONODE' || SEMVER_LINE.test(last))) {
-    node = last === 'NONODE' ? null : last;
-    lines.pop();
-  }
-  return { home: lines[0] || undefined, shell: lines[2] || undefined, node };
+  return { home: lines[0] || undefined, shell: lines[2] || undefined };
+}
+
+/**
+ * Node version from the env-capture output (`…env -0; printf "\0<marker>\0";
+ * command -v node && node -p process.versions.node || echo NONODE`). Null for
+ * `NONODE`, a missing marker (capture failed or an old shell) or junk.
+ */
+export function parseNodeVersion(stdout: Uint8Array | string, marker: string = NODE_MARKER): string | null {
+  const text = typeof stdout === 'string' ? stdout : new TextDecoder('utf-8').decode(stdout);
+  const sep = `\0${marker}\0`;
+  const at = text.lastIndexOf(sep);
+  if (at === -1) return null;
+  const token = text.slice(at + sep.length).trim().split(/\s+/).pop() ?? '';
+  return SEMVER_LINE.test(token) ? token : null;
 }
 
 /** Structural comparison of host status lists — ignores probe timestamps and env-capture timings so a re-probe that learned nothing new doesn't republish. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseProbeOutput, statusesChanged } from '../../src/core/execHost';
+import { parseNodeVersion, parseProbeOutput, statusesChanged } from '../../src/core/execHost';
 import type { HostStatus } from '../../src/shared/ipc';
 
 const row = (over: Partial<HostStatus> = {}): HostStatus => ({
@@ -40,20 +40,27 @@ describe('statusesChanged', () => {
 });
 
 describe('parseProbeOutput', () => {
-  it('reads home, shell and node version', () => {
-    expect(parseProbeOutput('/home/u\nu\n/bin/zsh\n22.4.1\n')).toEqual({
-      home: '/home/u',
-      shell: '/bin/zsh',
-      node: '22.4.1',
-    });
-  });
-  it('maps NONODE to null', () => {
-    expect(parseProbeOutput('/home/u\nu\n/bin/bash\nNONODE\n').node).toBeNull();
+  it('reads home and shell', () => {
+    expect(parseProbeOutput('/home/u\nu\n/bin/zsh\n')).toEqual({ home: '/home/u', shell: '/bin/zsh' });
   });
   it('keeps the shell empty when getent printed nothing', () => {
-    expect(parseProbeOutput('/home/u\nu\n18.0.0\n')).toEqual({ home: '/home/u', shell: undefined, node: '18.0.0' });
+    expect(parseProbeOutput('/home/u\nu\n')).toEqual({ home: '/home/u', shell: undefined });
   });
-  it('treats a legacy three-line answer as no node', () => {
-    expect(parseProbeOutput('/home/u\nu\n/bin/bash\n').node).toBeNull();
+});
+
+describe('parseNodeVersion', () => {
+  const env = '\0__DW_ENV__\0HOME=/home/u\0PATH=/x\0';
+  it('reads the version after the second marker', () => {
+    expect(parseNodeVersion(`${env}\0__DW_NODE__\0v-ignored\n22.4.1\n`)).toBe('22.4.1');
+    expect(parseNodeVersion(`${env}\0__DW_NODE__\x0022.4.1\n`)).toBe('22.4.1');
+  });
+  it('maps NONODE to null', () => {
+    expect(parseNodeVersion(`${env}\0__DW_NODE__\0NONODE\n`)).toBeNull();
+  });
+  it('is null when the second marker is missing', () => {
+    expect(parseNodeVersion(env)).toBeNull();
+  });
+  it('accepts bytes', () => {
+    expect(parseNodeVersion(new TextEncoder().encode(`${env}\0__DW_NODE__\x0018.0.0\n`))).toBe('18.0.0');
   });
 });

@@ -7,11 +7,11 @@
 //                                 FAKE_WSL_ROOT/C (created if missing)
 //   /usr/bin/env K=V… cmd         applies the leading assignments
 //   /bin/sh -c 'echo $HOME;id…'   the probe line → FAKE_WSL_HOME, u, /bin/bash
-//                                 + node version 22.12.0, or NONODE with
-//                                 FAKE_WSL_NO_NODE=1
 //                                 (sleeps FAKE_WSL_PROBE_DELAY_MS first)
 //   <shell> -ilc 'cmd' [posargs]  __DW_ENV__ capture → canned env -0
-//                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER);
+//                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER),
+//                                 then __DW_NODE__ + 22.12.0 (NONODE when
+//                                 FAKE_WSL_NO_NODE=1);
 //                                 `command -v <bin>` → canned PATH answers;
 //                                 'exec "$0" "$@"'/'exec $argv' → run the argv
 //   inotifywait …                 exit 127 unless FAKE_WSL_INOTIFY=1 → fs.watch
@@ -138,7 +138,8 @@ const shInteractive = (tail: string[], cwd: string): number => {
     const body = Object.entries(cannedEnv())
       .map(([k, v]) => `${k}=${v}`)
       .join('\0');
-    process.stdout.write(`\0__DW_ENV__\0${body}\0`);
+    const node = process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : '22.12.0';
+    process.stdout.write(`\0__DW_ENV__\0${body}\0\0__DW_NODE__\0${node}\n`);
     return 0;
   }
   if (cmd.includes('command -v')) {
@@ -224,8 +225,7 @@ const main = (): number => {
     if (delay > 0) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
     }
-    const node = process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : '22.12.0';
-    process.stdout.write(`${HOME}\nu\n/bin/bash\n${node}\n`);
+    process.stdout.write(`${HOME}\nu\n/bin/bash\n`);
     return 0;
   }
   if (/bash|zsh|fish|sh$/.test(file) && tail.some((a) => /^-[a-z]*c$/.test(a))) {

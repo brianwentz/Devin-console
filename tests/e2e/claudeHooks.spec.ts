@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { closeApp, evaluateInShell, launchWithClaudeFixture, shellPage } from './helpers';
+import { closeApp, evaluateInShell, launchWithClaudeFixture, readEvents, shellPage } from './helpers';
 import type { ClaudeState } from '../../src/shared/ipc';
 
 // §3.5: the Phase 4 hook listener + global settings install + chat-derived
@@ -373,6 +373,7 @@ test('hooks apply is gated: unchanged refreshes leave settings.json alone, a fai
     AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
     AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
+  const logFile = join(profile, 'events.jsonl');
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
@@ -394,11 +395,17 @@ test('hooks apply is gated: unchanged refreshes leave settings.json alone, a fai
     await expect.poll(async () => (await h.claudeState()).hooks.installed).toBe(true);
     expect((await h.claudeState()).hooks.error).toBeNull();
 
-    // Unchanged settings: further refreshes never touch the file.
+    // Unchanged settings: further refreshes never re-apply. applyGlobalHooks
+    // would log claude-hooks-install even for a no-op write, so the event count
+    // (not just the mtime) proves the lastApplied gate skipped it.
+    const installs = async () =>
+      (await readEvents(logFile)).filter((e) => e.event === 'claude-hooks-install').length;
     const before = statSync(settingsFile).mtimeMs;
+    const installsBefore = await installs();
     await h.hostRefresh();
     await h.hostRefresh();
     await new Promise((r) => setTimeout(r, 500));
+    expect(await installs()).toBe(installsBefore);
     expect(statSync(settingsFile).mtimeMs).toBe(before);
   } finally {
     await closeApp(app);

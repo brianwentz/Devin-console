@@ -36,7 +36,7 @@ test('a running fake distro is enumerated, probed and env-captured', async () =>
     expect(host?.shellEnv?.count).toBeGreaterThan(0);
     expect(host?.claude.path).toBeTruthy();
     expect(host?.shell).toBe('/bin/bash');
-    // Node version rides the existing probe spawn.
+    // Node version rides the interactive-login env-capture spawn.
     expect(host?.node).toBe('22.12.0');
     // Every wsl.exe call is counted: enumeration, probe and env capture all logged.
     const kinds = new Set(
@@ -49,6 +49,56 @@ test('a running fake distro is enumerated, probed and env-captured', async () =>
       (globalThis as any).__agentworkspace.hostShellEnvKeys('wsl:Fake'),
     )) as string[];
     expect(keys).toContain('FAKE_WSL_MARKER');
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('node is null (unknown) when the distro has no node', async () => {
+  const { app } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_NO_NODE: '1',
+  });
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    const host = (await state(app)).hosts.find((h) => h.id === 'wsl:Fake');
+    expect(host?.shellEnv?.ok).toBe(true);
+    expect(host?.node).toBeNull();
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('read paths never re-enumerate: repeated status reads add no wsl -l -v', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const enums = async () =>
+    (await readEvents(logFile)).filter(
+      (e) => e.event === 'host-exec' && (e.detail as { kind?: string } | undefined)?.kind === 'enum',
+    ).length;
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    // Let startup work (usage, agents, sessions) settle before counting.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const startup = await enums();
+    expect(startup).toBeGreaterThanOrEqual(1);
+    for (let i = 0; i < 25; i++) {
+      await app.evaluate(() => (globalThis as any).__agentworkspace.hosts());
+      await state(app);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await enums()).toBe(startup);
   } finally {
     await closeApp(app);
   }
@@ -274,6 +324,12 @@ test('a WSL transcript change does not trigger a full claude-list', async () => 
     writeFileSync(join(projectDir, `${id}.jsonl`), '{"type":"user"}\n');
     // Positive control: the change reached the store watcher...
     await expect.poll(inotifyEvents, { timeout: 10_000 }).toBeGreaterThan(seen);
+    // The inotify watcher is a wsl.exe spawn and is counted too.
+    expect(
+      (await readEvents(logFile)).some(
+        (e) => e.event === 'host-exec' && (e.detail as { kind?: string })?.kind === 'spawn',
+      ),
+    ).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 5_000));
     // ...but did not trigger a full list.
     expect(await watchLists()).toBe(before);

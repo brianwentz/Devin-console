@@ -24,7 +24,9 @@ import {
   type ExecHost,
   type HostCommand,
   type HostId,
+  parseNodeVersion,
   parseProbeOutput,
+  NODE_MARKER,
   statusesChanged,
 } from '../core/execHost';
 import type { HostStatus, Settings } from '../shared/ipc';
@@ -427,7 +429,6 @@ export class HostsRegistry {
       const overrides = this.overrides(id);
       try {
         // home / user / login shell in one sh call.
-        // The node token rides the same spawn — no extra wsl.exe call.
         const out = await this.execWsl(
           [
             '-d',
@@ -435,8 +436,7 @@ export class HostsRegistry {
             '-e',
             '/bin/sh',
             '-c',
-            'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7; ' +
-              'command -v node >/dev/null && node -p process.versions.node || echo NONODE',
+            'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7',
           ],
           'probe',
           id,
@@ -447,7 +447,6 @@ export class HostsRegistry {
           ...entry.status,
           home: entry.host.home,
           shell: overrides.shell ?? parsed.shell ?? '/bin/bash',
-          node: parsed.node,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -536,7 +535,12 @@ export class HostsRegistry {
     const t0 = Date.now();
     const id = entry.host.id;
     try {
-      const cmd = `printf "\\0${ENV_MARKER}\\0"; env -0`;
+      // The node probe rides this same interactive-login spawn (nvm and
+      // ~/.local/bin are only on a login PATH); node null = unknown when
+      // capture is disabled or fails.
+      const cmd =
+        `printf "\\0${ENV_MARKER}\\0"; env -0; printf "\\0${NODE_MARKER}\\0"; ` +
+        'command -v node >/dev/null && node -p process.versions.node || echo NONODE';
       // exit code ignored: an rc file may exit non-zero after printing.
       const { stdout } = await this.runWsl(
         ['-d', entry.host.distro, '-e', shell, '-ilc', cmd],
@@ -546,7 +550,7 @@ export class HostsRegistry {
       if (env === null) {
         entry.env = null;
         entry.envAt = Date.now();
-        entry.status = { ...entry.status, shellEnv: { ok: false, count: 0, ms: Date.now() - t0 } };
+        entry.status = { ...entry.status, node: null, shellEnv: { ok: false, count: 0, ms: Date.now() - t0 } };
         this.setPart(id, 'env', 'shell environment unavailable — using the plain WSL environment');
         log('host', 'host-env', {
           detail: { host: id, ok: false, ms: Date.now() - t0, count: 0, reason: 'no-marker' },
@@ -557,6 +561,7 @@ export class HostsRegistry {
       entry.envAt = Date.now();
       entry.status = {
         ...entry.status,
+        node: parseNodeVersion(stdout, NODE_MARKER),
         shellEnv: { ok: true, count: Object.keys(env).length, ms: Date.now() - t0 },
       };
       this.setPart(id, 'env', null);
@@ -566,7 +571,7 @@ export class HostsRegistry {
     } catch (error) {
       entry.env = null;
       entry.envAt = Date.now();
-      entry.status = { ...entry.status, shellEnv: { ok: false, count: 0, ms: Date.now() - t0 } };
+      entry.status = { ...entry.status, node: null, shellEnv: { ok: false, count: 0, ms: Date.now() - t0 } };
       this.setPart(id, 'env', 'shell environment unavailable — using the plain WSL environment');
       log('host', 'host-env', {
         detail: {
@@ -861,6 +866,8 @@ export class HostsRegistry {
     const wsl = this.wslCmd();
     if (!wsl) return null;
     const [file, ...prefix] = wsl;
+    // The caller runs the returned spec — one wsl.exe invocation per call.
+    log('host', 'host-exec', { detail: { host: id, kind: 'exec' } });
     const env = mergeShellEnv(this.cachedEnv(entry.host) ?? {}, {});
     const kv = Object.keys(env)
       .sort()

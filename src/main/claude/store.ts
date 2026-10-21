@@ -163,6 +163,7 @@ export class ClaudeStore {
     }
     const [file, ...prefix] = wsl;
     const projects = this.projectsDirLinux();
+    log('host', 'host-exec', { detail: { host: this.host.id, kind: 'spawn' } });
     const child = spawn(
       file!,
       [
