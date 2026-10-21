@@ -157,7 +157,7 @@ export class ClaudeSessions {
   }
 
   private startStores(): void {
-    for (const host of hosts().list()) {
+    for (const host of hosts().readyList()) {
       this.storeForHost(host).start();
     }
   }
@@ -203,6 +203,9 @@ export class ClaudeSessions {
     // also needs its store created, so refresh rather than emit only.
     hosts().onStatusChange = () => {
       void this.refresh('hosts');
+      // A host that just became ready gets its hooks block written now —
+      // applyHooks skips hosts whose fs isn't reachable yet.
+      this.hook.applyHooks();
     };
     this.pr.start();
     this.hook.start(this.userData);
@@ -431,9 +434,20 @@ export class ClaudeSessions {
       const list: ClaudeStoreSession[] = [];
       let localError: unknown = null;
       let storeComplete = true;
+      const skippedHosts: HostId[] = [];
       for (const host of hosts().list()) {
         if (this.started) this.agentsForHost(host).start();
+        if (!hosts().fsReady(host)) {
+          // Probe not ready: UNC fs would block — keep the previous rows so
+          // the sidebar doesn't empty during a transient re-probe.
+          storeComplete = false;
+          skippedHosts.push(host.id);
+          list.push(...this.storeSessions.filter((s) => s.host === host.id));
+          continue;
+        }
         try {
+          // A host that became ready mid-run starts its watcher now.
+          if (this.started) this.storeForHost(host).start();
           list.push(...(await this.storeForHost(host).list()));
           hosts().setError(host.id, 'store', null);
         } catch (error) {
@@ -478,7 +492,7 @@ export class ClaudeSessions {
         }
       }
       log('claude', 'claude-list', {
-        detail: { count: list.length, ms: Date.now() - t0, source },
+        detail: { count: list.length, skippedHosts, ms: Date.now() - t0, source },
       });
       this.emit();
     } catch (error) {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   displayPath,
   hostIdForPath,
+  isFsReady,
   isWslHost,
   shellFamily,
   LOCAL_HOST,
@@ -215,6 +216,24 @@ describe('isWslHost / wslHost', () => {
     expect(isWslHost(LOCAL_HOST)).toBe(false);
     expect(isWslHost(UB) && UB.mount).toBe('/mnt');
     expect(UB.id).toBe('wsl:Ubuntu-22.04');
+  });
+});
+
+describe('isFsReady', () => {
+  it('local is ready in any probe state, including none', () => {
+    expect(isFsReady(LOCAL_HOST, 'ready')).toBe(true);
+    expect(isFsReady(LOCAL_HOST, 'probing')).toBe(true);
+    expect(isFsReady(LOCAL_HOST, 'error')).toBe(true);
+    expect(isFsReady(LOCAL_HOST, undefined)).toBe(true);
+    expect(isFsReady(LOCAL_HOST, null)).toBe(true);
+  });
+  it('wsl is ready only once the probe lands', () => {
+    expect(isFsReady(UB, 'ready')).toBe(true);
+    expect(isFsReady(UB, 'probing')).toBe(false);
+    expect(isFsReady(UB, 'error')).toBe(false);
+    expect(isFsReady(UB, 'stopped')).toBe(false);
+    expect(isFsReady(UB, undefined)).toBe(false);
+    expect(isFsReady(UB, null)).toBe(false);
   });
 });
 

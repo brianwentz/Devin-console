@@ -21,8 +21,19 @@ import {
   launchApp,
   launchWithClaudeFixture,
   readEvents,
+  state as appState,
   waitForEvent,
 } from './helpers';
+
+// A wsl host's fs is only scanned once its probe is 'ready' — usage specs
+// that seed a fake distro wait for the probe before refreshing.
+const waitHostReady = async (app: ElectronApplication, id: string) => {
+  await expect
+    .poll(async () => (await appState(app)).hosts.find((h) => h.id === id)?.state, {
+      timeout: 30_000,
+    })
+    .toBe('ready');
+};
 
 function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
@@ -269,6 +280,7 @@ test('usage: fake WSL host contributes byHost + joins the same account', async (
   });
   const h = hooks(app);
   try {
+    await waitHostReady(app, 'wsl:Fake');
     await h.refresh();
     const state = await h.usage();
     expect(state.accounts).toHaveLength(1);
@@ -328,6 +340,7 @@ test('usage: scan racing a withConfigDir swap keeps local and wsl stores apart',
   });
   const h = hooks(app);
   try {
+    await waitHostReady(app, 'wsl:Fake');
     // Baseline pass (also materialises the wsl host entry for hostById).
     await h.refresh();
     // Hold the distro's CLAUDE_CONFIG_DIR swap open, then scan while it is
@@ -444,6 +457,7 @@ test('usage: two accounts render as two gauge blocks (per-host account files)', 
   });
   const h = hooks(app);
   try {
+    await waitHostReady(app, 'wsl:Fake');
     await h.refresh();
     const state = await h.usage();
     expect(state.accounts).toHaveLength(2);
