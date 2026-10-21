@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import {
   hostIdForPath as coreHostIdForPath,
   mergeShellEnv,
+  isFsReady,
   isWslHost,
   LOCAL_HOST,
   parseShellEnv,
@@ -299,6 +300,17 @@ export class HostsRegistry {
     for (const host of this.list()) seen.set(host.id, host);
     for (const entry of this.entries.values()) seen.set(entry.host.id, entry.host);
     return [LOCAL_HOST, ...[...seen.values()].filter((h) => h.id !== 'local')];
+  }
+
+  /** True when main-process fs may touch the host's config dir: local always,
+   * a wsl host only once its probe is `ready` (UNC on a hung distro blocks). */
+  fsReady(host: ExecHost): boolean {
+    return isFsReady(host, this.entries.get(host.id)?.status.state);
+  }
+
+  /** list() minus wsl hosts whose probe hasn't reached `ready` yet. */
+  readyList(): ExecHost[] {
+    return this.list().filter((h) => this.fsReady(h));
   }
 
   hostById(id: HostId | string): ExecHost | null {

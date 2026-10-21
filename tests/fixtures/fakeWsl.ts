@@ -7,6 +7,7 @@
 //                                 FAKE_WSL_ROOT/C (created if missing)
 //   /usr/bin/env K=V… cmd         applies the leading assignments
 //   /bin/sh -c 'echo $HOME;id…'   the probe line → FAKE_WSL_HOME, u, /bin/bash
+//                                 (sleeps FAKE_WSL_PROBE_DELAY_MS first)
 //   <shell> -ilc 'cmd' [posargs]  __DW_ENV__ capture → canned env -0
 //                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER);
 //                                 `command -v <bin>` → canned PATH answers;
@@ -215,6 +216,12 @@ const main = (): number => {
 
   // Probe line: /bin/sh -c 'echo "$HOME"; id -un; getent … | cut -d: -f7'
   if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('id -un')) {
+    // A wedged distro answers the probe late — block this thread so startup
+    // fs gating is exercised while the probe is still 'probing'.
+    const delay = Number(process.env.FAKE_WSL_PROBE_DELAY_MS) || 0;
+    if (delay > 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
     process.stdout.write(`${HOME}\nu\n/bin/bash\n`);
     return 0;
   }

@@ -412,10 +412,6 @@ async function createWindow(): Promise<void> {
     keepAliveMs: cloudKeepAliveMs(saved.sessions.keepAliveHours),
   });
   cloudSessions().start();
-  devinUsage().start();
-  // Eager start so usage alerts don't depend on visiting the Analytics tab
-  // (the hidden cadence is already 10 min).
-  claudeUsage().start();
 
   state.tabManager = new TabManager({
     parent: state.windowRef.contentView,
@@ -478,6 +474,10 @@ async function createWindow(): Promise<void> {
   state.tabManager.preloadVisibleScope();
   applyLayout();
   await state.shellView.webContents.loadURL('app://shell/index.html');
+  devinUsage().start();
+  // Eager start so usage alerts don't depend on visiting the Analytics tab
+  // (the hidden cadence is already 10 min).
+  claudeUsage().start();
   registerTestHooks();
   startCookieAudit();
   notifier.start();
