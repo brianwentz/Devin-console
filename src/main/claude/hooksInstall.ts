@@ -2,8 +2,8 @@
 // <configDir>/settings.json (literal token — external terminals have no env
 // var) or remove it on disable. The write rules (one-time backup, atomic
 // tmp+rename, never throws) live in core/hooksApply.ts, shared with the
-// in-distro helper. Async (fs/promises) so a slow UNC config dir can't block
-// the main loop.
+// in-distro helper. Local config dir only — a WSL host's file is written by
+// its helper (hooks.apply over the channel, see hooks.ts).
 
 import { copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

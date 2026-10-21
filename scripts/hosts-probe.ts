@@ -11,11 +11,14 @@
 // source is never modified, the copy is deleted at the end) with its own event
 // log, waits N minutes, closes the app (kill after 15 s) and writes a `soak`
 // object into hosts-probe.json: host-exec total/by-kind/per-min (raw and after a
-// 60 s startup grace), `excludedLongLived` (kind 'spawn': chats/ptys/acp/inotify),
-// background re-lists (claude-list source watch|hosts) per min and usage-scan file counts
-// (usage-scan `wslFiles` max; null on builds that do not emit it).
+// 60 s startup grace), `excludedLongLived` (kind 'spawn': chats/ptys/acp),
+// background re-lists (claude-list source watch|hosts) per min, usage-scan file counts
+// (usage-scan `wslFiles` max; null on builds that do not emit it) and, per distro,
+// `helpers[<host>]`: helper deploy ms (host-helper-deploy), spawn→hello ms
+// (host-helper starting→ready timestamps), store.list ms (claude-store-list) and
+// the claude-patch count — all read from the events the app logs.
 // `--label <name>` (default 'run') writes soak[label] and keeps other labels; the
-// reduced log (host-exec/claude-list/usage-scan counts only) is
+// reduced log (host-exec/claude-list/usage-scan/host-helper*/claude-store-list/claude-patch; counts, enums, ms only) is
 // docs/evidence/hosts-probe-soak-<label>.jsonl. The app runs with
 // AGENT_WORKSPACE_SKIP_HOOKS_INSTALL=1 so the real settings.json files are never written.
 // Copying a live leveldb WAL (*.log) while the installed app runs can capture a torn tail, which leveldb tolerates.

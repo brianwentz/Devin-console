@@ -15,11 +15,12 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync } from 'node:fs';
 import { access, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
+import { STORE_MESSAGES_PAGE } from '../core/hostRpc';
 import { optInt, optStr, str, type Handler } from './params';
 import type { WatchChange } from './watch';
 
-export const MESSAGES_PAGE_MAX = 500;
+export const MESSAGES_PAGE_MAX = STORE_MESSAGES_PAGE;
 
 export type StoreChanged = { files: string[]; sessions: SDKSessionInfo[]; removed: string[] };
 
@@ -105,6 +106,11 @@ export function storeHandlers(configDir: string): Record<string, Handler> {
       const agentId = str(p, 'agentId');
       return getSubagentMessages(sessionId, agentId, page(p));
     },
-    'store.transcriptPath': async (p) => ({ path: await transcriptPath(projectsDir, str(p, 'sessionId')) }),
+    // `rel` (`<project>/<id>.jsonl`, `/`-separated) lets the app rebuild the
+    // path under its own view of the config dir.
+    'store.transcriptPath': async (p) => {
+      const path = await transcriptPath(projectsDir, str(p, 'sessionId'));
+      return { path, rel: path === null ? null : relative(projectsDir, path).split(/[\\/]/).join('/') };
+    },
   };
 }

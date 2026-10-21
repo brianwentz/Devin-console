@@ -56,10 +56,13 @@ describe('helper store', () => {
 
   it('store.transcriptPath finds the transcript, null when unknown', async () => {
     const h = storeHandlers(home.dir);
-    const found = (await h['store.transcriptPath']!({ sessionId: SESSION_C })) as { path: string | null };
+    const found = (await h['store.transcriptPath']!({ sessionId: SESSION_C })) as { path: string | null; rel: string | null };
     expect(found.path).toBe(join(home.dir, 'projects', 'C--work-beta', `${SESSION_C}.jsonl`));
+    // `/`-separated and relative to projects/, whatever the platform separator.
+    expect(found.rel).toBe(`C--work-beta/${SESSION_C}.jsonl`);
     expect(await h['store.transcriptPath']!({ sessionId: '99999999-0000-4000-8000-000000000000' })).toEqual({
       path: null,
+      rel: null,
     });
   });
 

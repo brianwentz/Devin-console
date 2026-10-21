@@ -216,6 +216,41 @@ export function openPrsOf(
   );
 }
 
+/**
+ * Applies one host's `store.changed` delta to the full store list: `updated`
+ * rows replace that host's row of the same id in place (or append), `removed`
+ * ids drop that host's rows (a removal wins over an update). Rows of every
+ * other host are returned as the same objects, so a patched list still holds
+ * every host's sessions and reconcile never sees them as missing.
+ */
+export function patchSessions(
+  prev: readonly ClaudeStoreSession[],
+  hostId: ExecHostId,
+  updated: readonly ClaudeStoreSession[],
+  removed: readonly string[],
+): ClaudeStoreSession[] {
+  const gone = new Set(removed);
+  const fresh = new Map<string, ClaudeStoreSession>();
+  for (const s of updated) if (!gone.has(s.id)) fresh.set(s.id, { ...s, host: hostId });
+  const next: ClaudeStoreSession[] = [];
+  for (const s of prev) {
+    if (s.host !== hostId) {
+      next.push(s);
+      continue;
+    }
+    if (gone.has(s.id)) continue;
+    const replacement = fresh.get(s.id);
+    if (replacement) {
+      next.push(replacement);
+      fresh.delete(s.id);
+    } else {
+      next.push(s);
+    }
+  }
+  next.push(...fresh.values());
+  return next;
+}
+
 const DAY_MS = 86_400_000;
 
 export function reconcile(

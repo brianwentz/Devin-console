@@ -370,6 +370,44 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
   }
 });
 
+test('hooks install into the WSL settings.json via the channel', async () => {
+  // FAKE_WSL_ROOT is the distro's own filesystem (the helper writes there);
+  // the UNC root is a different, empty dir — a Windows-side \\wsl.localhost
+  // write would land in it instead.
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const claudeDir = join(root, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const ours = () => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/');
+  const helperReady = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.hostChannelState('wsl:Fake')?.state ?? null);
+  try {
+    await expect.poll(helperReady, { timeout: 30_000 }).toBe('ready');
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+    await expect.poll(ours, { timeout: 15_000 }).toBe(true);
+    expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+    // The helper runs the same core/hooksApply.ts: one-time backup next to it.
+    expect(existsSync(`${settingsFile}.agent-workspace.bak`)).toBe(true);
+    expect(existsSync(join(uncRoot, 'home', 'u', '.claude', 'settings.json'))).toBe(false);
+    expect((await hooks(app).claudeState()).hostErrors['wsl:Fake'] ?? null).toBeNull();
+
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`);
+    await expect.poll(ours, { timeout: 15_000 }).toBe(false);
+    expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('hooks apply is gated: unchanged refreshes leave settings.json alone, a failed apply retries', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,

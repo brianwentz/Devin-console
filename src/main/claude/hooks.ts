@@ -13,7 +13,7 @@ import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
-import type { HostId } from '../../core/execHost';
+import { isWslHost, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
@@ -83,7 +83,7 @@ export class ClaudeHooks {
   // Global opt-in: (re)write our hook block into <configDir>/settings.json so
   // external terminals report activity too; off removes exactly our entries.
   // Fire-and-forget and coalesced: one run in flight plus one dirty follow-up,
-  // so a burst of host-status changes never stacks UNC round-trips.
+  // so a burst of host-status changes never stacks helper round-trips.
   applyHooks(): void {
     const enabled = state.settings?.current.claude.hooksEnabled ?? false;
     this.hooks = { ...this.hooks, enabled };
@@ -137,18 +137,18 @@ export class ClaudeHooks {
       this.owner.emit();
       return;
     }
-    // The opt-in applies to every enabled host's settings.json — for a wsl
-    // host the file lives under \wsl.localhost\<D>\<home>\.claude and the
-    // URLs point at that host's reachable address (loopback in mirrored
-    // mode, the vEthernet IPv4 in NAT mode).
+    // The opt-in applies to every enabled host's settings.json — a wsl host's
+    // file is written by its helper (hooks.apply, the same core/hooksApply.ts)
+    // inside the distro, and the URLs point at that host's reachable address
+    // (loopback in mirrored mode, the vEthernet IPv4 in NAT mode).
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
-      // A wsl host whose probe isn't ready (or that is Stopped) gets skipped —
-      // touching its settings.json over UNC could block the loop for the SMB
-      // timeout or boot it. Installs target enabled hosts only; the opt-out
-      // also cleans a disabled-but-running one (our block carries the token).
+      // Installs target enabled hosts only; the opt-out also cleans a
+      // disabled-but-running one (our block carries the token) — over the
+      // channel when it is up, else skipped (never a Stopped distro, never UNC).
       if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
+      if (isWslHost(host) && hosts().channel(host)?.state !== 'ready') continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,
@@ -160,7 +160,9 @@ export class ClaudeHooks {
         // Already written in this state; lastApplied is only recorded on success.
         result = { installed: enabled, error: null };
       } else {
-        result = await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr);
+        result = isWslHost(host)
+          ? await this.applyOverChannel(host, enabled, info, addr)
+          : await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr);
         if (result.error === null) this.lastApplied.set(host.id, key);
         else this.lastApplied.delete(host.id);
       }
@@ -173,6 +175,36 @@ export class ClaudeHooks {
     }
     this.hooks = { ...this.hooks, enabled, installed, error: firstError };
     this.owner.emit();
+  }
+
+  /** hooks.apply in the distro; an RPC failure is reported like a write error. */
+  private async applyOverChannel(
+    host: ExecHost,
+    enabled: boolean,
+    info: { port: number; token: string },
+    addr: string | undefined,
+  ): Promise<{ installed: boolean; error: string | null }> {
+    let changed = false;
+    let result: { installed: boolean; error: string | null };
+    try {
+      const channel = hosts().channel(host);
+      if (!channel) throw new Error('helper channel is not ready');
+      const r = await channel.request<{ installed?: unknown; changed?: unknown; error?: unknown } | null>(
+        'hooks.apply',
+        { enabled, port: info.port, token: info.token, ...(addr ? { addr } : {}) },
+      );
+      changed = r?.changed === true;
+      result = {
+        installed: r?.installed === true,
+        error: typeof r?.error === 'string' ? r.error : null,
+      };
+    } catch (error) {
+      result = { installed: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    log('claude', 'claude-hooks-install', {
+      detail: { enabled, changed, ok: result.error === null, host: host.id },
+    });
+    return result;
   }
 
   /** Expose the listener on a non-loopback address (NAT-mode WSL reachability). */

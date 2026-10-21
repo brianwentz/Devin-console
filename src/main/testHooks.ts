@@ -319,6 +319,11 @@ export function registerTestHooks(): void {
       localMenuItems: () => localContextMenuItems(),
       localMenuClick: (id: string) => localContextMenuClick(id),
       claudeMutations: () => claudeSessions().mutationLog(),
+      // Store mutations without the menu round-trip (WSL ones go over the channel).
+      claudeRename: (id: string, title: string) => claudeSessions().rename(id, title),
+      claudeDeleteTranscript: (id: string) => claudeSessions().sessionDeleteTranscript(id),
+      claudeRevealTranscript: (id: string) => claudeSessions().revealTranscript(id),
+      claudeRevealed: () => claudeSessions().revealedPaths(),
       claudeConfigDir: () => claudeSessions().snapshot().configDir,
       // Chat.
       claudeChatState: () => publicChatState(),

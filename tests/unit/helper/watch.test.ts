@@ -102,6 +102,19 @@ describe('helper watch', () => {
     await until(() => payloads.find((x) => x.files.includes(`-home-u-gamma/${id}.jsonl`)));
   });
 
+  it('a projects dir that appears after start reports the transcripts already in it', async () => {
+    rmSync(projects(), { recursive: true, force: true });
+    const { payloads } = startWatching({ retryRootMs: 100 });
+    await settle(50);
+    const id = '33333333-0000-4000-8000-000000000002';
+    const dir = join(projects(), '-home-u-fresh');
+    // A fresh install: the CLI creates projects/<p>/<id>.jsonl in one go.
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${id}.jsonl`), transcriptLines(id, 2, '/home/u/fresh'));
+    const p = await until(() => payloads.find((x) => x.files.includes(`-home-u-fresh/${id}.jsonl`)));
+    expect(p.sessions.map((s) => s.sessionId)).toContain(id);
+  });
+
   it('subagent transcript changes are reported under <proj>/<id>/subagents/', async () => {
     const { raw } = startWatching();
     await settle(100);

@@ -497,6 +497,8 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
     AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    // The helper lists the distro's store: same root on both sides.
+    FAKE_WSL_ROOT: uncRoot,
   });
   const h = hooks(app);
   try {

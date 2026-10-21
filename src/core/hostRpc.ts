@@ -127,6 +127,8 @@ export const SILENCE_KILL_MS = 45_000;
 export const HELLO_DEADLINE_MS = 20_000;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 export const LONG_REQUEST_TIMEOUT_MS = 60_000;
+/** Max messages per store.messages / store.subagentMessages page; callers page until a short page. */
+export const STORE_MESSAGES_PAGE = 500;
 
 const LONG_METHODS: ReadonlySet<string> = new Set(['store.list', 'usage.scan']);
 

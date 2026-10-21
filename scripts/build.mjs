@@ -142,6 +142,15 @@ await Promise.all([
     format: 'cjs',
     outfile: 'out/fixtures/fakeWsl.cjs',
   }),
+  // `node -r` preload for the helper the fake launches (maps the linux claude path).
+  build({
+    entryPoints: ['tests/fixtures/fakeWslHelperPreload.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    outfile: 'out/fixtures/fakeWslHelperPreload.cjs',
+  }),
   // Phase 3 fake `claude` CLI for background agents
   // (AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD).
   build({

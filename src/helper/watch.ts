@@ -35,6 +35,8 @@ export type WatcherOptions = {
   debounceMs?: number;
   pollMs?: number;
   recentCount?: number;
+  /** How often a missing projects/ is looked for again (default 5 s). */
+  retryRootMs?: number;
   watchFn?: WatchFn;
 };
 
@@ -94,7 +96,9 @@ export class ProjectsWatcher {
 
   // ---- watch mode -------------------------------------------------------
 
-  private attachRoot(): void {
+  /** `emitExisting`: projects/ appeared after start (fresh install, or it was
+   * recreated) — every transcript already in it is new to the app. */
+  private attachRoot(emitExisting = false): void {
     if (this.stopped || this.mode === 'poll') return;
     if (!isDir(this.opts.projectsDir)) {
       this.retryRoot();
@@ -103,7 +107,7 @@ export class ProjectsWatcher {
     try {
       this.watchDir('', this.opts.projectsDir, (name) => this.onRootEvent(name));
       for (const entry of readdirSync(this.opts.projectsDir, { withFileTypes: true })) {
-        if (entry.isDirectory()) this.attachProject(entry.name, false);
+        if (entry.isDirectory()) this.attachProject(entry.name, emitExisting);
       }
     } catch (error) {
       if (!isGone(error)) throw error;
@@ -120,11 +124,11 @@ export class ProjectsWatcher {
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       try {
-        this.attachRoot();
+        this.attachRoot(true);
       } catch {
         this.toPoll();
       }
-    }, RETRY_ROOT_MS);
+    }, this.opts.retryRootMs ?? RETRY_ROOT_MS);
     this.retryTimer.unref?.();
   }
 

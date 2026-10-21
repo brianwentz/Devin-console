@@ -32,14 +32,16 @@
 //                                 and FAKE_WSL_HELPER=1; stdio piped through
 //                                 (drained before the fake exits);
 //                                 FAKE_WSL_HELPER_HANG=1 stops forwarding the
-//                                 child's stdout after its first line
-//   inotifywait …                 exit 127 unless FAKE_WSL_INOTIFY=1 → fs.watch
+//                                 child's stdout after its first line; node
+//                                 runs with `-r fakeWslHelperPreload.cjs` so the
+//                                 helper's `…/claude agents` prints
+//                                 $FAKE_CLAUDE_AGENTS
 //   curl … %{http_code}           200 only when FAKE_WSL_HOOKS=ok
 //   */claude …                    --version → a canned string; agents --json
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const ROOT = process.env.FAKE_WSL_ROOT ?? '.';
@@ -81,7 +83,9 @@ const helperEnv = (): Record<string, string> => {
 const helperLaunch = (file: string, cwd: string): number => {
   const local = linuxFile(file);
   if (!existsSync(local)) return 86;
-  const child = spawn(process.env.FAKE_WSL_NODE ?? process.execPath, [local, '--stdio'], {
+  // The preload sits next to this bundle in out/fixtures.
+  const preload = join(__dirname, 'fakeWslHelperPreload.cjs');
+  const child = spawn(process.env.FAKE_WSL_NODE ?? process.execPath, ['-r', preload, local, '--stdio'], {
     cwd,
     env: helperEnv(),
     stdio: 'pipe',
@@ -160,8 +164,6 @@ const commandV = (bin: string): string | null => {
       return `${HOME}/.local/bin/devin`;
     case 'gh':
       return process.env.FAKE_WSL_NO_GH === '1' ? null : `${HOME}/.local/bin/gh`;
-    case 'inotifywait':
-      return process.env.FAKE_WSL_INOTIFY === '1' ? '/usr/bin/inotifywait' : null;
     default:
       return null;
   }
@@ -191,17 +193,6 @@ const realBin = (argv: string[]): string[] => {
     return [process.execPath, process.env.FAKE_WSL_DEVIN_CMD, ...argv.slice(1)];
   }
   return argv;
-};
-
-// inotifywait -m -r -q -e <events> --format %w%f <dir> — one line per change.
-const inotify = (dir: string): number => {
-  if (process.env.FAKE_WSL_INOTIFY !== '1') return 127;
-  const local = linuxToLocal(dir);
-  const watcher = watch(local, { recursive: true }, (_e, f) => {
-    if (f) process.stdout.write(`${dir.replace(/\/+$/, '')}/${String(f).split('\\').join('/')}\n`);
-  });
-  process.on('SIGTERM', () => watcher.close());
-  return STAY_ALIVE;
 };
 
 // curl -s -m 2 -o /dev/null -w %{http_code} <url> → reachability probe.
@@ -242,7 +233,6 @@ const shInteractive = (tail: string[], cwd: string): number => {
   }
   if (cmd.startsWith('exec ')) {
     const { rest, env } = envPrefix(posargs);
-    if (rest[0]?.endsWith('inotifywait')) return inotify(rest[rest.length - 1]!);
     return runLocal(realBin(rest), cwd, env);
   }
   // Fallback: run the command string verbatim (argv form never used today).
@@ -338,7 +328,6 @@ const main = (): number => {
   if (/bash|zsh|fish|sh$/.test(file) && tail.some((a) => /^-[a-z]*c$/.test(a))) {
     return shInteractive(tail, cwd);
   }
-  if (file.endsWith('inotifywait')) return inotify(argv[argv.length - 1]!);
   if (file.endsWith('curl')) return curl(tail);
   return runLocal(realBin(argv), cwd, env);
 };

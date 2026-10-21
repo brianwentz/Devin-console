@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -272,9 +272,17 @@ test('FAKE_WSL_NO_NODE → node-missing + #hostHelperHint', async () => {
 });
 
 test('env.get feeds spawnOn — no -ilc env-capture spawn after ready', async () => {
-  const { app, spawnLog, logFile } = await launch({ AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300' });
-  const agentRuns = () =>
-    spawnLines(spawnLog).filter((argv) => argv.includes('agents') && argv.includes('--json'));
+  // spawnOn's consumer here is the Devin Local agent (`devin acp` in the
+  // distro); `claude agents` no longer spawns — it runs inside the helper.
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const fakeAgent = `node ${join(process.cwd(), 'out/fixtures/fakeAcpAgent.cjs')}`;
+  const { app, spawnLog, logFile } = await launch({
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: root,
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: fakeAgent,
+    FAKE_WSL_DEVIN_CMD: fakeAgent,
+  });
+  const agentRuns = () => spawnLines(spawnLog).filter((argv) => argv.includes('acp'));
   try {
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     // env.get landed: the spawn env now comes from the helper.
@@ -293,11 +301,15 @@ test('env.get feeds spawnOn — no -ilc env-capture spawn after ready', async ()
     for (const denied of ['WSL_INTEROP', 'WSLENV', 'PWD', 'SHLVL', 'TERM']) expect(keys).not.toContain(denied);
     const captures = envCaptures(spawnLog);
     const runsBefore = agentRuns().length;
-    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+    await app.evaluate(
+      (_e, path: string) => (globalThis as any).__agentworkspace.localAddWorkspace(path),
+      `${root}\\home\\u\\ws`,
+    );
     await expect.poll(() => agentRuns().length, { timeout: 15_000 }).toBeGreaterThan(runsBefore);
     const fresh = agentRuns().slice(runsBefore);
     expect(fresh.every((argv) => argv.includes('FAKE_WSL_HELPER=1'))).toBe(true);
-    // Several polls later still no new interactive-login capture.
+    // Later background work still runs no new interactive-login capture.
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(envCaptures(spawnLog)).toBe(captures);
     const channelEnv = (await readEvents(logFile)).filter(
@@ -487,6 +499,217 @@ test('no installed distros (wsl -l exits non-zero) is a cached empty list: focus
     expect(await enumRuns(logFile)).toBe(runs);
     expect((await readEvents(logFile)).some((e) => e.event === 'host-list' && (e.detail as { ok?: boolean }).ok === false)).toBe(false);
     expect((await state(app)).hosts.map((h) => h.id)).toEqual(['local']);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+// --- P1 Task 9: the Claude store, history, hooks and agents over the channel ---
+// FAKE_WSL_ROOT (what the helper sees) and the UNC root (what a Windows-side
+// \\wsl.localhost read would see) are DIFFERENT dirs: anything the app finds
+// can only have come over the channel.
+
+const STORE_ID = '99999999-0000-4000-8000-0000000000a1';
+let storeSeq = 0;
+const storeLine = (id: string, cwd: string, text: string): string =>
+  JSON.stringify({
+    parentUuid: null,
+    isSidechain: false,
+    type: 'user',
+    message: { role: 'user', content: text },
+    uuid: `99999999-0000-4000-8000-${String(++storeSeq).padStart(12, '0')}`,
+    timestamp: new Date().toISOString(),
+    userType: 'external',
+    entrypoint: 'cli',
+    cwd,
+    sessionId: id,
+    version: '2.1.302',
+    gitBranch: 'main',
+  }) + '\n';
+
+type StoreRow = { id: string; host: string; title: string };
+const claudeRows = async (app: ElectronApplication): Promise<StoreRow[]> =>
+  ((await app.evaluate(() => (globalThis as any).__agentworkspace.claudeState())) as { sessions: StoreRow[] })
+    .sessions;
+const wslRow = async (app: ElectronApplication, id: string) =>
+  (await claudeRows(app)).find((s) => s.id === id && s.host === HOST) ?? null;
+
+async function launchStore(extra: Record<string, string> = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const projectDir = join(root, 'home', 'u', '.claude', 'projects', '-home-u-proj');
+  mkdirSync(projectDir, { recursive: true });
+  const transcript = join(projectDir, `${STORE_ID}.jsonl`);
+  writeFileSync(transcript, storeLine(STORE_ID, '/home/u/proj', 'hello from the distro'));
+  const launched = await launch({ FAKE_WSL_ROOT: root, AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot, ...extra });
+  return { ...launched, uncRoot, projectDir, transcript };
+}
+
+const listsOf = async (logFile: string) =>
+  (await readEvents(logFile)).filter((e) => e.event === 'claude-list').length;
+const patchesOf = async (logFile: string) =>
+  (await readEvents(logFile))
+    .filter((e) => e.event === 'claude-patch')
+    .map((e) => e.detail as { host: string; updated: number; removed: number });
+
+test('WSL sessions list via the channel', async () => {
+  const { app, logFile } = await launchStore();
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 15_000 }).not.toBeNull();
+    expect((await wslRow(app, STORE_ID))?.title).toContain('hello from the distro');
+    const lists = (await readEvents(logFile))
+      .filter((e) => e.event === 'claude-store-list')
+      .map((e) => e.detail as Record<string, unknown>);
+    expect(lists.some((d) => d.host === HOST && (d.count as number) >= 1)).toBe(true);
+    for (const d of lists) expect(Object.keys(d).sort()).toEqual(['count', 'host', 'ms']);
+    // The store watch is the helper's: no UNC poll/inotify watcher any more.
+    const watches = (await readEvents(logFile))
+      .filter((e) => e.event === 'claude-watch' && (e.detail as { host?: string }).host === HOST)
+      .map((e) => (e.detail as { mode: string }).mode);
+    expect(watches.length).toBeGreaterThan(0);
+    expect(new Set(watches)).toEqual(new Set(['channel']));
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('transcript append patches one row — no full claude-list', async () => {
+  const { app, logFile, transcript } = await launchStore();
+  try {
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 30_000 }).not.toBeNull();
+    // Let start-up lists (start / hosts / env) settle before the baseline.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const lists = await listsOf(logFile);
+    appendFileSync(
+      transcript,
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'Patched in the distro', sessionId: STORE_ID })}\n`,
+    );
+    await expect
+      .poll(async () => (await wslRow(app, STORE_ID))?.title, { timeout: 15_000 })
+      .toBe('Patched in the distro');
+    expect((await patchesOf(logFile)).some((p) => p.host === HOST && p.updated === 1)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await listsOf(logFile)).toBe(lists);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('deleted WSL transcript removes its row', async () => {
+  const { app, logFile, transcript } = await launchStore();
+  try {
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 30_000 }).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const lists = await listsOf(logFile);
+    rmSync(transcript);
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 15_000 }).toBeNull();
+    expect((await patchesOf(logFile)).some((p) => p.host === HOST && p.removed === 1)).toBe(true);
+    expect(await listsOf(logFile)).toBe(lists);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('WSL history loads via store.messages', async () => {
+  const { app } = await launchStore();
+  try {
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 30_000 }).not.toBeNull();
+    const shell = await shellPage(app);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.claudeSelect(id), STORE_ID);
+    await expect(shell.locator('#messageList')).toContainText('hello from the distro', { timeout: 15_000 });
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('rename/delete via the channel', async () => {
+  const { app, transcript } = await launchStore();
+  try {
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 30_000 }).not.toBeNull();
+    await app.evaluate(
+      (_e, id: string) => (globalThis as any).__agentworkspace.claudeRename(id, 'Renamed over the channel'),
+      STORE_ID,
+    );
+    await expect
+      .poll(async () => (await wslRow(app, STORE_ID))?.title, { timeout: 15_000 })
+      .toBe('Renamed over the channel');
+    expect(readFileSync(transcript, 'utf8')).toContain('Renamed over the channel');
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.claudeDeleteTranscript(id), STORE_ID);
+    await expect.poll(() => existsSync(transcript), { timeout: 15_000 }).toBe(false);
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 15_000 }).toBeNull();
+    const mutations = (await app.evaluate(() => (globalThis as any).__agentworkspace.claudeMutations())) as {
+      op: string;
+    }[];
+    expect(mutations.map((m) => m.op)).toEqual(expect.arrayContaining(['rename', 'sessionDeleteTranscript']));
+    const snapshot = (await app.evaluate(() => (globalThis as any).__agentworkspace.claudeState())) as {
+      lastError: unknown;
+    };
+    expect(snapshot.lastError).toBeNull();
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('background agents list for WSL via the channel', async () => {
+  const agents = JSON.stringify([
+    {
+      pid: 4242,
+      id: 'bg-wsl-1',
+      cwd: '/home/u/proj',
+      kind: 'background',
+      startedAt: Date.now(),
+      sessionId: STORE_ID,
+      name: 'wsl agent',
+      status: 'busy',
+      state: 'working',
+    },
+  ]);
+  const { app, spawnLog } = await launchStore({ FAKE_CLAUDE_AGENTS: agents });
+  const wslAgent = async () =>
+    (
+      (await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgents())) as {
+        id: string;
+        host: string;
+      }[]
+    ).find((a) => a.id === 'bg-wsl-1')?.host ?? null;
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+    await expect.poll(wslAgent, { timeout: 15_000 }).toBe(HOST);
+    // No `wsl.exe … claude agents` spawn: it ran inside the helper.
+    expect(spawnLines(spawnLog).filter((argv) => argv.includes('agents'))).toEqual([]);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('Reveal transcript on a WSL session calls showItemInFolder with the \\\\wsl.localhost path', async () => {
+  const { app, uncRoot } = await launchStore();
+  const revealed = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.claudeRevealed()) as Promise<string[]>;
+  try {
+    await expect.poll(() => wslRow(app, STORE_ID), { timeout: 30_000 }).not.toBeNull();
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.claudeRevealTranscript(id), STORE_ID);
+    // The UNC root stands in for \\wsl.localhost\Fake (the windowsPath seam).
+    await expect
+      .poll(revealed, { timeout: 10_000 })
+      .toEqual([join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj', `${STORE_ID}.jsonl`)]);
   } catch (error) {
     throw await withListTrace(error);
   } finally {
