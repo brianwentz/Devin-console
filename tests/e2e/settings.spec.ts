@@ -30,7 +30,7 @@ async function launch(
 ) {
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, extraEnv);
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
   return app;
 }
@@ -53,11 +53,11 @@ const hasEl = (app: ElectronApplication, id: string) =>
   shell(app, `Boolean(document.getElementById('${id}'))`);
 
 test('settings has eight tabs and switches panels', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     await expect
       .poll(async () =>
@@ -116,11 +116,11 @@ test('settings has eight tabs and switches panels', async () => {
 });
 
 test('editing a field commits implicitly on tab switch', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await expect
       .poll(async () => shell(app, `Boolean(document.getElementById('keepAliveInput'))`))
       .toBe(true);
@@ -142,11 +142,11 @@ test('editing a field commits implicitly on tab switch', async () => {
 });
 
 test('a validation failure keeps the tab and flags the field', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'cloud');
     await expect.poll(async () => hasEl(app, 'tenantUrlInput')).toBe(true);
 
@@ -191,11 +191,11 @@ test('a validation failure keeps the tab and flags the field', async () => {
 });
 
 test('a validation failure blocks leaving Settings via the rail', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await expect
       .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
       .toBe(true);
@@ -213,17 +213,17 @@ test('a validation failure blocks leaving Settings via the rail', async () => {
 });
 
 test('updates tab renders release notes for current and available versions', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await shell(app, `document.querySelector('[data-settings-tab="updates"]').click()`);
     await expect
       .poll(async () =>
         shell(app, `document.getElementById('releasesLink')?.getAttribute('href')`),
       )
-      .toBe('https://github.com/brianwentz/devin-workspace/releases');
+      .toBe('https://github.com/brianwentz/agent-workspace/releases');
 
     // The fixture serves notes for v<pkg.version>: rendered markdown, no
     // "available" card until an update is pending.
@@ -252,7 +252,7 @@ test('updates tab renders release notes for current and available versions', asy
 
     // An available update adds its card above the current-version card.
     await app.evaluate(
-      (_e, v: string) => (globalThis as any).__devinworkspaces.simulateUpdateAvailable(v),
+      (_e, v: string) => (globalThis as any).__agentworkspace.simulateUpdateAvailable(v),
       '9.9.9',
     );
     await expect
@@ -274,14 +274,14 @@ test('updates tab renders release notes for current and available versions', asy
 });
 
 test('updates tab reports missing release notes on a non-2xx response', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   // Point the releases base at a path the fixture never serves (non-2xx).
   const app = await launch(profile, logFile, {
-    DEVIN_WORKSPACES_TEST_RELEASES_URL: `${fixtures.apiUrl}/nope`,
+    AGENT_WORKSPACE_TEST_RELEASES_URL: `${fixtures.apiUrl}/nope`,
   });
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await shell(app, `document.querySelector('[data-settings-tab="updates"]').click()`);
     await expect
       .poll(async () =>
@@ -327,11 +327,11 @@ const setSelectValue = (app: ElectronApplication, id: string, value: string) =>
   );
 
 test('Devin Local tab renders the devin path and the agents summary', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'local');
     await expect.poll(async () => selectedTab(app)).toBe('local');
     await expect.poll(async () => hasEl(app, 'devinPathInput')).toBe(true);
@@ -353,11 +353,11 @@ test('Devin Local tab renders the devin path and the agents summary', async () =
 });
 
 test('Claude Code tab renders the moved and new controls', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'claude');
     await expect.poll(async () => selectedTab(app)).toBe('claude');
     await expect.poll(async () => hasEl(app, 'claudePathInput')).toBe(true);
@@ -404,12 +404,12 @@ test('Claude Code tab renders the moved and new controls', async () => {
 });
 
 test('the hooks mirror and the Notifications checkbox reflect each other', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const checked = (id: string) => shell(app, `document.getElementById('${id}')?.checked`);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'claude');
     await expect.poll(async () => hasEl(app, 'claudeHooksEnabledMirror')).toBe(true);
     const initial = (await checked('claudeHooksEnabledMirror')) as boolean;
@@ -438,7 +438,7 @@ test('the hooks mirror and the Notifications checkbox reflect each other', async
 });
 
 test('both distro selects list the fake distro and persist independently', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile, { FAKE_WSL_DISTROS: 'Fake:Running:default' });
   const options = (id: string) =>
@@ -449,7 +449,7 @@ test('both distro selects list the fake distro and persist independently', async
         timeout: 30_000,
       })
       .toBe(true);
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab(app, 'local');
     await expect.poll(async () => hasEl(app, 'localDefaultWslDistroSelect')).toBe(true);
     expect(await options('localDefaultWslDistroSelect')).toBe(',Fake');
@@ -476,10 +476,10 @@ test('both distro selects list the fake distro and persist independently', async
 });
 
 test('a dirty draft is flushed on quit', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
-  await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+  await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
   await expect
     .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
     .toBe(true);
@@ -503,7 +503,7 @@ test('a dirty draft is flushed on quit', async () => {
 // ux3 S6: a build only rewrites what it understands — keys written by a
 // newer build (or an unknown value for a known key) come back out unchanged.
 test('settings.json keeps unknown keys and an invalid untouched value across a run', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-settings-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(
     join(profile, 'settings.json'),
@@ -516,7 +516,7 @@ test('settings.json keeps unknown keys and an invalid untouched value across a r
     }),
   );
   const app = await launch(profile, logFile);
-  await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+  await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
   await expect
     .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
     .toBe(true);

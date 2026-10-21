@@ -1,8 +1,8 @@
 {
-  "name": "devin-workspaces",
+  "name": "agent-workspace",
   "version": "1.2.2",
   "private": true,
-  "description": "Devin Workspaces desktop client",
+  "description": "Agent Workspace desktop client",
   "author": "brianwentz",
   "main": "out/main.cjs",
   "scripts": {
@@ -26,7 +26,8 @@
     "claude:hooks-probe": "npm run build && node out/scripts/claude-hooks-probe.cjs",
     "claude:store-probe": "npm run build && node out/scripts/claude-store-probe.cjs",
     "hosts:probe": "npm run build && node out/scripts/hosts-probe.cjs",
-    "dist:win:smoke": "npm run build && electron-builder --win nsis --x64 --publish never -c.appId=ai.devin.workspaces.smoke -c.productName=\"Devin Workspaces Smoke\" -c.nsis.shortcutName=\"Devin Workspaces Smoke\" -c.nsis.artifactName=\"DevinWorkspaces-Smoke-Setup-${version}.${ext}\" -c.directories.output=dist/smoke",
+    "dist:win:smoke": "npm run build && electron-builder --win nsis --x64 --publish never -c.appId=io.github.brianwentz.agent-workspace.smoke -c.productName=\"Agent Workspace Smoke\" -c.nsis.guid=8bc73818-13fb-5883-bfb3-62006ae4a564 -c.nsis.shortcutName=\"Agent Workspace Smoke\" -c.nsis.artifactName=\"AgentWorkspace-Smoke-Setup-${version}.${ext}\" -c.directories.output=dist/smoke",
+    "smoke:install:rename": "npm run dist:win:smoke && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1 -From dist/smoke-before/DevinWorkspaces-Smoke-Setup-1.2.0.exe",
     "smoke:install:real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1",
     "test:e2e:headed": "node scripts/e2e-headed.mjs"
   },
@@ -84,8 +85,8 @@
     "zod": "4.6.5"
   },
   "build": {
-    "appId": "ai.devin.workspaces",
-    "productName": "Devin Workspaces",
+    "appId": "io.github.brianwentz.agent-workspace",
+    "productName": "Agent Workspace",
     "directories": {
       "output": "dist"
     },
@@ -138,21 +139,23 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "artifactName": "DevinWorkspaces-${version}-${arch}.${ext}"
+      "artifactName": "AgentWorkspace-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false,
-      "shortcutName": "Devin Workspaces",
-      "artifactName": "DevinWorkspaces-Setup-${version}.${ext}"
+      "guid": "1f69b7bc-532a-5b53-bb75-cfe47a155a29",
+      "shortcutName": "Agent Workspace",
+      "artifactName": "AgentWorkspace-Setup-${version}.${ext}",
+      "include": "build/installer.nsh"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "brianwentz",
-        "repo": "devin-workspace"
+        "repo": "agent-workspace"
       }
     ],
     "afterPack": "scripts/after-pack.cjs",

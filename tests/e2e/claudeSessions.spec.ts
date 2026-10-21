@@ -103,32 +103,32 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
     claudeMenuItems: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeMenuItems()) as Promise<
+      evaluate(() => (globalThis as any).__agentworkspace.claudeMenuItems()) as Promise<
         MenuItem[]
       >,
     claudeMenuClick: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeMenuClick(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeMenuClick(v),
         id,
       ) as Promise<{ action: string | null }>,
     currentScope: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.currentScope()) as Promise<string>,
+      evaluate(() => (globalThis as any).__agentworkspace.currentScope()) as Promise<string>,
     setSurface: (surface: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v as never),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v as never),
         surface,
       ),
     getSessionsBounds: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.getSessionsBounds()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.getSessionsBounds()) as Promise<{
         x: number;
         y: number;
         width: number;
         height: number;
       } | null>,
     state: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.state()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.state()) as Promise<{
         surface: string;
         claudeSessionId: string | null;
       }>,
@@ -137,8 +137,8 @@ function hooks(app: ElectronApplication) {
 
 test('claude sidebar: rows, filter, menus, view, surface round-trip', async () => {
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -314,10 +314,10 @@ test('rail button switches to the claude surface and persists it', async () => {
 
 test('claude workspaces: new-session-here, reorder, collapse, rename, remove', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     // The fake SDK drives newSession → a real transcript row files itself.
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: join(process.cwd(), 'out/fixtures/fakeClaudeSdk.mjs'),
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: join(process.cwd(), 'out/fixtures/fakeClaudeSdk.mjs'),
   });
   const h = hooks(app);
   try {
@@ -332,7 +332,7 @@ test('claude workspaces: new-session-here, reorder, collapse, rename, remove', a
       .poll(async () => (await h.claudeState()).folders)
       .toContain('C:\\work\\alpha');
     await shell.evaluate(() =>
-      (window as any).devinworkspaces.claudeWorkspaceAdd('C:\\work\\beta'),
+      (window as any).agentworkspace.claudeWorkspaceAdd('C:\\work\\beta'),
     );
     await expect
       .poll(async () => (await h.claudeState()).folders)
@@ -404,7 +404,7 @@ test('claude workspaces: new-session-here, reorder, collapse, rename, remove', a
 });
 
 test('claude workspace migration: legacy registry folders → claude.workspaces', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-mig-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-mig-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const logFile = join(profile, 'events.jsonl');
@@ -435,7 +435,7 @@ test('claude workspace migration: legacy registry folders → claude.workspaces'
   );
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -467,10 +467,10 @@ test('claude workspace migration: legacy registry folders → claude.workspaces'
 });
 
 test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + host chip', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-wsl-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-wsl-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   // The fake distro's claude home: <root>\home\u\.claude
   const wslHome = join(uncRoot, 'home', 'u');
   mkdirSync(join(wslHome, '.claude', 'projects', '-home-u-ws'), { recursive: true });
@@ -494,9 +494,9 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const h = hooks(app);
   try {
@@ -510,7 +510,7 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
     // Add the UNC workspace (uncRoot stands in for \\wsl.localhost\Fake).
     const shell = await shellPage(app);
     const wsPath = `${uncRoot}\\home\\u\\ws`;
-    await shell.evaluate((_p) => (window as any).devinworkspaces.claudeWorkspaceAdd(_p), wsPath);
+    await shell.evaluate((_p) => (window as any).agentworkspace.claudeWorkspaceAdd(_p), wsPath);
     await h.setSurface('claude');
     await expect
       .poll(async () => (await h.claudeState()).folders)
@@ -530,7 +530,7 @@ test('claude WSL workspace: UNC workspace files a wsl session by linux cwd + hos
 // ux3 S1: drag session rows to reorder inside 'recent' and 'pinned'.
 test('claude sidebar: session row drag reorders inside recent and pinned', async () => {
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {
@@ -568,10 +568,10 @@ test('claude sidebar: session row drag reorders inside recent and pinned', async
 
     // pin UA + UB → they file under 'pinned'; reorder there too.
     await shell.evaluate(
-      `window.devinworkspaces.claudeSessionPin(${JSON.stringify(UA)}, true)`,
+      `window.agentworkspace.claudeSessionPin(${JSON.stringify(UA)}, true)`,
     );
     await shell.evaluate(
-      `window.devinworkspaces.claudeSessionPin(${JSON.stringify(UB)}, true)`,
+      `window.agentworkspace.claudeSessionPin(${JSON.stringify(UB)}, true)`,
     );
     await expect.poll(async () => (await rowOrder('pinned')).length).toBe(2);
     const pinOrder = await rowOrder('pinned');
@@ -597,7 +597,7 @@ test('claude sidebar: session row drag reorders inside recent and pinned', async
       join(profile, 'events2.jsonl'),
       join(profile, 'downloads'),
       fixtures,
-      { CLAUDE_CONFIG_DIR: claudeHome, DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' },
+      { CLAUDE_CONFIG_DIR: claudeHome, AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1' },
     );
     const h2 = hooks(secondApp);
     try {
@@ -628,19 +628,19 @@ test('claude sidebar: session row drag reorders inside recent and pinned', async
 });
 
 // ux3 S3 — Settings → Claude Code "Folder pickers start in": the header's
-// New session picker opens there (DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD unset
+// New session picker opens there (AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD unset
 // so the dialog seam is reached); a relative path is refused on the tab.
 test('claude picker start folder: New session dialog starts in the configured folder; relative paths are rejected', async () => {
-  const startDir = mkdtempSync(join(tmpdir(), 'devin-workspaces-picker-start-'));
+  const startDir = mkdtempSync(join(tmpdir(), 'agent-workspace-picker-start-'));
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_PICKER_CANCEL: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_PICKER_CANCEL: '1',
   });
   const h = hooks(app);
   const lastDialog = () =>
     app.evaluate(
       () =>
-        (globalThis as any).__devinworkspaces.lastOpenDialogOptions() as {
+        (globalThis as any).__agentworkspace.lastOpenDialogOptions() as {
           title?: string;
           defaultPath?: string;
         } | null,
@@ -709,7 +709,7 @@ test('claude picker start folder: New session dialog starts in the configured fo
 // refused, and nothing is persisted.
 test('claude sidebar: dragging a subagent child row does not reorder its parent', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const h = hooks(app);
   try {

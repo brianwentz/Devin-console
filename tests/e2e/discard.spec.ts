@@ -1,7 +1,7 @@
 // O6 state-safe discard: inactive tabs idle past the threshold lose their webContents but
 // keep id/title/favicon/order and reload on activation; a page that prevents unload is kept
 // (silently — no dialog); the active tab is never discarded; the threshold is a setting
-// (DEVIN_WORKSPACES_TEST_KEEPALIVE_MS overrides settings.tabs.keepAliveHours in test mode so this suite can use 1.5 s).
+// (AGENT_WORKSPACE_TEST_KEEPALIVE_MS overrides settings.tabs.keepAliveHours in test mode so this suite can use 1.5 s).
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,7 +25,7 @@ import {
 async function showSession(app: ElectronApplication, name: string | null): Promise<void> {
   const url = name ? `${fixtures.devinUrl}/sessions/${name}` : fixtures.devinUrl;
   await app.evaluate((_e, target: string) => {
-    (globalThis as any).__devinworkspaces.loadDevinUrl(target);
+    (globalThis as any).__agentworkspace.loadDevinUrl(target);
   }, url);
   await expect
     .poll(async () => (await state(app)).currentSessionId)
@@ -34,7 +34,7 @@ async function showSession(app: ElectronApplication, name: string | null): Promi
 
 async function tabInfo(app: ElectronApplication, id: string) {
   return app.evaluate(
-    (_e, tabId: string) => (globalThis as any).__devinworkspaces.tabInfo(tabId),
+    (_e, tabId: string) => (globalThis as any).__agentworkspace.tabInfo(tabId),
     id,
   ) as Promise<{ url: string; title?: string; discarded: boolean; loading: boolean; hasView: boolean } | null>;
 }
@@ -62,14 +62,14 @@ async function quit(app: ElectronApplication, profile: string): Promise<void> {
 }
 
 test('discards idle tabs in hidden scopes, keeps chrome state, reloads on scope return, honours beforeunload', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-discard-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-discard-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_KEEPALIVE_MS: String(DISCARD_MS),
+    AGENT_WORKSPACE_TEST_KEEPALIVE_MS: String(DISCARD_MS),
   });
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
-    expect(await app.evaluate(() => (globalThis as any).__devinworkspaces.getKeepAliveMs())).toBe(DISCARD_MS);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
+    expect(await app.evaluate(() => (globalThis as any).__agentworkspace.getKeepAliveMs())).toBe(DISCARD_MS);
 
     const a = await openTab(app, `${fixtures.githubUrl}/page/discard-a`);
     await waitForTabTitle(app, 'discard-a');
@@ -115,7 +115,7 @@ test('discards idle tabs in hidden scopes, keeps chrome state, reloads on scope 
     await new Promise((resolve) => setTimeout(resolve, DISCARD_MS));
     expect((await tabInfo(app, guarded))?.discarded).toBe(false);
     expect(
-      await app.evaluate((_e, id: string) => Boolean((globalThis as any).__devinworkspaces.getTabWebContents(id)), guarded),
+      await app.evaluate((_e, id: string) => Boolean((globalThis as any).__agentworkspace.getTabWebContents(id)), guarded),
     ).toBe(true);
     const events = await readEvents(logFile);
     expect(events.some((entry) => entry.event === 'beforeunload-prompt')).toBe(false);
@@ -129,12 +129,12 @@ test('discards idle tabs in hidden scopes, keeps chrome state, reloads on scope 
 
     // Disabling via the hook stops the sweep: a fresh idle tab stays alive.
     await showSession(app, null);
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setKeepAliveMs(0));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setKeepAliveMs(0));
     const e = await openTab(app, `${fixtures.githubUrl}/page/discard-e`);
     await waitForTabTitle(app, 'discard-e');
     await new Promise((resolve) => setTimeout(resolve, DISCARD_MS * 2));
     expect((await tabInfo(app, e))?.discarded).toBe(false);
-    expect(await app.evaluate(() => (globalThis as any).__devinworkspaces.discardIdle())).toEqual([]);
+    expect(await app.evaluate(() => (globalThis as any).__agentworkspace.discardIdle())).toEqual([]);
   } finally {
     await quit(app, profile);
   }
@@ -142,29 +142,29 @@ test('discards idle tabs in hidden scopes, keeps chrome state, reloads on scope 
 
 
 test('keep-alive threshold is a persisted setting (hours) applied live', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-discard-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-discard-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     expect((await state(app)).settings.tabs.keepAliveHours).toBe(24);
-    expect(await app.evaluate(() => (globalThis as any).__devinworkspaces.getKeepAliveMs())).toBe(24 * 3_600_000);
+    expect(await app.evaluate(() => (globalThis as any).__agentworkspace.getKeepAliveMs())).toBe(24 * 3_600_000);
 
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ tabs: { keepAliveHours: 0 } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ tabs: { keepAliveHours: 0 } })`);
     await expect.poll(async () => (await state(app)).settings.tabs.keepAliveHours).toBe(0);
-    expect(await app.evaluate(() => (globalThis as any).__devinworkspaces.getKeepAliveMs())).toBe(0);
+    expect(await app.evaluate(() => (globalThis as any).__agentworkspace.getKeepAliveMs())).toBe(0);
 
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ tabs: { keepAliveHours: 48 } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ tabs: { keepAliveHours: 48 } })`);
     await expect.poll(async () => (await state(app)).settings.tabs.keepAliveHours).toBe(48);
-    expect(await app.evaluate(() => (globalThis as any).__devinworkspaces.getKeepAliveMs())).toBe(48 * 3_600_000);
+    expect(await app.evaluate(() => (globalThis as any).__agentworkspace.getKeepAliveMs())).toBe(48 * 3_600_000);
     await waitForEvent(logFile, 'keepalive-threshold');
     expect(
       JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).tabs.keepAliveHours,
     ).toBe(48);
 
     // Out-of-range patches are rejected by the schema and leave the value untouched.
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ tabs: { keepAliveHours: -5 } })`);
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ tabs: { keepAliveHours: 200 } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ tabs: { keepAliveHours: -5 } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ tabs: { keepAliveHours: 200 } })`);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect((await state(app)).settings.tabs.keepAliveHours).toBe(48);
   } finally {
@@ -177,15 +177,15 @@ test('keep-alive threshold is a persisted setting (hours) applied live', async (
 // the 3 s probe timeout) must not leave a dangling view for attachActive to
 // re-add — the tab becomes discarded and reloads on activation.
 test('a tab whose webContents is destroyed out-of-band becomes discarded and reloads on activation instead of crashing', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-discard-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-discard-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
 
     const destroyOutOfBand = (id: string) =>
       app.evaluate((_e, tabId: string) => {
-        (globalThis as any).__devinworkspaces.getTabWebContents(tabId)?.close();
+        (globalThis as any).__agentworkspace.getTabWebContents(tabId)?.close();
       }, id);
 
     const a = await openTab(app, `${fixtures.githubUrl}/page/zombie-a`);

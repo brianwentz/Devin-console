@@ -25,11 +25,11 @@ export const DEFAULT_MAX_LIVE_VIEWS = 6;
 const DEFAULT_KEEPALIVE_MS = 24 * 60 * 60 * 1000;
 
 // Effective keep-alive for pooled Cloud views: settings hours, overridable in
-// test mode via DEVIN_WORKSPACES_TEST_CLOUD_KEEPALIVE_MS (mirrors the tabs one).
+// test mode via AGENT_WORKSPACE_TEST_CLOUD_KEEPALIVE_MS (mirrors the tabs one).
 export function cloudKeepAliveMs(settingHours: number): number {
   const override =
-    process.env.DEVIN_WORKSPACES_TEST === '1'
-      ? process.env.DEVIN_WORKSPACES_TEST_CLOUD_KEEPALIVE_MS
+    process.env.AGENT_WORKSPACE_TEST === '1'
+      ? process.env.AGENT_WORKSPACE_TEST_CLOUD_KEEPALIVE_MS
       : undefined;
   if (override !== undefined && override !== '') {
     const parsed = Number(override);
@@ -79,7 +79,7 @@ export class CloudViewPool {
   private createView(key: string): PoolEntry {
     const view = new WebContentsView({
       webPreferences: {
-        partition: 'persist:devin',
+        partition: 'persist:cloud',
         preload: resolve(app.getAppPath(), 'out', 'autofill-preload.cjs'),
         sandbox: true,
         contextIsolation: true,

@@ -42,7 +42,7 @@ async function poll(predicate: () => Promise<boolean>, timeoutMs: number, label:
 }
 
 async function tabsState(app: ElectronApplication): Promise<TabsState> {
-  return app.evaluate(() => (globalThis as typeof globalThis & { __devinworkspaces: { state(): TabsState } }).__devinworkspaces.state());
+  return app.evaluate(() => (globalThis as typeof globalThis & { __agentworkspace: { state(): TabsState } }).__agentworkspace.state());
 }
 
 async function sample(app: ElectronApplication, tabs: number): Promise<Sample> {
@@ -79,7 +79,7 @@ async function sample(app: ElectronApplication, tabs: number): Promise<Sample> {
 
 async function main(): Promise<void> {
   const fixtures = await startFixtureServers();
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-measure-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-measure-'));
   mkdirSync(evidenceDir, { recursive: true });
   const logFile = join(evidenceDir, 'p2-memory-events.jsonl');
   writeFileSync(logFile, '', 'utf8');
@@ -88,19 +88,19 @@ async function main(): Promise<void> {
     timeout: 30_000,
     env: {
       ...process.env,
-      DEVIN_WORKSPACES_TEST: '1',
-      DEVIN_WORKSPACES_TENANT_URL: fixtures.devinUrl,
-      DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS: fixtures.githubOrigins,
-      DEVIN_WORKSPACES_USER_DATA: profile,
-      DEVIN_WORKSPACES_LOG: logFile,
-      DEVIN_WORKSPACES_DOWNLOAD_DIR: join(profile, 'downloads'),
-      DEVIN_WORKSPACES_ALLOW_EXTERNAL: '0',
+      AGENT_WORKSPACE_TEST: '1',
+      AGENT_WORKSPACE_TENANT_URL: fixtures.devinUrl,
+      AGENT_WORKSPACE_TEST_GITHUB_ORIGINS: fixtures.githubOrigins,
+      AGENT_WORKSPACE_USER_DATA: profile,
+      AGENT_WORKSPACE_LOG: logFile,
+      AGENT_WORKSPACE_DOWNLOAD_DIR: join(profile, 'downloads'),
+      AGENT_WORKSPACE_ALLOW_EXTERNAL: '0',
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
     },
   });
   const samples: Sample[] = [];
   try {
-    await poll(() => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)), 30_000, 'test hooks');
+    await poll(() => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)), 30_000, 'test hooks');
     await poll(
       () =>
         app.evaluate(({ webContents }, url: string) => webContents.getAllWebContents().some((c) => c.getURL().startsWith(url)), fixtures.devinUrl),
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
       while (opened < target) {
         opened += 1;
         const url = `${fixtures.githubUrl}/heavy/${opened}`;
-        await app.evaluate((_e, u: string) => (globalThis as any).__devinworkspaces.open(u), url);
+        await app.evaluate((_e, u: string) => (globalThis as any).__agentworkspace.open(u), url);
       }
       await poll(async () => {
         const s = await tabsState(app);

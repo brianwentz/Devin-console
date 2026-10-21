@@ -2,8 +2,8 @@ import type { ClaudeChatStatePublic } from '../../shared/ipc';
 import { createPushedStateClient, usePushedState } from '../pushedState';
 
 const client = createPushedStateClient<ClaudeChatStatePublic>({
-  onState: (listener) => window.devinworkspaces.onClaudeChatState(listener),
-  getState: () => window.devinworkspaces.getClaudeChatState(),
+  onState: (listener) => window.agentworkspace.onClaudeChatState(listener),
+  getState: () => window.agentworkspace.getClaudeChatState(),
 });
 
 export function useClaudeChatState(): ClaudeChatStatePublic | null {

@@ -109,7 +109,7 @@ export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
   };
 
   const onRefresh = () => {
-    const api = window.devinworkspaces as unknown as RefreshApi;
+    const api = window.agentworkspace as unknown as RefreshApi;
     if (active === 'claude') {
       void api.claudeUsageRefresh();
     } else {

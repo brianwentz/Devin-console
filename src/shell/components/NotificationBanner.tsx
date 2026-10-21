@@ -9,7 +9,7 @@ const BANNER_MS = 8_000;
 // P6: transient banner in the title bar for pushed notifications. One at a
 // time — later pushes queue behind it. The test build shortens the timeout.
 const bannerMs = (): number => {
-  const override = (window.devinworkspaces as { bannerMs?: number }).bannerMs;
+  const override = (window.agentworkspace as { bannerMs?: number }).bannerMs;
   return typeof override === 'number' ? override : BANNER_MS;
 };
 
@@ -19,7 +19,7 @@ export function NotificationBanner() {
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
-    const unsubscribe = window.devinworkspaces.onNotificationBanner((entry) =>
+    const unsubscribe = window.agentworkspace.onNotificationBanner((entry) =>
       setQueue((items) => [...items, entry]),
     );
     return () => unsubscribe();
@@ -54,7 +54,7 @@ export function NotificationBanner() {
       role="status"
       data-source={current.source ?? 'devin'}
       onClick={() => {
-        window.devinworkspaces.notificationsOpen(current.id);
+        window.agentworkspace.notificationsOpen(current.id);
         dismiss();
       }}
     >

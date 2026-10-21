@@ -85,7 +85,7 @@ function usePrefetch(): {
       cancel();
       timer.current = setTimeout(() => {
         timer.current = null;
-        window.devinworkspaces.cloudPrefetch(id);
+        window.agentworkspace.cloudPrefetch(id);
       }, 300);
     },
     onLeave: cancel,
@@ -101,7 +101,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     { kind: 'create'; pendingSessionId?: string } | { kind: 'rename'; name: string } | null
   >(null);
   const { registerRow, onKeyDown } = useRowKeyboardNav((id) =>
-    window.devinworkspaces.cloudCopyLink(id),
+    window.agentworkspace.cloudCopyLink(id),
   );
 
   const cloud = state!.cloud;
@@ -143,31 +143,31 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       const next = addFolder(d, name);
       return pendingSessionId ? moveSession(next, pendingSessionId, name) : next;
     });
-    window.devinworkspaces.cloudFolderCreate(name);
-    if (pendingSessionId) window.devinworkspaces.cloudSessionMove(pendingSessionId, name);
+    window.agentworkspace.cloudFolderCreate(name);
+    if (pendingSessionId) window.agentworkspace.cloudSessionMove(pendingSessionId, name);
   };
   const renameFolderTo = (oldName: string, newName: string) => {
     applyOptimistic((d) => renameFolder(d, oldName, newName));
-    window.devinworkspaces.cloudFolderRename(oldName, newName);
+    window.agentworkspace.cloudFolderRename(oldName, newName);
   };
   const moveSessionTo = (id: string, folder: string | null) => {
     applyOptimistic((d) => moveSession(d, id, folder));
-    window.devinworkspaces.cloudSessionMove(id, folder);
+    window.agentworkspace.cloudSessionMove(id, folder);
   };
   const reorderTo = (names: string[]) => {
     applyOptimistic((d) => reorderFolders(d, names));
-    window.devinworkspaces.cloudFolderReorder(names);
+    window.agentworkspace.cloudFolderReorder(names);
   };
   const reorderSessionsTo = (section: string, ids: string[]) => {
     applyOptimistic((d) => ({
       ...d,
       sessionOrder: { ...d.sessionOrder, [section]: ids },
     }));
-    window.devinworkspaces.cloudSessionReorder(section, ids);
+    window.agentworkspace.cloudSessionReorder(section, ids);
   };
 
   const sessionMenu = async (sessionId: string, x: number, y: number) => {
-    const { action } = await window.devinworkspaces.cloudContextMenu({
+    const { action } = await window.agentworkspace.cloudContextMenu({
       kind: 'session',
       sessionId,
       x,
@@ -176,7 +176,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     if (action === 'new-folder') setEditing({ kind: 'create', pendingSessionId: sessionId });
   };
   const folderMenu = async (name: string, x: number, y: number) => {
-    const { action } = await window.devinworkspaces.cloudContextMenu({
+    const { action } = await window.agentworkspace.cloudContextMenu({
       kind: 'folder',
       name,
       x,
@@ -200,7 +200,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     const next = collapsedFolders.includes(name)
       ? collapsedFolders.filter((f) => f !== name)
       : [...collapsedFolders, name];
-    void window.devinworkspaces.setSettings({ sessions: { collapsedFolders: next } });
+    void window.agentworkspace.setSettings({ sessions: { collapsedFolders: next } });
   };
 
   const toggleChildren = (id: string) => {
@@ -240,7 +240,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       variant === 'tree'
         ? `session-row ${s.isArchived ? 'opacity-50' : ''} flex-1 min-w-0 flex items-center ${sessionRowClass} text-left text-[#c9d4e3] hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[current=true]:bg-[#1f2f42] data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`
         : `${s.isArchived ? 'opacity-50 ' : ''}w-full flex items-center ${sessionRowClass} text-left hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`,
-    onOpen: (id: string) => window.devinworkspaces.cloudOpen(id),
+    onOpen: (id: string) => window.agentworkspace.cloudOpen(id),
     prefetch,
     hasChildren: (node: { session: CloudSessionState; children: unknown[] }) =>
       node.children.length > 0 || node.session.directChildrenCount > 0,
@@ -267,7 +267,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
           aria-label="New session"
           title="New session"
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
-          onClick={() => window.devinworkspaces.cloudNewSession(null)}
+          onClick={() => window.agentworkspace.cloudNewSession(null)}
         >
           <SquarePen size={13} />
         </button>
@@ -287,7 +287,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
           aria-label="Refresh sessions"
           title="Refresh"
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
-          onClick={() => window.devinworkspaces.cloudRefresh()}
+          onClick={() => window.agentworkspace.cloudRefresh()}
         >
           <RefreshCw size={13} className={cloud.status === 'connecting' ? 'animate-spin' : ''} />
         </button>
@@ -298,7 +298,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
           title="More"
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
           onClick={(e) =>
-            void window.devinworkspaces.cloudContextMenu({
+            void window.agentworkspace.cloudContextMenu({
               kind: 'header',
               x: e.clientX,
               y: e.clientY,
@@ -372,7 +372,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
                 onMove={moveSessionTo}
                 onReorder={reorderTo}
                 reorderable={userFolderNames.length > 1}
-                onNewInFolder={(name) => window.devinworkspaces.cloudNewSession(name)}
+                onNewInFolder={(name) => window.agentworkspace.cloudNewSession(name)}
               />
               {!sectionItem.collapsed && (
                 <>
@@ -403,7 +403,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
                       type="button"
                       data-load-more={sectionItem.name}
                       className="w-full pl-6 py-1 text-left text-[11px] text-[#6e9bd0] hover:text-[#9fc4ea]"
-                      onClick={() => window.devinworkspaces.cloudLoadMore(sectionItem.name)}
+                      onClick={() => window.agentworkspace.cloudLoadMore(sectionItem.name)}
                     >
                       Show more
                     </button>

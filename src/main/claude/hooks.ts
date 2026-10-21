@@ -196,7 +196,7 @@ export class ClaudeHooks {
     if (mode === 'attach') return null;
     const info = this.hookServer?.info();
     if (!info) return null;
-    const envVar = 'DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN';
+    const envVar = 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN';
     return {
       extraArgs: [
         '--settings',

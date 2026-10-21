@@ -262,6 +262,28 @@ export function notificationsFlush(): void {
   store?.flush();
 }
 
+// macOS rename caveat (§3.3): after the profile move the safeStorage key is
+// keyed by the new app name, so secrets.json/credentials.json can't be
+// decrypted. The stores delete the dead file and call this — once.
+let migratedSecretsResetNotified = false;
+export function notifyMigratedSecretsReset(): void {
+  if (migratedSecretsResetNotified) return;
+  migratedSecretsResetNotified = true;
+  try {
+    notificationStore().add({
+      kind: 'update',
+      sessionId: null,
+      ownerUserId: null,
+      sessionTitle: 'Agent Workspace',
+      title: 'Re-enter your credentials',
+      body: 'Agent Workspace replaced Devin Workspaces; the API token and saved passwords must be entered again.',
+      createdAt: Date.now(),
+    });
+  } catch {
+    // store not initialised yet — the decrypt failure is still logged
+  }
+}
+
 // Badge icon: 16 logical px at the display's scale factor (16–64 device px).
 export function badgeIconSize(): number {
   const scale = screen.getPrimaryDisplay().scaleFactor;

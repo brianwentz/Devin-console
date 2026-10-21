@@ -10,7 +10,7 @@ export function AccountPicker() {
   useEffect(() => {
     if (!picker) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') window.devinworkspaces.autofillPickerClose();
+      if (event.key === 'Escape') window.agentworkspace.autofillPickerClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -33,7 +33,7 @@ export function AccountPicker() {
       className="absolute inset-0 z-40"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
-          window.devinworkspaces.autofillPickerClose();
+          window.agentworkspace.autofillPickerClose();
         }
       }}
     >
@@ -52,7 +52,7 @@ export function AccountPicker() {
               type="button"
               data-account-id={account.id}
               className="block w-full px-3 py-2 text-left font-mono text-[12px] text-[#e8edf3] hover:bg-[#2a394d]"
-              onClick={() => window.devinworkspaces.autofillPick(account.id)}
+              onClick={() => window.agentworkspace.autofillPick(account.id)}
             >
               {account.username}
             </button>

@@ -39,15 +39,15 @@ interface SavedCredential {
 async function launch(
   extraEnv: Record<string, string> = {},
 ): Promise<{ app: ElectronApplication; profile: string; logFile: string }> {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-capture-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-capture-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_AUTOFILL_PROMPT_MS: '300',
+    AGENT_WORKSPACE_TEST_AUTOFILL_PROMPT_MS: '300',
     ...extraEnv,
   });
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
   return { app, profile, logFile };
 }
@@ -65,11 +65,11 @@ async function saveCredential(
   const entry = await app.evaluate((_electron, credential) => {
     return (
       globalThis as typeof globalThis & {
-        __devinworkspaces: {
+        __agentworkspace: {
           saveCredential(c: typeof credential): Promise<SavedCredential | null>;
         };
       }
-    ).__devinworkspaces.saveCredential(credential);
+    ).__agentworkspace.saveCredential(credential);
   }, { origin: githubOrigin(), username, password });
   expect(entry?.id).toBeTruthy();
   return entry!;
@@ -78,16 +78,16 @@ async function saveCredential(
 async function listCredentials(app: ElectronApplication): Promise<SavedCredential[]> {
   return app.evaluate(() =>
     (globalThis as typeof globalThis & {
-      __devinworkspaces: { listCredentials(): SavedCredential[] };
-    }).__devinworkspaces.listCredentials(),
+      __agentworkspace: { listCredentials(): SavedCredential[] };
+    }).__agentworkspace.listCredentials(),
   );
 }
 
 async function reveal(app: ElectronApplication, id: string): Promise<string | null> {
   return app.evaluate((_electron, credId: string) =>
     (globalThis as typeof globalThis & {
-      __devinworkspaces: { revealCredential(id: string): Promise<string | null> };
-    }).__devinworkspaces.revealCredential(credId), id);
+      __agentworkspace: { revealCredential(id: string): Promise<string | null> };
+    }).__agentworkspace.revealCredential(credId), id);
 }
 
 // Mirror real typing: native setter + input event.
@@ -146,8 +146,8 @@ test('submit captures credentials and Save persists them', async () => {
       .poll(async () =>
         app.evaluate(() =>
           (globalThis as typeof globalThis & {
-            __devinworkspaces: { childViews(): { url: string | null }[] };
-          }).__devinworkspaces.childViews()[0]?.url?.startsWith('app://shell/'),
+            __agentworkspace: { childViews(): { url: string | null }[] };
+          }).__agentworkspace.childViews()[0]?.url?.startsWith('app://shell/'),
         ),
       )
       .toBe(true);
@@ -303,8 +303,8 @@ test('a pending capture survives a scope switch caused by another navigation', a
     // historically this ran onActiveChanged and dropped the armed capture.
     await app.evaluate((_electron, target: string) => {
       (globalThis as typeof globalThis & {
-        __devinworkspaces: { loadDevinUrl(url: string): void };
-      }).__devinworkspaces.loadDevinUrl(target);
+        __agentworkspace: { loadDevinUrl(url: string): void };
+      }).__agentworkspace.loadDevinUrl(target);
     }, `${fixtures.devinUrl}/sessions/B`);
     // Whether the prompt shows before or after the switch, the capture must not
     // be dropped — assert via the persisted prompt event.
@@ -321,7 +321,7 @@ test('a pending capture survives a scope switch caused by another navigation', a
 
 test('the prompt auto-dismisses', async () => {
   const { app, profile, logFile } = await launch({
-    DEVIN_WORKSPACES_TEST_AUTOFILL_DISMISS_MS: '1000',
+    AGENT_WORKSPACE_TEST_AUTOFILL_DISMISS_MS: '1000',
   });
   try {
     await openTab(app, loginUrl());

@@ -29,7 +29,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
   // Keep main's selection lifted — it drives the GitHub tab scope and survives
   // surface switches (this panel unmounts when leaving Local).
   useEffect(() => {
-    window.devinworkspaces.localActiveSession(sessionId);
+    window.agentworkspace.localActiveSession(sessionId);
   }, [sessionId]);
 
   const session = sessionId && local ? (local.sessions[sessionId] ?? null) : null;
@@ -52,7 +52,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
     const targetSessionId = session.id;
     const targetWorkspace = session.workspace;
     let cancelled = false;
-    void window.devinworkspaces
+    void window.agentworkspace
       .terminalOpen({ kind: 'devin', workspace: targetWorkspace, sessionId: targetSessionId })
       .then((result) => {
         if (cancelled) return;
@@ -89,13 +89,13 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
   const send = (text: string) => {
     if (!session) return;
     setError(null);
-    void window.devinworkspaces.localPrompt(session.id, text).then((result) => {
+    void window.agentworkspace.localPrompt(session.id, text).then((result) => {
       if (!result.ok) setError(result.error);
     });
   };
 
   const cancel = () => {
-    if (session) void window.devinworkspaces.localCancel(session.id);
+    if (session) void window.agentworkspace.localCancel(session.id);
   };
 
   return (
@@ -147,7 +147,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
                     id={id}
                     active={view === 'terminal' && sid === session?.id}
                     onRestart={() => {
-                      window.devinworkspaces.terminalClose(id);
+                      window.agentworkspace.terminalClose(id);
                       setTerminalIds((map) => {
                         if (!map[sid]) return map;
                         const next = { ...map };
@@ -185,7 +185,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
             onSend={send}
             onCancel={cancel}
             onPermission={(requestId, optionId) => {
-              if (session) void window.devinworkspaces.localPermission(session.id, requestId, optionId);
+              if (session) void window.agentworkspace.localPermission(session.id, requestId, optionId);
             }}
             footerHint={
               <>
@@ -207,7 +207,7 @@ export function LocalPanel({ style }: { style: CSSProperties }) {
                     className="rounded border border-[#39475a] px-2 py-0.5 text-xs text-[#aeb9c8] hover:text-[#e8edf5]"
                     onClick={() => {
                       const id = terminalIds[session.id];
-                      if (id) void window.devinworkspaces.terminalClose(id);
+                      if (id) void window.agentworkspace.terminalClose(id);
                       else setView('terminal');
                     }}
                   >

@@ -40,28 +40,28 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
     claudeHookInfo: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeHookInfo()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.claudeHookInfo()) as Promise<{
         port: number;
         token: string;
       } | null>,
     claudeActivity: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeActivity()) as Promise<
+      evaluate(() => (globalThis as any).__agentworkspace.claudeActivity()) as Promise<
         Record<string, { activity: string }>
       >,
     claudeHooksSettingsPath: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeHooksSettingsPath()) as Promise<string>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeHooksSettingsPath()) as Promise<string>,
     claudePostHook: (event: string, body: unknown) =>
       app.evaluate(
         (_e, a: { event: string; body: unknown }) =>
-          (globalThis as any).__devinworkspaces.claudePostHook(a.event, a.body),
+          (globalThis as any).__agentworkspace.claudePostHook(a.event, a.body),
         { event, body },
       ) as Promise<{ ok: boolean; status?: number }>,
     claudePostHookRaw: (event: string, body: unknown, auth: string | null) =>
       app.evaluate(
         (_e, a: { event: string; body: unknown; auth: string | null }) =>
-          (globalThis as any).__devinworkspaces.claudePostHookRaw(
+          (globalThis as any).__agentworkspace.claudePostHookRaw(
             a.event,
             a.body,
             a.auth ?? undefined,
@@ -69,39 +69,39 @@ function hooks(app: ElectronApplication) {
         { event, body, auth },
       ) as Promise<{ ok: boolean; status?: number }>,
     state: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.state()) as Promise<any>,
+      evaluate(() => (globalThis as any).__agentworkspace.state()) as Promise<any>,
     notifications: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.notifications()) as Promise<NotificationEntry[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.notifications()) as Promise<NotificationEntry[]>,
     claudeNewSession: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeNewSession()) as Promise<string>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeNewSession()) as Promise<string>,
     claudePrompt: (id: string, text: string) =>
       app.evaluate(
         (_e, a: { id: string; text: string }) =>
-          (globalThis as any).__devinworkspaces.claudePrompt(a.id, a.text),
+          (globalThis as any).__agentworkspace.claudePrompt(a.id, a.text),
         { id, text },
       ) as Promise<void>,
     claudeChatState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeChatState()) as Promise<any>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeChatState()) as Promise<any>,
     claudeTerminalOpen: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeTerminalOpen(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeTerminalOpen(v),
         id,
       ) as Promise<{ ok: boolean; id?: string; error?: string }>,
     claudeSelect: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeSelect(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeSelect(v),
         id,
       ) as Promise<void>,
     setSurface: (s: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v),
         s,
       ) as Promise<void>,
     terminalList: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.terminalList()) as Promise<any[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.terminalList()) as Promise<any[]>,
     terminalRead: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.terminalRead(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.terminalRead(v),
         id,
       ) as Promise<string>,
   };
@@ -113,9 +113,9 @@ function claudeEntries(list: NotificationEntry[]): NotificationEntry[] {
 
 test('hook events drive sidebar activity + notification entries (dedup + kinds)', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -185,7 +185,7 @@ test('hook events drive sidebar activity + notification entries (dedup + kinds)'
     expect(await finishedCount()).toBe(0);
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ notifications: { kinds: { finished: true } } })`,
+      `window.agentworkspace.setSettings({ notifications: { kinds: { finished: true } } })`,
     );
     await h.claudePostHook('UserPromptSubmit', { session_id: UA, cwd: UA_CWD });
     await expect(shell.locator(`[data-session-id="${UA}"]`)).toHaveAttribute(
@@ -205,9 +205,9 @@ test('hook events drive sidebar activity + notification entries (dedup + kinds)'
 
 test('PostToolUse gh pr create → pr-opened entry + auto-opened tab in claude scope', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -254,9 +254,9 @@ test('PostToolUse gh pr create → pr-opened entry + auto-opened tab in claude s
 
 test('a bad token is rejected (401 + claude-hook-rejected)', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -271,7 +271,7 @@ test('a bad token is rejected (401 + claude-hook-rejected)', async () => {
     const info = await h.claudeHookInfo();
     const notFound = await app.evaluate(
       (_e, a: { port: number }) =>
-        fetch(`http://127.0.0.1:${a.port}/devin-workspaces/nope/Stop`, {
+        fetch(`http://127.0.0.1:${a.port}/agent-workspace/nope/Stop`, {
           method: 'POST',
           headers: { authorization: 'Bearer x' },
           body: '{}',
@@ -287,9 +287,9 @@ test('a bad token is rejected (401 + claude-hook-rejected)', async () => {
 
 test('opening a waiting notification selects the session on the claude surface', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -305,7 +305,7 @@ test('opening a waiting notification selects the session on the claude surface',
       .poll(async () => claudeEntries(await h.notifications()).length)
       .toBe(1);
     const id = claudeEntries(await h.notifications())[0]!.id;
-    await evaluateInShell(app, 'window.devinworkspaces.notificationsPanel(true)');
+    await evaluateInShell(app, 'window.agentworkspace.notificationsPanel(true)');
     const row = shell.locator(`[data-notification-id="${id}"]`);
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.click();
@@ -319,9 +319,9 @@ test('opening a waiting notification selects the session on the claude surface',
 
 test('claude.hooksEnabled writes and removes our block in settings.json', async () => {
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
   });
   const h = hooks(app);
   try {
@@ -344,21 +344,21 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
     );
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ claude: { hooksEnabled: true } })`,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`,
     );
     await expect.poll(async () => (await h.claudeState()).hooks.installed).toBe(true);
     const merged = readFileSync(settingsFile, 'utf8');
-    expect(merged).toContain('/devin-workspaces/hook/');
+    expect(merged).toContain('/agent-workspace/hook/');
     expect(merged).toContain('echo foreign');
-    expect(existsSync(`${settingsFile}.devin-workspaces.bak`)).toBe(true);
+    expect(existsSync(`${settingsFile}.agent-workspace.bak`)).toBe(true);
 
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ claude: { hooksEnabled: false } })`,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`,
     );
     await expect.poll(async () => (await h.claudeState()).hooks.installed).toBe(false);
     const removed = readFileSync(settingsFile, 'utf8');
-    expect(removed).not.toContain('/devin-workspaces/hook/');
+    expect(removed).not.toContain('/agent-workspace/hook/');
     expect(removed).toContain('echo foreign');
   } finally {
     await closeApp(app);
@@ -368,9 +368,9 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
 
 test('claude pty gets --settings hook block + token env (resume mode)', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: FAKE_PTY,
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY,
   });
   const h = hooks(app);
   try {
@@ -390,7 +390,7 @@ test('claude pty gets --settings hook block + token env (resume mode)', async ()
         const t = terms.find((x: any) => x.sessionId === UA);
         return t ? await h.terminalRead(t.id) : '';
       })
-      .toContain('/devin-workspaces/hook/');
+      .toContain('/agent-workspace/hook/');
     const terms = await h.terminalList();
     const t = terms.find((x: any) => x.sessionId === UA);
     const text = await h.terminalRead(t.id);
@@ -399,7 +399,7 @@ test('claude pty gets --settings hook block + token env (resume mode)', async ()
     // Phase 6 #4: the app default permission mode is passed through.
     expect(text).toContain('--permission-mode');
     expect(text).toContain('default');
-    expect(text).toContain('env:DEVIN_WORKSPACES_CLAUDE_HOOK_TOKEN=set');
+    expect(text).toContain('env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set');
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
@@ -408,9 +408,9 @@ test('claude pty gets --settings hook block + token env (resume mode)', async ()
 
 test('chat: permission card → waiting entry; Allow → finished', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     FAKE_CLAUDE_TOOL: '1',
   });
   const h = hooks(app);
@@ -425,13 +425,13 @@ test('chat: permission card → waiting entry; Allow → finished', async () => 
       .toBe(1);
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ notifications: { kinds: { finished: true } } })`,
+      `window.agentworkspace.setSettings({ notifications: { kinds: { finished: true } } })`,
     );
     const requestId = (await h.claudeChatState()).sessions[id]?.pendingPermission?.requestId;
     expect(requestId).toBeTruthy();
     await app.evaluate(
       (_e, a: { id: string; requestId: string }) =>
-        (globalThis as any).__devinworkspaces.claudePermission(a.id, a.requestId, 'allow'),
+        (globalThis as any).__agentworkspace.claudePermission(a.id, a.requestId, 'allow'),
       { id, requestId },
     );
     await expect

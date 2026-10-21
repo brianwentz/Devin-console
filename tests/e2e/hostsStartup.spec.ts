@@ -22,7 +22,7 @@ test.afterAll(async () => {
 });
 
 test('a slow-probing distro never blocks window creation or the first passes', async () => {
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const wslClaude = join(uncRoot, 'home', 'u', '.claude');
   mkdirSync(join(wslClaude, 'projects', '-tmp-x'), { recursive: true });
   cpSync(join(CLAUDE_FIXTURE_HOME, '.credentials.json'), join(wslClaude, '.credentials.json'));
@@ -34,7 +34,7 @@ test('a slow-probing distro never blocks window creation or the first passes', a
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Slow:Running:default',
     FAKE_WSL_PROBE_DELAY_MS: '8000',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const logFile = join(profile, 'events.jsonl');
   const slowState = async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Slow')?.state;
@@ -100,7 +100,7 @@ test('a slow-probing distro never blocks window creation or the first passes', a
       .not.toContain('wsl:Slow');
     // And the seeded transcript reached the token totals.
     const usage = (await app.evaluate(() =>
-      (globalThis as any).__devinworkspaces.claudeUsageState(),
+      (globalThis as any).__agentworkspace.claudeUsageState(),
     )) as { tokens: { byHost: Record<string, unknown> } };
     expect(usage.tokens.byHost['wsl:Slow']).toBeTruthy();
   } finally {

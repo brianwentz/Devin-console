@@ -57,15 +57,15 @@ function kindEnabled() {
 
 // Test-only overrides: a short poll interval and a fixture API base.
 function pollBase(): { active: number; idle: number } {
-  if (testMode && process.env.DEVIN_WORKSPACES_POLL_MS) {
-    const ms = Math.max(50, Number(process.env.DEVIN_WORKSPACES_POLL_MS) || 0);
+  if (testMode && process.env.AGENT_WORKSPACE_POLL_MS) {
+    const ms = Math.max(50, Number(process.env.AGENT_WORKSPACE_POLL_MS) || 0);
     return { active: ms, idle: ms };
   }
   return { active: ACTIVE_POLL_MS, idle: IDLE_POLL_MS };
 }
 
 export function apiBase(): string {
-  if (testMode && process.env.DEVIN_WORKSPACES_API_BASE) return process.env.DEVIN_WORKSPACES_API_BASE;
+  if (testMode && process.env.AGENT_WORKSPACE_API_BASE) return process.env.AGENT_WORKSPACE_API_BASE;
   return state.settings?.current.apiBase ?? 'https://api.devin.ai';
 }
 
@@ -321,7 +321,7 @@ class Notifier {
             kind: 'identity',
             sessionId: null,
             ownerUserId: null,
-            sessionTitle: 'Devin Workspaces',
+            sessionTitle: 'Agent Workspace',
             title: 'Could not determine your user',
             body: 'Could not determine your user — sign in with the Devin CLI (devin auth login) or set your user id in Settings.',
             createdAt: Date.now(),
@@ -455,7 +455,7 @@ class Notifier {
             kind: 'auth',
             sessionId: null,
             ownerUserId: null,
-            sessionTitle: 'Devin Workspaces',
+            sessionTitle: 'Agent Workspace',
             title: 'Devin API token rejected',
             body:
               kind === 'forbidden'

@@ -46,26 +46,26 @@ export function App() {
       const target = event.target;
       if (!(target instanceof HTMLAnchorElement)) return;
       event.preventDefault();
-      window.devinworkspaces.openLink(target.href);
+      window.agentworkspace.openLink(target.href);
     };
     document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
   }, []);
 
   // Quit-time implicit save: main sends settings:flush inside shutdown().
-  useEffect(() => window.devinworkspaces.onSettingsFlush(handleSettingsFlush), []);
+  useEffect(() => window.agentworkspace.onSettingsFlush(handleSettingsFlush), []);
 
   // Taskbar badge: render the requested PNG here (canvas) and reply until the
   // acknowledged count matches — the reply re-converges a late-mounting shell.
   useEffect(() => {
     let stopped = false;
     const send = async (dataUrl: string | null): Promise<void> => {
-      const want = await window.devinworkspaces.badgeRendered(dataUrl);
+      const want = await window.agentworkspace.badgeRendered(dataUrl);
       if (stopped) return;
       const rendered = renderBadgeDataUrl(want.count, want.size);
       if (rendered !== dataUrl) await send(rendered);
     };
-    const off = window.devinworkspaces.onBadgeRender((request) => {
+    const off = window.agentworkspace.onBadgeRender((request) => {
       void send(renderBadgeDataUrl(request.count, request.size));
     });
     void send(null);
@@ -158,7 +158,7 @@ export function App() {
         <AnalyticsTabs
           rect={bounds.analyticsTabs}
           active={analyticsTab}
-          onSelect={(tab) => void window.devinworkspaces.setSettings({ analytics: { tab } })}
+          onSelect={(tab) => void window.agentworkspace.setSettings({ analytics: { tab } })}
         />
       )}
       {state.surface === 'analytics' && analyticsTab === 'claude' && (

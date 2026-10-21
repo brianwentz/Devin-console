@@ -28,14 +28,14 @@ test.afterAll(async () => {
 const shell = (app: ElectronApplication, expr: string) => evaluateInShell(app, expr);
 
 async function newProfileWorkspace(tag: string) {
-  const profile = mkdtempSync(join(tmpdir(), `devin-workspaces-e2e-mode-${tag}-`));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), `agent-workspace-e2e-mode-${tag}-`));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   return { profile, workspace, logFile: join(profile, 'events.jsonl') };
 }
 
 async function addWorkspace(app: ElectronApplication, path: string): Promise<string> {
   const added = await app.evaluate(
-    (_electron, value: string) => (globalThis as any).__devinworkspaces.localAddWorkspace(value),
+    (_electron, value: string) => (globalThis as any).__agentworkspace.localAddWorkspace(value),
     path,
   );
   if (!added) throw new Error('localAddWorkspace returned null');
@@ -46,7 +46,7 @@ async function readyAgent(app: ElectronApplication, workspace: string): Promise<
   await expect
     .poll(
       async () =>
-        (await app.evaluate(() => (globalThis as any).__devinworkspaces.localState())).agents[
+        (await app.evaluate(() => (globalThis as any).__agentworkspace.localState())).agents[
           workspace
         ]?.status,
     )
@@ -55,7 +55,7 @@ async function readyAgent(app: ElectronApplication, workspace: string): Promise<
 
 async function newSession(app: ElectronApplication, workspace: string): Promise<string> {
   return app.evaluate(
-    (_electron, value: string) => (globalThis as any).__devinworkspaces.localNewSession(value),
+    (_electron, value: string) => (globalThis as any).__agentworkspace.localNewSession(value),
     workspace,
   );
 }
@@ -65,7 +65,7 @@ test('local.defaultMode applies to a new session via session/set_mode', async ()
   const modeLog = join(profile, 'acp-modes.log');
   writeFileSync(join(profile, 'settings.json'), JSON.stringify({ local: { defaultMode: 'smart' } }));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
     FAKE_ACP_MODES: '1',
     FAKE_ACP_MODE_LOG: modeLog,
   });
@@ -80,7 +80,7 @@ test('local.defaultMode applies to a new session via session/set_mode', async ()
     const event = (await readEvents(logFile)).find((entry) => entry.event === 'session-mode-set')!;
     expect((event.detail as Record<string, unknown>).modeId).toBe('smart');
     expect((event.detail as Record<string, unknown>).source).toBe('new');
-    const local = await app.evaluate(() => (globalThis as any).__devinworkspaces.localState());
+    const local = await app.evaluate(() => (globalThis as any).__agentworkspace.localState());
     expect(local.sessions[sessionId]?.modes?.currentModeId).toBe('smart');
     expect(local.sessions[sessionId]?.modes?.availableModes.length).toBe(5);
   } finally {
@@ -94,7 +94,7 @@ test('no local.defaultMode → no session/set_mode call', async () => {
   const { profile, workspace, logFile } = await newProfileWorkspace('unset');
   const modeLog = join(profile, 'acp-modes.log');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
     FAKE_ACP_MODES: '1',
     FAKE_ACP_MODE_LOG: modeLog,
   });
@@ -105,7 +105,7 @@ test('no local.defaultMode → no session/set_mode call', async () => {
     await expect
       .poll(
         async () =>
-          (await app.evaluate(() => (globalThis as any).__devinworkspaces.localState())).sessions[
+          (await app.evaluate(() => (globalThis as any).__agentworkspace.localState())).sessions[
             sessionId
           ]?.modes?.currentModeId,
       )
@@ -129,7 +129,7 @@ test('Settings → Devin Local: #localDefaultModeSelect persists local.defaultMo
     shell(app, `document.querySelector('[data-settings-tab="${id}"]').click()`);
   const hasEl = (id: string) => shell(app, `Boolean(document.getElementById('${id}'))`);
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await clickTab('local');
     await expect.poll(async () => hasEl('localDefaultModeSelect')).toBe(true);
     // No live agent modes → the static fallback list is offered.

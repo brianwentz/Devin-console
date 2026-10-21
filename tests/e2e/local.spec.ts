@@ -76,19 +76,19 @@ test.afterAll(async () => {
   await fixtures.close();
 });
 
-type G = typeof globalThis & { __devinworkspaces: Hooks };
+type G = typeof globalThis & { __agentworkspace: Hooks };
 
 async function localState(app: ElectronApplication): Promise<LocalState> {
-  return app.evaluate(() => (globalThis as G).__devinworkspaces.localState());
+  return app.evaluate(() => (globalThis as G).__agentworkspace.localState());
 }
 
 async function setSurfaceLocal(app: ElectronApplication): Promise<void> {
-  await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('local'));
+  await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('local'));
 }
 
 async function addWorkspace(app: ElectronApplication, path: string): Promise<string> {
   const added = await app.evaluate(
-    (_electron, value: string) => (globalThis as G).__devinworkspaces.localAddWorkspace(value),
+    (_electron, value: string) => (globalThis as G).__agentworkspace.localAddWorkspace(value),
     path,
   );
   if (!added) throw new Error('localAddWorkspace returned null');
@@ -97,7 +97,7 @@ async function addWorkspace(app: ElectronApplication, path: string): Promise<str
 
 async function agentPid(app: ElectronApplication, workspace: string): Promise<number> {
   const pid = await app.evaluate(
-    (_electron, value: string) => (globalThis as G).__devinworkspaces.localAgentPid(value),
+    (_electron, value: string) => (globalThis as G).__agentworkspace.localAgentPid(value),
     workspace,
   );
   return pid ?? 0;
@@ -105,7 +105,7 @@ async function agentPid(app: ElectronApplication, workspace: string): Promise<nu
 
 async function newSession(app: ElectronApplication, workspace: string): Promise<string> {
   return app.evaluate(
-    (_electron, value: string) => (globalThis as G).__devinworkspaces.localNewSession(value),
+    (_electron, value: string) => (globalThis as G).__agentworkspace.localNewSession(value),
     workspace,
   );
 }
@@ -114,7 +114,7 @@ async function newSession(app: ElectronApplication, workspace: string): Promise<
 async function promptAndWait(app: ElectronApplication, sessionId: string, text: string): Promise<string> {
   return app.evaluate(
     (_electron, args: { id: string; text: string }) =>
-      (globalThis as G).__devinworkspaces.localPrompt(args.id, args.text),
+      (globalThis as G).__agentworkspace.localPrompt(args.id, args.text),
     { id: sessionId, text },
   );
 }
@@ -123,7 +123,7 @@ async function promptAndWait(app: ElectronApplication, sessionId: string, text: 
 async function promptNoWait(app: ElectronApplication, sessionId: string, text: string): Promise<void> {
   await app.evaluate(
     (_electron, args: { id: string; text: string }) => {
-      (globalThis as G).__devinworkspaces.localPrompt(args.id, args.text).catch(() => undefined);
+      (globalThis as G).__agentworkspace.localPrompt(args.id, args.text).catch(() => undefined);
     },
     { id: sessionId, text },
   );
@@ -131,7 +131,7 @@ async function promptNoWait(app: ElectronApplication, sessionId: string, text: s
 
 async function listSessions(app: ElectronApplication, workspace: string) {
   return app.evaluate(
-    (_electron, value: string) => (globalThis as G).__devinworkspaces.localListSessions(value),
+    (_electron, value: string) => (globalThis as G).__agentworkspace.localListSessions(value),
     workspace,
   );
 }
@@ -140,7 +140,7 @@ async function loadSession(app: ElectronApplication, workspace: string, sessionI
   return app.evaluate(
     async (_electron, args: { path: string; id: string }) => {
       try {
-        await (globalThis as G).__devinworkspaces.localLoadSession(args.path, args.id);
+        await (globalThis as G).__agentworkspace.localLoadSession(args.path, args.id);
         return null;
       } catch (error) {
         return error instanceof Error ? error.message : String(error);
@@ -152,7 +152,7 @@ async function loadSession(app: ElectronApplication, workspace: string, sessionI
 
 async function waitForHooks(app: ElectronApplication): Promise<void> {
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
 }
 
@@ -187,11 +187,11 @@ async function rightClickWorkspace(app: ElectronApplication, path: string): Prom
 type MenuItem = { id: string; label: string; enabled: boolean };
 async function localMenuItems(app: ElectronApplication): Promise<MenuItem[]> {
   return app.evaluate(
-    () => (globalThis as any).__devinworkspaces.localMenuItems(),
+    () => (globalThis as any).__agentworkspace.localMenuItems(),
   ) as Promise<MenuItem[]>;
 }
 async function localMenuClick(app: ElectronApplication, id: string): Promise<void> {
-  await app.evaluate((_e, v) => (globalThis as any).__devinworkspaces.localMenuClick(v), id);
+  await app.evaluate((_e, v) => (globalThis as any).__agentworkspace.localMenuClick(v), id);
 }
 async function menuItem(app: ElectronApplication, label: string): Promise<MenuItem | undefined> {
   const items = await localMenuItems(app);
@@ -242,13 +242,13 @@ function processAlive(pid: number): boolean {
 }
 
 test('Local: fake agent with session/list + session/load — prompt, permission, cancel, link, history, crash restart', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-local-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-local-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const linkUrl = `${fixtures.githubUrl}/page/pr-1`;
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_DELETE: '1',
@@ -405,7 +405,7 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     const refusal = await app.evaluate(
       async (_e, id) => {
         try {
-          await (globalThis as G).__devinworkspaces.localDeleteSession(id as string);
+          await (globalThis as G).__agentworkspace.localDeleteSession(id as string);
           return null;
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
@@ -415,7 +415,7 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
     );
     expect(refusal).toBe('cancel the running prompt before deleting');
     await app.evaluate(
-      (_e, id) => (globalThis as G).__devinworkspaces.localCancel(id as string),
+      (_e, id) => (globalThis as G).__agentworkspace.localCancel(id as string),
       secondId,
     );
     await expect.poll(async () => (await localState(app)).sessions[secondId]?.running).toBe(false);
@@ -508,10 +508,10 @@ test('Local: fake agent with session/list + session/load — prompt, permission,
 });
 
 test('Local: fake agent without list/load — local-index history, load error, crash rebinds to a fresh remote session, index persists', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-local-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-local-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
-  const env = { DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD, DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' };
+  const env = { AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD, AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1' };
   let app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
   const agentPids: number[] = [];
   try {
@@ -624,12 +624,12 @@ test('Local: fake agent without list/load — local-index history, load error, c
 });
 
 test('Local composer: native editing shortcuts work (Ctrl+A/C/V/X/Z) — regression guard', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-composer-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-composer-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const agentPids: number[] = [];
   try {
@@ -651,14 +651,14 @@ test('Local composer: native editing shortcuts work (Ctrl+A/C/V/X/Z) — regress
 
     // Ctrl+A selects all; Ctrl+C writes the selection to the OS clipboard.
     await page.keyboard.press('Control+a');
-    await app.evaluate((_e, text) => (globalThis as G).__devinworkspaces.clipboardWrite(text as string), '__seed__');
+    await app.evaluate((_e, text) => (globalThis as G).__agentworkspace.clipboardWrite(text as string), '__seed__');
     await page.keyboard.press('Control+c');
     await expect
-      .poll(async () => app.evaluate(() => (globalThis as G).__devinworkspaces.clipboardRead()))
+      .poll(async () => app.evaluate(() => (globalThis as G).__agentworkspace.clipboardRead()))
       .toBe('clip text');
 
     // Ctrl+V pastes; Ctrl+X cuts; Ctrl+Z undoes.
-    await app.evaluate((_e, text) => (globalThis as G).__devinworkspaces.clipboardWrite(text as string), 'PASTED');
+    await app.evaluate((_e, text) => (globalThis as G).__agentworkspace.clipboardWrite(text as string), 'PASTED');
     await page.keyboard.press('Control+a');
     await page.keyboard.press('Control+v');
     await expect.poll(async () => composer.inputValue()).toBe('PASTED');
@@ -666,7 +666,7 @@ test('Local composer: native editing shortcuts work (Ctrl+A/C/V/X/Z) — regress
     await page.keyboard.press('Control+x');
     await expect.poll(async () => composer.inputValue()).toBe('');
     await expect
-      .poll(async () => app.evaluate(() => (globalThis as G).__devinworkspaces.clipboardRead()))
+      .poll(async () => app.evaluate(() => (globalThis as G).__agentworkspace.clipboardRead()))
       .toBe('PASTED');
     await page.keyboard.press('Control+z');
     await expect.poll(async () => composer.inputValue()).toBe('PASTED');
@@ -689,12 +689,12 @@ test('Local composer: native editing shortcuts work (Ctrl+A/C/V/X/Z) — regress
 });
 
 test('Local composer keeps unsent text across a surface switch', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-draft-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-draft-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const agentPids: number[] = [];
   try {
@@ -714,9 +714,9 @@ test('Local composer keeps unsent text across a surface switch', async () => {
     await composer.click();
     await page.keyboard.type('keep me');
 
-    await evaluateInShell(app, "window.devinworkspaces.setSurface('settings')");
+    await evaluateInShell(app, "window.agentworkspace.setSurface('settings')");
     await page.waitForSelector('#composer', { state: 'detached' });
-    await evaluateInShell(app, "window.devinworkspaces.setSurface('local')");
+    await evaluateInShell(app, "window.agentworkspace.setSurface('local')");
     await page.waitForSelector('#composer:not([disabled])');
 
     await expect.poll(() => page.locator('#composer').inputValue()).toBe('keep me');
@@ -740,12 +740,12 @@ test('Local composer keeps unsent text across a surface switch', async () => {
 });
 
 test('Local composer: plain Enter inserts a newline, Ctrl+Enter sends', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-enter-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-enter-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   const agentPids: number[] = [];
   try {
@@ -808,12 +808,12 @@ test('Local composer: plain Enter inserts a newline, Ctrl+Enter sends', async ()
 });
 
 test('Local: thinking indicator and token usage while a prompt runs', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-thinking-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-thinking-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_USAGE: '1',
     FAKE_ACP_PROMPT_DELAY_MS: '1500',
   });
@@ -869,13 +869,13 @@ test('Local: thinking indicator and token usage while a prompt runs', async () =
 });
 
 test('terminal handoff: devin -r takes the session lock; closing reclaims it', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-local-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-local-'));
   const logFile = join(profile, 'events.jsonl');
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_PROMPT_DELAY_MS: '4000',
   });
@@ -924,7 +924,7 @@ test('terminal handoff: devin -r takes the session lock; closing reclaims it', a
     // CLI's per-session lock; chat is disabled while the pty owns it.
     const opened = await app.evaluate(
       (_e, args: { ws: string; sid: string }) =>
-        (globalThis as G).__devinworkspaces.terminalOpen({
+        (globalThis as G).__agentworkspace.terminalOpen({
           kind: 'devin',
           workspace: args.ws,
           sessionId: args.sid,
@@ -955,7 +955,7 @@ test('terminal handoff: devin -r takes the session lock; closing reclaims it', a
 
     // Close the terminal -> chat reclaims the session (fresh load).
     await app.evaluate(
-      (_e, id: string) => (globalThis as G).__devinworkspaces.terminalClose(id),
+      (_e, id: string) => (globalThis as G).__agentworkspace.terminalClose(id),
       opened.ok ? opened.id : '',
     );
     await waitForEvent(logFile, 'session-load');
@@ -980,17 +980,17 @@ test('terminal handoff: devin -r takes the session lock; closing reclaims it', a
 // ux2 P4a — the workspace sidebar itself: sections at start, DnD reorder,
 // collapse, rename, remove, sessions-column toggle, WSL host chip.
 test('Local sidebar: sections list at start, reorder/collapse/rename persist, context-menu new/remove, WSL chip, toggle off', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-side-'));
-  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
-  const wsB = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsB-'));
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-side-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'agent-workspace-wsA-'));
+  const wsB = mkdtempSync(join(tmpdir(), 'agent-workspace-wsB-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const hasSection = (path: string) =>
     evaluateInShell(
@@ -1101,7 +1101,7 @@ test('Local sidebar: sections list at start, reorder/collapse/rename persist, co
     // Sessions-column toggle off → no sidebar, LocalPanel still spans.
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ sessions: { open: false } })`,
+      `window.agentworkspace.setSettings({ sessions: { open: false } })`,
     );
     await expect.poll(() => shellCount(app, '[data-sidebar="local"]')).toBe(0);
     expect(await shellCount(app, '#localPanel')).toBe(1);
@@ -1122,14 +1122,14 @@ test('Local sidebar: sections list at start, reorder/collapse/rename persist, co
 // started at launch — the sidebar lists on the ready transition, and nothing
 // else spawns an agent before the user acts.
 test('Local startup: configured workspaces autostart their agents and list in the sidebar', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-autostart-'));
-  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
-  const wsB = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsB-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-autostart-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'agent-workspace-wsA-'));
+  const wsB = mkdtempSync(join(tmpdir(), 'agent-workspace-wsB-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(join(profile, 'settings.json'), JSON.stringify({ workspaces: [wsA, wsB] }));
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
   });
   try {
@@ -1178,14 +1178,14 @@ test('Local startup: configured workspaces autostart their agents and list in th
 // Negative: a configured workspace with no devin binary (local.devinPath
 // points nowhere, no test command) stays missing-cli — nothing is spawned.
 test('Local startup: missing CLI leaves configured workspaces missing-cli without spawning', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-autostart-nocli-'));
-  const wsA = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsA-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-autostart-nocli-'));
+  const wsA = mkdtempSync(join(tmpdir(), 'agent-workspace-wsA-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(
     join(profile, 'settings.json'),
     JSON.stringify({ workspaces: [wsA], local: { devinPath: join(profile, 'missing', 'devin.exe') } }),
   );
-  const env: Record<string, string> = { DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1' };
+  const env: Record<string, string> = { AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1' };
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, env);
   try {
     await waitForHooks(app);
@@ -1207,12 +1207,12 @@ test('Local startup: missing CLI leaves configured workspaces missing-cli withou
 
 // ux3 S1: drag a session row to reorder inside a workspace section.
 test('Local sidebar: session row drag reorders inside the section and persists', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-reorder-'));
-  const ws = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsR-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-reorder-'));
+  const ws = mkdtempSync(join(tmpdir(), 'agent-workspace-wsR-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
   });
   const rowOrder = () =>
@@ -1254,12 +1254,12 @@ test('Local sidebar: session row drag reorders inside the section and persists',
     // sidebar files the persisted local-index sessions — their order survives.
     await app.close();
     const app2 = await launchApp(profile, join(profile, 'events2.jsonl'), join(profile, 'downloads'), fixtures, {
-      DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-      DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+      AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+      AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     });
     try {
       await waitForHooks(app2);
-      await app2.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('local'));
+      await app2.evaluate(() => (globalThis as any).__agentworkspace.setSurface('local'));
       const order2 = () =>
         evaluateInShell(
           app2,
@@ -1282,21 +1282,21 @@ test('Local sidebar: session row drag reorders inside the section and persists',
 // workspace dialog opens there (defaultPath), with the default-WSL-distro
 // home as the fallback when the folder is gone (logged, never cleared).
 test('Local picker start folder: configured folder wins, missing folder falls back to the distro home', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-picker-'));
-  const startDir = mkdtempSync(join(tmpdir(), 'devin-workspaces-picker-start-'));
-  const uncRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-unc-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-picker-'));
+  const startDir = mkdtempSync(join(tmpdir(), 'agent-workspace-picker-start-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_PICKER_CANCEL: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_PICKER_CANCEL: '1',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
   });
   const lastDialog = () =>
     app.evaluate(
       () =>
-        (globalThis as any).__devinworkspaces.lastOpenDialogOptions() as {
+        (globalThis as any).__agentworkspace.lastOpenDialogOptions() as {
           title?: string;
           defaultPath?: string;
         } | null,
@@ -1311,7 +1311,7 @@ test('Local picker start folder: configured folder wins, missing folder falls ba
       .toBe(true);
 
     // Set the folder through the Settings tab; switching tabs commits.
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('settings'));
     await evaluateInShell(app, `document.querySelector('[data-settings-tab="local"]').click()`);
     await expect.poll(() => shellCount(app, '#localPickerFolderInput')).toBe(1);
     expect(await shellCount(app, '#localPickerFolderBrowse')).toBe(1);
@@ -1332,7 +1332,7 @@ test('Local picker start folder: configured folder wins, missing folder falls ba
     const gone = join(startDir, 'gone');
     await shell.evaluate(
       (value: string) =>
-        (window as any).devinworkspaces.setSettings({
+        (window as any).agentworkspace.setSettings({
           local: { pickerFolder: value, defaultWslDistro: 'Fake' },
         }),
       gone,

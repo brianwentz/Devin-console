@@ -48,7 +48,7 @@ import { hosts } from './hosts';
 export function registerTestHooks(): void {
   if (!testMode) return;
   Object.assign(globalThis, {
-    __devinworkspaces: {
+    __agentworkspace: {
       state: () => publicState(),
       lastOpenDialogOptions: () => lastOpenDialogOptions(),
       open: (url: string) => {
@@ -87,7 +87,7 @@ export function registerTestHooks(): void {
         if (contents) historyAction(action, contents);
       },
       setBeforeUnloadDecision: (value: 'stay' | 'leave') => {
-        process.env.DEVIN_WORKSPACES_TEST_BEFOREUNLOAD = value;
+        process.env.AGENT_WORKSPACE_TEST_BEFOREUNLOAD = value;
       },
       getShellWebContents: () => state.shellView?.webContents ?? null,
       getWebContentsCount: () => webContents.getAllWebContents().length,
@@ -234,7 +234,7 @@ export function registerTestHooks(): void {
           kind: 'waiting',
           sessionId: null,
           ownerUserId: null,
-          sessionTitle: 'Devin Workspaces',
+          sessionTitle: 'Agent Workspace',
           title: 'Test',
           body: 'Test notification',
           createdAt: Date.now(),
@@ -355,7 +355,7 @@ export function registerTestHooks(): void {
             {
               host: '127.0.0.1',
               port: info.port,
-              path: `/devin-workspaces/hook/${event}`,
+              path: `/agent-workspace/hook/${event}`,
               method: 'POST',
               headers: {
                 'content-type': 'application/json',
@@ -379,11 +379,37 @@ export function registerTestHooks(): void {
             {
               host: '127.0.0.1',
               port: info.port,
-              path: `/devin-workspaces/hook/${event}`,
+              path: `/agent-workspace/hook/${event}`,
               method: 'POST',
               headers: {
                 'content-type': 'application/json',
                 ...(auth !== undefined ? { authorization: auth } : {}),
+              },
+            },
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve({ ok: true, status: res.statusCode }));
+            },
+          );
+          req.on('error', () => resolve({ ok: false, status: 0 }));
+          req.end(JSON.stringify(body ?? {}));
+        });
+      },
+      // POSTs to an arbitrary path on the hook server with the real bearer
+      // token — covers the legacy `/devin-workspaces/hook/` prefix.
+      claudePostHookPath: async (path: string, body: unknown) => {
+        const info = claudeSessions().hookInfo();
+        if (!info) return { ok: false, status: 0 };
+        return new Promise((resolve) => {
+          const req = httpRequest(
+            {
+              host: '127.0.0.1',
+              port: info.port,
+              path,
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${info.token}`,
               },
             },
             (res) => {
@@ -419,10 +445,10 @@ export function registerTestHooks(): void {
   // test:hook — the one generic dispatch into the hooks above. The installed
   // smoke spec depends on it: Electron's browser CDP target cannot
   // Runtime.evaluate in the main process, so the spec reaches these hooks
-  // through `devinworkspaces.testHook(name, ...args)` from the shell page.
+  // through `agentworkspace.testHook(name, ...args)` from the shell page.
   // Test-mode only: this handler is not registered otherwise.
   guardedHandle('test:hook', (_event, name: unknown, args: unknown) => {
-    const hooks = (globalThis as Record<string, unknown>).__devinworkspaces as
+    const hooks = (globalThis as Record<string, unknown>).__agentworkspace as
       | Record<string, unknown>
       | undefined;
     const fn = typeof name === 'string' ? hooks?.[name] : undefined;

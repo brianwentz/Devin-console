@@ -15,7 +15,7 @@ export interface StoredEntry extends CredentialEntry {
 export const SUGGESTED_ORIGINS = ['https://cloudbeds.okta.com', 'https://github.com'];
 
 // Origins are https-only by default; allowInsecureOrigins is populated from
-// DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS in test mode and empty in production.
+// AGENT_WORKSPACE_TEST_GITHUB_ORIGINS in test mode and empty in production.
 export function normalizeOrigin(
   input: string,
   allowInsecureOrigins: readonly string[] = [],

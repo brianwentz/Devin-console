@@ -77,7 +77,7 @@ interface TerminalEntry {
   // F2: cumulative output bytes since the last sampled `terminal-data` log.
   bytesOut: number;
   lastDataLogAt: number;
-  // Test mode only: rolling output buffer for __devinworkspaces.terminalRead.
+  // Test mode only: rolling output buffer for __agentworkspace.terminalRead.
   readBuffer: string;
   // Devin-kind only: PR-URL scanner over the pty output stream.
   linkScanner: LinkScanner | null;
@@ -107,7 +107,7 @@ function resolveOnPath(name: string): string | null {
 // One interactive `devin` CLI pty per local session — a selected session
 // resumes with `devin -r <id>` in its own pty. The external binary is spawned
 // via node-pty/ConPTY — never node (RunAsNode fuse is off). A full command
-// override exists only in test mode (DEVIN_WORKSPACES_TEST_TERMINAL_CMD).
+// override exists only in test mode (AGENT_WORKSPACE_TEST_TERMINAL_CMD).
 export class TerminalHost {
   private readonly terminals = new Map<string, TerminalEntry>();
   private readonly bySession = new Map<string, string>();
@@ -136,10 +136,10 @@ export class TerminalHost {
   private resolveCommand(options: TerminalOpenOptions): ResolvedCommand | { error: string } {
     const kind = options.kind;
     if (this.testMode) {
-      const testCommand = process.env.DEVIN_WORKSPACES_TEST_TERMINAL_CMD;
+      const testCommand = process.env.AGENT_WORKSPACE_TEST_TERMINAL_CMD;
       if (testCommand) {
         const [file, ...args] = testCommand.split(/\s+/).filter(Boolean);
-        if (!file) return { error: 'empty DEVIN_WORKSPACES_TEST_TERMINAL_CMD' };
+        if (!file) return { error: 'empty AGENT_WORKSPACE_TEST_TERMINAL_CMD' };
         const resolvedFile = existsSync(file)
           ? file
           : resolveOnPath(file);
@@ -519,10 +519,10 @@ export class TerminalHost {
         spawnCwd = spec.cwd ?? homedir();
         // wsl.exe needs a Windows env; the distro env comes from the shell.
         spawnEnv = { ...process.env };
-        if (this.testMode && process.env.DEVIN_WORKSPACES_TEST_TERMINAL_CMD) {
+        if (this.testMode && process.env.AGENT_WORKSPACE_TEST_TERMINAL_CMD) {
           // Same resolution as resolveCommand's test branch: absolute or
           // PATH-resolved binary, fixture paths relative to the app dir.
-          const [file, ...testArgs] = process.env.DEVIN_WORKSPACES_TEST_TERMINAL_CMD.trim()
+          const [file, ...testArgs] = process.env.AGENT_WORKSPACE_TEST_TERMINAL_CMD.trim()
             .split(/\s+/)
             .filter(Boolean);
           const resolvedFile = file && (existsSync(file) ? file : resolveOnPath(file));
@@ -809,4 +809,4 @@ export class TerminalHost {
 }
 
 
-export const terminalHost = new TerminalHost(process.env.DEVIN_WORKSPACES_TEST === '1');
+export const terminalHost = new TerminalHost(process.env.AGENT_WORKSPACE_TEST === '1');

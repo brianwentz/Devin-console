@@ -9,14 +9,14 @@ import { testMode } from '../state';
 // external + unpacked, so Node's resolver (not esbuild) resolves it at
 // runtime. The version is read from the package.json via createRequire so the
 // log stays dependency-only; the module path is never logged.
-// Test mode: DEVIN_WORKSPACES_TEST_CLAUDE_SDK points at an ESM module (the
+// Test mode: AGENT_WORKSPACE_TEST_CLAUDE_SDK points at an ESM module (the
 // fake in out/fixtures/fakeClaudeSdk.mjs) that loadSdk() imports instead.
 let pending: Promise<typeof import('@anthropic-ai/claude-agent-sdk')> | null = null;
 
 export function loadSdk(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')> {
   if (!pending) {
     const t0 = Date.now();
-    const override = testMode ? process.env.DEVIN_WORKSPACES_TEST_CLAUDE_SDK?.trim() : '';
+    const override = testMode ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_SDK?.trim() : '';
     const load = override
       ? (import(pathToFileURL(override).href) as Promise<
           typeof import('@anthropic-ai/claude-agent-sdk')

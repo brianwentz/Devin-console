@@ -23,13 +23,13 @@ const GH_CACHE_MS = 10 * 60_000;
 const execFileAsync = promisify(execFile);
 
 // `gh` on PATH — resolved once via where/which and cached for 10 min
-// (test mode honours DEVIN_WORKSPACES_TEST_GH_CMD — a full command line,
-// split like DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD).
+// (test mode honours AGENT_WORKSPACE_TEST_GH_CMD — a full command line,
+// split like AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD).
 let ghResolvedAt = 0;
 let ghCmd: { cmd: string; args: string[] } | null = null;
 
 export async function resolveGhCmd(): Promise<{ cmd: string; args: string[] } | null> {
-  const override = testMode ? process.env.DEVIN_WORKSPACES_TEST_GH_CMD?.trim() : '';
+  const override = testMode ? process.env.AGENT_WORKSPACE_TEST_GH_CMD?.trim() : '';
   if (override) {
     const argv = override.split(/\s+/).filter(Boolean);
     return argv.length > 0 ? { cmd: argv[0]!, args: argv.slice(1) } : null;

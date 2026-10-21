@@ -80,7 +80,7 @@ const normalizeWin = (p: string): string => stripTrailingSep(p.replace(/\\/g, '/
 
 export interface WorkspaceMatchOpts {
   /** Test seam: a path under this root maps to `uncHostId`, like
-   * hosts().pathHostId/windowsPath's DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT. */
+   * hosts().pathHostId/windowsPath's AGENT_WORKSPACE_TEST_WSL_UNC_ROOT. */
   uncRoot?: string | undefined;
   /** Host id the uncRoot maps to (first wsl host, same as pathHostId). */
   uncHostId?: HostId | undefined;

@@ -1,5 +1,5 @@
 // Fake Claude Agent SDK for the claudeChat e2e — loaded via
-// DEVIN_WORKSPACES_TEST_CLAUDE_SDK → out/fixtures/fakeClaudeSdk.mjs.
+// AGENT_WORKSPACE_TEST_CLAUDE_SDK → out/fixtures/fakeClaudeSdk.mjs.
 // Re-exports the real store API (listSessions/getSessionMessages/…) and
 // replaces `query` with a deterministic streaming-input generator that writes
 // real-shaped jsonl lines into CLAUDE_CONFIG_DIR/projects/<encoded cwd>/ so

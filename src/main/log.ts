@@ -1,3 +1,6 @@
+// Side-effect first: bootstrap applies the userData override and migrates
+// the legacy profile before this module resolves/mkdirs userData below.
+import './bootstrap';
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { app } from 'electron';
@@ -14,12 +17,12 @@ type LogEvent = {
 };
 
 // Resolved at import time, which is before index.ts applies the userData
-// override — so honour DEVIN_WORKSPACES_USER_DATA here as well.
-const userDataDir = process.env.DEVIN_WORKSPACES_USER_DATA
-  ? resolve(process.env.DEVIN_WORKSPACES_USER_DATA)
+// override — so honour AGENT_WORKSPACE_USER_DATA here as well.
+const userDataDir = process.env.AGENT_WORKSPACE_USER_DATA
+  ? resolve(process.env.AGENT_WORKSPACE_USER_DATA)
   : app.getPath('userData');
 export const logFile = resolve(
-  process.env.DEVIN_WORKSPACES_LOG ?? join(userDataDir, 'events.jsonl'),
+  process.env.AGENT_WORKSPACE_LOG ?? join(userDataDir, 'events.jsonl'),
 );
 mkdirSync(resolve(logFile, '..'), { recursive: true });
 
@@ -27,8 +30,8 @@ mkdirSync(resolve(logFile, '..'), { recursive: true });
 // tracked in-process; size is statSync'd once at startup. The limit is
 // overridable in test mode for the rotation e2e.
 const logMaxBytes =
-  testMode && process.env.DEVIN_WORKSPACES_LOG_MAX_BYTES
-    ? Number(process.env.DEVIN_WORKSPACES_LOG_MAX_BYTES)
+  testMode && process.env.AGENT_WORKSPACE_LOG_MAX_BYTES
+    ? Number(process.env.AGENT_WORKSPACE_LOG_MAX_BYTES)
     : LOG_MAX_BYTES;
 let writtenBytes = 0;
 try {

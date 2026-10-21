@@ -14,7 +14,7 @@ export function PrPanel() {
   const open = state?.notifications.prsPanelOpen ?? false;
 
   const refresh = useCallback(async () => {
-    setEntries(await window.devinworkspaces.listPrs());
+    setEntries(await window.agentworkspace.listPrs());
   }, []);
 
   // Re-fetch on every state push while open — mark/read/clear from anywhere
@@ -26,7 +26,7 @@ export function PrPanel() {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') window.devinworkspaces.prsPanel(false);
+      if (event.key === 'Escape') window.agentworkspace.prsPanel(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -34,7 +34,7 @@ export function PrPanel() {
 
   if (!open) return null;
 
-  const close = () => window.devinworkspaces.prsPanel(false);
+  const close = () => window.agentworkspace.prsPanel(false);
 
   return (
     <div
@@ -64,7 +64,7 @@ export function PrPanel() {
             title="Mark all read"
             disabled={entries.length === 0}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#7d8a99] hover:bg-[#2a394d] disabled:opacity-40"
-            onClick={() => window.devinworkspaces.prsMarkAllRead()}
+            onClick={() => window.agentworkspace.prsMarkAllRead()}
           >
             <CheckCheck size={13} /> Mark all read
           </button>
@@ -75,7 +75,7 @@ export function PrPanel() {
             title="Clear all"
             disabled={entries.length === 0}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#7d8a99] hover:bg-[#2a394d] disabled:opacity-40"
-            onClick={() => window.devinworkspaces.prsClear()}
+            onClick={() => window.agentworkspace.prsClear()}
           >
             <Trash2 size={13} /> Clear all
           </button>
@@ -97,7 +97,7 @@ export function PrPanel() {
               <button
                 type="button"
                 className="min-w-0 flex-1 text-left"
-                onClick={() => window.devinworkspaces.prsOpen(pr.sessionId, pr.url)}
+                onClick={() => window.agentworkspace.prsOpen(pr.sessionId, pr.url)}
               >
                 <div
                   className={`text-[12px] leading-tight ${
@@ -123,14 +123,14 @@ export function PrPanel() {
                   title="Mark as read"
                   checked={pr.readAt !== null}
                   disabled={pr.readAt !== null}
-                  onChange={() => window.devinworkspaces.prsMarkRead(pr.url)}
+                  onChange={() => window.agentworkspace.prsMarkRead(pr.url)}
                 />
                 <button
                   type="button"
                   aria-label="Delete"
                   title="Delete"
                   className="text-[#7d8a99] hover:text-[#e8edf3]"
-                  onClick={() => window.devinworkspaces.prsRemove(pr.url)}
+                  onClick={() => window.agentworkspace.prsRemove(pr.url)}
                 >
                   <Trash2 size={13} />
                 </button>

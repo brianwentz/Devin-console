@@ -22,7 +22,7 @@ describe('SettingsStore round-trip (ux3 S6)', () => {
   const readFile = (): Json => JSON.parse(readFileSync(file(), 'utf8'));
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'devin-workspaces-settings-store-'));
+    dir = mkdtempSync(join(tmpdir(), 'agent-workspace-settings-store-'));
     logged.length = 0;
   });
   afterEach(() => {

@@ -36,7 +36,7 @@ export function NotificationSettings() {
   // Re-fetch the identity info when the resolved source flips (and on mount).
   useEffect(() => {
     let alive = true;
-    window.devinworkspaces
+    window.agentworkspace
       .identity()
       .then((info) => {
         if (alive) setIdentity(info);
@@ -48,7 +48,7 @@ export function NotificationSettings() {
   }, [identityState?.source, identityState?.resolved]);
 
   const refreshHasToken = () =>
-    window.devinworkspaces.hasPat().then(setHasToken).catch(() => undefined);
+    window.agentworkspace.hasPat().then(setHasToken).catch(() => undefined);
 
   const saveToken = (event: FormEvent) => {
     event.preventDefault();
@@ -58,7 +58,7 @@ export function NotificationSettings() {
       return;
     }
     setBusy(true);
-    void window.devinworkspaces
+    void window.agentworkspace
       .setPat(value)
       .then((result) => {
         if (result.ok) {
@@ -74,7 +74,7 @@ export function NotificationSettings() {
 
   const clearToken = () => {
     setBusy(true);
-    void window.devinworkspaces
+    void window.agentworkspace
       .clearPat()
       .then((result) => {
         setMessage(
@@ -88,10 +88,10 @@ export function NotificationSettings() {
   };
 
   const toggleCollect = (enabled: boolean) => {
-    void window.devinworkspaces.setSettings({ notifications: { collect: enabled } });
+    void window.agentworkspace.setSettings({ notifications: { collect: enabled } });
   };
   const toggleBanner = (enabled: boolean) => {
-    void window.devinworkspaces.setSettings({ notifications: { banner: enabled } });
+    void window.agentworkspace.setSettings({ notifications: { banner: enabled } });
   };
   const toggleKind = (
     key:
@@ -105,14 +105,14 @@ export function NotificationSettings() {
       | 'usage',
     enabled: boolean,
   ) => {
-    void window.devinworkspaces.setSettings({ notifications: { kinds: { [key]: enabled } } });
+    void window.agentworkspace.setSettings({ notifications: { kinds: { [key]: enabled } } });
   };
 
   const toggleAutoOpenTabs = (enabled: boolean) => {
-    void window.devinworkspaces.setSettings({ prs: { autoOpenTabs: enabled } });
+    void window.agentworkspace.setSettings({ prs: { autoOpenTabs: enabled } });
   };
   const toggleClaudeHooks = (enabled: boolean) => {
-    void window.devinworkspaces.setSettings({ claude: { hooksEnabled: enabled } });
+    void window.agentworkspace.setSettings({ claude: { hooksEnabled: enabled } });
   };
 
   const identityLabel = (info: IdentityInfo | null): string => {
@@ -196,7 +196,7 @@ export function NotificationSettings() {
               disabled={
                 !identity?.source || identity.source === 'self' || identity.source === 'manual'
               }
-              onClick={() => window.devinworkspaces.identityReset()}
+              onClick={() => window.agentworkspace.identityReset()}
             >
               Reset
             </button>

@@ -17,7 +17,7 @@ import {
 
 type Rect = { x: number; y: number; width: number; height: number };
 interface G {
-  __devinworkspaces: {
+  __agentworkspace: {
     getAnalyticsBounds(): Rect | null;
     getDevinBounds(): Rect | null;
     childViews(): Array<{ bounds: Rect; url: string | null }>;
@@ -27,15 +27,15 @@ interface G {
 }
 const hooks = (app: import('playwright').ElectronApplication) => ({
   getAnalyticsBounds: () =>
-    app.evaluate(() => (globalThis as unknown as G).__devinworkspaces.getAnalyticsBounds()),
+    app.evaluate(() => (globalThis as unknown as G).__agentworkspace.getAnalyticsBounds()),
   getDevinBounds: () =>
-    app.evaluate(() => (globalThis as unknown as G).__devinworkspaces.getDevinBounds()),
+    app.evaluate(() => (globalThis as unknown as G).__agentworkspace.getDevinBounds()),
   childViews: () =>
-    app.evaluate(() => (globalThis as unknown as G).__devinworkspaces.childViews()),
+    app.evaluate(() => (globalThis as unknown as G).__agentworkspace.childViews()),
   layoutRects: () =>
-    app.evaluate(() => (globalThis as unknown as G).__devinworkspaces.layoutRects()),
+    app.evaluate(() => (globalThis as unknown as G).__agentworkspace.layoutRects()),
   setSurface: (value: string) =>
-    app.evaluate((_e, v) => (globalThis as unknown as G).__devinworkspaces.setSurface(v), value),
+    app.evaluate((_e, v) => (globalThis as unknown as G).__agentworkspace.setSurface(v), value),
 });
 
 const analyticsTab = async (app: import('playwright').ElectronApplication) =>
@@ -53,7 +53,7 @@ test.afterAll(async () => {
 });
 
 test('analytics rail button swaps the main column to the tenant analytics view', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
@@ -114,13 +114,13 @@ test('analytics rail button swaps the main column to the tenant analytics view',
 });
 
 test('analytics tab strip: Devin default, Claude tab swaps the hosted view for the shell panel, persists', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-antabs-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-antabs-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const logFile = join(profile, 'events.jsonl');
   const usageEnv = {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   };
   let app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, usageEnv);
   try {
@@ -261,7 +261,7 @@ test('analytics tab strip: Devin default, Claude tab swaps the hosted view for t
 });
 
 test('analytics refresh on the Devin tab reloads the hosted view', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-anref-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-anref-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
@@ -282,21 +282,21 @@ test('analytics refresh on the Devin tab reloads the hosted view', async () => {
 });
 
 test('usage 503 after a good fetch keeps the gauges (stale + cached fetchedAt)', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-an503-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-an503-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
     CLAUDE_CONFIG_DIR: claudeHome,
-    DEVIN_WORKSPACES_TEST_NOW: '2026-10-15T12:00:00.000Z',
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const h = hooks(app);
   const usageState = () =>
-    app.evaluate(() => (globalThis as any).__devinworkspaces.claudeUsageState()) as Promise<{
+    app.evaluate(() => (globalThis as any).__agentworkspace.claudeUsageState()) as Promise<{
       accounts: { stale: boolean; error: string | null; fetchedAt: string | null; limits: unknown[] }[];
     }>;
   try {
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.claudeUsageRefresh());
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeUsageRefresh());
     const good = await usageState();
     expect(good.accounts[0]?.stale).toBe(false);
     expect(good.accounts[0]?.limits).toHaveLength(3);
@@ -306,7 +306,7 @@ test('usage 503 after a good fetch keeps the gauges (stale + cached fetchedAt)',
     const prev = process.env.FAKE_USAGE_STATUS;
     process.env.FAKE_USAGE_STATUS = '503';
     try {
-      await app.evaluate(() => (globalThis as any).__devinworkspaces.claudeUsageRefresh());
+      await app.evaluate(() => (globalThis as any).__agentworkspace.claudeUsageRefresh());
       const stale = await usageState();
       const account = stale.accounts[0]!;
       expect(account.stale).toBe(true);

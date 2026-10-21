@@ -40,65 +40,65 @@ type PrLink = {
 function hooks(app: ElectronApplication) {
   return {
     setPat: (pat: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.setPat(value) as Promise<boolean>, pat),
-    clearPat: () => app.evaluate(() => (globalThis as any).__devinworkspaces.clearPat() as Promise<void>),
-    hasPat: () => app.evaluate(() => (globalThis as any).__devinworkspaces.hasPat() as boolean),
-    pollNow: () => app.evaluate(() => (globalThis as any).__devinworkspaces.pollNow() as Promise<void>),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.setPat(value) as Promise<boolean>, pat),
+    clearPat: () => app.evaluate(() => (globalThis as any).__agentworkspace.clearPat() as Promise<void>),
+    hasPat: () => app.evaluate(() => (globalThis as any).__agentworkspace.hasPat() as boolean),
+    pollNow: () => app.evaluate(() => (globalThis as any).__agentworkspace.pollNow() as Promise<void>),
     listPrs: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.listPrs() as PrLink[]),
+      app.evaluate(() => (globalThis as any).__agentworkspace.listPrs() as PrLink[]),
     openSessionPr: (sessionId: string, url: string) =>
       app.evaluate(
         (_e, args: { sessionId: string; url: string }) =>
-          (globalThis as any).__devinworkspaces.openSessionPr(args.sessionId, args.url),
+          (globalThis as any).__agentworkspace.openSessionPr(args.sessionId, args.url),
         { sessionId, url },
       ),
-    prsPanelOpen: () => app.evaluate(() => (globalThis as any).__devinworkspaces.prsPanelOpen()),
+    prsPanelOpen: () => app.evaluate(() => (globalThis as any).__agentworkspace.prsPanelOpen()),
     prRecords: () =>
       app.evaluate(
         () =>
-          (globalThis as any).__devinworkspaces.prRecords() as {
+          (globalThis as any).__agentworkspace.prRecords() as {
             url: string;
             firstSeenAt: number;
             readAt: number | null;
             dismissedAt: number | null;
           }[],
       ),
-    newSession: () => app.evaluate(() => (globalThis as any).__devinworkspaces.newSession()),
+    newSession: () => app.evaluate(() => (globalThis as any).__agentworkspace.newSession()),
     // P6 notification center
-    notifications: () => app.evaluate(() => (globalThis as any).__devinworkspaces.notifications()),
+    notifications: () => app.evaluate(() => (globalThis as any).__agentworkspace.notifications()),
     openNotification: (id: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.notificationsOpen(value), id),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.notificationsOpen(value), id),
     pushNotification: (partial: Record<string, unknown>) =>
-      app.evaluate((_e, value: Record<string, unknown>) => (globalThis as any).__devinworkspaces.pushNotification(value), partial),
+      app.evaluate((_e, value: Record<string, unknown>) => (globalThis as any).__agentworkspace.pushNotification(value), partial),
     simulateUpdate: (version: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.simulateUpdateDownloaded(value), version),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.simulateUpdateDownloaded(value), version),
     simulateUpdateAvailable: (version: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.simulateUpdateAvailable(value), version),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.simulateUpdateAvailable(value), version),
     simulateUpdateFocus: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.simulateUpdateFocus()),
+      app.evaluate(() => (globalThis as any).__agentworkspace.simulateUpdateFocus()),
     simulateUpdateResume: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.simulateUpdateResume()),
-    panelOpen: () => app.evaluate(() => (globalThis as any).__devinworkspaces.panelOpen()),
+      app.evaluate(() => (globalThis as any).__agentworkspace.simulateUpdateResume()),
+    panelOpen: () => app.evaluate(() => (globalThis as any).__agentworkspace.panelOpen()),
     identity: () =>
       app.evaluate(
         () =>
-          (globalThis as any).__devinworkspaces.identity() as {
+          (globalThis as any).__agentworkspace.identity() as {
             source: 'self' | 'cli' | 'inferred' | 'manual' | null;
             maskedUserId: string | null;
             cliOrgMismatch: boolean;
           },
       ),
     identityReset: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.identityReset()),
-    childViews: () => app.evaluate(() => (globalThis as any).__devinworkspaces.childViews()),
+      app.evaluate(() => (globalThis as any).__agentworkspace.identityReset()),
+    childViews: () => app.evaluate(() => (globalThis as any).__agentworkspace.childViews()),
     loadDevinUrl: (url: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.loadDevinUrl(value), url),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.loadDevinUrl(value), url),
     closeTab: (id: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.close(value) as Promise<boolean>, id),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.close(value) as Promise<boolean>, id),
     listScopes: () =>
       app.evaluate(
         () =>
-          (globalThis as any).__devinworkspaces.listScopes() as Array<{
+          (globalThis as any).__agentworkspace.listScopes() as Array<{
             scope: string;
             count: number;
             liveCount: number;
@@ -107,7 +107,7 @@ function hooks(app: ElectronApplication) {
     tabInfo: (id: string) =>
       app.evaluate(
         (_e, value: string) =>
-          (globalThis as any).__devinworkspaces.tabInfo(value) as {
+          (globalThis as any).__agentworkspace.tabInfo(value) as {
             url: string;
             originSessionId: string | null;
             discarded: boolean;
@@ -124,12 +124,12 @@ function hooks(app: ElectronApplication) {
 
 async function launch(profile: string, logFile: string, extraEnv: Record<string, string> = {}) {
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_API_BASE: fixtures.apiUrl,
-    DEVIN_WORKSPACES_POLL_MS: String(POLL_MS),
-    DEVIN_WORKSPACES_TEST_BANNER_MS: '1500',
+    AGENT_WORKSPACE_API_BASE: fixtures.apiUrl,
+    AGENT_WORKSPACE_POLL_MS: String(POLL_MS),
+    AGENT_WORKSPACE_TEST_BANNER_MS: '1500',
     ...extraEnv,
   });
-  await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+  await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
   return app;
 }
 
@@ -152,7 +152,7 @@ test.beforeEach(() => {
 const v3Requests = () => fixtures.api.requests().filter((r) => r.path.startsWith('/v3'));
 
 test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_user', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -212,12 +212,12 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
     expect((await readEvents(logFile)).filter((e) => e.event === 'notification-added')).toHaveLength(1);
 
     // Opening the notification navigates devinView to the session + reads it.
-    await evaluateInShell(app, `window.devinworkspaces.setSurface('settings')`);
+    await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     const list = (await h.notifications()) as { id: string; sessionId: string | null; readAt: number | null }[];
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ sessionId: 'sess-1', readAt: null });
-    await evaluateInShell(app, `window.devinworkspaces.notificationsOpen('${list[0]!.id}')`);
+    await evaluateInShell(app, `window.agentworkspace.notificationsOpen('${list[0]!.id}')`);
     await expect.poll(async () => (await state(app)).surface).toBe('cloud');
     await expect.poll(() => h.devinUrl()).toBe(`${fixtures.devinUrl}/sessions/sess-1`);
     await expect.poll(async () => (await state(app)).currentSessionId).toBe('sess-1');
@@ -245,7 +245,7 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
     expect(JSON.stringify(await state(app))).not.toContain(PAT);
     const shellDump = (await evaluateInShell(
       app,
-      `JSON.stringify(Object.keys(window.devinworkspaces)) + document.documentElement.outerHTML`,
+      `JSON.stringify(Object.keys(window.agentworkspace)) + document.documentElement.outerHTML`,
     )) as string;
     expect(shellDump).not.toContain(PAT);
 
@@ -262,7 +262,7 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
 });
 
 test('surfaces 401 as authError and honours 429 Retry-After', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -303,7 +303,7 @@ test('surfaces 401 as authError and honours 429 Retry-After', async () => {
 });
 
 test('lists open PRs across my sessions with GitHub titles and opens them in their session', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -372,7 +372,7 @@ test('lists open PRs across my sessions with GitHub titles and opens them in the
       .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('prQuickOpen'))`))
       .toBe(true);
     // The IPC path returns the same list the menu is built from.
-    const viaIpc = (await evaluateInShell(app, `window.devinworkspaces.listPrs()`)) as unknown[];
+    const viaIpc = (await evaluateInShell(app, `window.agentworkspace.listPrs()`)) as unknown[];
     expect(viaIpc).toHaveLength(3);
 
     // GitHub titles resolve via the pr-title fetch (menu truncation is
@@ -405,9 +405,9 @@ test('lists open PRs across my sessions with GitHub titles and opens them in the
     // unread, the panel lists the same rows.
     await expect.poll(async () => (await state(app)).notifications.unreadPrCount).toBe(3);
     // Opening one panel closes the other.
-    await evaluateInShell(app, `window.devinworkspaces.notificationsPanel(true)`);
+    await evaluateInShell(app, `window.agentworkspace.notificationsPanel(true)`);
     await expect.poll(() => h.panelOpen()).toBe(true);
-    await evaluateInShell(app, `window.devinworkspaces.prsPanel(true)`);
+    await evaluateInShell(app, `window.agentworkspace.prsPanel(true)`);
     await expect.poll(() => h.prsPanelOpen()).toBe(true);
     await expect.poll(() => h.panelOpen()).toBe(false);
     await expect
@@ -507,11 +507,11 @@ test('lists open PRs across my sessions with GitHub titles and opens them in the
     await expect
       .poll(async () => (await h.prRecords()).some((record) => record.url === pr43))
       .toBe(false);
-    await evaluateInShell(app, `window.devinworkspaces.prsPanel(false)`);
+    await evaluateInShell(app, `window.agentworkspace.prsPanel(false)`);
     await expect.poll(() => h.prsPanelOpen()).toBe(false);
 
     // Ctrl+N: back to the tenant's create surface (root) on the Cloud surface.
-    await evaluateInShell(app, `window.devinworkspaces.setSurface('settings')`);
+    await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     await h.newSession();
     await expect.poll(async () => (await state(app)).surface).toBe('cloud');
@@ -525,10 +525,10 @@ test('lists open PRs across my sessions with GitHub titles and opens them in the
 // The "resolution failed entirely" case: service-user token, CLI
 // unauthenticated (exit 1), no sessions observed, no manual override.
 test('shows nothing for a service-user token when no identity resolves', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile, {
-    DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
+    AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
     FAKE_AUTH_STATUS_EXIT: '1',
   });
   const h = hooks(app);
@@ -559,7 +559,7 @@ test('shows nothing for a service-user token when no identity resolves', async (
       .toBe(false);
 
     // The Settings surface explains the empty state.
-    await evaluateInShell(app, `window.devinworkspaces.setSurface('settings')`);
+    await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     await evaluateInShell(app, `document.querySelector('[data-settings-tab="notifications"]').click()`);
     await expect
@@ -572,7 +572,7 @@ test('shows nothing for a service-user token when no identity resolves', async (
 });
 
 test('prunes persisted notifications from other users on identity resolution', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const seed = (id: string, sessionId: string, ownerUserId?: string) => ({
     id,
@@ -612,7 +612,7 @@ test('prunes persisted notifications from other users on identity resolution', a
 });
 
 test('service-user token prunes leftovers and surfaces an identity notification', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(
     join(profile, 'notifications.json'),
@@ -630,7 +630,7 @@ test('service-user token prunes leftovers and surfaces an identity notification'
     ]),
   );
   const app = await launch(profile, logFile, {
-    DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
+    AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
     FAKE_AUTH_STATUS_EXIT: '1',
   });
   const h = hooks(app);
@@ -658,7 +658,7 @@ test('service-user token prunes leftovers and surfaces an identity notification'
 });
 
 test('auto-opens a lazy background tab in the session scope when a session gains a PR (F1)', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -757,7 +757,7 @@ test('auto-opens a lazy background tab in the session scope when a session gains
 
     // (4) Toggle off via the settings IPC. The flag is read per poll — no
     // restart, polls keep running, and a new PR still opens nothing.
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ prs: { autoOpenTabs: false } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ prs: { autoOpenTabs: false } })`);
     await expect.poll(async () => (await state(app)).settings.prs).toEqual({ autoOpenTabs: false });
     fixtures.api.setSessions([session([existingPr, newPr, laterPr])]);
     await pollOnce();
@@ -769,7 +769,7 @@ test('auto-opens a lazy background tab in the session scope when a session gains
 
     // Toggle back on: the poller kept running, so laterPr is already in the
     // baseline — still nothing opens until a genuinely new PR arrives.
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ prs: { autoOpenTabs: true } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ prs: { autoOpenTabs: true } })`);
     await expect.poll(async () => (await state(app)).settings.prs).toEqual({ autoOpenTabs: true });
     await pollOnce();
     expect(await events('pr-auto-open')).toHaveLength(1);
@@ -799,7 +799,7 @@ test('auto-opens a lazy background tab in the session scope when a session gains
 });
 
 test('notification panel: badge, banner, open/read/delete, update entry, restart persistence', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notifcenter-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notifcenter-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -828,7 +828,7 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
       .toBe(false);
 
     // Panel open: unread entry bold; the shell view is raised over hosted views.
-    await evaluateInShell(app, `window.devinworkspaces.notificationsPanel(true)`);
+    await evaluateInShell(app, `window.agentworkspace.notificationsPanel(true)`);
     await expect.poll(async () => shell(`Boolean(document.getElementById('notificationsPanel'))`)).toBe(true);
     expect(await h.panelOpen()).toBe(true);
     const views = (await h.childViews()) as { url: string }[];
@@ -865,9 +865,9 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
     expect(viewsAfter[0]?.url).toContain('app://shell/');
 
     // Update entry: clicking logs update-install (test mode, no quit).
-    await evaluateInShell(app, `window.devinworkspaces.notificationsPanel(true)`);
+    await evaluateInShell(app, `window.agentworkspace.notificationsPanel(true)`);
     const upd = ((await h.notifications()) as { id: string; kind: string }[]).find((e) => e.kind === 'update')!;
-    await evaluateInShell(app, `window.devinworkspaces.notificationsOpen('${upd.id}')`);
+    await evaluateInShell(app, `window.agentworkspace.notificationsOpen('${upd.id}')`);
     await waitForEvent(logFile, 'update-install');
     await expect.poll(async () => ((await h.notifications()) as any[]).filter((e) => e.kind === 'update').length).toBe(0);
 
@@ -875,7 +875,7 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
     // distinct sessions so neither supersedes the blocked entry or each other.
     await h.pushNotification({ kind: 'waiting', sessionId: 'sess-2', sessionTitle: 's', title: 'w1', body: 'b' });
     await h.pushNotification({ kind: 'waiting', sessionId: 'sess-3', sessionTitle: 's', title: 'w2', body: 'b2' });
-    await evaluateInShell(app, `window.devinworkspaces.notificationsPanel(true)`);
+    await evaluateInShell(app, `window.agentworkspace.notificationsPanel(true)`);
     await expect.poll(async () => shell(`document.querySelectorAll('[data-notification-id]').length`)).toBe(3);
     await shell(`document.getElementById('markAllRead').click()`);
     await expect.poll(async () => (await state(app)).notifications.unreadCount).toBe(0);
@@ -896,13 +896,13 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
     await app.evaluate(({ app: electronApp }) => electronApp.quit());
     await app.close().catch(() => undefined);
     const app2 = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-      DEVIN_WORKSPACES_API_BASE: fixtures.apiUrl,
-      DEVIN_WORKSPACES_POLL_MS: String(POLL_MS),
-      DEVIN_WORKSPACES_TEST_BANNER_MS: '1500',
+      AGENT_WORKSPACE_API_BASE: fixtures.apiUrl,
+      AGENT_WORKSPACE_POLL_MS: String(POLL_MS),
+      AGENT_WORKSPACE_TEST_BANNER_MS: '1500',
     });
     try {
-      await expect.poll(async () => app2.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
-      const restored = (await app2.evaluate(() => (globalThis as any).__devinworkspaces.notifications())) as { kind: string; title: string }[];
+      await expect.poll(async () => app2.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
+      const restored = (await app2.evaluate(() => (globalThis as any).__agentworkspace.notifications())) as { kind: string; title: string }[];
       expect(restored.map((e) => e.title)).toEqual(['Persist me 2', 'Persist me 1']);
       expect(restored.some((e) => e.kind === 'update')).toBe(false);
     } finally {
@@ -915,7 +915,7 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
 });
 
 test('a pr-completed supersedes the pr-opened entry for the same PR', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-supersede-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-supersede-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -970,7 +970,7 @@ test('a pr-completed supersedes the pr-opened entry for the same PR', async () =
 });
 
 test('settings shows the app version and an Update now button', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-update-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-update-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -981,7 +981,7 @@ test('settings shows the app version and an Update now button', async () => {
       version: pkg.version,
       available: null,
       downloaded: null,
-      releasesUrl: 'https://github.com/brianwentz/devin-workspace/releases',
+      releasesUrl: 'https://github.com/brianwentz/agent-workspace/releases',
       enabled: true,
       checking: false,
       lastCheckedAt: null,
@@ -989,7 +989,7 @@ test('settings shows the app version and an Update now button', async () => {
     });
 
     // Switch to the settings surface; the About block renders the version.
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('settings'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     await shell(`document.querySelector('[data-settings-tab="updates"]').click()`);
     await expect
       .poll(async () => shell(`document.getElementById('appVersion')?.textContent`))
@@ -1088,7 +1088,7 @@ test('settings shows the app version and an Update now button', async () => {
 });
 
 test('focus and resume trigger an update check when none has run yet', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-upcheck-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-upcheck-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -1125,10 +1125,10 @@ test('focus and resume trigger an update check when none has run yet', async () 
 });
 
 test('service-user token resolves the user from the Devin CLI sign-in', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-identity-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-identity-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile, {
-    DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
+    AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
   });
   const h = hooks(app);
   try {
@@ -1163,7 +1163,7 @@ test('service-user token resolves the user from the Devin CLI sign-in', async ()
     ).toBe(true);
 
     // Settings shows the resolved (masked) identity.
-    await evaluateInShell(app, `window.devinworkspaces.setSurface('settings')`);
+    await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     await evaluateInShell(app, `document.querySelector('[data-settings-tab="notifications"]').click()`);
     await expect
@@ -1194,10 +1194,10 @@ test('service-user token resolves the user from the Devin CLI sign-in', async ()
 });
 
 test('service-user token infers the user from an observed session', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-identity-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-identity-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile, {
-    DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
+    AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
     FAKE_AUTH_STATUS_EXIT: '1',
   });
   const h = hooks(app);
@@ -1245,10 +1245,10 @@ test('service-user token infers the user from an observed session', async () => 
 });
 
 test('an unconfirmed CLI identity is rejected and the manual override wins', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-identity-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-identity-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile, {
-    DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
+    AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD: 'node out/fixtures/fakeAuthStatus.cjs',
     FAKE_AUTH_STATUS_USER_ID: 'user-ghost',
   });
   const h = hooks(app);
@@ -1270,7 +1270,7 @@ test('an unconfirmed CLI identity is rejected and the manual override wins', asy
     // The manual override resolves and confirms against the same page.
     await evaluateInShell(
       app,
-      `window.devinworkspaces.setSettings({ notifications: { userId: 'user-fixture' } })`,
+      `window.agentworkspace.setSettings({ notifications: { userId: 'user-fixture' } })`,
     );
     await expect.poll(async () => (await state(app)).notifications.identity.source).toBe('manual');
     expect((await state(app)).notifications.noUserIdentity).toBe(false);
@@ -1285,7 +1285,7 @@ test('an unconfirmed CLI identity is rejected and the manual override wins', asy
 });
 
 test('a rejected token raises an auth notification and a rail warning; focus re-polls', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);
@@ -1348,7 +1348,7 @@ test('a rejected token raises an auth notification and a rail warning; focus re-
 });
 
 test('catches up PRs that appeared while the poller was down, across a restart', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-notify-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   const h = hooks(app);

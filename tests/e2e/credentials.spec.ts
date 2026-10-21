@@ -33,24 +33,24 @@ const fieldValues = (app: ElectronApplication) =>
   ) as Promise<{ user: string; pass: string }>;
 
 test('credential vault saves, autofills, and keeps secrets out of logs', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
   let app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
 
     const saved = await app.evaluate((_electron, credential) => {
       return (
         globalThis as typeof globalThis & {
-          __devinworkspaces: {
+          __agentworkspace: {
             saveCredential(c: typeof credential): Promise<{ id: string } | null>;
           };
         }
-      ).__devinworkspaces.saveCredential(credential);
+      ).__agentworkspace.saveCredential(credential);
     }, { origin: githubOrigin(), username: 'alice', password: 's3cret' });
     expect(saved?.id).toBeTruthy();
     await expect
@@ -99,13 +99,13 @@ test('credential vault saves, autofills, and keeps secrets out of logs', async (
     // Cookie audit hook returns both partitions, metadata only.
     const audit = await app.evaluate(() =>
       (globalThis as typeof globalThis & {
-        __devinworkspaces: {
+        __agentworkspace: {
           auditCookies(): Promise<Array<{ partition: string; cookies: Array<Record<string, unknown>> }>>;
         };
-      }).__devinworkspaces.auditCookies(),
+      }).__agentworkspace.auditCookies(),
     );
     expect(audit.map((entry) => entry.partition).sort()).toEqual([
-      'persist:devin',
+      'persist:cloud',
       'persist:github',
     ]);
     for (const entry of audit) {
@@ -122,7 +122,7 @@ test('credential vault saves, autofills, and keeps secrets out of logs', async (
     app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
     closed = false;
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     const persisted = await app.evaluate(async ({ session }) =>
       session.fromPartition('persist:github').cookies.get({ name: 'fixture_persist' }),
@@ -139,7 +139,7 @@ test('credential vault saves, autofills, and keeps secrets out of logs', async (
 });
 
 test('migrates a v1 credentials.json and manages passwords from Settings', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
   // Pre-seed a v1 vault; the store must migrate it to version 2 on launch.
@@ -155,7 +155,7 @@ test('migrates a v1 credentials.json and manages passwords from Settings', async
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
       .toBe(true);
     await expect
       .poll(async () =>
@@ -174,16 +174,16 @@ test('migrates a v1 credentials.json and manages passwords from Settings', async
     const saved = await app.evaluate((_electron, credential) => {
       return (
         globalThis as typeof globalThis & {
-          __devinworkspaces: {
+          __agentworkspace: {
             saveCredential(c: typeof credential): Promise<{ id: string } | null>;
           };
         }
-      ).__devinworkspaces.saveCredential(credential);
+      ).__agentworkspace.saveCredential(credential);
     }, { origin: githubOrigin(), username: 'alice', password: 's3cret' });
     expect(saved?.id).toBeTruthy();
     const id = saved!.id;
 
-    await evaluateInShell(app, `window.devinworkspaces.setSurface('settings')`);
+    await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await evaluateInShell(app, `document.querySelector('[data-settings-tab="passwords"]').click()`);
     const rowSelector = `tr[data-credential-id="${id}"]`;
     await expect

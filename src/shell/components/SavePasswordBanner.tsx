@@ -12,7 +12,7 @@ export function SavePasswordBanner() {
   useEffect(() => {
     if (!prompt) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') window.devinworkspaces.autofillPromptResolve('dismiss');
+      if (event.key === 'Escape') window.agentworkspace.autofillPromptResolve('dismiss');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -35,7 +35,7 @@ export function SavePasswordBanner() {
       className="absolute inset-0 z-40"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
-          window.devinworkspaces.autofillPromptResolve('dismiss');
+          window.agentworkspace.autofillPromptResolve('dismiss');
         }
       }}
     >
@@ -57,7 +57,7 @@ export function SavePasswordBanner() {
             id="autofillPromptSave"
             type="button"
             className="px-3 py-1.5 rounded-md border border-[#39475a] bg-[#1a2330] hover:bg-[#2a394d] text-sm"
-            onClick={() => window.devinworkspaces.autofillPromptResolve('save')}
+            onClick={() => window.agentworkspace.autofillPromptResolve('save')}
           >
             {prompt.kind === 'update' ? 'Update' : 'Save'}
           </button>
@@ -65,7 +65,7 @@ export function SavePasswordBanner() {
             id="autofillPromptDismiss"
             type="button"
             className="px-3 py-1.5 rounded-md border border-[#39475a] bg-[#1a2330] hover:bg-[#2a394d] text-sm"
-            onClick={() => window.devinworkspaces.autofillPromptResolve('dismiss')}
+            onClick={() => window.agentworkspace.autofillPromptResolve('dismiss')}
           >
             Not now
           </button>

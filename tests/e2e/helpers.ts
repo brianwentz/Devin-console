@@ -118,10 +118,10 @@ export type PublicState = {
   };
 };
 
-const profileWslRoot = mkdtempSync(join(tmpdir(), 'devin-workspaces-wsl-'));
+const profileWslRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wsl-'));
 
 // Quiet mode is the default for every test-mode launch (window invisible,
-// never takes the desktop foreground); DEVIN_WORKSPACES_TEST_QUIET=0 shows it
+// never takes the desktop foreground); AGENT_WORKSPACE_TEST_QUIET=0 shows it
 // — that is what  sets for watching a run.
 export async function launchApp(
   userData: string,
@@ -136,31 +136,31 @@ export async function launchApp(
     env: {
       ...process.env,
       ...extraEnv,
-      DEVIN_WORKSPACES_TEST: '1',
-      DEVIN_WORKSPACES_TENANT_URL: fixtures.devinUrl,
-      DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS: fixtures.githubOrigins,
-      DEVIN_WORKSPACES_USER_DATA: userData,
-      DEVIN_WORKSPACES_LOG: logFile,
-      DEVIN_WORKSPACES_DOWNLOAD_DIR: downloadDir,
-      DEVIN_WORKSPACES_ALLOW_EXTERNAL: '0',
+      AGENT_WORKSPACE_TEST: '1',
+      AGENT_WORKSPACE_TENANT_URL: fixtures.devinUrl,
+      AGENT_WORKSPACE_TEST_GITHUB_ORIGINS: fixtures.githubOrigins,
+      AGENT_WORKSPACE_USER_DATA: userData,
+      AGENT_WORKSPACE_LOG: logFile,
+      AGENT_WORKSPACE_DOWNLOAD_DIR: downloadDir,
+      AGENT_WORKSPACE_ALLOW_EXTERNAL: '0',
       // Legacy specs assume the sessions column is closed (devin.x === RAIL).
-      DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '0',
-      DEVIN_WORKSPACES_TEST_RELEASES_URL: fixtures.apiUrl,
+      AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '0',
+      AGENT_WORKSPACE_TEST_RELEASES_URL: fixtures.apiUrl,
       // Analytics Claude tab (A2): the usage fixture + account file live under
       // tests/fixtures; nothing reads them until the service lands.
-      DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL: fixtures.claudeUsageUrl,
+      AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL: fixtures.claudeUsageUrl,
       // Devin usage metric: fixture endpoint; slow default cadence — specs
       // opt into faster polling.
-      DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL: fixtures.devinUsageUrl,
-      DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS: '600000',
-      DEVIN_WORKSPACES_TEST_CLAUDE_ACCOUNT_FILE: join(
+      AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL: fixtures.devinUsageUrl,
+      AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS: '600000',
+      AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE: join(
         process.cwd(),
         'tests/fixtures/claude-account.json',
       ),
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       // Route every wsl.exe call through the fake; with no distros the app
       // stays local-only. Specs opt into distros via FAKE_WSL_DISTROS.
-      DEVIN_WORKSPACES_TEST_WSL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeWsl.cjs')}`,
+      AGENT_WORKSPACE_TEST_WSL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeWsl.cjs')}`,
       FAKE_WSL_DISTROS: '',
       FAKE_WSL_ROOT: join(profileWslRoot, 'root'),
       ...extraEnv,
@@ -182,7 +182,7 @@ export async function launchApp(
   // Fail fast when the display clamps the window below the pane threshold —
   // otherwise every pane-dependent assertion just times out mysteriously.
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
   const width = await app.evaluate(
     ({ BaseWindow }) => BaseWindow.getAllWindows()[0]?.getContentBounds().width ?? 0,
@@ -209,8 +209,8 @@ export async function launchApp(
 export async function state(app: ElectronApplication): Promise<PublicState> {
   return app.evaluate(
     () =>
-      (globalThis as typeof globalThis & { __devinworkspaces: { state(): PublicState } })
-        .__devinworkspaces.state(),
+      (globalThis as typeof globalThis & { __agentworkspace: { state(): PublicState } })
+        .__agentworkspace.state(),
   );
 }
 
@@ -382,8 +382,8 @@ export async function waitForTabTitle(app: ElectronApplication, title: string): 
 export async function openTab(app: ElectronApplication, url: string): Promise<string> {
   const id = await app.evaluate((_electron, targetUrl: string) => {
     return (
-      globalThis as typeof globalThis & { __devinworkspaces: { open(url: string): string } }
-    ).__devinworkspaces.open(targetUrl);
+      globalThis as typeof globalThis & { __agentworkspace: { open(url: string): string } }
+    ).__agentworkspace.open(targetUrl);
   }, url);
   if (typeof id !== 'string') throw new Error(`Could not open fixture tab at ${url}`);
   return id;
@@ -675,7 +675,7 @@ export async function launchWithClaudeFixture(
   fixtures: FixtureServers,
   extraEnv: Record<string, string> = {},
 ): Promise<{ app: ElectronApplication; profile: string; claudeHome: string }> {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const logFile = join(profile, 'events.jsonl');

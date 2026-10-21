@@ -203,7 +203,7 @@ export function attachRouting(webContents: Electron.WebContents, view: ViewName)
   );
 }
 
-// Links clicked in shell-owned UI (Local chat, settings) and the `__devinworkspaces.routeLink`
+// Links clicked in shell-owned UI (Local chat, settings) and the `__agentworkspace.routeLink`
 // test hook: treated as new-window requests from the shell.
 export function handleLink(url: string, source: ViewName = 'shell'): void {
   applyDecision(url, source, 'link-open', 'new-window');

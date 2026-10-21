@@ -8,7 +8,7 @@ import { closeApp, launchWithClaudeFixture, shellPage, waitForEvent } from './he
 import type { ClaudeAgent, ClaudeState } from '../../src/shared/ipc';
 
 // §2.5: the Claude terminal tab + background agents end-to-end — fake pty
-// (DEVIN_WORKSPACES_TEST_TERMINAL_CMD prints `args:...`), fake `claude agents`
+// (AGENT_WORKSPACE_TEST_TERMINAL_CMD prints `args:...`), fake `claude agents`
 // CLI (FAKE_CLAUDE_AGENTS file / FAKE_CLAUDE_AGENTS_LOG record), fake SDK.
 
 let fixtures: FixtureServers;
@@ -48,54 +48,54 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
     claudeChatState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeChatState()) as Promise<any>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeChatState()) as Promise<any>,
     claudeSelect: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeSelect(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeSelect(v),
         id,
       ) as Promise<void>,
     claudeMenuItems: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeMenuItems()) as Promise<MenuItem[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeMenuItems()) as Promise<MenuItem[]>,
     claudeMenuClick: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeMenuClick(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeMenuClick(v),
         id,
       ) as Promise<{ action: string | null }>,
     claudeLiveCount: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeLiveCount()) as Promise<number>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeLiveCount()) as Promise<number>,
     claudeAgents: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeAgents()) as Promise<ClaudeAgent[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeAgents()) as Promise<ClaudeAgent[]>,
     claudeAgentsRefresh: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeAgentsRefresh()) as Promise<void>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh()) as Promise<void>,
     claudePrompt: (id: string, text: string) =>
       app.evaluate(
         (_e, a: { id: string; text: string }) =>
-          (globalThis as any).__devinworkspaces.claudePrompt(a.id, a.text),
+          (globalThis as any).__agentworkspace.claudePrompt(a.id, a.text),
         { id, text },
       ) as Promise<void>,
     terminalList: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.terminalList()) as Promise<
+      evaluate(() => (globalThis as any).__agentworkspace.terminalList()) as Promise<
         { id: string; kind: string; sessionId: string | null }[]
       >,
     terminalRead: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.terminalRead(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.terminalRead(v),
         id,
       ) as Promise<string>,
     terminalPid: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.terminalPid(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.terminalPid(v),
         id,
       ) as Promise<number | null>,
     state: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.state()) as Promise<{
+      evaluate(() => (globalThis as any).__agentworkspace.state()) as Promise<{
         claudeSessionId: string | null;
       }>,
     setSurface: (surface: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v as never),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v as never),
         surface,
       ),
   };
@@ -103,13 +103,13 @@ function hooks(app: ElectronApplication) {
 
 function baseEnv(agentsFile?: string, agentsLog?: string): Record<string, string> {
   return {
-    DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: FAKE_PTY,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
-    DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD: FAKE_AGENTS,
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD: FAKE_AGENTS,
     ...(agentsFile ? { FAKE_CLAUDE_AGENTS: agentsFile } : {}),
     ...(agentsLog ? { FAKE_CLAUDE_AGENTS_LOG: agentsLog } : {}),
-    DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_POLL_MS: '500',
+    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '500',
   };
 }
 
@@ -172,7 +172,7 @@ test('opening the terminal during a running prompt is refused', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     ...baseEnv(),
     FAKE_CLAUDE_DELAY_MS: '4000',
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: mkdtempSync(
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: mkdtempSync(
       join(tmpdir(), 'claude-term-cwd-'),
     ),
   });
@@ -182,7 +182,7 @@ test('opening the terminal during a running prompt is refused', async () => {
     await h.setSurface('claude');
     const shell = await shellPage(app);
     const id = (await app.evaluate(() =>
-      (globalThis as any).__devinworkspaces.claudeNewSession(null),
+      (globalThis as any).__agentworkspace.claudeNewSession(null),
     )) as string;
     await h.claudePrompt(id, 'long turn');
     await expect
@@ -197,7 +197,7 @@ test('opening the terminal during a running prompt is refused', async () => {
     // wedges the Electron quit path on Windows (see AGENTS.md Phase 3 notes).
     await app.evaluate(
       (_e, sid: string) =>
-        (globalThis as any).__devinworkspaces.claudeCancel(sid),
+        (globalThis as any).__agentworkspace.claudeCancel(sid),
       id,
     );
     await expect

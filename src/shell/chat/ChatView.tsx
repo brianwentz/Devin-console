@@ -8,7 +8,7 @@ import { clearDraft, getDraft, setDraft as setStoredDraft } from './drafts';
 // Label for the composer's send chord (Ctrl+Enter / ⌘+Enter) — the hints in
 // LocalPanel and ClaudeView both read it so the string is defined once.
 export const sendShortcutLabel = (): string =>
-  `${window.devinworkspaces.platform === 'darwin' ? '⌘' : 'Ctrl'}+Enter`;
+  `${window.agentworkspace.platform === 'darwin' ? '⌘' : 'Ctrl'}+Enter`;
 
 export interface ChatViewProps {
   session: ChatSessionPublic | null;

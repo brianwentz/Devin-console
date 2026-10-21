@@ -21,7 +21,7 @@ export interface CookieAuditResult {
 // Never include cookie values — metadata only.
 export async function auditCookies(): Promise<CookieAuditResult[]> {
   const results: CookieAuditResult[] = [];
-  for (const partition of ['persist:devin', 'persist:github']) {
+  for (const partition of ['persist:cloud', 'persist:github']) {
     try {
       const cookies = await session.fromPartition(partition).cookies.get({});
       const result: CookieAuditResult = {

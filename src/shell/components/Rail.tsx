@@ -31,7 +31,7 @@ function NotificationsButton({ buttonClass }: { buttonClass: string }) {
       aria-pressed={open}
       title="Notifications"
       className={`${buttonClass} relative flex items-center justify-center`}
-      onClick={() => window.devinworkspaces.notificationsPanel(!open)}
+      onClick={() => window.agentworkspace.notificationsPanel(!open)}
     >
       <Bell size={18} strokeWidth={1.8} />
       {unread > 0 && (
@@ -170,7 +170,7 @@ export function Rail({
         disabled={terminalOffSurface}
         className={`${buttonClass} text-sm`}
         onClick={() => {
-          if (!terminalOffSurface) window.devinworkspaces.terminalToggle();
+          if (!terminalOffSurface) window.agentworkspace.terminalToggle();
         }}
       >
         &gt;_
@@ -182,7 +182,7 @@ export function Rail({
         aria-pressed={paneOpen}
         title={paneCollapsed ? 'GitHub pane hidden — widen window' : 'Toggle GitHub pane'}
         className={`${buttonClass} relative text-sm`}
-        onClick={() => window.devinworkspaces.togglePane()}
+        onClick={() => window.agentworkspace.togglePane()}
       >
         GH
         {paneCollapsed && paneOpen && (

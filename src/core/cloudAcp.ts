@@ -81,7 +81,7 @@ export interface CloudListResult {
 export function buildInitializeParams(version: string): Record<string, unknown> {
   return {
     protocolVersion: 1,
-    clientInfo: { name: 'devin-workspaces', version },
+    clientInfo: { name: 'agent-workspace', version },
     clientCapabilities: { _meta: { [`${META}sessionListFolders`]: true } },
   };
 }

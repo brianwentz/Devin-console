@@ -68,7 +68,7 @@ await Promise.all([
     external: ['electron', 'playwright'],
     outfile: 'out/scripts/os-input.cjs',
   }),
-  // Fake ACP v1 agent used by the Local E2E tests (DEVIN_WORKSPACES_LOCAL_AGENT_CMD).
+  // Fake ACP v1 agent used by the Local E2E tests (AGENT_WORKSPACE_LOCAL_AGENT_CMD).
   build({
     entryPoints: ['tests/fixtures/fakeAcpAgent.ts'],
     bundle: true,
@@ -77,7 +77,7 @@ await Promise.all([
     format: 'cjs',
     outfile: 'out/fixtures/fakeAcpAgent.cjs',
   }),
-  // Echo pty used by the Terminal E2E (DEVIN_WORKSPACES_TEST_TERMINAL_CMD).
+  // Echo pty used by the Terminal E2E (AGENT_WORKSPACE_TEST_TERMINAL_CMD).
   build({
     entryPoints: ['tests/fixtures/fakePty.ts'],
     bundle: true,
@@ -86,7 +86,7 @@ await Promise.all([
     format: 'cjs',
     outfile: 'out/fixtures/fakePty.cjs',
   }),
-  // Fake `devin auth status` (DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD).
+  // Fake `devin auth status` (AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD).
   build({
     entryPoints: ['tests/fixtures/fakeAuthStatus.ts'],
     bundle: true,
@@ -118,7 +118,7 @@ await Promise.all([
       outfile: 'out/scripts/' + name + '.cjs',
     }),
   ),
-  // Phase 2 fake SDK (DEVIN_WORKSPACES_TEST_CLAUDE_SDK): loaded by
+  // Phase 2 fake SDK (AGENT_WORKSPACE_TEST_CLAUDE_SDK): loaded by
   // dynamic import() → must be ESM with the real SDK external.
   build({
     entryPoints: ['tests/fixtures/fakeClaudeSdk.ts'],
@@ -129,7 +129,7 @@ await Promise.all([
     external: ['@anthropic-ai/claude-agent-sdk'],
     outfile: 'out/fixtures/fakeClaudeSdk.mjs',
   }),
-  // Fake wsl.exe for hosts e2e (DEVIN_WORKSPACES_TEST_WSL_CMD).
+  // Fake wsl.exe for hosts e2e (AGENT_WORKSPACE_TEST_WSL_CMD).
   build({
     entryPoints: ['tests/fixtures/fakeWsl.ts'],
     bundle: true,
@@ -139,7 +139,7 @@ await Promise.all([
     outfile: 'out/fixtures/fakeWsl.cjs',
   }),
   // Phase 3 fake `claude` CLI for background agents
-  // (DEVIN_WORKSPACES_TEST_CLAUDE_AGENTS_CMD).
+  // (AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD).
   build({
     entryPoints: ['tests/fixtures/fakeClaudeAgents.ts'],
     bundle: true,
@@ -149,7 +149,7 @@ await Promise.all([
     outfile: 'out/fixtures/fakeClaudeAgents.cjs',
   }),
   // Phase 6 fake `gh` CLI for the PR-state fallback
-  // (DEVIN_WORKSPACES_TEST_GH_CMD).
+  // (AGENT_WORKSPACE_TEST_GH_CMD).
   build({
     entryPoints: ['tests/fixtures/fakeGh.ts'],
     bundle: true,

@@ -30,15 +30,15 @@ test.afterAll(async () => {
 
 async function routeLink(app: ElectronApplication, url: string): Promise<void> {
   await app.evaluate((_e, target: string) => {
-    (globalThis as typeof globalThis & { __devinworkspaces: { routeLink(url: string): void } })
-      .__devinworkspaces.routeLink(target);
+    (globalThis as typeof globalThis & { __agentworkspace: { routeLink(url: string): void } })
+      .__agentworkspace.routeLink(target);
   }, url);
 }
 
 async function openSession(app: ElectronApplication, name: string): Promise<void> {
   await app.evaluate((_e, url: string) => {
-    (globalThis as typeof globalThis & { __devinworkspaces: { loadDevinUrl(url: string): void } })
-      .__devinworkspaces.loadDevinUrl(url);
+    (globalThis as typeof globalThis & { __agentworkspace: { loadDevinUrl(url: string): void } })
+      .__agentworkspace.loadDevinUrl(url);
   }, `${fixtures.devinUrl}/sessions/${name}`);
   await expect.poll(async () => (await state(app)).currentSessionId).toBe(name);
   await expect.poll(async () => (await state(app)).tabs.scope).toBe(name);
@@ -48,7 +48,7 @@ async function activeTabBounds(app: ElectronApplication) {
   const s = await state(app);
   if (!s.tabs.activeId) return null;
   return app.evaluate(
-    (_e, id: string) => (globalThis as any).__devinworkspaces.getTabBounds(id),
+    (_e, id: string) => (globalThis as any).__agentworkspace.getTabBounds(id),
     s.tabs.activeId,
   );
 }
@@ -66,7 +66,7 @@ async function expectActiveTabSized(app: ElectronApplication) {
 async function scopes(
   app: ElectronApplication,
 ): Promise<Array<{ scope: string; count: number; liveCount: number; lastSeen: number }>> {
-  return app.evaluate(() => (globalThis as any).__devinworkspaces.listScopes());
+  return app.evaluate(() => (globalThis as any).__agentworkspace.listScopes());
 }
 
 async function quit(app: ElectronApplication, profile: string): Promise<void> {
@@ -76,11 +76,11 @@ async function quit(app: ElectronApplication, profile: string): Promise<void> {
 }
 
 test('tabs follow the visible session; hidden tabs stay live and keep scroll/form state', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-scopes-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-scopes-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
 
     // Session A: two tabs.
     await openSession(app, 'A');
@@ -171,13 +171,13 @@ test('tabs follow the visible session; hidden tabs stay live and keep scroll/for
 });
 
 test('keepAliveHours=0 discards hidden-scope tabs on switch and restores on return', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-scopes0-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-scopes0-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_KEEPALIVE_MS: '0',
+    AGENT_WORKSPACE_TEST_KEEPALIVE_MS: '0',
   });
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await openSession(app, 'A');
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-1`);
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-2`);
@@ -209,7 +209,7 @@ test('keepAliveHours=0 discards hidden-scope tabs on switch and restores on retu
     expect(s.tabs.tabs.find((t) => t.id === restoredId)?.discarded).toBeUndefined();
     const other = s.tabs.tabs.find((t) => t.id !== restoredId)!;
     await expect.poll(async () => (await state(app)).tabs.tabs.find((t) => t.id === other.id)?.discarded).toBeUndefined();
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), other.id);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), other.id);
     await expect.poll(async () => (await state(app)).tabs.activeId).toBe(other.id);
   } finally {
     await quit(app, profile);
@@ -217,12 +217,12 @@ test('keepAliveHours=0 discards hidden-scope tabs on switch and restores on retu
 });
 
 test('maxLiveTabs caps live webContents LRU and skips a beforeunload-protected tab', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-cap-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-cap-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
-    await evaluateInShell(app, `window.devinworkspaces.setSettings({ tabs: { maxLiveTabs: 1 } })`);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ tabs: { maxLiveTabs: 1 } })`);
     await expect.poll(async () => (await state(app)).settings.tabs.maxLiveTabs).toBe(1);
 
     // Oldest tab is protected (unsaved-draft); it must survive the cap.
@@ -259,11 +259,11 @@ test('maxLiveTabs caps live webContents LRU and skips a beforeunload-protected t
 });
 
 test('closeScope keeps a beforeunload-protected tab live and visible', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-closescope-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-closescope-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await openSession(app, 'A');
     await routeLink(app, `${fixtures.githubUrl}/beforeunload`);
     await waitForTabTitle(app, 'Before unload');
@@ -275,18 +275,18 @@ test('closeScope keeps a beforeunload-protected tab live and visible', async () 
     )!.id;
     // User answers "Stay" on the beforeunload prompt.
     await app.evaluate(
-      () => (globalThis as any).__devinworkspaces.setBeforeUnloadDecision('stay'),
+      () => (globalThis as any).__agentworkspace.setBeforeUnloadDecision('stay'),
     );
 
     // Close the whole scope — the guarded tab refuses, the other closes.
-    await evaluateInShell(app, `window.devinworkspaces.closeScope('A')`);
+    await evaluateInShell(app, `window.agentworkspace.closeScope('A')`);
     await expect.poll(async () => (await state(app)).tabs.tabs.map((t) => t.id)).toEqual([guardedId]);
     const aScope = (await scopes(app)).find((s) => s.scope === 'A');
     expect(aScope).toMatchObject({ count: 1, liveCount: 1 });
     // No orphan: the surviving entry still owns a live webContents.
     expect(
       await app.evaluate((_e, id: string) =>
-        Boolean((globalThis as any).__devinworkspaces.getTabWebContents(id)), guardedId),
+        Boolean((globalThis as any).__agentworkspace.getTabWebContents(id)), guardedId),
     ).toBe(true);
     await waitForEvent(logFile, 'tabs-scope-closed');
   } finally {
@@ -295,25 +295,25 @@ test('closeScope keeps a beforeunload-protected tab live and visible', async () 
 });
 
 test('restart persists scopes/active; visible scope preloads, hidden stays lazy', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-persist-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-persist-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   let ids: string[] = [];
   let bIds: string[] = [];
   const tabInfo = (app2: ElectronApplication, id: string) =>
     app2.evaluate(
-      (_e, tid: string) => (globalThis as any).__devinworkspaces.tabInfo(tid),
+      (_e, tid: string) => (globalThis as any).__agentworkspace.tabInfo(tid),
       id,
     ) as Promise<{ discarded: boolean; hasView: boolean } | null>;
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await openSession(app, 'A');
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-1`);
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-2`);
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-3`);
     await waitForTabCount(app, 3);
     ids = (await state(app)).tabs.tabs.map((t) => t.id);
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), ids[0]!);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), ids[0]!);
     await openSession(app, 'B');
     await routeLink(app, `${fixtures.githubUrl}/page/session-b-1`);
     await routeLink(app, `${fixtures.githubUrl}/page/session-b-2`);
@@ -334,7 +334,7 @@ test('restart persists scopes/active; visible scope preloads, hidden stays lazy'
   // becomes visible — then ALL of that scope's tabs load in the background.
   const app2 = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app2.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app2.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     expect((await state(app2)).tabs.hiddenTabCount).toBe(5);
     await openSession(app2, 'A');
     const s = await state(app2);
@@ -366,7 +366,7 @@ test('restart persists scopes/active; visible scope preloads, hidden stays lazy'
 });
 
 test('v1 tab snapshot migrates into scopes', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-v1-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-v1-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(
     join(profile, 'settings.json'),
@@ -384,7 +384,7 @@ test('v1 tab snapshot migrates into scopes', async () => {
   );
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     // discardIdleMinutes 90 -> keepAliveHours 2; v1 snapshot moved to tabSnapshot.
     expect((await state(app)).settings.tabs.keepAliveHours).toBe(2);
     expect((await state(app)).tabs.hiddenTabCount).toBe(2);
@@ -398,13 +398,13 @@ test('v1 tab snapshot migrates into scopes', async () => {
 });
 
 // Right-click strip menus are native (views paint over the shell); the test
-// drives the same code paths via __devinworkspaces hooks.
+// drives the same code paths via __agentworkspace hooks.
 test('tab menus: copy address and reload all tabs in this session', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-menus-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-menus-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await openSession(app, 'A');
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-1`);
     await routeLink(app, `${fixtures.githubUrl}/page/session-a-2`);
@@ -419,13 +419,13 @@ test('tab menus: copy address and reload all tabs in this session', async () => 
 
     // Copy address writes the tab's URL to the clipboard and logs it.
     const copied = await app.evaluate((_e, id: string) => {
-      return (globalThis as any).__devinworkspaces.copyTabAddress(id);
+      return (globalThis as any).__agentworkspace.copyTabAddress(id);
     }, ids[0]!);
     expect(copied).toBe(true);
     expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(firstUrl);
     await waitForEvent(logFile, 'tab-copy-address');
     expect(
-      await app.evaluate(() => (globalThis as any).__devinworkspaces.copyTabAddress('nope')),
+      await app.evaluate(() => (globalThis as any).__agentworkspace.copyTabAddress('nope')),
     ).toBe(false);
 
     // Reload all tabs in this session: both live tabs reload (did-stop-loading
@@ -436,7 +436,7 @@ test('tab menus: copy address and reload all tabs in this session', async () => 
       ).length;
     const before = [await stopCount(ids[0]!), await stopCount(ids[1]!)];
     const reloaded = await app.evaluate(
-      () => (globalThis as any).__devinworkspaces.reloadScope(),
+      () => (globalThis as any).__agentworkspace.reloadScope(),
     );
     expect(reloaded).toBe(2);
     await waitForEvent(logFile, 'tabs-reload-scope');

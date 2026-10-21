@@ -60,23 +60,23 @@ test('Local: real-pointer workspace header drag reorders and persists', async ()
   const wsB = mkdtempSync(join(tmpdir(), 'dndp-wsB-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_QUIET: '0',
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_QUIET: '0',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
   });
   try {
     await app.evaluate(
-      (_e, v: string) => (globalThis as any).__devinworkspaces.localAddWorkspace(v),
+      (_e, v: string) => (globalThis as any).__agentworkspace.localAddWorkspace(v),
       wsA,
     );
     await app.evaluate(
-      (_e, v: string) => (globalThis as any).__devinworkspaces.localAddWorkspace(v),
+      (_e, v: string) => (globalThis as any).__agentworkspace.localAddWorkspace(v),
       wsB,
     );
-    await app.evaluate((_e, v: string) => (globalThis as any).__devinworkspaces.localNewSession(v), wsA);
-    await app.evaluate((_e, v: string) => (globalThis as any).__devinworkspaces.localNewSession(v), wsB);
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('local'));
+    await app.evaluate((_e, v: string) => (globalThis as any).__agentworkspace.localNewSession(v), wsA);
+    await app.evaluate((_e, v: string) => (globalThis as any).__agentworkspace.localNewSession(v), wsB);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('local'));
     const shell = await shellPage(app);
     const secA = await sectionAt(shell, app, wsA);
     const secB = await sectionAt(shell, app, wsB);
@@ -99,17 +99,17 @@ test('Local: real-pointer workspace header drag reorders and persists', async ()
 
 test('Claude: real-pointer workspace header drag reorders and persists', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_QUIET: '0',
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_QUIET: '0',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   try {
     const wsA = 'C:\\work\\dndp-alpha';
     const wsB = 'C:\\work\\dndp-beta';
     const shell = await shellPage(app);
     for (const w of [wsA, wsB]) {
-      await shell.evaluate((path) => window.devinworkspaces.claudeWorkspaceAdd(path), w);
+      await shell.evaluate((path) => window.agentworkspace.claudeWorkspaceAdd(path), w);
     }
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('claude'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
     const secA = await sectionAt(shell, app, wsA);
     const secB = await sectionAt(shell, app, wsB);
     await expect.poll(async () => sectionIndex(app, wsA)).toBeGreaterThanOrEqual(0);
@@ -137,17 +137,17 @@ test('negative: a lone workspace header is not draggable', async () => {
   const ws = mkdtempSync(join(tmpdir(), 'dndp-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_QUIET: '0',
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_QUIET: '0',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
   });
   try {
     await app.evaluate(
-      (_e, v: string) => (globalThis as any).__devinworkspaces.localAddWorkspace(v),
+      (_e, v: string) => (globalThis as any).__agentworkspace.localAddWorkspace(v),
       ws,
     );
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.setSurface('local'));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('local'));
     const shell = await shellPage(app);
     const sec = await sectionAt(shell, app, ws);
     await sec.waitFor();

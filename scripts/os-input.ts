@@ -16,8 +16,8 @@ type ShellStateLike = {
 const evidenceDir = resolve('docs/evidence');
 const requireFromRepo = createRequire(join(process.cwd(), 'package.json'));
 const electronBinary = requireFromRepo('electron') as unknown as string;
-const scales = process.env.DEVIN_WORKSPACES_OS_SCALE
-  ? [Number(process.env.DEVIN_WORKSPACES_OS_SCALE)]
+const scales = process.env.AGENT_WORKSPACE_OS_SCALE
+  ? [Number(process.env.AGENT_WORKSPACE_OS_SCALE)]
   : [1, 1.5, 2];
 
 function xdotool(args: string[], capture = false): string {
@@ -37,7 +37,7 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function getState(app: ElectronApplication): Promise<ShellStateLike> {
-  return app.evaluate(() => (globalThis as typeof globalThis & { __devinworkspaces: { state(): ShellStateLike } }).__devinworkspaces.state());
+  return app.evaluate(() => (globalThis as typeof globalThis & { __agentworkspace: { state(): ShellStateLike } }).__agentworkspace.state());
 }
 
 async function readEvents(path: string): Promise<Array<Record<string, any>>> {
@@ -69,7 +69,7 @@ async function runScale(scale: number, devinUrl: string, githubUrl: string): Pro
   if (process.env.DISPLAY !== ':0') {
     throw new Error(`OS-input proof requires DISPLAY=:0 (received ${process.env.DISPLAY ?? 'unset'})`);
   }
-  const profile = mkdtempSync(join(tmpdir(), `devin-workspaces-os-${String(scale).replace('.', '-')}-`));
+  const profile = mkdtempSync(join(tmpdir(), `agent-workspace-os-${String(scale).replace('.', '-')}-`));
   const downloadDir = join(profile, 'downloads');
   mkdirSync(downloadDir, { recursive: true });
   mkdirSync(evidenceDir, { recursive: true });
@@ -87,19 +87,19 @@ async function runScale(scale: number, devinUrl: string, githubUrl: string): Pro
       timeout: 30_000,
       env: {
         ...process.env,
-        DEVIN_WORKSPACES_TEST: '1',
-        DEVIN_WORKSPACES_TENANT_URL: devinUrl,
-        DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS: new URL(githubUrl).origin,
-        DEVIN_WORKSPACES_USER_DATA: profile,
-        DEVIN_WORKSPACES_LOG: eventFile,
-        DEVIN_WORKSPACES_DOWNLOAD_DIR: downloadDir,
-        DEVIN_WORKSPACES_ALLOW_EXTERNAL: '0',
-        DEVIN_WORKSPACES_SCALE: String(scale),
+        AGENT_WORKSPACE_TEST: '1',
+        AGENT_WORKSPACE_TENANT_URL: devinUrl,
+        AGENT_WORKSPACE_TEST_GITHUB_ORIGINS: new URL(githubUrl).origin,
+        AGENT_WORKSPACE_USER_DATA: profile,
+        AGENT_WORKSPACE_LOG: eventFile,
+        AGENT_WORKSPACE_DOWNLOAD_DIR: downloadDir,
+        AGENT_WORKSPACE_ALLOW_EXTERNAL: '0',
+        AGENT_WORKSPACE_SCALE: String(scale),
         ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       },
     });
     app = launched;
-    await expect.poll(async () => launched.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => launched.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await expect
       .poll(() =>
         launched.evaluate(
@@ -111,10 +111,10 @@ async function runScale(scale: number, devinUrl: string, githubUrl: string): Pro
       .toBe(true);
 
     await launched.evaluate((_electron, url: string) => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { open(value: string): string } }).__devinworkspaces.open(url);
+      return (globalThis as typeof globalThis & { __agentworkspace: { open(value: string): string } }).__agentworkspace.open(url);
     }, `${githubUrl}/page/os-one`);
     await launched.evaluate((_electron, url: string) => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { open(value: string): string } }).__devinworkspaces.open(url);
+      return (globalThis as typeof globalThis & { __agentworkspace: { open(value: string): string } }).__agentworkspace.open(url);
     }, `${githubUrl}/page/os-two`);
     await expect.poll(async () =>
       (await getState(launched)).tabs.tabs.filter((tab) => tab.title.startsWith('GitHub fixture')).length,

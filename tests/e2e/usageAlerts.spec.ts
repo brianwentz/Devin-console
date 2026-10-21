@@ -52,36 +52,36 @@ type UsageEntry = {
 function hooks(app: ElectronApplication) {
   return {
     notifications: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.notifications() as UsageEntry[]),
+      app.evaluate(() => (globalThis as any).__agentworkspace.notifications() as UsageEntry[]),
     usageEntries: async () =>
       (await app.evaluate(
-        () => (globalThis as any).__devinworkspaces.notifications(),
+        () => (globalThis as any).__agentworkspace.notifications(),
       ) as UsageEntry[]).filter((e) => e.kind === 'usage'),
     openNotification: (id: string) =>
-      app.evaluate((_e, value: string) => (globalThis as any).__devinworkspaces.notificationsOpen(value), id),
+      app.evaluate((_e, value: string) => (globalThis as any).__agentworkspace.notificationsOpen(value), id),
     setSurface: (value: string) =>
-      app.evaluate((_e, v) => (globalThis as any).__devinworkspaces.setSurface(v), value),
+      app.evaluate((_e, v) => (globalThis as any).__agentworkspace.setSurface(v), value),
     getAnalyticsBounds: () =>
       app.evaluate(
-        () => (globalThis as any).__devinworkspaces.getAnalyticsBounds() as {
+        () => (globalThis as any).__agentworkspace.getAnalyticsBounds() as {
           x: number; y: number; width: number; height: number;
         } | null,
       ),
     devinUsageState: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.devinUsageState()),
+      app.evaluate(() => (globalThis as any).__agentworkspace.devinUsageState()),
     devinUsageRefresh: () =>
-      app.evaluate(() => (globalThis as any).__devinworkspaces.devinUsageRefresh()),
+      app.evaluate(() => (globalThis as any).__agentworkspace.devinUsageRefresh()),
   };
 }
 
 async function launch(profile: string, logFile: string, extraEnv: Record<string, string> = {}) {
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS: String(POLL_MS),
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '0',
+    AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS: String(POLL_MS),
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '0',
     ...extraEnv,
   });
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
   return app;
 }
@@ -95,7 +95,7 @@ const usageAlertCount = async (logFile: string) =>
   (await readEvents(logFile)).filter((e) => e.event === 'usage-alert').length;
 
 test('devin 50 → 80 → no refire → persisted across restart → re-arm', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const logFile = join(profile, 'events.jsonl');
   fixtures.devin.setUsageLimit({ ...USAGE_BODY, cycle_usage: 6600 });
   const app = await launch(profile, logFile);
@@ -160,7 +160,7 @@ test('devin 50 → 80 → no refire → persisted across restart → re-arm', as
 });
 
 test('Devin tab summary row + strip layout + Claude tab row', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const logFile = join(profile, 'events.jsonl');
   fixtures.devin.setUsageLimit({ ...USAGE_BODY, cycle_usage: 6600 });
   const app = await launch(profile, logFile);
@@ -186,7 +186,7 @@ test('Devin tab summary row + strip layout + Claude tab row', async () => {
     const tablistY = (await shell.locator('#analyticsTabs [role="tablist"]').boundingBox())!.y;
     await evaluateInShell(
       app,
-      "window.devinworkspaces.setSettings({ analytics: { tab: 'claude' } })",
+      "window.agentworkspace.setSettings({ analytics: { tab: 'claude' } })",
     );
     await expect(shell.locator('#claudeUsageSummary')).toHaveCount(1);
     const tablistY2 = (await shell.locator('#analyticsTabs [role="tablist"]').boundingBox())!.y;
@@ -198,7 +198,7 @@ test('Devin tab summary row + strip layout + Claude tab row', async () => {
 });
 
 test('HTTP failure keeps last good; recovery clears stale', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const logFile = join(profile, 'events.jsonl');
   fixtures.devin.setUsageLimit({ ...USAGE_BODY, cycle_usage: 6600 });
   const app = await launch(profile, logFile);
@@ -235,8 +235,8 @@ test('claude session-limit alert opens Analytics on the Claude tab', async () =>
   const previous = process.env.FAKE_USAGE_JSON;
   process.env.FAKE_USAGE_JSON = JSON.stringify(body);
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    DEVIN_WORKSPACES_TEST_DEVIN_USAGE_POLL_MS: String(POLL_MS),
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '0',
+    AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS: String(POLL_MS),
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '0',
   });
   const h = hooks(app);
   try {
@@ -260,7 +260,7 @@ test('claude session-limit alert opens Analytics on the Claude tab', async () =>
 });
 
 test('kinds.usage = false: ledger still advances, no notification entry', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-usage-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const logFile = join(profile, 'events.jsonl');
   fixtures.devin.setUsageLimit({ ...USAGE_BODY, cycle_usage: 6600 });
   const app = await launch(profile, logFile);
@@ -271,7 +271,7 @@ test('kinds.usage = false: ledger still advances, no notification entry', async 
 
     await evaluateInShell(
       app,
-      'window.devinworkspaces.setSettings({ notifications: { kinds: { usage: false } } })',
+      'window.agentworkspace.setSettings({ notifications: { kinds: { usage: false } } })',
     );
     fixtures.devin.setUsageLimit({ ...USAGE_BODY, cycle_usage: 10200 });
     await expect.poll(async () => await usageAlertCount(logFile)).toBe(2);

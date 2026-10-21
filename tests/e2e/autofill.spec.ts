@@ -33,12 +33,12 @@ interface SavedCredential {
 }
 
 async function launch(): Promise<{ app: ElectronApplication; profile: string; logFile: string }> {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-autofill-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-autofill-'));
   const logFile = join(profile, 'events.jsonl');
   writeFileSync(logFile, '', 'utf8');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   await expect
-    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces)))
+    .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
   return { app, profile, logFile };
 }
@@ -56,11 +56,11 @@ async function save(
   const entry = await app.evaluate((_electron, credential) => {
     return (
       globalThis as typeof globalThis & {
-        __devinworkspaces: {
+        __agentworkspace: {
           saveCredential(c: typeof credential): Promise<SavedCredential | null>;
         };
       }
-    ).__devinworkspaces.saveCredential(credential);
+    ).__agentworkspace.saveCredential(credential);
   }, { origin: githubOrigin(), username, password });
   expect(entry?.id).toBeTruthy();
   return entry!;
@@ -103,11 +103,11 @@ test('single account auto-fills without submitting and marks lastUsedAt', async 
         app.evaluate((_electron, id: string) => {
           const list = (
             globalThis as typeof globalThis & {
-              __devinworkspaces: {
+              __agentworkspace: {
                 listCredentials(): { id: string; lastUsedAt: number | null }[];
               };
             }
-          ).__devinworkspaces.listCredentials();
+          ).__agentworkspace.listCredentials();
           return list.find((item) => item.id === id)?.lastUsedAt ?? null;
         }, entry.id),
       )
@@ -117,7 +117,7 @@ test('single account auto-fills without submitting and marks lastUsedAt', async 
     const isolation = await evaluateInView(
       app,
       `${fixtures.githubUrl}/login`,
-      `[typeof require, typeof process, typeof window.devinworkspaces, typeof ipcRenderer]`,
+      `[typeof require, typeof process, typeof window.agentworkspace, typeof ipcRenderer]`,
     );
     expect(isolation).toEqual(['undefined', 'undefined', 'undefined', 'undefined']);
 
@@ -215,8 +215,8 @@ test('multiple accounts open the picker; pick fills and lowers the shell', async
       .poll(async () =>
         app.evaluate(() =>
           (globalThis as typeof globalThis & {
-            __devinworkspaces: { childViews(): { url: string | null }[] };
-          }).__devinworkspaces.childViews()[0]?.url?.startsWith('app://shell/'),
+            __agentworkspace: { childViews(): { url: string | null }[] };
+          }).__agentworkspace.childViews()[0]?.url?.startsWith('app://shell/'),
         ),
       )
       .toBe(true);
@@ -236,8 +236,8 @@ test('multiple accounts open the picker; pick fills and lowers the shell', async
       .poll(async () =>
         app.evaluate(() =>
           (globalThis as typeof globalThis & {
-            __devinworkspaces: { childViews(): { url: string | null }[] };
-          }).__devinworkspaces.childViews()[0]?.url?.startsWith('app://shell/'),
+            __agentworkspace: { childViews(): { url: string | null }[] };
+          }).__agentworkspace.childViews()[0]?.url?.startsWith('app://shell/'),
         ),
       )
       .toBe(true);
@@ -258,9 +258,9 @@ test('a cross-origin iframe is not filled and its IPC would be rejected', async 
     const userValue = await app.evaluate((_electron, id: string) => {
       const contents = (
         globalThis as typeof globalThis & {
-          __devinworkspaces: { getTabWebContents(id: string): Electron.WebContents | null };
+          __agentworkspace: { getTabWebContents(id: string): Electron.WebContents | null };
         }
-      ).__devinworkspaces.getTabWebContents(id);
+      ).__agentworkspace.getTabWebContents(id);
       const frame = contents?.mainFrame.frames.find((f) => f.url.includes('/login'));
       return frame?.executeJavaScript(`document.getElementById('user').value`);
     }, tabId);

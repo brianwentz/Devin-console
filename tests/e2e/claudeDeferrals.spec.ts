@@ -31,71 +31,71 @@ function hooks(app: ElectronApplication) {
   const evaluate = (fn: () => unknown) => app.evaluate(fn);
   return {
     claudeState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeState()) as Promise<ClaudeState>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<ClaudeState>,
     state: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.state()) as Promise<any>,
+      evaluate(() => (globalThis as any).__agentworkspace.state()) as Promise<any>,
     setSurface: (s: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.setSurface(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v),
         s,
       ) as Promise<void>,
     claudeSelect: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeSelect(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeSelect(v),
         id,
       ) as Promise<void>,
     claudeNewSession: (cwd: string | null = null) =>
       app.evaluate(
-        (_e, v: string | null) => (globalThis as any).__devinworkspaces.claudeNewSession(v),
+        (_e, v: string | null) => (globalThis as any).__agentworkspace.claudeNewSession(v),
         cwd,
       ) as Promise<string>,
     claudePrompt: (id: string, text: string) =>
       app.evaluate(
         (_e, a: { id: string; text: string }) =>
-          (globalThis as any).__devinworkspaces.claudePrompt(a.id, a.text),
+          (globalThis as any).__agentworkspace.claudePrompt(a.id, a.text),
         { id, text },
       ) as Promise<void>,
     claudeChatState: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.claudeChatState()) as Promise<any>,
+      evaluate(() => (globalThis as any).__agentworkspace.claudeChatState()) as Promise<any>,
     claudeSubagents: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeSubagents(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeSubagents(v),
         id,
       ) as Promise<ClaudeSubagent[]>,
     claudeOpenSubagent: (id: string, agentId: string) =>
       app.evaluate(
         (_e, a: { id: string; agentId: string }) =>
-          (globalThis as any).__devinworkspaces.claudeOpenSubagent(a.id, a.agentId),
+          (globalThis as any).__agentworkspace.claudeOpenSubagent(a.id, a.agentId),
         { id, agentId },
       ) as Promise<null>,
     claudeChatMessageIds: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeChatMessageIds(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeChatMessageIds(v),
         id,
       ) as Promise<(string | null)[]>,
     claudeFork: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeFork(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeFork(v),
         id,
       ) as Promise<void>,
     claudeTerminalOpen: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.claudeTerminalOpen(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.claudeTerminalOpen(v),
         id,
       ) as Promise<void>,
     terminalList: () =>
-      evaluate(() => (globalThis as any).__devinworkspaces.terminalList()) as Promise<any[]>,
+      evaluate(() => (globalThis as any).__agentworkspace.terminalList()) as Promise<any[]>,
     terminalRead: (id: string) =>
       app.evaluate(
-        (_e, v: string) => (globalThis as any).__devinworkspaces.terminalRead(v),
+        (_e, v: string) => (globalThis as any).__agentworkspace.terminalRead(v),
         id,
       ) as Promise<string>,
   };
 }
 
 const BASE_ENV = {
-  DEVIN_WORKSPACES_TEST_CLAUDE_SDK: FAKE_SDK,
-  DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+  AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+  AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
 };
 
 test('subagent row expands, opens read-only, back returns', async () => {
@@ -163,7 +163,7 @@ test('header fork creates and selects a new session', async () => {
 test('two API messages in one turn → two agent bubbles', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     ...BASE_ENV,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     FAKE_CLAUDE_TWO_MESSAGES: '1',
   });
   const h = hooks(app);
@@ -191,7 +191,7 @@ test('two API messages in one turn → two agent bubbles', async () => {
 test('terminal-owned session reloads history on transcript change', async () => {
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
     ...BASE_ENV,
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: FAKE_PTY,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY,
   });
   const h = hooks(app);
   try {
@@ -241,7 +241,7 @@ test('terminal-owned session reloads history on transcript change', async () => 
 test('cost reaches the usage pill', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     ...BASE_ENV,
-    DEVIN_WORKSPACES_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
+    AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD: 'C:\\work\\alpha',
     FAKE_CLAUDE_COST_USD: '0.05',
   });
   const h = hooks(app);

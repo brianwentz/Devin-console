@@ -168,7 +168,7 @@ export class SettingsStore {
 }
 
 export function allowExternalEnabled(): boolean {
-  const env = process.env.DEVIN_WORKSPACES_ALLOW_EXTERNAL;
+  const env = process.env.AGENT_WORKSPACE_ALLOW_EXTERNAL;
   if (env !== undefined) return env === '1';
   return state.settings?.current.routing.allowExternal ?? true;
 }

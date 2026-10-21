@@ -35,9 +35,9 @@ test.afterAll(async () => {
 });
 
 test('routes fixture navigation, manages tabs, persists state, and cleans up webContents', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
   const downloads = join(profile, 'downloads');
-  const evidence = process.env.DEVIN_WORKSPACES_EVIDENCE === '1' ? resolve('docs/evidence') : profile;
+  const evidence = process.env.AGENT_WORKSPACE_EVIDENCE === '1' ? resolve('docs/evidence') : profile;
   mkdirSync(evidence, { recursive: true });
   const logFile = join(evidence, 'e2e-fixture-events.jsonl');
   writeFileSync(logFile, '', 'utf8');
@@ -45,7 +45,7 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
   let app = await launchApp(profile, logFile, downloads, fixtures);
   let appClosed = false;
   try {
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await expect.poll(() => hasDevinView(app, fixtures)).toBe(true);
 
     const initialCount = await app.evaluate(({ webContents }) => webContents.getAllWebContents().length);
@@ -83,7 +83,7 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     await expect.poll(() => hasFixtureFrame(app, fixtures)).toBe(true);
 
     await app.evaluate((_electron) => {
-      (globalThis as typeof globalThis & { __devinworkspaces: { setPaneOpen(value: boolean): void } }).__devinworkspaces.setPaneOpen(false);
+      (globalThis as typeof globalThis & { __agentworkspace: { setPaneOpen(value: boolean): void } }).__agentworkspace.setPaneOpen(false);
     });
     expect((await state(app)).paneOpen).toBe(false);
     await evaluateInView(app, fixtures.devinUrl, `document.getElementById('sameTab').click()`);
@@ -105,7 +105,7 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     await evaluateInView(app, fixtures.devinUrl, `document.getElementById('javascript').click()`);
     await evaluateInView(app, fixtures.devinUrl, `document.getElementById('data').click()`);
     await app.evaluate((_electron, urls: string[]) => {
-      const api = (globalThis as typeof globalThis & { __devinworkspaces: { routeLink(url: string): void } }).__devinworkspaces;
+      const api = (globalThis as typeof globalThis & { __agentworkspace: { routeLink(url: string): void } }).__agentworkspace;
       urls.forEach((url) => api.routeLink(url));
     }, ['javascript:alert(1)', 'data:text/html,denied']);
     await waitForEvent(logFile, 'window-open', 'external');
@@ -134,10 +134,10 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     await waitForTabTitle(app, 'popup-child');
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
     await app.evaluate((_electron, id: string) => {
-      (globalThis as typeof globalThis & { __devinworkspaces: { activate(value: string): void } }).__devinworkspaces.activate(id);
+      (globalThis as typeof globalThis & { __agentworkspace: { activate(value: string): void } }).__agentworkspace.activate(id);
     }, historyId);
     await app.evaluate((_electron, id: string) => {
-      (globalThis as typeof globalThis & { __devinworkspaces: { focus(value: string): void } }).__devinworkspaces.focus(id);
+      (globalThis as typeof globalThis & { __agentworkspace: { focus(value: string): void } }).__agentworkspace.focus(id);
     }, historyId);
     await evaluateInView(app, `${fixtures.githubUrl}/page/history-start`, `document.getElementById('next').click()`);
     await expect.poll(async () =>
@@ -147,19 +147,19 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
       (await state(app)).tabs.tabs.find((tab) => tab.id === historyId)?.canGoBack,
     ).toBe(true);
     await app.evaluate((_electron, action: 'back' | 'forward' | 'reload') => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { navigate(value: string): void } }).__devinworkspaces.navigate(action);
+      return (globalThis as typeof globalThis & { __agentworkspace: { navigate(value: string): void } }).__agentworkspace.navigate(action);
     }, 'back');
     await expect.poll(async () =>
       (await state(app)).tabs.tabs.find((tab) => tab.id === historyId)?.url.endsWith('/page/history-start'),
     ).toBe(true);
     await app.evaluate((_electron, action: 'back' | 'forward' | 'reload') => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { navigate(value: string): void } }).__devinworkspaces.navigate(action);
+      return (globalThis as typeof globalThis & { __agentworkspace: { navigate(value: string): void } }).__agentworkspace.navigate(action);
     }, 'forward');
     await expect.poll(async () =>
       (await state(app)).tabs.tabs.find((tab) => tab.id === historyId)?.url.endsWith('/page/next'),
     ).toBe(true);
     await app.evaluate((_electron, action: 'back' | 'forward' | 'reload') => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { navigate(value: string): void } }).__devinworkspaces.navigate(action);
+      return (globalThis as typeof globalThis & { __agentworkspace: { navigate(value: string): void } }).__agentworkspace.navigate(action);
     }, 'reload');
 
     await openTab(app, `${fixtures.githubUrl}/page/download-fixture`);
@@ -176,20 +176,20 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     const guardedId = await openTab(app, `${fixtures.githubUrl}/beforeunload`);
     await waitForTabTitle(app, 'Before unload');
     await app.evaluate((_electron) => {
-      (globalThis as typeof globalThis & { __devinworkspaces: { setBeforeUnloadDecision(value: string): void } })
-        .__devinworkspaces.setBeforeUnloadDecision('stay');
+      (globalThis as typeof globalThis & { __agentworkspace: { setBeforeUnloadDecision(value: string): void } })
+        .__agentworkspace.setBeforeUnloadDecision('stay');
     });
     const stayed = await app.evaluate((_electron, id: string) => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { close(id: string): Promise<boolean> } }).__devinworkspaces.close(id);
+      return (globalThis as typeof globalThis & { __agentworkspace: { close(id: string): Promise<boolean> } }).__agentworkspace.close(id);
     }, guardedId);
     expect(stayed).toBe(false);
     expect((await state(app)).tabs.tabs.some((tab) => tab.id === guardedId)).toBe(true);
     await app.evaluate((_electron) => {
-      (globalThis as typeof globalThis & { __devinworkspaces: { setBeforeUnloadDecision(value: string): void } })
-        .__devinworkspaces.setBeforeUnloadDecision('leave');
+      (globalThis as typeof globalThis & { __agentworkspace: { setBeforeUnloadDecision(value: string): void } })
+        .__agentworkspace.setBeforeUnloadDecision('leave');
     });
     const left = await app.evaluate((_electron, id: string) => {
-      return (globalThis as typeof globalThis & { __devinworkspaces: { close(id: string): Promise<boolean> } }).__devinworkspaces.close(id);
+      return (globalThis as typeof globalThis & { __agentworkspace: { close(id: string): Promise<boolean> } }).__agentworkspace.close(id);
     }, guardedId);
     expect(left).toBe(true);
 
@@ -237,8 +237,8 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     const tabCountAfterBehavior = (await state(app)).tabs.tabs.length;
     await app.evaluate((_electron) => {
       const api = (globalThis as typeof globalThis & {
-        __devinworkspaces: { state(): PublicState; close(id: string): Promise<boolean> };
-      }).__devinworkspaces;
+        __agentworkspace: { state(): PublicState; close(id: string): Promise<boolean> };
+      }).__agentworkspace;
       return api.state().tabs.tabs.reduce<Promise<boolean>>(
         (previous, tab) => previous.then(async () => {
           await api.close(tab.id);
@@ -252,8 +252,8 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
 
     await app.evaluate((_electron) => {
       const api = (globalThis as typeof globalThis & {
-        __devinworkspaces: { setPaneOpen(value: boolean): void; setPaneFraction(value: number): void };
-      }).__devinworkspaces;
+        __agentworkspace: { setPaneOpen(value: boolean): void; setPaneFraction(value: number): void };
+      }).__agentworkspace;
       api.setPaneFraction(0.374);
       api.setPaneOpen(true);
     });
@@ -267,7 +267,7 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     appClosed = true;
     app = await launchApp(profile, logFile, downloads, fixtures);
     appClosed = false;
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await waitForTabCount(app, 1);
     const restored = await state(app);
     expect(restored.paneOpen).toBe(true);
@@ -279,7 +279,7 @@ test('routes fixture navigation, manages tabs, persists state, and cleans up web
     const restoredTabId = restored.tabs.tabs[0]?.id;
     if (restoredTabId) {
       const closed = await app.evaluate((_electron, id: string) => {
-        return (globalThis as typeof globalThis & { __devinworkspaces: { close(id: string): Promise<boolean> } }).__devinworkspaces.close(id);
+        return (globalThis as typeof globalThis & { __agentworkspace: { close(id: string): Promise<boolean> } }).__agentworkspace.close(id);
       }, restoredTabId);
       expect(closed).toBe(true);
     }

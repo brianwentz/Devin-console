@@ -23,7 +23,7 @@ function HooksMirror() {
           type="checkbox"
           checked={enabled}
           onChange={(event) => {
-            void window.devinworkspaces.setSettings({
+            void window.agentworkspace.setSettings({
               claude: { hooksEnabled: event.target.checked },
             });
           }}

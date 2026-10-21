@@ -23,7 +23,7 @@ type Hooks = {
   terminalClose(id: string): boolean;
 };
 
-type G = typeof globalThis & { __devinworkspaces: Hooks };
+type G = typeof globalThis & { __agentworkspace: Hooks };
 
 let fixtures: FixtureServers;
 
@@ -36,7 +36,7 @@ test.afterAll(async () => {
 });
 
 async function localState(app: ElectronApplication): Promise<LocalState> {
-  return app.evaluate(() => (globalThis as G).__devinworkspaces.localState());
+  return app.evaluate(() => (globalThis as G).__agentworkspace.localState());
 }
 
 async function shellCount(app: ElectronApplication, selector: string): Promise<number> {
@@ -57,7 +57,7 @@ async function rightClick(app: ElectronApplication, selector: string): Promise<v
 type MenuItem = { id: string; label: string; enabled: boolean };
 async function menuItem(app: ElectronApplication, label: string): Promise<MenuItem | undefined> {
   const items = (await app.evaluate(() =>
-    (globalThis as any).__devinworkspaces.localMenuItems(),
+    (globalThis as any).__agentworkspace.localMenuItems(),
   )) as MenuItem[];
   return items.find((i) => i.label === label);
 }
@@ -87,40 +87,40 @@ async function typeAndSend(app: ElectronApplication, text: string): Promise<void
 }
 
 test('local sessions get their own GitHub tab scope and devin terminal', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-e2e-lscope-'));
-  const workspace = mkdtempSync(join(tmpdir(), 'devin-workspaces-ws-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-lscope-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'agent-workspace-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    DEVIN_WORKSPACES_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
-    DEVIN_WORKSPACES_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
     FAKE_ACP_LOAD: '1',
     FAKE_ACP_DELETE: '1',
     FAKE_ACP_LINK_URL: `${fixtures.githubUrl}/page/pr-1`,
-    DEVIN_WORKSPACES_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
   });
   const agentPids: number[] = [];
   let closed = false;
   try {
     await expect
-      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__devinworkspaces)))
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
       .toBe(true);
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('local'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('local'));
     const page = await shellPage(app);
     await page.waitForSelector('#localPanel', { timeout: 10_000 });
 
     const ws = await app.evaluate(
-      (_e, p) => (globalThis as G).__devinworkspaces.localAddWorkspace(p as string),
+      (_e, p) => (globalThis as G).__agentworkspace.localAddWorkspace(p as string),
       workspace,
     );
     await expect.poll(async () => (await localState(app)).agents[ws!]?.status).toBe('ready');
 
     const sessionA = await app.evaluate(
-      (_e, w) => (globalThis as G).__devinworkspaces.localNewSession(w as string),
+      (_e, w) => (globalThis as G).__agentworkspace.localNewSession(w as string),
       ws,
     );
     const sessionB = await app.evaluate(
-      (_e, w) => (globalThis as G).__devinworkspaces.localNewSession(w as string),
+      (_e, w) => (globalThis as G).__agentworkspace.localNewSession(w as string),
       ws,
     );
     await expect
@@ -164,7 +164,7 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
     await expect.poll(async () => (await state(app)).tabs.tabs.map((t) => t.id)).toEqual([tabA]);
 
     // Cloud surface → the local scope is hidden; the strip serves the cloud scope.
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('cloud'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('cloud'));
     await expect
       .poll(async () => (await state(app)).tabs.scope.startsWith('local:'))
       .toBe(false);
@@ -173,7 +173,7 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
     // Back to Local → the panel re-selects A (selection lives in main), and no
     // transient `active-session` null event is emitted during the remount.
     const eventMark = (await readEvents(logFile)).length;
-    await app.evaluate(() => (globalThis as G).__devinworkspaces.setSurface('local'));
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('local'));
     await expect
       .poll(async () =>
         (await readEvents(logFile))
@@ -248,7 +248,7 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
     const deleteItem = await menuItem(app, 'Delete');
     expect(deleteItem?.enabled).toBe(true);
     await app.evaluate(
-      (_e, id) => (globalThis as any).__devinworkspaces.localMenuClick(id),
+      (_e, id) => (globalThis as any).__agentworkspace.localMenuClick(id),
       deleteItem!.id,
     );
     await expect.poll(async () => (await localState(app)).sessions[sessionB]).toBeUndefined();
@@ -273,13 +273,13 @@ test('local sessions get their own GitHub tab scope and devin terminal', async (
       .toBe(true);
     await expect
       .poll(async () =>
-        (await app.evaluate(() => (globalThis as G).__devinworkspaces.listScopes())).map(
+        (await app.evaluate(() => (globalThis as G).__agentworkspace.listScopes())).map(
           (s) => s.scope,
         ),
       )
       .not.toContain(`local:${sessionB}`);
     const listed = await app.evaluate(
-      (_e, w) => (globalThis as G).__devinworkspaces.localListSessions(w as string),
+      (_e, w) => (globalThis as G).__agentworkspace.localListSessions(w as string),
       ws,
     );
     expect(listed.map((entry) => entry.id)).not.toContain(sessionB);

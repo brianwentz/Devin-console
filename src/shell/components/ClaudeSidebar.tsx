@@ -201,13 +201,13 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
   // Terminal for a session (optionally attaching a background agent): select
   // it, then ask ClaudeView to switch to its Terminal tab.
   const openTerminal = (sessionId: string, agentId?: string) => {
-    window.devinworkspaces.claudeOpen(sessionId);
+    window.agentworkspace.claudeOpen(sessionId);
     requestTerminal(sessionId, agentId);
   };
   // Orphan agents have no session row to select; attach in the dock instead.
   const attachInDock = (agentId: string) => {
-    if (!state!.terminalOpen) window.devinworkspaces.terminalToggle();
-    void window.devinworkspaces.terminalOpen({ kind: 'shell', command: ['claude', 'attach', agentId] });
+    if (!state!.terminalOpen) window.agentworkspace.terminalToggle();
+    void window.agentworkspace.terminalOpen({ kind: 'shell', command: ['claude', 'attach', agentId] });
   };
   const attachAgent = (agent: ClaudeAgent) => {
     if (agent.sessionId) openTerminal(agent.sessionId, agent.id);
@@ -215,12 +215,12 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
   };
   // "Open terminal here" on a workspace header: shell pty at the workspace cwd.
   const openTerminalAt = (path: string) => {
-    if (!state!.terminalOpen) window.devinworkspaces.terminalToggle();
-    void window.devinworkspaces.terminalOpen({ kind: 'shell', cwd: path });
+    if (!state!.terminalOpen) window.agentworkspace.terminalToggle();
+    void window.agentworkspace.terminalOpen({ kind: 'shell', cwd: path });
   };
 
   const sessionMenu = async (sessionId: string, x: number, y: number) => {
-    const result = await window.devinworkspaces.claudeContextMenu({
+    const result = await window.agentworkspace.claudeContextMenu({
       kind: 'session',
       sessionId,
       x,
@@ -237,17 +237,17 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
     return action;
   };
   const agentMenu = async (agent: ClaudeAgent, x: number, y: number) => {
-    const { action } = await window.devinworkspaces.claudeContextMenu({
+    const { action } = await window.agentworkspace.claudeContextMenu({
       kind: 'agent',
       agentId: agent.id,
       x,
       y,
     });
     if (action === 'attach-agent') attachAgent(agent);
-    window.devinworkspaces.claudeAgentsRefresh();
+    window.agentworkspace.claudeAgentsRefresh();
   };
   const workspaceMenu = async (path: string, x: number, y: number) => {
-    const { action } = await window.devinworkspaces.claudeContextMenu({
+    const { action } = await window.agentworkspace.claudeContextMenu({
       kind: 'workspace',
       path,
       x,
@@ -257,12 +257,12 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
     return action;
   };
   const headerMenu = async (x: number, y: number) => {
-    const { action } = await window.devinworkspaces.claudeContextMenu({
+    const { action } = await window.agentworkspace.claudeContextMenu({
       kind: 'header',
       x,
       y,
     });
-    if (action === 'add') void window.devinworkspaces.claudeWorkspaceAdd();
+    if (action === 'add') void window.agentworkspace.claudeWorkspaceAdd();
     return action;
   };
 
@@ -270,7 +270,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
     const next = collapsedFolders.includes(name)
       ? collapsedFolders.filter((f) => f !== name)
       : [...collapsedFolders, name];
-    void window.devinworkspaces.setSettings({ claude: { collapsedFolders: next } });
+    void window.agentworkspace.setSettings({ claude: { collapsedFolders: next } });
   };
 
   // Subagent lists are fetched on first expand (main fills `subagents` on the row).
@@ -284,10 +284,10 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       else next.delete(sessionId);
       return next;
     });
-    if (opening && session?.subagents === null) void window.devinworkspaces.claudeSubagents(sessionId);
+    if (opening && session?.subagents === null) void window.agentworkspace.claudeSubagents(sessionId);
   };
   const openSubagent = (sessionId: string, agentId: string) =>
-    void window.devinworkspaces.claudeOpenSubagent(sessionId, agentId);
+    void window.agentworkspace.claudeOpenSubagent(sessionId, agentId);
 
   const rowOpts: RowRenderOpts<ClaudeSessionState> = {
     attrs: (s) => ({
@@ -357,7 +357,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       variant === 'tree'
         ? `session-row ${s.isArchived ? 'opacity-50' : ''} flex-1 min-w-0 flex items-center ${sessionRowClass} text-left text-[#c9d4e3] hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[current=true]:bg-[#1f2f42]`
         : `${s.isArchived ? 'opacity-50 ' : ''}w-full flex items-center ${sessionRowClass} text-left hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none`,
-    onOpen: (id) => window.devinworkspaces.claudeOpen(id),
+    onOpen: (id) => window.agentworkspace.claudeOpen(id),
   };
 
   const statusText = () => {
@@ -460,7 +460,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
         <RenameSessionInput
           initial={session.title}
           onCommit={(title) => {
-            window.devinworkspaces.claudeRename(session.id, title);
+            window.agentworkspace.claudeRename(session.id, title);
             setRenamingSession(null);
           }}
           onCancel={() => setRenamingSession(null)}
@@ -492,18 +492,18 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
         return id && id !== 'local' ? hostChip(id) : null;
       }}
       onToggle={toggleFolder}
-      onReorder={(paths) => void window.devinworkspaces.claudeWorkspaceReorder(paths)}
+      onReorder={(paths) => void window.agentworkspace.claudeWorkspaceReorder(paths)}
       onReorderSessions={(section, ids) =>
-        void window.devinworkspaces.claudeSessionReorder(section, ids)
+        void window.agentworkspace.claudeSessionReorder(section, ids)
       }
-      onRename={(path, label) => void window.devinworkspaces.claudeWorkspaceRename(path, label)}
-      onNewSession={(path) => void window.devinworkspaces.claudeNewSession(path)}
-      onAdd={() => void window.devinworkspaces.claudeWorkspaceAdd()}
-      onRefresh={() => window.devinworkspaces.claudeRefresh()}
+      onRename={(path, label) => void window.agentworkspace.claudeWorkspaceRename(path, label)}
+      onNewSession={(path) => void window.agentworkspace.claudeNewSession(path)}
+      onAdd={() => void window.agentworkspace.claudeWorkspaceAdd()}
+      onRefresh={() => window.agentworkspace.claudeRefresh()}
       onWorkspaceMenu={workspaceMenu}
       onSessionMenu={sessionMenu}
       onHeaderMenu={headerMenu}
-      onCopyId={(id) => window.devinworkspaces.clipboardWriteText(id)}
+      onCopyId={(id) => window.agentworkspace.clipboardWriteText(id)}
       emptyText={`No Claude Code sessions found in ${claude.configDir}`}
       extraSections={extraSections}
       renderRow={(node) =>

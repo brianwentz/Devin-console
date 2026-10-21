@@ -77,8 +77,8 @@ export class IdentityResolver {
   // whitespace and resolves relative args against the app path, exactly like
   // TerminalHost.resolveCommand; otherwise the real `devin` binary.
   private cliCommand(override: string | null | undefined): { file: string; args: string[] } | null {
-    if (this.testMode && process.env.DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD) {
-      const [file, ...args] = process.env.DEVIN_WORKSPACES_TEST_AUTH_STATUS_CMD
+    if (this.testMode && process.env.AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD) {
+      const [file, ...args] = process.env.AGENT_WORKSPACE_TEST_AUTH_STATUS_CMD
         .split(/\s+/)
         .filter(Boolean);
       if (!file) return null;

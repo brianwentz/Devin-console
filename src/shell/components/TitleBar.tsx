@@ -29,7 +29,7 @@ function windowControlsOverlay(): WindowControlsOverlayLike | null {
   return candidate ?? null;
 }
 
-const isMac = window.devinworkspaces.platform === 'darwin';
+const isMac = window.agentworkspace.platform === 'darwin';
 
 // Width of the strip the OS caption buttons cover on the right. Measured from the
 // overlay's titlebar rect when available; 138px is the standard win32 caption width.
@@ -88,7 +88,7 @@ export function TitleBar({
       <div
         className="absolute left-0 top-0 flex items-center justify-center text-[#7d8a99] text-[11px] font-semibold tracking-wide select-none"
         style={{ width: RAIL_WIDTH, height: '100%' }}
-        title="Devin Workspaces"
+        title="Agent Workspace"
       >
         {/* the macOS traffic lights cover the left rail */}
         {!isMac && 'DW'}
@@ -115,7 +115,7 @@ export function TitleBar({
             aria-label="Back"
             className={navButton}
             disabled={!active?.canGoBack}
-            onClick={() => window.devinworkspaces.navigate('back')}
+            onClick={() => window.agentworkspace.navigate('back')}
           >
             ←
           </button>
@@ -125,7 +125,7 @@ export function TitleBar({
             aria-label="Forward"
             className={navButton}
             disabled={!active?.canGoForward}
-            onClick={() => window.devinworkspaces.navigate('forward')}
+            onClick={() => window.agentworkspace.navigate('forward')}
           >
             →
           </button>
@@ -136,10 +136,10 @@ export function TitleBar({
             className={navButton}
             disabled={!active}
             title="Reload (right-click: reload all tabs in this session)"
-            onClick={() => window.devinworkspaces.navigate('reload')}
+            onClick={() => window.agentworkspace.navigate('reload')}
             onContextMenu={(e) => {
               e.preventDefault();
-              window.devinworkspaces.openReloadMenu(e.clientX, e.clientY);
+              window.agentworkspace.openReloadMenu(e.clientX, e.clientY);
             }}
           >
             ↻

@@ -2,8 +2,8 @@ import type { ClaudeUsageState } from '../../shared/ipc';
 import { createPushedStateClient, usePushedState } from '../pushedState';
 
 const client = createPushedStateClient<ClaudeUsageState>({
-  onState: (listener) => window.devinworkspaces.onClaudeUsage(listener),
-  getState: () => window.devinworkspaces.claudeUsageState(),
+  onState: (listener) => window.agentworkspace.onClaudeUsage(listener),
+  getState: () => window.agentworkspace.claudeUsageState(),
 });
 
 export function useClaudeUsage(): ClaudeUsageState | null {

@@ -80,11 +80,11 @@ const localApi = {
       ipcRenderer.send(IpcChannels.localActiveSession, { sessionId });
     }
   },
-  // Test seam only: mirrors main's DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT so the
+  // Test seam only: mirrors main's AGENT_WORKSPACE_TEST_WSL_UNC_ROOT so the
   // sidebar's host chip resolves fake-UNC workspace paths.
-  testWslUncRoot: process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT ?? null,
+  testWslUncRoot: process.env.AGENT_WORKSPACE_TEST_WSL_UNC_ROOT ?? null,
   // Deterministic clock for the Claude-analytics gauges in tests (A4).
-  testNow: process.env.DEVIN_WORKSPACES_TEST_NOW ?? null,
+  testNow: process.env.AGENT_WORKSPACE_TEST_NOW ?? null,
   localSessionReorder: (section: string, ids: string[]) =>
     ipcRenderer.invoke(IpcChannels.localSessionReorder, { section, ids }) as Promise<
       LocalResult<null>
@@ -547,8 +547,8 @@ const api = {
     ipcRenderer.send(IpcChannels.updateCheck, { source }),
   releaseNotes: () =>
     ipcRenderer.invoke(IpcChannels.updateReleaseNotes) as Promise<ReleaseNotesReply>,
-  // DEVIN_WORKSPACES_TEST_BANNER_MS shortens the banner auto-hide in tests.
-  bannerMs: testEnvNumber('DEVIN_WORKSPACES_TEST_BANNER_MS'),
+  // AGENT_WORKSPACE_TEST_BANNER_MS shortens the banner auto-hide in tests.
+  bannerMs: testEnvNumber('AGENT_WORKSPACE_TEST_BANNER_MS'),
   onNotificationBanner: (callback: (entry: AppNotification) => void) => {
     const listener = (_event: unknown, entry: AppNotification) => callback(entry);
     ipcRenderer.on(IpcChannels.notificationBanner, listener);
@@ -556,7 +556,7 @@ const api = {
       ipcRenderer.removeListener(IpcChannels.notificationBanner, listener);
     };
   },
-  // Test mode only: dispatch into the main-process __devinworkspaces hooks.
+  // Test mode only: dispatch into the main-process __agentworkspace hooks.
   // The channel exists only when test hooks are registered.
   testHook: (name: string, ...args: unknown[]) =>
     ipcRenderer.invoke('test:hook', name, args),
@@ -564,6 +564,6 @@ const api = {
 
 export type SecretResult = { ok: true } | { ok: false; error: string };
 
-contextBridge.exposeInMainWorld('devinworkspaces', api);
+contextBridge.exposeInMainWorld('agentworkspace', api);
 
-export type DevinWorkspacesApi = typeof api;
+export type AgentWorkspaceApi = typeof api;

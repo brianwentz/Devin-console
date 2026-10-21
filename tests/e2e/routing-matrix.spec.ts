@@ -1,5 +1,5 @@
 // R7 routing matrix (plan §7): source x disposition x host class.
-//   sources:      devin page | gh tab | shell link (`__devinworkspaces.routeLink`)
+//   sources:      devin page | gh tab | shell link (`__agentworkspace.routeLink`)
 //   dispositions: _blank | window.open | ctrl-click / middle-click (background) |
 //                 top-level link nav | iframe link (_blank, _top, in-frame) |
 //                 server redirect | SSO hop via the fixture IdP
@@ -53,7 +53,7 @@ interface Harness {
 }
 
 async function start(): Promise<Harness> {
-  const profile = mkdtempSync(join(tmpdir(), 'devin-workspaces-matrix-'));
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-matrix-'));
   // Keep the event log outside the profile so it survives cleanup for post-mortems.
   const logDir = resolve('test-results', 'matrix-logs');
   mkdirSync(logDir, { recursive: true });
@@ -61,7 +61,7 @@ async function start(): Promise<Harness> {
   writeFileSync(logFile, '', 'utf8');
   const downloads = join(profile, 'downloads');
   const app = await launchApp(profile, logFile, downloads, fixtures);
-  await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+  await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
   await expect.poll(() => hasDevinView(app, fixtures)).toBe(true);
   return { app, profile, logFile, downloads };
 }
@@ -104,13 +104,13 @@ function tabById(current: Awaited<ReturnType<typeof state>>, id: string) {
 
 async function routeLink(app: ElectronApplication, url: string): Promise<void> {
   await app.evaluate((_electron, target: string) => {
-    (globalThis as typeof globalThis & { __devinworkspaces: { routeLink(url: string): void } }).__devinworkspaces.routeLink(target);
+    (globalThis as typeof globalThis & { __agentworkspace: { routeLink(url: string): void } }).__agentworkspace.routeLink(target);
   }, url);
 }
 
 async function loadDevinUrl(app: ElectronApplication, url: string): Promise<void> {
   await app.evaluate((_electron, target: string) => {
-    (globalThis as typeof globalThis & { __devinworkspaces: { loadDevinUrl(url: string): void } }).__devinworkspaces.loadDevinUrl(target);
+    (globalThis as typeof globalThis & { __agentworkspace: { loadDevinUrl(url: string): void } }).__agentworkspace.loadDevinUrl(target);
   }, url);
 }
 
@@ -252,13 +252,13 @@ test('gh tab: popups, ctrl-click, in-place navigation, cross-origin, redirects, 
     expect((await state(app)).tabs.activeId).not.toBe(a);
 
     // _blank to the other GitHub-class origin -> tab.
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), a);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), a);
     await clickLink(app, aPage, '#altPopup');
     await waitForTabCount(app, 4);
     await waitForDecision(logFile, 'github-tab', '/page/alt-popup-child');
 
     // Tenant popup -> devinView navigates; no tab.
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), a);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), a);
     await clickLink(app, aPage, '#tenantPopup');
     await waitForDecision(logFile, 'devin', '/sessions/from-github');
     await expect.poll(() => currentDevinUrl(app, fixtures)).toBe(`${fixtures.devinUrl}/sessions/from-github`);
@@ -407,7 +407,7 @@ test('gh tab: popups, ctrl-click, in-place navigation, cross-origin, redirects, 
   }
 });
 
-test('shell link source: every host class via __devinworkspaces.routeLink, originSessionId tagging', async () => {
+test('shell link source: every host class via __agentworkspace.routeLink, originSessionId tagging', async () => {
   const harness = await start();
   const { app, logFile } = harness;
   try {
@@ -489,7 +489,7 @@ test('dedupes owner/repo/pull/N across sub-paths and keeps distinct tabs otherwi
     await waitForTabCount(app, 4);
 
     // Ctrl-click (background) onto an existing PR navigates it but does not steal focus.
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), other);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), other);
     const otherUrl = `${fixtures.githubUrl}/org/repo/issues/7`;
     const otherPage = await pageFor(app, otherUrl);
     await expect
@@ -526,8 +526,8 @@ test('restart restores tabs (order, active, originSessionId) and window close le
     await waitForTabTitle(app, 'three');
     const before = await state(app);
     const ids = before.tabs.tabs.map((tab) => tab.id);
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.activate(id), ids[1]!);
-    await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.reorder(id, 0), ids[2]!);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), ids[1]!);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.reorder(id, 0), ids[2]!);
     await expect.poll(async () => (await state(app)).tabs.tabs.map((tab) => tab.id)).toEqual([ids[2], ids[0], ids[1]]);
     expect(await webContentsCount(app)).toBe(5);
 
@@ -539,7 +539,7 @@ test('restart restores tabs (order, active, originSessionId) and window close le
     app = await launchApp(profile, logFile, downloads, fixtures);
     harness.app = app;
     closed = false;
-    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__devinworkspaces))).toBe(true);
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     // After relaunch the Cloud view is at the tenant root (GLOBAL scope); the
     // restored 'persist-me' tabs are hidden until the session is opened again.
     expect((await state(app)).tabs.tabs).toHaveLength(0);
@@ -561,11 +561,11 @@ test('restart restores tabs (order, active, originSessionId) and window close le
     await waitForTabTitle(app, 'two');
 
     // Closing a restored tab destroys its webContents.
-    const closedTab = await app.evaluate((_e, id: string) => (globalThis as any).__devinworkspaces.close(id), ids[0]!);
+    const closedTab = await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.close(id), ids[0]!);
     expect(closedTab).toBe(true);
     await expect.poll(() => webContentsCount(app)).toBe(4);
 
-    await app.evaluate(() => (globalThis as any).__devinworkspaces.closeWindow());
+    await app.evaluate(() => (globalThis as any).__agentworkspace.closeWindow());
     await waitForEventCount(logFile, 'window-close-complete', 2);
     await app.close();
     closed = true;

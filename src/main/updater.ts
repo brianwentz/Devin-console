@@ -171,7 +171,7 @@ export function updateDownloaded(version: string): void {
     version,
     sessionId: null,
     ownerUserId: null,
-    sessionTitle: 'Devin Workspaces',
+    sessionTitle: 'Agent Workspace',
     title: `Update v${version} ready`,
     body: 'Click to restart and install',
     createdAt: Date.now(),
@@ -190,7 +190,7 @@ function updateDownloadedKeep(): void {
     version: downloadedVersion,
     sessionId: null,
     ownerUserId: null,
-    sessionTitle: 'Devin Workspaces',
+    sessionTitle: 'Agent Workspace',
     title: `Update v${downloadedVersion} ready`,
     body: 'Click to restart and install',
     createdAt: Date.now(),
@@ -200,7 +200,7 @@ function updateDownloadedKeep(): void {
 // GitHub Releases auto-update (feed from build.publish in package.json, baked
 // into resources/app-update.yml by electron-builder). Downloads silently and
 // installs via the 'update' notification. Skipped in dev and under
-// DEVIN_WORKSPACES_TEST so the smoke/e2e suites never touch the network.
+// AGENT_WORKSPACE_TEST so the smoke/e2e suites never touch the network.
 export function setupUpdater(): void {
   if (!app.isPackaged || testMode) {
     log('shell', 'updater-disabled', { detail: { isPackaged: app.isPackaged, testMode } });

@@ -9,7 +9,7 @@ import { testMode } from './state';
 
 // Matches build.publish[0] in package.json — the GitHub Releases feed that
 // electron-builder bakes into app-update.yml.
-export const RELEASE_REPO = { owner: 'brianwentz', repo: 'devin-workspace' } as const;
+export const RELEASE_REPO = { owner: 'brianwentz', repo: 'agent-workspace' } as const;
 
 const NULL_RETRY_MS = 10 * 60_000;
 const OK_REFRESH_MS = 6 * 60 * 60_000;
@@ -21,8 +21,8 @@ interface CacheEntry {
 }
 
 function apiBase(): string {
-  if (testMode && process.env.DEVIN_WORKSPACES_TEST_RELEASES_URL) {
-    return process.env.DEVIN_WORKSPACES_TEST_RELEASES_URL;
+  if (testMode && process.env.AGENT_WORKSPACE_TEST_RELEASES_URL) {
+    return process.env.AGENT_WORKSPACE_TEST_RELEASES_URL;
   }
   return 'https://api.github.com';
 }
@@ -56,7 +56,7 @@ export class ReleaseNotesCache {
     try {
       const response = await net.fetch(url, {
         method: 'GET',
-        headers: { accept: 'application/vnd.github+json', 'user-agent': 'devin-workspaces' },
+        headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-workspace' },
         signal: controller.signal,
       });
       status = response.status;

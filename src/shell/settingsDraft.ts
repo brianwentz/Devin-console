@@ -126,7 +126,7 @@ export async function commitDraft(reason: CommitReason, settings: Settings): Pro
   }
   set({ saving: true });
   try {
-    const reply = await window.devinworkspaces.commitSettings(validated.patch);
+    const reply = await window.agentworkspace.commitSettings(validated.patch);
     if (reply.ok) {
       lastSettings = reply.settings;
       set({
@@ -160,6 +160,6 @@ export function handleSettingsFlush(): void {
   );
   void (async () => {
     const ok = settings ? await commitDraft('quit', settings) : true;
-    window.devinworkspaces.settingsFlushDone({ pending, ok });
+    window.agentworkspace.settingsFlushDone({ pending, ok });
   })();
 }

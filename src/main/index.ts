@@ -1,3 +1,7 @@
+// First import on purpose: bootstrap applies the userData override and moves
+// the legacy `devin-workspaces` profile into it, before ./log (imported
+// transitively below) resolves and mkdirs the dir.
+import { migration } from './bootstrap';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -59,10 +63,10 @@ import { SecretStore } from './secrets';
 import { requestSettingsFlush } from './settingsFlush';
 
 // Windows toasts require an AppUserModelID; match electron-builder's appId.
-if (process.platform === 'win32') app.setAppUserModelId('ai.devin.workspaces');
+if (process.platform === 'win32') app.setAppUserModelId('io.github.brianwentz.agent-workspace');
 
-if (process.env.DEVIN_WORKSPACES_SCALE) {
-  app.commandLine.appendSwitch('force-device-scale-factor', process.env.DEVIN_WORKSPACES_SCALE);
+if (process.env.AGENT_WORKSPACE_SCALE) {
+  app.commandLine.appendSwitch('force-device-scale-factor', process.env.AGENT_WORKSPACE_SCALE);
 }
 if (quiet) {
   // Keep rendering + timers at full speed for a window the OS treats as
@@ -72,16 +76,19 @@ if (quiet) {
 }
 app.enableSandbox();
 
-const requestedUserData = process.env.DEVIN_WORKSPACES_USER_DATA;
-if (requestedUserData) app.setPath('userData', resolve(requestedUserData));
-
 const userData = app.getPath('userData');
 mkdirSync(userData, { recursive: true });
+
+if (migration.migrated) {
+  log('shell', 'profile-migrated', { detail: migration.detail });
+} else if (migration.error) {
+  log('shell', 'profile-migration-failed', { detail: migration.detail });
+}
 
 function onBeforeUnload(tabId: string, event: Electron.Event): boolean {
   let leave = false;
   if (testMode) {
-    leave = process.env.DEVIN_WORKSPACES_TEST_BEFOREUNLOAD !== 'stay';
+    leave = process.env.AGENT_WORKSPACE_TEST_BEFOREUNLOAD !== 'stay';
   } else {
     const options: Electron.MessageBoxSyncOptions = {
       type: 'warning',
@@ -120,7 +127,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     log('shell', 'shutdown-probe', { detail: { live: probe.live, vetoed: probe.vetoed.length } });
     if (probe.vetoed.length > 0) {
       const quit = testMode
-        ? process.env.DEVIN_WORKSPACES_TEST_BEFOREUNLOAD !== 'stay'
+        ? process.env.AGENT_WORKSPACE_TEST_BEFOREUNLOAD !== 'stay'
         : dialog.showMessageBoxSync(state.windowRef!, {
             type: 'warning',
             buttons: ['Quit', 'Cancel'],
@@ -301,8 +308,8 @@ async function createWindow(): Promise<void> {
   state.terminalHeight = saved.layout.terminalHeight;
   state.sessionsOpen = saved.sessions.open;
   state.sessionsWidth = saved.sessions.width;
-  if (testMode && process.env.DEVIN_WORKSPACES_TEST_SESSIONS_OPEN !== undefined) {
-    state.sessionsOpen = process.env.DEVIN_WORKSPACES_TEST_SESSIONS_OPEN === '1';
+  if (testMode && process.env.AGENT_WORKSPACE_TEST_SESSIONS_OPEN !== undefined) {
+    state.sessionsOpen = process.env.AGENT_WORKSPACE_TEST_SESSIONS_OPEN === '1';
   }
   terminalHost.onChange = notifyShell;
   terminalHost.onPullRequestUrl = (url, target) => {
@@ -323,7 +330,7 @@ async function createWindow(): Promise<void> {
   };
   state.surface = saved.surface;
   // Env override wins over the persisted tenant URL (tests rely on it).
-  state.tenantUrl = process.env.DEVIN_WORKSPACES_TENANT_URL ?? saved.tenantUrl;
+  state.tenantUrl = process.env.AGENT_WORKSPACE_TENANT_URL ?? saved.tenantUrl;
   state.credentials = new CredentialStore(
     join(userData, 'credentials.json'),
     undefined,
@@ -331,7 +338,7 @@ async function createWindow(): Promise<void> {
     (event, detail) => log('shell', event, { detail }),
   );
 
-  const devinSession = session.fromPartition('persist:devin');
+  const devinSession = session.fromPartition('persist:cloud');
   const githubSession = session.fromPartition('persist:github');
   setPermissions(devinSession, 'devin');
   setPermissions(githubSession, 'gh:session');
@@ -344,7 +351,7 @@ async function createWindow(): Promise<void> {
     ...placementOptions,
     minWidth: saved.pane.open ? MIN_WINDOW_WIDTH_OPEN : MIN_WINDOW_WIDTH_CLOSED,
     minHeight: MIN_WINDOW_HEIGHT,
-    title: 'Devin Workspaces',
+    title: 'Agent Workspace',
     show: !quiet,
     titleBarStyle: 'hidden',
     backgroundColor: '#111827',
@@ -361,7 +368,7 @@ async function createWindow(): Promise<void> {
   // With the hidden title bar the content size is (≈) the window size.
   if (testMode) {
     const match = /^(\d+)x(\d+)$/.exec(
-      process.env.DEVIN_WORKSPACES_TEST_WINDOW_SIZE ?? '1400x900',
+      process.env.AGENT_WORKSPACE_TEST_WINDOW_SIZE ?? '1400x900',
     );
     if (match) {
       const [w, h] = [Number(match[1]), Number(match[2])];

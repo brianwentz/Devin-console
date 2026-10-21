@@ -27,6 +27,7 @@ import {
 } from '../core/execHost';
 import type { HostStatus, Settings } from '../shared/ipc';
 import { log } from './log';
+import { HOOK_PATH_PREFIX } from '../core/claudeHooks';
 import { state, testMode } from './state';
 import { resolveClaudePath } from './claude/claudePath';
 import { resolveDevinPath } from './local/acpHost';
@@ -38,6 +39,7 @@ const ENUM_CACHE_MS = 5 * 60_000;
 const ENV_CACHE_MS = 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_MARKER = '__DW_ENV__';
+const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
 
 export interface HostPtySpec {
   file: string;
@@ -115,8 +117,8 @@ export class HostsRegistry {
   // --- command plumbing ----------------------------------------------------
 
   private async resolveWsl(): Promise<void> {
-    if (testMode && process.env.DEVIN_WORKSPACES_TEST_WSL_CMD?.trim()) {
-      const parts = process.env.DEVIN_WORKSPACES_TEST_WSL_CMD.trim().split(/\s+/).filter(Boolean);
+    if (testMode && process.env.AGENT_WORKSPACE_TEST_WSL_CMD?.trim()) {
+      const parts = process.env.AGENT_WORKSPACE_TEST_WSL_CMD.trim().split(/\s+/).filter(Boolean);
       this.wsl = parts.length ? { file: parts[0]!, args: parts.slice(1) } : null;
       return;
     }
@@ -549,7 +551,7 @@ export class HostsRegistry {
         '/dev/null',
         '-w',
         '%{http_code}',
-        `http://${addr}:${port}/devin-workspaces/hook/health`,
+        `http://${addr}:${port}${HOOK_HEALTH_PATH}`,
       ]).then((code) => ['200', '401', '404'].includes(code.trim()));
     try {
       if (await curl('127.0.0.1')) return 'ok';
@@ -702,7 +704,7 @@ export class HostsRegistry {
 
   /** Windows-side path → host id; honours the test UNC root seam. */
   pathHostId(p: string): HostId {
-    const root = testMode ? process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT : undefined;
+    const root = testMode ? process.env.AGENT_WORKSPACE_TEST_WSL_UNC_ROOT : undefined;
     if (root && p.startsWith(root)) {
       const first = this.list().find((h) => h.kind === 'wsl');
       if (first) return first.id;
@@ -712,7 +714,7 @@ export class HostsRegistry {
 
   /** Windows-side path → host path (UNC root seam post-processes here). */
   hostPath(host: ExecHost, winPath: string): string {
-    const root = testMode ? process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT : undefined;
+    const root = testMode ? process.env.AGENT_WORKSPACE_TEST_WSL_UNC_ROOT : undefined;
     if (root && winPath.startsWith(root) && isWslHost(host)) {
       const rest = winPath.slice(root.length).replace(/\\/g, '/');
       const cleaned = rest.replace(/^\/+/, '');
@@ -724,7 +726,7 @@ export class HostsRegistry {
   /** Host path → Windows-side (UNC root seam: \\wsl.localhost\<D> → the root). */
   windowsPath(host: ExecHost, hostPath: string): string {
     const out = coreToWindowsPath(host, hostPath);
-    const root = testMode ? process.env.DEVIN_WORKSPACES_TEST_WSL_UNC_ROOT : undefined;
+    const root = testMode ? process.env.AGENT_WORKSPACE_TEST_WSL_UNC_ROOT : undefined;
     if (root && isWslHost(host)) {
       return out.replace(`\\\\wsl.localhost\\${host.distro}`, root);
     }

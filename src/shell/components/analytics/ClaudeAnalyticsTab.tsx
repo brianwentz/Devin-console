@@ -8,8 +8,8 @@ import { ClaudeAnalyticsPanel } from './ClaudeAnalyticsPanel';
 export function ClaudeAnalyticsTab({ style }: { style: CSSProperties }) {
   const state = useClaudeUsage();
   useEffect(() => {
-    window.devinworkspaces.claudeUsageVisible(true);
-    return () => window.devinworkspaces.claudeUsageVisible(false);
+    window.agentworkspace.claudeUsageVisible(true);
+    return () => window.agentworkspace.claudeUsageVisible(false);
   }, []);
   return (
     <ClaudeAnalyticsPanel

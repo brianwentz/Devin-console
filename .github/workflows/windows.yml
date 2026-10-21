@@ -49,7 +49,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: devin-workspaces-windows-${{ github.sha }}
+          name: agent-workspace-windows-${{ github.sha }}
           if-no-files-found: error
           path: |
             dist/*.exe
@@ -89,15 +89,15 @@ jobs:
       - name: Check artifacts
         run: |
           ls dist/latest-mac.yml
-          ls dist/DevinWorkspaces-*-arm64.dmg
-          ls dist/DevinWorkspaces-*-arm64.zip
-          ls dist/DevinWorkspaces-*-arm64.zip.blockmap
-          codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Devin Workspaces.app"
+          ls dist/AgentWorkspace-*-arm64.dmg
+          ls dist/AgentWorkspace-*-arm64.zip
+          ls dist/AgentWorkspace-*-arm64.zip.blockmap
+          codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Agent Workspace.app"
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: devin-workspaces-macos-${{ github.sha }}
+          name: agent-workspace-macos-${{ github.sha }}
           if-no-files-found: error
           path: |
             dist/latest-mac.yml

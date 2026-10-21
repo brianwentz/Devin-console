@@ -8,7 +8,7 @@ import { createServer, type Server } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { HOOK_EVENTS, HOOK_PATH_PREFIX } from '../../core/claudeHooks';
+import { HOOK_EVENTS, HOOK_PATH_PREFIX, LEGACY_HOOK_PATH_PREFIXES } from '../../core/claudeHooks';
 import type { ClaudeHookEvent } from '../../core/claudeActivity';
 import { log } from '../log';
 
@@ -141,11 +141,14 @@ export class ClaudeHookServer {
     request: import('node:http').IncomingMessage,
     response: import('node:http').ServerResponse,
   ): void {
-    if (request.method === 'GET' && request.url === `${HOOK_PATH_PREFIX}health`) {
+    // Accept the legacy prefix too for the 2.x line: Claude terminals started
+    // before the rename still carry /agent-workspace/hook/ URLs.
+    const prefixes: readonly string[] = [HOOK_PATH_PREFIX, ...LEGACY_HOOK_PATH_PREFIXES];
+    if (request.method === 'GET' && prefixes.some((p) => request.url === `${p}health`)) {
       response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
       return;
     }
-    const match = new RegExp(`^${HOOK_PATH_PREFIX}([A-Za-z]+)$`).exec(request.url ?? '');
+    const match = new RegExp(`^(?:${prefixes.join('|')})([A-Za-z]+)$`).exec(request.url ?? '');
     if (!match) {
       response.writeHead(404).end();
       return;

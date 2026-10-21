@@ -7,12 +7,12 @@ import { state } from './state';
 
 // The Analytics surface is a hosted view on the tenant partition, created on
 // first use (it stays alive after leaving the surface — no teardown on switch).
-// No preload: it shares `persist:devin` but never talks autofill IPC.
+// No preload: it shares `persist:cloud` but never talks autofill IPC.
 export function ensureAnalyticsView(): WebContentsView {
   if (state.analyticsView) return state.analyticsView;
   const view = new WebContentsView({
     webPreferences: {
-      partition: 'persist:devin',
+      partition: 'persist:cloud',
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,

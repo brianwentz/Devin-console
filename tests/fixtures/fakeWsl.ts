@@ -1,4 +1,4 @@
-// Fake wsl.exe for hosts e2e (DEVIN_WORKSPACES_TEST_WSL_CMD — invoked as
+// Fake wsl.exe for hosts e2e (AGENT_WORKSPACE_TEST_WSL_CMD — invoked as
 // `node out/fixtures/fakeWsl.cjs`, so argv starts at process.argv[2]).
 // Implements just the surface hosts.ts exercises:
 //   -l -v / -l -q                 UTF-16LE distro table from FAKE_WSL_DISTROS

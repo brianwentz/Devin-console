@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { safeStorage } from 'electron';
+import { migrationRan } from './migrate';
 import {
   migrateCredentialsFile,
   normalizeOrigin,
@@ -51,6 +52,29 @@ export class CredentialStore {
       if (raw?.version !== 2) this.persist();
     } catch (error) {
       this.log('credentials-load-failed', { error: String(error) });
+    }
+    // §3.3: on darwin the safeStorage key is keyed by app name, so a migrated
+    // profile's entries can never decrypt — probe once and drop the file.
+    // Gated on the migration having run this launch so an ordinary Keychain
+    // hiccup deletes nothing.
+    if (process.platform === 'darwin' && migrationRan() && this.entries.size > 0) {
+      void this.resetIfUndecryptable();
+    }
+  }
+
+  private async resetIfUndecryptable(): Promise<void> {
+    const first = this.entries.values().next().value;
+    if (!first) return;
+    try {
+      if (!(await this.encryptor.isAvailable())) return;
+      await this.encryptor.decrypt(Buffer.from(first.passwordEnc, 'base64'));
+    } catch {
+      this.entries.clear();
+      this.persist();
+      this.log('profile-migrated-secrets-reset', { file: this.file });
+      // Lazy: notifications.ts pulls electron-dependent modules that are not
+      // importable in unit tests.
+      void import('./notifications.js').then((m) => m.notifyMigratedSecretsReset());
     }
   }
 

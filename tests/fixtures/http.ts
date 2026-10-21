@@ -14,7 +14,7 @@ export interface FixtureServers {
   githubAltUrl: string;
   // External identity provider (not GitHub, not tenant). `http://localhost:<p>`
   idpUrl: string;
-  // Comma-separated value for DEVIN_WORKSPACES_TEST_GITHUB_ORIGINS.
+  // Comma-separated value for AGENT_WORKSPACE_TEST_GITHUB_ORIGINS.
   githubOrigins: string;
   // P5: in-memory v3 API fixture. http://127.0.0.1:<p>
   apiUrl: string;
@@ -89,7 +89,7 @@ function createFixtureApi(): { api: FixtureApi; handle: (request: IncomingMessag
     const authorization = request.headers.authorization ?? null;
     requests.push({ ts: Date.now(), method: request.method ?? 'GET', path: url.pathname + url.search, authorization });
     // Analytics Claude tab: stands in for api.anthropic.com (A2 sets
-    // DEVIN_WORKSPACES_TEST_CLAUDE_USAGE_URL to this URL).
+    // AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL to this URL).
     if (url.pathname === '/api/oauth/usage') {
       const status = Number(process.env.FAKE_USAGE_STATUS ?? '200') || 200;
       const body =
@@ -98,7 +98,7 @@ function createFixtureApi(): { api: FixtureApi; handle: (request: IncomingMessag
       json(response, status, JSON.parse(body));
       return;
     }
-    // GitHub Releases API stand-in (DEVIN_WORKSPACES_TEST_RELEASES_URL) — no
+    // GitHub Releases API stand-in (AGENT_WORKSPACE_TEST_RELEASES_URL) — no
     // auth, the app fetches release notes without credentials.
     const release = /^\/repos\/[^/]+\/[^/]+\/releases\/tags\/(v[^/]+)$/.exec(url.pathname);
     if (release) {
@@ -119,7 +119,7 @@ function createFixtureApi(): { api: FixtureApi; handle: (request: IncomingMessag
         name: `Fixture release ${release[1]}`,
         published_at: '2025-01-15T12:00:00Z',
         body,
-        html_url: `https://github.com/brianwentz/devin-workspace/releases/tag/${release[1]}`,
+        html_url: `https://github.com/brianwentz/agent-workspace/releases/tag/${release[1]}`,
       });
       return;
     }
@@ -294,7 +294,7 @@ export async function startFixtureServers(): Promise<FixtureServers> {
       return;
     }
     // Usage alerts: stands in for the tenant's usage-limit endpoint
-    // (DEVIN_WORKSPACES_TEST_DEVIN_USAGE_URL points here).
+    // (AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL points here).
     if (url.pathname === '/api/personal-analytics/usage-limit') {
       const status =
         usageStatus || Number(process.env.FAKE_DEVIN_USAGE_STATUS ?? '200') || 200;
