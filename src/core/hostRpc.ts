@@ -69,7 +69,8 @@ export class LineDecoder {
       const text = line.endsWith('\r') ? line.slice(0, -1) : line;
       if (text.trim() === '') continue;
       try {
-        out.push(JSON.parse(text));
+        const v: unknown = JSON.parse(text);
+        if (typeof v === 'object' && v !== null && !Array.isArray(v)) out.push(v);
       } catch {
         // rc-file noise before hello
       }
@@ -101,16 +102,19 @@ export function onStartFailed(s: BreakerState, now: number): BreakerState {
 }
 
 export function onReady(s: BreakerState, now: number): BreakerState {
-  return { ...s, readySince: now };
+  if (s.open) return s;
+  return { ...s, readySince: now, nextAttemptAt: null };
 }
 
+// Once open, only resetBreaker() closes the breaker.
 export function onExit(s: BreakerState, now: number): BreakerState {
+  if (s.open) return s;
   if (s.readySince === null || now - s.readySince < STABLE_MS) return onStartFailed(s, now);
   return resetBreaker();
 }
 
 export function onTick(s: BreakerState, now: number): BreakerState {
-  if (s.readySince !== null && now - s.readySince >= STABLE_MS && s.failures > 0) {
+  if (!s.open && s.readySince !== null && now - s.readySince >= STABLE_MS && s.failures > 0) {
     return { ...s, failures: 0, open: false, nextAttemptAt: null };
   }
   return s;

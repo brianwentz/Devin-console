@@ -25,6 +25,7 @@ describe('LineDecoder', () => {
     const d = new LineDecoder();
     const out = d.push('Welcome to zsh\n\n[oh-my-zsh] update?\n{"method":"hello","params":{"protocol":1}}\n');
     expect(out).toEqual([{ method: 'hello', params: { protocol: 1 } }]);
+    expect(new LineDecoder().push('42\ntrue\nnull\n"x"\n[]\n[{"a":1}]\n{"a":1}\n')).toEqual([{ a: 1 }]);
   });
 
   it('oversize frame → too-large, decoder resyncs', () => {
@@ -90,6 +91,24 @@ describe('breaker', () => {
     expect(s.failures).toBe(1);
     expect(s.readySince).toBeNull();
     expect(s.nextAttemptAt).toBe(1000 + STABLE_MS - 1 + BACKOFF_MS[0]);
+  });
+
+  it('open breaker stays open across onReady/onTick/onExit', () => {
+    let open = resetBreaker();
+    for (let i = 0; i < 3; i++) open = onStartFailed(open, i);
+    expect(open.open).toBe(true);
+    const ready = onReady(open, 0);
+    expect(ready).toEqual(open);
+    const stuck = { ...open, readySince: 0 };
+    expect(onTick(stuck, STABLE_MS * 2)).toBe(stuck);
+    expect(onExit(stuck, STABLE_MS * 2)).toBe(stuck);
+    expect(onExit(stuck, 5)).toBe(stuck);
+  });
+
+  it('onReady clears nextAttemptAt', () => {
+    const s = onStartFailed(resetBreaker(), 0);
+    expect(s.nextAttemptAt).not.toBeNull();
+    expect(onReady(s, 10).nextAttemptAt).toBeNull();
   });
 
   it('exit before ever being ready counts as a failed start', () => {
