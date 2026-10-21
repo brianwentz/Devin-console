@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { closeApp, launchWithClaudeFixture, shellPage, state } from './helpers';
+import { closeApp, launchWithClaudeFixture, readEvents, shellPage, state } from './helpers';
 
 // Exec hosts (§3.8): the fake wsl.exe stands in for WSL — enumeration,
 // probing, env capture and the wsl-shaped pty argv all run for real.
@@ -217,6 +217,42 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
     await expect(shell.locator('#messageList')).toContainText('wsl transcript line', {
       timeout: 8_000,
     });
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('a WSL transcript change does not trigger a full claude-list', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const watchLists = async () =>
+    (await readEvents(logFile)).filter(
+      (e) =>
+        e.event === 'claude-list' &&
+        (e.detail as { source?: string } | undefined)?.source === 'watch',
+    ).length;
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    const id = (await app.evaluate(
+      (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
+      `${uncRoot}\\home\\u\\proj`,
+    )) as string;
+    // Not terminal-owned: a transcript append must not re-list over the UNC.
+    const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
+    mkdirSync(projectDir, { recursive: true });
+    const before = await watchLists();
+    writeFileSync(join(projectDir, `${id}.jsonl`), '{"type":"user"}\n');
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    expect(await watchLists()).toBe(before);
   } finally {
     await closeApp(app);
   }

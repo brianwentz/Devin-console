@@ -30,6 +30,7 @@ import {
 } from '../../core/workspaceTree';
 import { claudeScope } from '../../core/tabModel';
 import { LOCAL_HOST, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
+import { watchAction } from '../../core/claudeWatchPolicy';
 import { ClaudeContextMenu, type MenuAction } from './contextMenu';
 import { ClaudeHooks } from './hooks';
 import { ClaudePrTracking } from './prTracking';
@@ -121,7 +122,7 @@ export class ClaudeSessions {
         // Lazy: a wsl host's home lands on the first probe.
         configDir: () => hosts().configDir(host),
         onChange: (files) => {
-          void this.refresh('watch');
+          if (watchAction(host, files) === 'refresh') void this.refresh('watch');
           this.onTranscriptFiles(files);
         },
       });

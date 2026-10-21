@@ -6,8 +6,9 @@
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, readdir, stat as statFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { basename, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
+import { dirsChanged } from '../../core/claudeWatchPolicy';
 import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
@@ -15,10 +16,11 @@ import { loadSdk } from './sdk';
 
 const WATCH_DEBOUNCE_MS = 250;
 const POLL_MS = 30_000;
-// WSL tiered polling: hot transcripts every 2 s while the Claude surface is
-// visible (fs.watch does not work over the wsl UNC), full scan every 30 s.
+// WSL polling (fs.watch does not work over the wsl UNC): terminal-owned
+// transcripts every 2 s while the Claude surface is visible, project-dir
+// change check every WSL_CHANGE_CHECK_MS.
 const HOT_POLL_MS = 2_000;
-const HOT_COUNT = 20;
+export const WSL_CHANGE_CHECK_MS = 300_000;
 
 export class ClaudeStore {
   private configDirFn: string | (() => string);
@@ -31,8 +33,9 @@ export class ClaudeStore {
   private hotIds: () => string[] = () => [];
   private visible: () => boolean = () => false;
   private inotify: ChildProcess | null = null;
-  // abs path → last known mtime, recomputed on the 30 s full-scan tick
-  private hotPaths = new Map<string, number>();
+  // hot session id -> resolved transcript path + last known mtime
+  private hotPaths = new Map<string, { path: string; mtime: number }>();
+  private dirMtimeSnapshot: Map<string, number> | null = null;
   private hotTickInFlight = false;
   private started = false;
   private watchRestarts = 0;
@@ -215,22 +218,51 @@ export class ClaudeStore {
     return m && m[1] ? m[1] : dir;
   }
 
-  // Tiered polling (wsl without inotify): the 30 s full-scan tick recomputes
-  // the recent-20 ∪ hot-id path set once; the 2 s tick only stats that cached
-  // set and reports changed transcripts as <encoded-cwd>/<id>.jsonl relative
-  // paths — the same shape fs.watch emits, so onTranscriptFiles parses them.
+  // wsl without inotify. fs.watch fails over the UNC and a full SDK list there
+  // costs seconds, so: a cheap project-dir mtime check every WSL_CHANGE_CHECK_MS
+  // (onChange([]) -> full refresh only when a dir changed), plus a 2 s stat of
+  // the terminal-owned (hot) transcripts only, reported as <encoded-cwd>/<id>.jsonl
+  // relative paths - the shape fs.watch emits, so onTranscriptFiles parses them.
   private startTieredPoll(): void {
-    log('claude', 'claude-watch', {
-      detail: { mode: 'poll-tiered', host: this.host.id, events: 0 },
+    log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 0 } });
+    void this.dirMtimes().then((m) => {
+      this.dirMtimeSnapshot ??= m;
     });
-    void this.recomputeHotPaths();
-    this.startPoll(() => {
-      void this.recomputeHotPaths();
-    });
+    this.pollTimer = setInterval(() => {
+      void this.changeCheck();
+    }, WSL_CHANGE_CHECK_MS);
+    this.pollTimer.unref?.();
     this.hotTimer = setInterval(() => {
       void this.hotTick();
     }, HOT_POLL_MS);
     this.hotTimer.unref?.();
+  }
+
+  // projectDir -> mtimeMs; null when the projects dir can't be read.
+  private async dirMtimes(): Promise<Map<string, number> | null> {
+    try {
+      const next = new Map<string, number>();
+      for (const project of await readdir(this.projectsDir)) {
+        try {
+          next.set(project, (await statFile(join(this.projectsDir, project))).mtimeMs);
+        } catch {
+          /* removed between readdir and stat */
+        }
+      }
+      return next;
+    } catch {
+      return null;
+    }
+  }
+
+  private async changeCheck(): Promise<void> {
+    const next = await this.dirMtimes();
+    if (!next) return;
+    const changed = dirsChanged(this.dirMtimeSnapshot, next);
+    this.dirMtimeSnapshot = next;
+    if (!changed) return;
+    log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 1 } });
+    this.onChange([]);
   }
 
   // The 2 s hot tick is async (UNC stats don't block the loop); a slow tick
@@ -239,78 +271,41 @@ export class ClaudeStore {
     if (this.hotTickInFlight || !this.visible()) return;
     this.hotTickInFlight = true;
     try {
-      // Hot ids whose transcript appeared since the last recompute get
-      // resolved lazily — a new file counts as changed immediately.
-      const known = new Set([...this.hotPaths.keys()].map((p) => basename(p, '.jsonl')));
-      for (const id of this.hotIds()) {
-        if (known.has(id)) continue;
-        const path = await this.transcriptFor(id);
-        if (!path) continue;
-        try {
-          this.hotPaths.set(path, (await statFile(path)).mtimeMs - 1);
-        } catch {
-          /* gone already */
-        }
+      const ids = this.hotIds();
+      for (const id of [...this.hotPaths.keys()]) {
+        if (!ids.includes(id)) this.hotPaths.delete(id);
       }
       const changed: string[] = [];
-      for (const [path, prev] of this.hotPaths) {
+      for (const id of ids) {
+        let entry = this.hotPaths.get(id);
+        if (!entry) {
+          // Resolved once per id; a new file counts as changed immediately.
+          const path = await this.transcriptFor(id);
+          if (!path) continue;
+          entry = { path, mtime: -1 };
+          this.hotPaths.set(id, entry);
+        }
         let mtime: number | null = null;
         try {
-          mtime = (await statFile(path)).mtimeMs;
+          mtime = (await statFile(entry.path)).mtimeMs;
         } catch {
           /* gone between ticks */
         }
-        if (mtime === null || mtime === prev) continue;
-        this.hotPaths.set(path, mtime);
-        changed.push(relative(this.projectsDir, path));
+        if (mtime === null || mtime === entry.mtime) continue;
+        entry.mtime = mtime;
+        changed.push(relative(this.projectsDir, entry.path));
       }
       if (changed.length > 0) {
         log('claude', 'claude-watch', {
-          detail: { mode: 'poll-tiered', host: this.host.id, events: changed.length },
+          detail: { mode: 'poll-wsl', host: this.host.id, events: changed.length },
         });
         this.onChange(changed);
       }
     } catch {
-      /* transient stat failures — next tick retries */
+      /* transient stat failures - next tick retries */
     } finally {
       this.hotTickInFlight = false;
     }
-  }
-
-  // Full readdir scan: the 20 most recent transcripts plus any hot (e.g.
-  // terminal-owned) ids, keyed abs-path → mtime. Runs on the 30 s tick and
-  // once at watcher start.
-  private async recomputeHotPaths(): Promise<void> {
-    await this.run(async () => {
-      try {
-        const files: { path: string; mtime: number }[] = [];
-        for (const project of await readdir(this.projectsDir)) {
-          const dir = join(this.projectsDir, project);
-          for (const name of await readdir(dir)) {
-            if (!name.endsWith('.jsonl')) continue;
-            const path = join(dir, name);
-            try {
-              files.push({ path, mtime: (await statFile(path)).mtimeMs });
-            } catch {
-              /* transient */
-            }
-          }
-        }
-        const hot = new Set(this.hotIds());
-        const next = new Map<string, number>();
-        for (const file of files.sort((a, b) => b.mtime - a.mtime).slice(0, HOT_COUNT)) {
-          next.set(file.path, file.mtime);
-        }
-        for (const file of files) {
-          if (hot.has(basename(file.path, '.jsonl')) && !next.has(file.path)) {
-            next.set(file.path, file.mtime);
-          }
-        }
-        this.hotPaths = next;
-      } catch {
-        /* no projects dir yet */
-      }
-    });
   }
 
   private async transcriptFor(id: string): Promise<string | null> {
@@ -370,7 +365,7 @@ export class ClaudeStore {
     }
   }
 
-  private startPoll(onTick?: () => void): void {
+  private startPoll(): void {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(() => {
       void (async () => {
@@ -386,7 +381,6 @@ export class ClaudeStore {
           return;
         }
         if (dirExists) {
-          onTick?.();
           this.onChange([]);
         }
       })();
