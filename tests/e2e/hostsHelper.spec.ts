@@ -273,3 +273,87 @@ test('env.get feeds spawnOn — no -ilc env-capture spawn after ready', async ()
     await closeApp(app);
   }
 });
+
+// Fix round 1: the channel's own respawn re-checks the distro (G15 / review
+// focus #2) and a degraded channel resets when its distro comes back (R19a).
+const flipAndEnumerate = async (app: ElectronApplication, distros: string, spec: string) => {
+  writeFileSync(distros, spec);
+  // The agents poll's backgroundReady re-reads the (stale) table.
+  await app.evaluate(() => (globalThis as any).__agentworkspace.claudeAgentsRefresh());
+};
+
+const flipEnv = (root: string, distros: string, extra: Record<string, string> = {}) => ({
+  FAKE_WSL_ROOT: root,
+  FAKE_WSL_DISTROS_FILE: distros,
+  AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '300',
+  // Nothing re-enumerates on its own; only the respawn gate or an explicit poll.
+  AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '600000',
+  ...extra,
+});
+
+const flipRoot = (): { root: string; distros: string } => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const distros = join(root, 'distros.txt');
+  writeFileSync(distros, 'Fake:Running:default');
+  return { root, distros };
+};
+
+test('a helper killed by a distro stop is not respawned into the stopped distro', async () => {
+  const { root, distros } = flipRoot();
+  const { app, spawnLog, logFile } = await launch(flipEnv(root, distros));
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    const n = launches(spawnLog);
+    // `wsl --terminate Fake`: the table says Stopped and the helper dies.
+    writeFileSync(distros, 'Fake:Stopped:default');
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), HOST);
+    await expect
+      .poll(async () => (await helperEvents(logFile)).some((e) => e.reason === 'distro-unavailable'), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(launches(spawnLog)).toBe(n);
+    expect((await channelState(app))?.running).toBe(false);
+    await flipAndEnumerate(app, distros, 'Fake:Running:default');
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    expect(launches(spawnLog)).toBe(n + 1);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('a degraded helper resets when its distro stops and runs again', async () => {
+  const { root, distros } = flipRoot();
+  const { app, spawnLog } = await launch(
+    flipEnv(root, distros, { FAKE_WSL_NODE: join(tmpdir(), 'nonexistent', 'node.exe') }),
+  );
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('degraded');
+    expect(launches(spawnLog)).toBe(3);
+    await flipAndEnumerate(app, distros, 'Fake:Stopped:default');
+    await expect.poll(async () => (await hostRow(app))?.state, { timeout: 15_000 }).toBe('stopped');
+    expect(launches(spawnLog)).toBe(3);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await flipAndEnumerate(app, distros, 'Fake:Running:default');
+    await expect.poll(() => launches(spawnLog), { timeout: 15_000 }).toBeGreaterThan(3);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test("Settings shows a stopped distro's helper as paused", async () => {
+  const { root, distros } = flipRoot();
+  const { app } = await launch(flipEnv(root, distros));
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    const shell = await shellPage(app);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    const helper = shell.locator(`[data-host-id="${HOST}"] [data-host-helper]`);
+    await expect(helper).toContainText('ready', { timeout: 10_000 });
+    await flipAndEnumerate(app, distros, 'Fake:Stopped:default');
+    await expect(helper).toContainText('paused (distro stopped)', { timeout: 15_000 });
+  } finally {
+    await closeApp(app);
+  }
+});

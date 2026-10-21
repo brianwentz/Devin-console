@@ -596,7 +596,11 @@ variable that selects it.
 - Helper channel (P1): `src/main/hostChannel.ts` `HostChannel` (electron-free; hosts.ts injects spawn + log) owns one `helperSpec` child per WSL host —
   `hosts().channel(host)`. Started by `syncChannel` (after each probe and enumeration) only for an enabled distro the enumeration reports `Running`, probed
   `ready` with a home, a shipped bundle and helper state not `node-missing`/`unsupported-node`; leaving Running/enabled → `stop()` (no respawn), coming back →
-  `reset()`; `hosts:refresh` → `reset()`; quit → `stopChannels()` (stdin EOF, kill after 1 s). Liveness from `core/hostRpc` (`livenessAction`: any frame
+  `reset()` (also from `degraded`: any non-Running sync holds the channel); `hosts:refresh` → `reset()`; quit → `stopChannels()` (stdin EOF, 300 ms,
+  then `killStopped()` kills what is left synchronously). Every spawn (start, backoff timer, immediate respawn, post-redeploy, reset) first awaits
+  `canSpawn` = a fresh `wsl -l -v` requiring listed+enabled+Running — false → stop (`distro-unavailable`) + held, so a helper killed by
+  `wsl --terminate`/`--shutdown` never respawns into (boots) the distro. A hello whose `hash` differs from the bundle's → kill + redeploy once per
+  run, a second mismatch → `degraded` (`hash-mismatch`). Liveness from `core/hostRpc` (`livenessAction`: any frame
   counts, one ping after 15 s quiet, kill after 45 s with no frame; `requestTimeoutMs` 10 s / 60 s for `store.list`/`usage.scan`; hello deadline 20 s); exits feed
   the breaker (`onExit`), exit 86 → `deployHelper` + immediate respawn before the breaker (a second 86 right after a redeploy is a failed start). While a
   channel runs it owns `HostStatus.helper` (a re-probe skips `prepareHelper`). With a bundle shipped, `fsReady` for WSL = channel `ready`; `shellEnv()` = the
@@ -775,7 +779,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `claude-sdk-load` | `{ok,ms,version}` (version read by resolving the SDK entry — its exports map blocks `./package.json`). |
 | `claude-list` / `claude-watch` / `claude-select` / `claude-mutate` / `claude-menu` | Sidebar/registry ops; `claude-list` carries `{ count, skippedHosts, listedHosts, ms, source }` (`listedHosts` = hosts actually re-listed this pass; `source` includes `watch`\|`hosts`\|`surface`\|`start`\|`test`…); `claude-watch` carries `{ mode: 'poll-wsl'\|'inotify', host, events }` for wsl store watchers. |
 | `host-exec` | `{ host, kind: 'enum'\|'probe'\|'env'\|'exec'\|'spawn'\|'helper' }` — one per `wsl.exe` invocation (enumeration incl. the terminal host's `-l -q`, probe/CLI resolution/hook curl, env capture, `execOn`, `spawnOn`, pty spawn, the inotify watcher, each `ghSpec` use, each helper channel launch = `helper`) so a soak can count them; ids and enums only. |
-| `host-helper` | `{ host, state, reason? }` — helper channel state change; `state` = `starting\|ready\|reconnecting\|degraded`, `reason` = `spawn\|hello\|exit\|spawn-error\|hello-timeout\|silence\|protocol\|redeploy\|redeploy-failed\|stopped\|reset\|breaker`. |
+| `host-helper` | `{ host, state, reason? }` — helper channel state change; `state` = `starting\|ready\|reconnecting\|degraded`, `reason` = `spawn\|hello\|exit\|spawn-error\|hello-timeout\|silence\|protocol\|redeploy\|redeploy-failed\|stopped\|reset\|breaker\|distro-unavailable\|hash-mismatch`. |
 | `host-rpc-timeout` | `{ host, method, ms }` — a channel request got no answer within its timeout (10 s, 60 s for `store.list`/`usage.scan`). |
 | `host-rpc-error` | `{ host, method, code }` — the helper answered with an error code, or a frame over 32 MB arrived (`code: 'too-large'`, `method: 'unknown'`; the channel survives). |
 | `host-helper-deploy` | `{ host, ok, bytes, ms }` - the helper bundle streamed over stdin into `<home>/.agent-workspace/` after a probe found it absent (only when `out/helper/helper-hash.json` exists; logs one `host-exec` `kind:'exec'`). |

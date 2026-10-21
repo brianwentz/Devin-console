@@ -698,14 +698,12 @@ export class HostsRegistry {
   private syncChannel(entry: WslEntry, opts: { reset?: boolean } = {}): void {
     const bundle = helperBundle();
     if (!bundle || this.quitting) return;
-    const id = entry.host.id;
-    const running = this.enumerate().some((row) => `wsl:${row.name}` === id && row.state === 'Running');
-    const enabled = this.enabledDistros().some((d) => `wsl:${d.name}` === id);
     const helperState = entry.status.helper?.state;
     const nodeBlocked = helperState === 'node-missing' || helperState === 'unsupported-node';
-    if (!running || !enabled || nodeBlocked) {
-      if (entry.channel?.running) {
-        entry.channel.stop();
+    if (!this.distroLive(entry) || nodeBlocked) {
+      if (entry.channel) {
+        if (entry.channel.running) entry.channel.stop(nodeBlocked ? 'stopped' : 'distro-unavailable');
+        // Any channel — degraded included — resets when the distro is back.
         entry.channelHeld = true;
       }
       return;
@@ -723,6 +721,25 @@ export class HostsRegistry {
     }
   }
 
+  /** Listed, enabled and Running in the cached enumeration. */
+  private distroLive(entry: WslEntry): boolean {
+    const id = entry.host.id;
+    const running = this.enumerate().some((row) => `wsl:${row.name}` === id && row.state === 'Running');
+    return running && this.enabledDistros().some((d) => `wsl:${d.name}` === id);
+  }
+
+  /** The channel's pre-spawn gate: a fresh `wsl -l -v` (never boots a distro)
+   * — a helper killed by `wsl --terminate`/`--shutdown` must not respawn into
+   * (and thereby boot) the stopped distro. False holds the channel until an
+   * enumeration reports it Running again. */
+  private async canSpawnHelper(entry: WslEntry): Promise<boolean> {
+    if (this.quitting) return false;
+    await this.enumerateAsync();
+    const ok = !this.quitting && this.distroLive(entry);
+    if (!ok) entry.channelHeld = true;
+    return ok;
+  }
+
   private createChannel(entry: WslEntry, hash: string): HostChannel {
     const silenceMs = testNumber('AGENT_WORKSPACE_TEST_HELPER_SILENCE_MS');
     const backoffMs = testNumber('AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS');
@@ -730,6 +747,8 @@ export class HostsRegistry {
       ...(silenceMs !== null ? { silenceMs, killMs: silenceMs * 3 } : {}),
       backoffMs,
       redeploy: () => this.deployHelper(entry),
+      canSpawn: () => this.canSpawnHelper(entry),
+      expectedHash: hash,
       log: (event, detail) => log('host', event, { detail }),
     });
     channel.onState((status) => this.onChannelState(entry, channel, status));
@@ -791,8 +810,11 @@ export class HostsRegistry {
     this.quitting = true;
     const live = [...this.entries.values()].filter((e) => e.channel?.running);
     for (const entry of live) entry.channel!.stop();
-    // Give the EOFs a moment to land before the main process goes away.
-    if (live.length) await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+    if (!live.length) return;
+    // Give the EOFs a moment to land, then kill what is left: stop()'s grace
+    // timer is unref'd and would not fire before the process exits.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+    for (const entry of live) entry.channel!.killStopped();
   }
 
   /** Test hooks: kill the live helper / read the channel state. */

@@ -127,7 +127,9 @@ function HostsBlock() {
           )}
           {host.helper ? (
             <span data-host-helper={host.helper.state} className="text-xs text-[#7f8ca0]">
-              {`helper ${helperLabel(host.helper.state)}`}
+              {host.state === 'stopped'
+                ? 'helper paused (distro stopped)'
+                : `helper ${helperLabel(host.helper.state)}`}
             </span>
           ) : null}
           {host.helper?.state === 'node-missing' || host.helper?.state === 'unsupported-node' ? (

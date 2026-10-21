@@ -53,8 +53,14 @@ export interface HostChannelOptions {
   /** stop(): stdin EOF first, kill after this long. */
   stopGraceMs?: number;
   maxFrameBytes?: number;
-  /** Exit 86: put the bundle back; resolves true when the file is deployed. */
+  /** Exit 86 / hello hash mismatch: put the bundle back; resolves true when the file is deployed. */
   redeploy?: () => Promise<boolean>;
+  /** Checked before EVERY spawn (start, backoff timer, immediate respawn,
+   * post-redeploy, reset): false = the distro is gone — the channel stops
+   * instead of a `wsl.exe -d D` that would boot it again. */
+  canSpawn?: () => Promise<boolean>;
+  /** The deployed bundle's hash; a hello carrying another one is a stale helper. */
+  expectedHash?: string;
   log?: (event: string, detail: Record<string, unknown>) => void;
 }
 
@@ -78,12 +84,15 @@ type Reason =
   | 'redeploy-failed'
   | 'stopped'
   | 'reset'
-  | 'breaker';
+  | 'breaker'
+  | 'distro-unavailable'
+  | 'hash-mismatch';
 
 const methodTag = (method: string): string => method.slice(0, 64);
 
 export class HostChannel {
   private stateValue: HelperChannelState = 'absent';
+  private stateReason: Reason | null = null;
   private watchModeValue: HelperStatus['watchMode'] = null;
   private child: ChildProcess | null = null;
   private helloInfo: Hello | null = null;
@@ -104,6 +113,14 @@ export class HostChannel {
   private redeploying = false;
   /** The current attempt is the respawn right after a redeploy. */
   private afterRedeploy = false;
+  /** canSpawn() in flight; the sequence number cancels a stale gate. */
+  private gating = false;
+  private gateSeq = 0;
+  /** hello hash mismatch: redeploy once per run, then degraded. */
+  private hashRedeployUsed = false;
+  private hashRedeployPending = false;
+  /** Children stop() ended stdin on that have not exited yet (quit kills them). */
+  private stopping = new Set<ChildProcess>();
   private notificationFns = new Map<string, Set<(params: unknown) => void>>();
   private stateFns = new Set<(s: HelperStatus) => void>();
   private readonly silenceMs: number;
@@ -141,7 +158,7 @@ export class HostChannel {
 
   /** A child is up or a respawn is scheduled — the channel owns HostStatus.helper. */
   get running(): boolean {
-    return !this.stopped && (this.child !== null || this.respawnTimer !== null || this.redeploying);
+    return !this.stopped && (this.child !== null || this.respawnTimer !== null || this.redeploying || this.gating);
   }
 
   /** Test seam / diagnostics (no ids beyond counts). */
@@ -158,7 +175,7 @@ export class HostChannel {
 
   start(): void {
     this.stopped = false;
-    if (this.child || this.respawnTimer || this.redeploying) return;
+    if (this.child || this.respawnTimer || this.redeploying || this.gating) return;
     if (this.breaker.open) {
       this.setState('degraded', 'breaker');
       return;
@@ -172,14 +189,35 @@ export class HostChannel {
     this.afterRedeploy = false;
     this.clearRespawn();
     this.stopped = false;
-    if (this.child || this.redeploying) return;
+    // Inside stop()'s grace the old child may still be draining its EOF: a
+    // reset here briefly overlaps two children — accepted, the old one exits.
+    if (this.child || this.redeploying || this.gating) return;
     this.spawnNow('reset');
   }
 
   /** stdin EOF (the helper exits on it), kill after a short grace; no respawn. */
-  stop(): void {
+  stop(reason: 'stopped' | 'distro-unavailable' = 'stopped'): void {
+    this.halt(reason);
+  }
+
+  /** Quit: kill (synchronously) every child stop() is still waiting on — the
+   * unref'd grace timer would not fire before the process exits. */
+  killStopped(): void {
+    for (const child of this.stopping) {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+    }
+    this.stopping.clear();
+  }
+
+  private halt(reason: Reason): void {
     this.stopped = true;
     this.clearRespawn();
+    this.gateSeq++;
+    this.gating = false;
     const child = this.child;
     this.detach();
     this.rejectAll('exited', 'helper channel stopped');
@@ -189,7 +227,9 @@ export class HostChannel {
       } catch {
         // already closed
       }
+      this.stopping.add(child);
       const kill = setTimeout(() => {
+        this.stopping.delete(child);
         try {
           child.kill();
         } catch {
@@ -197,10 +237,13 @@ export class HostChannel {
         }
       }, this.stopGraceMs);
       kill.unref?.();
-      child.once('exit', () => clearTimeout(kill));
+      child.once('exit', () => {
+        clearTimeout(kill);
+        this.stopping.delete(child);
+      });
     }
     if (this.stateValue !== 'absent' && this.stateValue !== 'node-missing' && this.stateValue !== 'unsupported-node') {
-      this.setState('reconnecting', 'stopped');
+      this.setState('reconnecting', reason);
     }
   }
 
@@ -266,6 +309,25 @@ export class HostChannel {
 
   private spawnNow(reason: Reason): void {
     this.clearRespawn();
+    const gate = this.opts.canSpawn;
+    if (!gate) {
+      this.doSpawn(reason);
+      return;
+    }
+    const seq = ++this.gateSeq;
+    this.gating = true;
+    void gate()
+      .catch(() => false)
+      .then((ok) => {
+        if (seq !== this.gateSeq) return;
+        this.gating = false;
+        if (this.stopped) return;
+        if (ok) this.doSpawn(reason);
+        else this.halt('distro-unavailable');
+      });
+  }
+
+  private doSpawn(reason: Reason): void {
     const attempt = ++this.attempt;
     this.decoder = new LineDecoder(this.maxFrameBytes);
     this.helloInfo = null;
@@ -337,6 +399,18 @@ export class HostChannel {
       this.kill();
       return;
     }
+    if (this.opts.expectedHash && hello.hash !== this.opts.expectedHash) {
+      // A stale helper answered (old build / foreign file): redeploy once.
+      this.endReason = 'hash-mismatch';
+      if (!this.hashRedeployUsed && this.opts.redeploy) {
+        this.hashRedeployUsed = true;
+        this.hashRedeployPending = true;
+      } else {
+        this.breaker = { ...this.breaker, open: true, nextAttemptAt: null, readySince: null };
+      }
+      this.kill();
+      return;
+    }
     if (this.helloTimer) clearTimeout(this.helloTimer);
     this.helloTimer = null;
     this.helloInfo = hello as Hello;
@@ -396,12 +470,14 @@ export class HostChannel {
     this.rejectAll('exited', 'helper channel closed');
     if (this.stopped) return;
     const now = Date.now();
-    if (code === HELPER_MISSING_EXIT && this.opts.redeploy && !this.afterRedeploy) {
+    const hashRedeploy = this.hashRedeployPending;
+    this.hashRedeployPending = false;
+    if (hashRedeploy || (code === HELPER_MISSING_EXIT && this.opts.redeploy && !this.afterRedeploy)) {
       this.afterRedeploy = true;
       this.redeploying = true;
       this.setState('starting', 'redeploy');
       void this.opts
-        .redeploy()
+        .redeploy!()
         .catch(() => false)
         .then((ok) => {
           this.redeploying = false;
@@ -469,8 +545,10 @@ export class HostChannel {
   }
 
   private setState(next: HelperChannelState, reason: Reason): void {
-    if (next === this.stateValue && next !== 'starting') return;
+    // Same state, same reason = no news (starting always logs: one per spawn).
+    if (next === this.stateValue && reason === this.stateReason && next !== 'starting') return;
     this.stateValue = next;
+    this.stateReason = reason;
     this.log('host-helper', { host: this.host.id, state: next, reason });
     this.emitState();
   }

@@ -40,8 +40,8 @@ class FakeChild extends EventEmitter {
   raw(text: string): void {
     this.stdout.emit('data', Buffer.from(text));
   }
-  hello(): void {
-    this.send({ method: 'hello', params: { protocol: 1, hash: 'abcdef012345', node: '22.12.0', pid: 1, home: '/home/u', watchMode: 'watch' } });
+  hello(hash = 'abcdef012345'): void {
+    this.send({ method: 'hello', params: { protocol: 1, hash, node: '22.12.0', pid: 1, home: '/home/u', watchMode: 'watch' } });
   }
   requests(): Array<{ id: number; method: string }> {
     return this.written.map((l) => JSON.parse(l) as { id: number; method: string });
@@ -50,7 +50,14 @@ class FakeChild extends EventEmitter {
 
 type Logged = { event: string; detail: Record<string, unknown> };
 
-function make(opts: { redeploy?: () => Promise<boolean>; maxFrameBytes?: number } = {}) {
+function make(
+  opts: {
+    redeploy?: () => Promise<boolean>;
+    maxFrameBytes?: number;
+    canSpawn?: () => Promise<boolean>;
+    expectedHash?: string;
+  } = {},
+) {
   const children: FakeChild[] = [];
   const logs: Logged[] = [];
   const states: string[] = [];
@@ -354,5 +361,99 @@ describe('HostChannel', () => {
     expect(children).toHaveLength(1);
     vi.advanceTimersByTime(2);
     expect(children).toHaveLength(2);
+  });
+});
+
+describe('HostChannel fix round 1', () => {
+  it('canSpawn gates every spawn: a stable exit with the distro gone does not respawn', async () => {
+    let allowed = true;
+    const canSpawn = vi.fn(async () => allowed);
+    const { channel, children, last, logs } = make({ canSpawn });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(1);
+    const child = last();
+    child.hello();
+    for (let t = 0; t < 70_000; t += 10_000) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      child.send({ method: 'store.changed', params: {} });
+    }
+    // `wsl --terminate`: the helper dies, the stable-exit path wants an immediate respawn.
+    allowed = false;
+    child.exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(1);
+    expect(channel.info().running).toBe(false);
+    expect(channel.state).toBe('reconnecting');
+    expect(logs.some((l) => l.event === 'host-helper' && l.detail.reason === 'distro-unavailable')).toBe(true);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(children).toHaveLength(1);
+    allowed = true;
+    channel.reset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+  });
+
+  it('canSpawn gates the backoff timer, the post-redeploy respawn and reset()', async () => {
+    let allowed = true;
+    const canSpawn = vi.fn(async () => allowed);
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last } = make({ canSpawn, redeploy });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    last().exit(1); // failed start → 60 s backoff
+    allowed = false;
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(children).toHaveLength(1);
+    allowed = true;
+    channel.reset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    allowed = false;
+    last().exit(86);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(2);
+    allowed = false;
+    channel.reset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+  });
+
+  it('killStopped(): a child still alive after stop() is killed synchronously (quit)', () => {
+    const { channel, last } = make();
+    channel.start();
+    const child = last();
+    child.hello();
+    channel.stop();
+    expect(child.killed).toBe(false);
+    channel.killStopped();
+    expect(child.killed).toBe(true);
+  });
+
+  it('hello hash mismatch → kill + redeploy once; a second mismatch → degraded', async () => {
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last, logs } = make({ redeploy, expectedHash: 'abcdef012345' });
+    channel.start();
+    last().hello('000000000000');
+    expect(last().killed).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(2);
+    expect(channel.info().failures).toBe(0);
+    last().hello('000000000000');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(channel.state).toBe('degraded');
+    expect(logs.some((l) => l.event === 'host-helper' && l.detail.state === 'degraded' && l.detail.reason === 'hash-mismatch')).toBe(true);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(children).toHaveLength(2);
+  });
+
+  it('a matching hello hash goes ready', () => {
+    const { channel, last } = make({ expectedHash: 'abcdef012345' });
+    channel.start();
+    last().hello('abcdef012345');
+    expect(channel.state).toBe('ready');
   });
 });
