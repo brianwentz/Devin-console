@@ -7,6 +7,7 @@
   "main": "out/main.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "helper:check": "node scripts/helper-bundle-check.mjs",
     "start": "npm run build && electron .",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "npm run build && playwright test",
