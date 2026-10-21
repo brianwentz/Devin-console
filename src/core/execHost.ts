@@ -305,10 +305,112 @@ const SEMVER_LINE = /^\d+\.\d+\.\d+/;
 /** Second marker the env-capture command prints after `env -0`, followed by the node version or `NONODE`. */
 export const NODE_MARKER = '__DW_NODE__';
 
-/** Probe line output: `$HOME`, user, login shell. */
+/** Token the probe line prints when the helper bundle is already deployed. */
+export const HELPER_PRESENT = 'HELPER_PRESENT';
+
+/** Exit code of the helper launch line when the bundle file is missing (→ redeploy). */
+export const HELPER_MISSING_EXIT = 86;
+
+export const HELPER_DIR = '.agent-workspace';
+
+const HELPER_HASH_RE = /^[0-9a-f]{12}$/;
+
+/** `helper-hash.json` → the 12-hex bundle hash; null when absent or malformed. */
+export function parseHelperHash(json: string | null): string | null {
+  if (!json) return null;
+  try {
+    const hash = (JSON.parse(json) as { hash?: unknown } | null)?.hash;
+    return typeof hash === 'string' && HELPER_HASH_RE.test(hash) ? hash : null;
+  } catch {
+    return null;
+  }
+}
+
+export function helperFileName(hash: string): string {
+  return `helper-${hash}.mjs`;
+}
+
+/** Absolute helper path under the probed home — neither `wsl.exe -e` nor `"$0"` expands `~`. */
+export function helperPath(home: string, hash: string): string {
+  return `${home.replace(/\/+$/, '')}/${HELPER_DIR}/${helperFileName(hash)}`;
+}
+
+/** The existing probe line (home / user / login shell) plus, when a bundle exists, the presence check — no extra spawn. */
+export function probeLine(hash: string | null): string {
+  const base = 'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7';
+  return hash === null ? base : `${base}; if test -f "$HOME/${HELPER_DIR}/${helperFileName(hash)}"; then echo ${HELPER_PRESENT}; fi`;
+}
+
+/** Probe line output: `$HOME`, user, login shell. The presence token is not a shell. */
 export function parseProbeOutput(out: string): { home: string | undefined; shell: string | undefined } {
-  const lines = out.trim().split('\n').map((l) => l.trim());
+  const lines = out
+    .trim()
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== HELPER_PRESENT);
   return { home: lines[0] || undefined, shell: lines[2] || undefined };
+}
+
+export function parseHelperPresent(out: string): boolean {
+  return out.split('\n').some((l) => l.trim() === HELPER_PRESENT);
+}
+
+export type HelperState = NonNullable<HostStatus['helper']>['state'];
+
+/**
+ * Initial helper state after the probe. `envOk` = the interactive-login env
+ * capture succeeded; with it failed/disabled the node version is unknown and
+ * the host stays eligible (a failed channel start surfaces the problem).
+ */
+export function deriveHelperState(input: {
+  envOk: boolean;
+  node: string | null;
+  present: boolean;
+}): HelperState {
+  if (input.envOk) {
+    if (input.node === null) return 'node-missing';
+    const major = Number(input.node.split('.')[0]);
+    if (Number.isFinite(major) && major < 18) return 'unsupported-node';
+  }
+  return input.present ? 'starting' : 'absent';
+}
+
+/**
+ * Helper launch: interactive login shell (full PATH/nvm/SSH_AUTH_SOCK) running
+ * the deployed bundle on stdio. `$0` (fish: `$argv[1]`) is the bundle path, so
+ * paths with spaces stay one argv element. Exit 86 = bundle missing.
+ */
+export function helperSpec(host: ExecHost, home: string, shell: string, hash: string): HostSpawnSpec {
+  if (host.kind !== 'wsl') throw new Error('helperSpec: not a wsl host');
+  const line =
+    shellFamily(shell) === 'fish'
+      ? `test -f $argv[1]; or exit ${HELPER_MISSING_EXIT}; exec node $argv --stdio`
+      : `test -f "$0" || exit ${HELPER_MISSING_EXIT}; exec node "$0" --stdio`;
+  return {
+    file: 'wsl.exe',
+    args: ['-d', host.distro, '--cd', home, '-e', shell, '-ilc', line, helperPath(home, hash)],
+    cwd: null,
+  };
+}
+
+/** Deploy: bundle on stdin, written atomically (tmp + mv) to `$1/$2`. */
+export function helperDeploySpec(host: ExecHost, home: string, hash: string): HostSpawnSpec {
+  if (host.kind !== 'wsl') throw new Error('helperDeploySpec: not a wsl host');
+  return {
+    file: 'wsl.exe',
+    args: [
+      '-d',
+      host.distro,
+      '-e',
+      '/bin/sh',
+      '-c',
+      'mkdir -p "$1" && cat > "$1/.tmp.$$" && mv "$1/.tmp.$$" "$1/$2"',
+      'sh',
+      `${home.replace(/\/+$/, '')}/${HELPER_DIR}`,
+      helperFileName(hash),
+    ],
+    cwd: null,
+  };
 }
 
 /**

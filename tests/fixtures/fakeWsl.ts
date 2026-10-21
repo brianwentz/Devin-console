@@ -12,18 +12,31 @@
 //                                 (sleeps FAKE_WSL_PROBE_DELAY_MS first)
 //   <shell> -ilc 'cmd' [posargs]  __DW_ENV__ capture → canned env -0
 //                                 (FAKE_WSL_MARKER=1 when FAKE_WSL_ENV_MARKER),
-//                                 then __DW_NODE__ + 22.12.0 (NONODE when
+//                                 then __DW_NODE__ + FAKE_WSL_NODE_VERSION
+//                                 (default 22.12.0; NONODE when
 //                                 FAKE_WSL_NO_NODE=1);
 //                                 `command -v <bin>` → canned PATH answers;
 //                                 'exec "$0" "$@"'/'exec $argv' → run the argv
+//   probe line + HELPER_PRESENT   prints the token when the bundle file named in
+//                                 the line exists under FAKE_WSL_ROOT<home>
+//   /bin/sh -c 'mkdir -p "$1" …' sh <dir> <name>
+//                                 helper deploy: stdin → <ROOT><dir>/<name>
+//   <shell> -ilc 'test -f "$0" || exit 86; exec node "$0" --stdio' <file>
+//                                 helper launch: exit 86 when the mapped file is
+//                                 missing, else a piped child
+//                                 (FAKE_WSL_NODE ?? this node) running the file
+//                                 with HOME and CLAUDE_CONFIG_DIR under
+//                                 FAKE_WSL_ROOT; stdio piped through;
+//                                 FAKE_WSL_HELPER_HANG=1 stops forwarding the
+//                                 child's stdout after its first line
 //   inotifywait …                 exit 127 unless FAKE_WSL_INOTIFY=1 → fs.watch
 //   curl … %{http_code}           200 only when FAKE_WSL_HOOKS=ok
 //   */claude …                    --version → a canned string; agents --json
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
-import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, watch } from 'node:fs';
-import { join } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const ROOT = process.env.FAKE_WSL_ROOT ?? '.';
 const HOME = process.env.FAKE_WSL_HOME ?? '/home/u';
@@ -34,6 +47,49 @@ const linuxToLocal = (p: string): string => {
   const dir = join(ROOT, ...p.split('/').filter(Boolean));
   mkdirSync(dir, { recursive: true });
   return dir;
+};
+
+// Same mapping without creating anything (file lookups).
+const linuxFile = (p: string): string => join(ROOT, ...p.split('/').filter(Boolean));
+
+// Helper launch: `test -f <file> || exit 86; exec node <file> --stdio` — piped
+// (async) child so the NDJSON channel stays open.
+const helperLaunch = (file: string, cwd: string): number => {
+  const local = linuxFile(file);
+  if (!existsSync(local)) return 86;
+  const child = spawn(process.env.FAKE_WSL_NODE ?? process.execPath, [local, '--stdio'], {
+    cwd,
+    env: { ...process.env, HOME: linuxFile(HOME), CLAUDE_CONFIG_DIR: linuxFile(`${HOME}/.claude`) },
+    stdio: 'pipe',
+    windowsHide: true,
+  });
+  let forwarding = true;
+  child.stdout.on('data', (chunk: Buffer) => {
+    if (!forwarding) return;
+    if (process.env.FAKE_WSL_HELPER_HANG === '1') {
+      const nl = chunk.indexOf(10);
+      if (nl !== -1) {
+        forwarding = false;
+        process.stdout.write(chunk.subarray(0, nl + 1));
+        return;
+      }
+    }
+    process.stdout.write(chunk);
+  });
+  child.stderr.pipe(process.stderr);
+  process.stdin.pipe(child.stdin);
+  child.stdin.on('error', () => undefined);
+  child.once('exit', (code) => process.exit(code ?? 1));
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  return STAY_ALIVE;
+};
+
+// Helper deploy: `mkdir -p "$1" && cat > "$1/.tmp.$$" && mv … "$1/$2"` with the bundle on stdin.
+const helperDeploy = (dir: string, name: string): number => {
+  const target = join(linuxToLocal(dir), name);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, readFileSync(0));
+  return 0;
 };
 
 const cannedEnv = (): Record<string, string> => ({
@@ -136,11 +192,14 @@ const shInteractive = (tail: string[], cwd: string): number => {
   const cmd = cIdx === -1 ? '' : (tail[cIdx + 1] ?? '');
   const posargs = cIdx === -1 ? tail : tail.slice(cIdx + 2);
 
+  if (cmd.startsWith('test -f ') && cmd.includes('exit 86;')) {
+    return helperLaunch(posargs[0] ?? '', cwd);
+  }
   if (cmd.includes('__DW_ENV__')) {
     const body = Object.entries(cannedEnv())
       .map(([k, v]) => `${k}=${v}`)
       .join('\0');
-    const node = process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : '22.12.0';
+    const node = process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : (process.env.FAKE_WSL_NODE_VERSION ?? '22.12.0');
     process.stdout.write(`\0__DW_ENV__\0${body}\0\0__DW_NODE__\0${node}\n`);
     return 0;
   }
@@ -233,8 +292,13 @@ const main = (): number => {
     if (delay > 0) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
     }
-    process.stdout.write(`${HOME}\nu\n/bin/bash\n`);
+    const name = /helper-[0-9a-f]{12}[.]mjs/.exec(tail[1] ?? '')?.[0];
+    const present = name !== undefined && existsSync(linuxFile(`${HOME}/.agent-workspace/${name}`));
+    process.stdout.write(`${HOME}\nu\n/bin/bash\n${present ? 'HELPER_PRESENT\n' : ''}`);
     return 0;
+  }
+  if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('mkdir -p "$1"')) {
+    return helperDeploy(tail[3] ?? '', tail[4] ?? '');
   }
   if (/bash|zsh|fish|sh$/.test(file) && tail.some((a) => /^-[a-z]*c$/.test(a))) {
     return shInteractive(tail, cwd);

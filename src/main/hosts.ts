@@ -8,6 +8,8 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { app } from 'electron';
 import {
   hostIdForPath as coreHostIdForPath,
   mergeShellEnv,
@@ -26,6 +28,10 @@ import {
   type HostId,
   parseNodeVersion,
   parseProbeOutput,
+  parseHelperPresent,
+  probeLine,
+  deriveHelperState,
+  helperDeploySpec,
   NODE_MARKER,
   statusesChanged,
 } from '../core/execHost';
@@ -36,8 +42,17 @@ import { state, testMode } from './state';
 import { resolveClaudePath } from './claude/claudePath';
 import { resolveDevinPath } from './local/acpHost';
 import { sdkTargetCliVersion } from './claude/sdk';
+import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 
 const execFileAsync = promisify(execFile);
+
+let helperInfo: HelperBundleInfo | null | undefined;
+/** The shipped helper bundle (`out/helper/helper-hash.json`), null until the build produces one - then no deploy, no probe token, no channel. Read once per run. */
+export function helperBundle(): HelperBundleInfo | null {
+  if (helperInfo === undefined) helperInfo = loadHelperBundleInfo(join(app.getAppPath(), 'out'));
+  return helperInfo;
+}
+export const helperAvailable = (): boolean => helperBundle() !== null;
 
 const ENUM_CACHE_MS = 5 * 60_000;
 // Background WSL work (agents poll, change check, gh fallback) re-reads an
@@ -171,7 +186,7 @@ export class HostsRegistry {
   // already printed, and the marker-validated output is still usable).
   private runWsl(
     args: string[],
-    opts: { kind: WslExecKind; host: string; timeout?: number; requireSuccess?: boolean },
+    opts: { kind: WslExecKind; host: string; timeout?: number; requireSuccess?: boolean; input?: Buffer },
   ): Promise<WslRun> {
     const timeout = opts.timeout ?? PROBE_TIMEOUT_MS;
     const requireSuccess = opts.requireSuccess ?? true;
@@ -185,17 +200,22 @@ export class HostsRegistry {
         const [file, ...prefix] = cmd;
         log('host', 'host-exec', { detail: { host: opts.host, kind: opts.kind } });
         const child = spawn(file!, [...prefix, ...args], {
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [opts.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
           windowsHide: true,
         });
+        if (opts.input) {
+          // EPIPE when wsl.exe dies early surfaces through the exit code.
+          child.stdin!.on('error', () => undefined);
+          child.stdin!.end(opts.input);
+        }
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
         const timer = setTimeout(() => {
           child.kill('SIGKILL');
         }, timeout);
         timer.unref?.();
-        child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
-        child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+        child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
+        child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
         child.once('error', (error) => {
           clearTimeout(timer);
           reject(error);
@@ -476,6 +496,7 @@ export class HostsRegistry {
       const distro = entry.host.distro;
       const id = entry.host.id;
       const overrides = this.overrides(id);
+      let helperPresent = false;
       try {
         // home / user / login shell in one sh call.
         const out = await this.execWsl(
@@ -485,12 +506,13 @@ export class HostsRegistry {
             '-e',
             '/bin/sh',
             '-c',
-            'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7',
+            probeLine(helperBundle()?.hash ?? null),
           ],
           'probe',
           id,
         );
         const parsed = parseProbeOutput(out);
+        helperPresent = parseHelperPresent(out);
         entry.host = { ...entry.host, home: overrides.home ?? parsed.home ?? null };
         entry.status = {
           ...entry.status,
@@ -554,6 +576,7 @@ export class HostsRegistry {
       // Hook listener reachability: loopback first, then the WSL vEthernet
       // address for NAT-mode distros.
       const hooks = await this.probeHooks(entry);
+      const helper = await this.prepareHelper(entry, helperPresent);
       entry.status = {
         ...entry.status,
         state: 'ready',
@@ -564,6 +587,7 @@ export class HostsRegistry {
         hooks,
         inotify,
         gh,
+        ...(helper ? { helper } : {}),
       };
       log('host', 'host-probe', {
         detail: {
@@ -581,6 +605,41 @@ export class HostsRegistry {
       this.publish();
     });
     await entry.probing;
+  }
+
+  /**
+   * Initial helper status from the env capture's node version plus, when the
+   * bundle is absent from the distro, a stdin deploy (one wsl.exe run, no UNC).
+   * Only reached from a probe the P0 gates allow (never boots a stopped
+   * distro); unknown node (capture disabled/failed) stays eligible. Null = no
+   * bundle ships.
+   */
+  private async prepareHelper(
+    entry: WslEntry,
+    present: boolean,
+  ): Promise<NonNullable<HostStatus['helper']> | null> {
+    const bundle = helperBundle();
+    if (!bundle) return null;
+    const { node, shellEnv } = entry.status;
+    let derived = deriveHelperState({ envOk: shellEnv?.ok === true, node, present });
+    const home = entry.host.home;
+    if (derived === 'absent' && home && !this.enumStopped(entry.host.id)) {
+      const t0 = Date.now();
+      let ok = false;
+      let bytes = 0;
+      try {
+        const data = await readFile(bundle.file);
+        bytes = data.length;
+        const spec = helperDeploySpec(entry.host, home, bundle.hash);
+        await this.runWsl(spec.args, { kind: 'exec', host: entry.host.id, timeout: 30_000, input: data });
+        ok = true;
+      } catch {
+        ok = false;
+      }
+      log('host', 'host-helper-deploy', { detail: { host: entry.host.id, ok, bytes, ms: Date.now() - t0 } });
+      if (ok) derived = 'starting';
+    }
+    return { state: derived, watchMode: null };
   }
 
   /** §1.4 capture: `<shell> -ilc 'printf "\0__DW_ENV__\0"; env -0'`. */

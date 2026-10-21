@@ -1,6 +1,17 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { loadHelperBundleInfo } from '../../src/main/helperBundle';
 import {
+  deriveHelperState,
   displayPath,
+  helperDeploySpec,
+  helperSpec,
+  parseHelperHash,
+  parseHelperPresent,
+  parseProbeOutput,
+  probeLine,
   hostIdForPath,
   isFsReady,
   isWslHost,
@@ -265,5 +276,82 @@ describe('resolveLocalConfigDir', () => {
     const captured = resolveLocalConfigDir(env, '/home/u', j);
     env.CLAUDE_CONFIG_DIR = '//wsl.localhost/D/home/u/.claude';
     expect(captured).toBe('C:/one');
+  });
+});
+
+describe('helperSpec', () => {
+  const H = 'abcdef012345';
+  const file = '/home/brian/.agent-workspace/helper-abcdef012345.mjs';
+  it.each(['/bin/bash', '/usr/bin/zsh'])('posix shell %s is byte-exact', (shell) => {
+    expect(helperSpec(UB, '/home/brian', shell, H)).toEqual({
+      file: 'wsl.exe',
+      cwd: null,
+      args: [
+        '-d', 'Ubuntu-22.04', '--cd', '/home/brian', '-e', shell,
+        '-ilc', 'test -f "$0" || exit 86; exec node "$0" --stdio', file,
+      ],
+    });
+  });
+  it('fish uses $argv and still passes --stdio', () => {
+    const spec = helperSpec(UB, '/home/brian', '/usr/bin/fish', H);
+    expect(spec.args.slice(-2)).toEqual(['test -f $argv[1]; or exit 86; exec node $argv --stdio', file]);
+  });
+  it('has no ~ and no UNC; a home with a space is one argv element', () => {
+    const spec = helperSpec(wslHost('U', '/home/a b'), '/home/a b', '/bin/bash', H);
+    expect(spec.args.join('')).not.toMatch(/~|\\\\/);
+    expect(spec.args).toContain('/home/a b/.agent-workspace/helper-abcdef012345.mjs');
+    expect(spec.args[3]).toBe('/home/a b');
+  });
+});
+
+describe('helperDeploySpec', () => {
+  it('passes the dir and file name as $1 and $2', () => {
+    const spec = helperDeploySpec(UB, '/home/brian/', 'abcdef012345');
+    expect(spec.file).toBe('wsl.exe');
+    expect(spec.args.slice(0, 5)).toEqual(['-d', 'Ubuntu-22.04', '-e', '/bin/sh', '-c']);
+    expect(spec.args[5]).toBe('mkdir -p "$1" && cat > "$1/.tmp.$$" && mv "$1/.tmp.$$" "$1/$2"');
+    expect(spec.args.slice(6)).toEqual(['sh', '/home/brian/.agent-workspace', 'helper-abcdef012345.mjs']);
+  });
+});
+
+describe('helper probe', () => {
+  it('probeLine only gains the presence check when a bundle exists', () => {
+    expect(probeLine(null)).not.toContain('HELPER_PRESENT');
+    expect(probeLine('abcdef012345')).toContain(
+      'if test -f "$HOME/.agent-workspace/helper-abcdef012345.mjs"; then echo HELPER_PRESENT; fi',
+    );
+  });
+  it('the presence token never becomes the shell', () => {
+    expect(parseProbeOutput('/home/u\nu\nHELPER_PRESENT\n')).toEqual({ home: '/home/u', shell: undefined });
+    expect(parseProbeOutput('/home/u\nu\n/bin/zsh\nHELPER_PRESENT\n')).toEqual({ home: '/home/u', shell: '/bin/zsh' });
+    expect(parseHelperPresent('/home/u\nu\n/bin/zsh\nHELPER_PRESENT\n')).toBe(true);
+    expect(parseHelperPresent('/home/u\nu\n/bin/zsh\n')).toBe(false);
+  });
+  it('deriveHelperState', () => {
+    expect(deriveHelperState({ envOk: true, node: null, present: true })).toBe('node-missing');
+    expect(deriveHelperState({ envOk: true, node: '16.20.0', present: true })).toBe('unsupported-node');
+    expect(deriveHelperState({ envOk: true, node: '18.0.0', present: false })).toBe('absent');
+    expect(deriveHelperState({ envOk: true, node: '22.12.0', present: true })).toBe('starting');
+    expect(deriveHelperState({ envOk: false, node: null, present: false })).toBe('absent');
+    expect(deriveHelperState({ envOk: false, node: null, present: true })).toBe('starting');
+  });
+});
+
+describe('helper bundle info', () => {
+  it('parseHelperHash accepts only 12 hex', () => {
+    expect(parseHelperHash('{"hash":"abcdef012345"}')).toBe('abcdef012345');
+    expect(parseHelperHash('{"hash":"xyz"}')).toBeNull();
+    expect(parseHelperHash('nope')).toBeNull();
+    expect(parseHelperHash(null)).toBeNull();
+  });
+  it('is unavailable without out/helper/helper-hash.json', () => {
+    const out = mkdtempSync(join(tmpdir(), 'helper-out-'));
+    expect(loadHelperBundleInfo(out)).toBeNull();
+    mkdirSync(join(out, 'helper'));
+    writeFileSync(join(out, 'helper', 'helper-hash.json'), '{"hash":"abcdef012345"}');
+    expect(loadHelperBundleInfo(out)).toEqual({
+      hash: 'abcdef012345',
+      file: join(out, 'helper', 'agent-workspace-helper.mjs'),
+    });
   });
 });

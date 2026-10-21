@@ -25,6 +25,13 @@ export const HostStatusSchema = z.object({
   hooks: z.enum(['ok', 'unreachable', 'untested']),
   inotify: z.boolean(),
   gh: z.boolean(),
+  /** In-distro helper (WSL only); absent while no helper bundle ships or for the local host. */
+  helper: z
+    .object({
+      state: z.enum(['absent', 'starting', 'ready', 'reconnecting', 'degraded', 'node-missing', 'unsupported-node']),
+      watchMode: z.enum(['watch', 'poll']).nullable(),
+    })
+    .optional(),
 });
 export type HostStatus = z.infer<typeof HostStatusSchema>;
 
