@@ -311,7 +311,9 @@ export class ClaudeStore {
   }
 
   private async changeCheck(): Promise<void> {
-    if (!this.hostUsable()) return;
+    // Re-reads a stale enumeration first: a distro stopped since the last
+    // pass is never readdir-ed over UNC (that boots it).
+    if (isWslHost(this.host) && !(await hosts().backgroundReady(this.host))) return;
     const next = await this.changeMtimes();
     if (!next) return;
     const prev = this.changeSnapshot;

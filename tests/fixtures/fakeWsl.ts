@@ -2,7 +2,9 @@
 // `node out/fixtures/fakeWsl.cjs`, so argv starts at process.argv[2]).
 // Implements just the surface hosts.ts exercises:
 //   -l -v / -l -q                 UTF-16LE distro table from FAKE_WSL_DISTROS
-//                                 ("Fake:Running:default,Other:Stopped")
+//                                 ("Fake:Running:default,Other:Stopped");
+//                                 FAKE_WSL_DISTROS_FILE (same syntax, read per
+//                                 call) wins when it exists — flips mid-run
 //   -d D [--cd C] -e argv…        run argv locally; linux cwd C maps onto
 //                                 FAKE_WSL_ROOT/C (created if missing)
 //   /usr/bin/env K=V… cmd         applies the leading assignments
@@ -20,7 +22,7 @@
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, watch } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, watch } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = process.env.FAKE_WSL_ROOT ?? '.';
@@ -160,8 +162,14 @@ const shInteractive = (tail: string[], cwd: string): number => {
   return runLocal([cmd, ...posargs], cwd, {});
 };
 
+const distroSpec = (): string => {
+  const file = process.env.FAKE_WSL_DISTROS_FILE;
+  if (file && existsSync(file)) return readFileSync(file, 'utf8').trim();
+  return process.env.FAKE_WSL_DISTROS ?? '';
+};
+
 const listV = (): number => {
-  const spec = process.env.FAKE_WSL_DISTROS ?? '';
+  const spec = distroSpec();
   const rows = spec
     .split(',')
     .filter(Boolean)
@@ -175,7 +183,7 @@ const listV = (): number => {
 };
 
 const listQ = (): number => {
-  const names = (process.env.FAKE_WSL_DISTROS ?? '')
+  const names = distroSpec()
     .split(',')
     .filter(Boolean)
     .map((entry) => entry.split(':')[0]!);

@@ -144,9 +144,11 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
-      // A wsl host whose probe isn't ready gets skipped — touching its
-      // settings.json over UNC could block the loop for the SMB timeout.
-      if (!hosts().fsReady(host)) continue;
+      // A wsl host whose probe isn't ready (or that is Stopped) gets skipped —
+      // touching its settings.json over UNC could block the loop for the SMB
+      // timeout or boot it. Installs target enabled hosts only; the opt-out
+      // also cleans a disabled-but-running one (our block carries the token).
+      if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,

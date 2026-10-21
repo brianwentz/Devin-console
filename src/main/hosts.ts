@@ -40,6 +40,15 @@ import { sdkTargetCliVersion } from './claude/sdk';
 const execFileAsync = promisify(execFile);
 
 const ENUM_CACHE_MS = 5 * 60_000;
+// Background WSL work (agents poll, change check, gh fallback) re-reads an
+// enumeration older than this first — a distro stopped or crashed since the
+// last 5-min pass must not be booted again by the next tick.
+const ENUM_FRESH_MS = 60_000;
+
+function enumFreshMs(): number {
+  const override = testMode ? Number(process.env.AGENT_WORKSPACE_TEST_ENUM_FRESH_MS) : NaN;
+  return Number.isFinite(override) && override > 0 ? override : ENUM_FRESH_MS;
+}
 const ENV_CACHE_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_MARKER = '__DW_ENV__';
@@ -339,6 +348,22 @@ export class HostsRegistry {
     return this.enumerate().some((row) => `wsl:${row.name}` === id && row.state === 'Stopped');
   }
 
+  /** Public form of the Stopped check (autostart skips such hosts). */
+  isStopped(id: HostId | string): boolean {
+    return this.enumStopped(id as HostId);
+  }
+
+  /** Gate for recurring background WSL work: re-enumerates first when the
+   * cached table is older than ENUM_FRESH_MS (`wsl -l -v` never boots a
+   * distro; concurrent callers share the in-flight run), then fsReady. */
+  async backgroundReady(host: ExecHost): Promise<boolean> {
+    if (!isWslHost(host)) return true;
+    if (!this.distros || Date.now() - this.distros.at >= enumFreshMs()) {
+      await this.enumerateAsync();
+    }
+    return this.fsReady(host);
+  }
+
   /** Enabled hosts plus every host we've seen this run — used by the hooks
    * opt-in so a disabled host still gets our block removed. */
   allHosts(): ExecHost[] {
@@ -355,6 +380,14 @@ export class HostsRegistry {
     // A stale `ready` entry outlives disabling or stopping the distro.
     if (this.enumStopped(host.id)) return false;
     if (!this.enabledDistros().some((d) => `wsl:${d.name}` === host.id)) return false;
+    return isFsReady(host, this.entries.get(host.id)?.status.state);
+  }
+
+  /** fsReady without the enabled check: the hooks opt-out still removes our
+   * block (it embeds the bearer token) from a disabled but running distro. */
+  fsSafe(host: ExecHost): boolean {
+    if (!isWslHost(host)) return true;
+    if (this.enumStopped(host.id)) return false;
     return isFsReady(host, this.entries.get(host.id)?.status.state);
   }
 
@@ -475,6 +508,9 @@ export class HostsRegistry {
       // §1.4 shell environment capture (escape hatch: envCaptureDisabled).
       if (overrides.envCaptureDisabled === true) {
         entry.env = null;
+        // Without a timestamp shellEnv() (via the execOn below) would wait on
+        // this very probe.
+        entry.envAt = Date.now();
         entry.status = { ...entry.status, shellEnv: null };
       } else {
         await this.captureEnv(entry, shell);
@@ -691,13 +727,22 @@ export class HostsRegistry {
     if (!isWslHost(host)) return null;
     const entry = this.entries.get(host.id);
     if (!entry) return null;
-    if (!opts?.explicit && this.enumStopped(host.id)) return entry.env;
-    if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
-    if (!entry.probed && !entry.probing) await this.probe(entry);
-    else if (entry.probing) await entry.probing;
-    if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
-    await this.captureEnv(entry, entry.status.shell ?? '/bin/bash');
-    return entry.env;
+    const stopped = this.enumStopped(host.id);
+    if (!opts?.explicit && stopped) return entry.env;
+    try {
+      if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
+      if (!entry.probed && !entry.probing) await this.probe(entry);
+      else if (entry.probing) await entry.probing;
+      // The escape hatch: plain WSL environment, never a re-capture.
+      if (this.overrides(host.id).envCaptureDisabled === true) return null;
+      if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
+      await this.captureEnv(entry, entry.status.shell ?? '/bin/bash');
+      return entry.env;
+    } finally {
+      // An explicit start just booted a Stopped distro: re-read the table so
+      // its row (and every fsReady gate) flips to Running now, not in 5 min.
+      if (stopped) void this.enumerateAsync();
+    }
   }
 
   /** Synchronous cached env for the spawn path (shellEnv() refreshes first). */
@@ -905,7 +950,10 @@ export class HostsRegistry {
    * anything else → null (caller falls back to local gh resolution). */
   ghSpec(id: HostId): { cmd: string; args: string[] } | null {
     const entry = this.entries.get(id);
-    if (!entry || !entry.status.gh || !isWslHost(entry.host)) return null;
+    // fsReady: never spawn into a disabled or Stopped distro (that boots it).
+    if (!entry || !entry.status.gh || !isWslHost(entry.host) || !this.fsReady(entry.host)) {
+      return null;
+    }
     const wsl = this.wslCmd();
     if (!wsl) return null;
     const [file, ...prefix] = wsl;

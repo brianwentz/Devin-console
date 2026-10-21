@@ -1,9 +1,27 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { closeApp, launchWithClaudeFixture, readEvents, shellPage, state } from './helpers';
+import type { ElectronApplication } from 'playwright';
+import {
+  CLAUDE_FIXTURE_HOME,
+  closeApp,
+  evaluateInShell,
+  launchApp,
+  launchWithClaudeFixture,
+  readEvents,
+  shellPage,
+  state,
+} from './helpers';
 
 // Exec hosts (§3.8): the fake wsl.exe stands in for WSL — enumeration,
 // probing, env capture and the wsl-shaped pty argv all run for real.
@@ -366,6 +384,20 @@ test('a WSL transcript change does not trigger a full claude-list', async () => 
       (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
       `${uncRoot}\\home\\u\\proj`,
     )) as string;
+    // The fake inotifywait is a node child: wait for the watcher, then give
+    // its fs.watch time to arm before writing (else the event is missed).
+    await expect
+      .poll(
+        async () =>
+          (await readEvents(logFile)).some(
+            (e) =>
+              e.event === 'claude-watch' &&
+              (e.detail as { mode?: string } | undefined)?.mode === 'inotify',
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
     // Not terminal-owned: a transcript append must not re-list over the UNC.
     const before = await watchLists();
     const seen = await inotifyEvents();
@@ -583,6 +615,251 @@ test('the WSL change check surfaces a new external session and a transcript appe
       .poll(async () => (await watchLists()).length, { timeout: 10_000 })
       .toBeGreaterThan(beforeAppend);
     expect((await watchLists()).at(-1)?.listedHosts).toBe(1);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+// --- iteration 3: gh fallback, hooks opt-out, mid-run stop, autostart, envCaptureDisabled ---
+
+const spawnLines = (spawnLog: string): string[][] =>
+  existsSync(spawnLog)
+    ? readFileSync(spawnLog, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
+    : [];
+
+const hostState = async (app: ElectronApplication) =>
+  (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state;
+
+// Launch with a pre-seeded settings.json (autostart / overrides are read at start).
+async function launchSeeded(settings: Record<string, unknown>, env: Record<string, string>) {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-'));
+  const claudeHome = join(profile, 'claude-home');
+  cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify(settings));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    CLAUDE_CONFIG_DIR: claudeHome,
+    ...env,
+  });
+  return { app, profile, logFile };
+}
+
+test('a distro that stops mid-run gets no background work after the next tick', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const distros = join(root, 'distros.txt');
+  writeFileSync(distros, 'Fake:Running:default');
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS_FILE: distros,
+    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
+    AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '500',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const work = async () =>
+    (await hostExecs(logFile, 'wsl:Fake', 'probe')) +
+    (await hostExecs(logFile, 'wsl:Fake', 'env')) +
+    (await hostExecs(logFile, 'wsl:Fake', 'exec'));
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    await expect
+      .poll(() => hostExecs(logFile, 'wsl:Fake', 'exec'), { timeout: 10_000 })
+      .toBeGreaterThan(1);
+    // `wsl --terminate Fake` / a VM crash: nothing else in the app changes.
+    writeFileSync(distros, 'Fake:Stopped:default');
+    // The next background tick re-reads the (stale) enumeration first.
+    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('stopped');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const baseline = await work();
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(await work()).toBe(baseline);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('the gh PR-state fallback never runs in a stopped distro', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const distros = join(uncRoot, 'distros.txt');
+  const spawnLog = join(uncRoot, 'spawn.log');
+  writeFileSync(distros, 'Fake:Running:default');
+  const projects = join(uncRoot, 'home', 'u', '.claude', 'projects');
+  const sessionId = '55555555-0000-4000-8000-0000000000aa';
+  mkdirSync(join(projects, '-home-u-proj'), { recursive: true });
+  writeFileSync(
+    join(projects, '-home-u-proj', `${sessionId}.jsonl`),
+    transcriptLine(sessionId, '/home/u/proj', 'pr session'),
+  );
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS_FILE: distros,
+    FAKE_WSL_SPAWN_LOG: spawnLog,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '300',
+    // The agents tick also re-reads the table, so the stop is noticed even
+    // when the gh path itself doesn't re-enumerate.
+    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const ghRuns = () =>
+    spawnLines(spawnLog).filter((argv) => argv.includes('gh') && argv.includes('pr')).length;
+  const prTitleEvents = async () =>
+    (await readEvents(logFile)).filter((e) => e.event === 'pr-title').length;
+  const sessionIds = async () =>
+    (
+      (await app.evaluate(() => (globalThis as any).__agentworkspace.claudeState())) as {
+        sessions: { id: string }[];
+      }
+    ).sessions.map((s) => s.id);
+  const record = (url: string) =>
+    app.evaluate(
+      (_e, a: { id: string; url: string }) =>
+        (globalThis as any).__agentworkspace.claudeRecordPr(a.id, a.url),
+      { id: sessionId, url },
+    );
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(sessionIds, { timeout: 15_000 }).toContain(sessionId);
+    // The gh fallback uses the registry entry's host: a first PR creates the
+    // entry (host 'local'), the next re-list stamps the store row's host.
+    await record(`${fixtures.githubUrl}/o/r/pull/100`);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh());
+    // Positive control: a fixture PR page carries no state, so it falls back to the distro's gh.
+    await record(`${fixtures.githubUrl}/o/r/pull/1`);
+    await expect.poll(ghRuns, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(prTitleEvents, { timeout: 15_000 }).toBeGreaterThan(0);
+
+    writeFileSync(distros, 'Fake:Stopped:default');
+    // A background PR-state refresh re-reads the enumeration; it never probes.
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefreshPrStates());
+    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('stopped');
+    const gh = ghRuns();
+    const execs = await hostExecs(logFile, 'wsl:Fake');
+    const titles = await prTitleEvents();
+    await record(`${fixtures.githubUrl}/o/r/pull/2`);
+    await expect.poll(prTitleEvents, { timeout: 15_000 }).toBeGreaterThan(titles);
+    expect(ghRuns()).toBe(gh);
+    expect(await hostExecs(logFile, 'wsl:Fake')).toBe(execs);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('turning hooks off removes our block from a disabled, running distro', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const claudeDir = join(uncRoot, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+  const { app } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const shell = await shellPage(app);
+  const ours = () => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/');
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    await evaluateInShell(
+      app,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`,
+    );
+    await expect.poll(ours, { timeout: 15_000 }).toBe(true);
+
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    const row = shell.locator('[data-host-id="wsl:Fake"]');
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await row.locator('[data-host-enabled]').click();
+    await expect.poll(() => hostState(app)).toBe('disabled');
+
+    await evaluateInShell(
+      app,
+      `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`,
+    );
+    // Our block embeds the bearer token: opting out must remove it everywhere.
+    await expect.poll(ours, { timeout: 15_000 }).toBe(false);
+    expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('Devin Local autostart skips a workspace on a stopped distro', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const spawnLog = join(uncRoot, 'spawn.log');
+  const workspace = `${uncRoot}\\home\\u\\ws`;
+  const fakeAgent = `node ${join(process.cwd(), 'out/fixtures/fakeAcpAgent.cjs')}`;
+  const { app, logFile } = await launchSeeded(
+    { workspaces: [workspace] },
+    {
+      FAKE_WSL_DISTROS: 'Fake:Stopped:default',
+      FAKE_WSL_SPAWN_LOG: spawnLog,
+      AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+      AGENT_WORKSPACE_LOCAL_AGENT_CMD: fakeAgent,
+      FAKE_WSL_DEVIN_CMD: fakeAgent,
+    },
+  );
+  const autostart = async () =>
+    (await readEvents(logFile)).find((e) => e.event === 'agents-autostart');
+  try {
+    await expect.poll(autostart, { timeout: 30_000 }).toBeTruthy();
+    expect(((await autostart())!.detail as { skipped: number }).skipped).toBeGreaterThanOrEqual(1);
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(spawnLines(spawnLog).filter((argv) => argv[1] === 'Fake')).toEqual([]);
+    expect(await hostExecs(logFile, 'wsl:Fake')).toBe(0);
+    expect(await hostState(app)).toBe('stopped');
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('envCaptureDisabled: the probe completes and an explicit refresh resolves', async () => {
+  const { app } = await launchSeeded(
+    { hosts: { overrides: { 'wsl:Fake': { envCaptureDisabled: true } } } },
+    { FAKE_WSL_DISTROS: 'Fake:Running:default' },
+  );
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    const host = (await state(app)).hosts.find((h) => h.id === 'wsl:Fake');
+    expect(host?.claude.path).toBeTruthy();
+    expect(host?.shellEnv).toBeNull();
+    const outcome = await app.evaluate(() =>
+      Promise.race([
+        (globalThis as any).__agentworkspace.hostRefresh('wsl:Fake').then(() => 'resolved'),
+        new Promise((resolve) => setTimeout(() => resolve('hung'), 15_000)),
+      ]),
+    );
+    expect(outcome).toBe('resolved');
+    expect(await hostState(app)).toBe('ready');
+    const keys = (await app.evaluate(() =>
+      (globalThis as any).__agentworkspace.hostShellEnvKeys('wsl:Fake'),
+    )) as string[];
+    expect(keys).toEqual([]);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('an explicit start on a stopped distro re-reads its state promptly', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const distros = join(uncRoot, 'distros.txt');
+  writeFileSync(distros, 'Fake:Stopped:default');
+  const fakeAgent = `node ${join(process.cwd(), 'out/fixtures/fakeAcpAgent.cjs')}`;
+  const { app } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS_FILE: distros,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: fakeAgent,
+    FAKE_WSL_DEVIN_CMD: fakeAgent,
+  });
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('stopped');
+    // The user adds a workspace in that distro: the start boots it (the fake
+    // can't boot, so flip the table the way the real distro would).
+    writeFileSync(distros, 'Fake:Running:default');
+    await app.evaluate(
+      (_e, path: string) => (globalThis as any).__agentworkspace.localAddWorkspace(path),
+      `${uncRoot}\\home\\u\\ws`,
+    );
+    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('ready');
   } finally {
     await closeApp(app);
   }

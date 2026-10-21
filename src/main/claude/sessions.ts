@@ -407,8 +407,11 @@ export class ClaudeSessions {
                   .then(() => undefined),
               // Each wsl poll is a wsl.exe spawn: only for a listed, running,
               // probed distro that has claude (status changes poke it).
-              eligible: () =>
-                hosts().fsReady(host) && Boolean(hosts().status(host.id)?.claude.path),
+              // backgroundReady re-reads a stale enumeration first (a distro
+              // that stopped mid-run must not be booted by this tick).
+              eligible: async () =>
+                (await hosts().backgroundReady(host)) &&
+                Boolean(hosts().status(host.id)?.claude.path),
             }
           : {}),
         onChange: (agents) => {

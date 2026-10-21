@@ -349,7 +349,17 @@ export class DevinLocalHost {
         const skipped: string[] = [];
         for (const workspace of this.workspaces) {
           const execHost = this.hostFor(workspace);
-          if (isWslHost(execHost)) targets.push(workspace);
+          if (isWslHost(execHost) && hosts().isStopped(execHost.id)) {
+            // Autostart is implicit: never boot a Stopped distro. A user
+            // action (selecting a session, prompting) starts it explicitly.
+            skipped.push(workspace);
+            update((state) =>
+              upsertAgent(state, workspace, {
+                status: 'stopped',
+                error: `${execHost.distro} is stopped — select a session to start it`,
+              }),
+            );
+          } else if (isWslHost(execHost)) targets.push(workspace);
           else if (coreHostIdForPath(workspace) !== 'local') skipped.push(workspace); // distro not enabled
           else if (this.command) targets.push(workspace);
           else skipped.push(workspace); // missing-cli — set by the constructor
