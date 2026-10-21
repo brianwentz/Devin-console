@@ -4,6 +4,7 @@ import { useShellState } from '../store';
 import { requestSurface } from '../surface';
 import type { Surface } from '../../shared/ipc';
 import { PrQuickOpen } from './PrQuickOpen';
+import { ChromiumIcon } from './icons/ChromiumIcon';
 
 interface RailProps {
   surface: Surface;
@@ -178,13 +179,13 @@ export function Rail({
       <button
         id="paneToggle"
         type="button"
-        aria-label="Toggle GitHub pane"
+        aria-label="Toggle Linked Context"
         aria-pressed={paneOpen}
-        title={paneCollapsed ? 'GitHub pane hidden — widen window' : 'Toggle GitHub pane'}
-        className={`${buttonClass} relative text-sm`}
+        title={paneCollapsed ? 'Linked Context hidden — widen window' : 'Linked Context'}
+        className={`${buttonClass} relative flex items-center justify-center`}
         onClick={() => window.agentworkspace.togglePane()}
       >
-        GH
+        <ChromiumIcon size={18} strokeWidth={1.8} />
         {paneCollapsed && paneOpen && (
           <span
             className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#e0a03c]"

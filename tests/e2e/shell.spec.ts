@@ -163,6 +163,22 @@ test('renders a custom title bar with the tab strip inside', async () => {
   try {
     const shell = await shellPage(app);
     await expect(shell.locator('#titleBar')).toBeVisible();
+    if (process.platform !== 'darwin') {
+      await expect(shell.locator('#titleBar svg[data-ag-mark]')).toBeVisible();
+      await expect(shell.locator('#titleBar')).not.toContainText('DW');
+    }
+
+    const paneToggle = shell.locator('#paneToggle');
+    await expect(paneToggle).toHaveAttribute('aria-label', 'Toggle Linked Context');
+    await expect(paneToggle.locator('svg[data-icon="chromium"]')).toBeVisible();
+    await expect(paneToggle).not.toContainText('GH');
+    await expect(paneToggle).toBeEnabled();
+    const paneWasOpen = (await state(app)).paneOpen;
+    await paneToggle.click();
+    await expect.poll(async () => (await state(app)).paneOpen).toBe(!paneWasOpen);
+    await paneToggle.click();
+    await expect.poll(async () => (await state(app)).paneOpen).toBe(paneWasOpen);
+
     await expect(shell.locator('#navBar')).toHaveCount(0);
     const devinBounds = await app.evaluate(() =>
       (globalThis as typeof globalThis & {

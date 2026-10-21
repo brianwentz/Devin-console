@@ -78,7 +78,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
     axis === 'x' ? 'splitter' : axis === 's' ? 'sessionsSplitter' : 'terminalSplitter';
   const label =
     axis === 'x'
-      ? 'Resize GitHub pane'
+      ? 'Resize Linked Context'
       : axis === 's'
         ? 'Resize sessions sidebar'
         : 'Resize terminal dock';

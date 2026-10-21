@@ -3,6 +3,7 @@ import { RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
 import type { ShellState } from '../../shared/ipc';
 import { NotificationBanner } from './NotificationBanner';
 import { TabStrip } from './TabStrip';
+import { AgMark } from './icons/AgMark';
 
 type Tab = ShellState['tabs']['tabs'][number];
 
@@ -91,7 +92,7 @@ export function TitleBar({
         title="Agent Workspace"
       >
         {/* the macOS traffic lights cover the left rail */}
-        {!isMac && 'DW'}
+        {!isMac && <AgMark size={20} />}
       </div>
       {/* drag space over the main column (extends to the overlay gap when the pane is hidden) */}
       <div

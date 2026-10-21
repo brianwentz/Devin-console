@@ -143,7 +143,7 @@ export function GeneralTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <span className="text-sm text-[#aeb9c8]">GitHub pane</span>
+      <span className="text-sm text-[#aeb9c8]">Linked Context</span>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">
           Keep hidden GitHub tabs live for (hours, 0 = discard on switch)

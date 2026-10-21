@@ -1,6 +1,6 @@
 # Agent Workspace
 
-Agent Workspace is a desktop client for Windows and macOS (Apple Silicon) that puts your coding agents in one window: Devin Cloud sessions from your tenant, Devin Local and Claude Code sessions on local or WSL folders, a tabbed GitHub pane that catches every link and PR a session produces, a terminal dock, PR and notification panels, usage analytics with limit alerts, and saved SSO logins — with layout and sessions remembered across restarts.
+Agent Workspace is a desktop client for Windows and macOS (Apple Silicon) that puts your coding agents in one window: Devin Cloud sessions from your tenant, Devin Local and Claude Code sessions on local or WSL folders, a tabbed Linked Context pane that catches every link and PR a session produces, a terminal dock, PR and notification panels, usage analytics with limit alerts, and saved SSO logins — with layout and sessions remembered across restarts.
 
 ## Install
 
@@ -41,7 +41,7 @@ Everything works out of the box except: the **Devin Local** surface and the term
 ## Getting started
 
 - The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin Cloud → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.
-- Click any GitHub link in a session — it opens in the tabbed **GitHub pane** on the right (`Ctrl+Shift+G` toggles it).
+- Click any GitHub link in a session — it opens in the tabbed **Linked Context** pane on the right (`Ctrl+Shift+G` toggles it).
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Notifications**.
@@ -61,7 +61,7 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 
 | Keys | Action |
 | --- | --- |
-| `Ctrl+Shift+G` | Toggle GitHub pane |
+| `Ctrl+Shift+G` | Toggle Linked Context |
 | `Ctrl+Shift+[` / `]` | Shrink / grow the pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
