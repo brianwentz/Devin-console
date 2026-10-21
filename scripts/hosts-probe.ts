@@ -17,6 +17,7 @@
 // `--label <name>` (default 'run') writes soak[label] and keeps other labels; the
 // reduced log (host-exec/claude-list/usage-scan counts only) is
 // docs/evidence/hosts-probe-soak-<label>.jsonl. The app runs with
+// Copying a live leveldb WAL (*.log) while the installed app runs can capture a torn tail, which leveldb tolerates.
 // AGENT_WORKSPACE_SKIP_HOOKS_INSTALL=1 so the real settings.json files are never written.
 // A pre-P0 build does not emit host-exec (its host-exec numbers are 0/absent): compare
 // backgroundRelists and usage-scan for the old build.
@@ -144,7 +145,7 @@ const SKIP_DIRS = new Set(
     'Shared Dictionary',
   ].map((n) => n.toLowerCase()),
 );
-const SKIP_FILE = /^(lock|lockfile|singleton.*|events(\.1)?\.jsonl|.*\.log)$/i;
+const SKIP_FILE = /^(lock|lockfile|singleton.*|events(\.1)?\.jsonl)$/i;
 
 /** Copies the profile minus Chromium cache/state; per-file EBUSY/EPERM is counted, not fatal. */
 function copyProfile(src: string, dest: string, stats: { copied: number; skipped: number }): void {
