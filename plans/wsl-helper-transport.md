@@ -139,6 +139,8 @@ Each phase is its own PR, green on typecheck/lint/unit/build/e2e, and shippable 
 
 Verification: unit (status-change dedup, hook hash gate, change-check decision); e2e `hosts.spec.ts` "terminal-owned WSL session reloads history on a transcript change" still passes and a new spec asserts a transcript change on a WSL host does **not** trigger `claude-list`; real-machine soak on a **copied** userData (2 distros, one active WSL chat, 30 min): `host-exec` ≤ 2.0/min total, WSL `claude-list` ≤ 0.4/min, WSL usage-scan files = 0; plus the user re-runs the workload that crashed before.
 
+P0 residuals (accepted until P1): `loadHistory` of an active WSL terminal-owned session still re-reads the whole transcript over UNC on every change the 2 s hot tick reports (1 s debounce); the mutate, terminal begin/end and start paths still run a full `listSessions` over UNC. The 300 s change check also stats the 5 newest listed transcripts so appends to existing sessions are noticed, and entering the Claude surface re-lists at most once per 60 s.
+
 ### P1 — Helper + WSL channel; Claude store over RPC
 
 Bundling spike first; then `src/helper/*`, `src/core/hostRpc.ts`, `src/main/hostChannel.ts`, `helperSpec` in `execHost.ts`, deploy in the probe, `store.*` + `watch.subscribe` + `env.get` + `ping` + `hooks.apply` + `agents.list`, `ClaudeStore` backends, `sessions.ts` row patching, `host.ts` history, `revealTranscript` via `store.transcriptPath`, `HostStatus.helper` in Settings. UNC code remains only for usage until P2. Real-distro gate before the PR opens: `hosts:probe` reports helper deploy/hello/`store.list` ms and a 30-min soak.

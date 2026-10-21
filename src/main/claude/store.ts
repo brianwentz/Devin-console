@@ -8,7 +8,13 @@ import { access, readdir, stat as statFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join, relative } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
-import { dirsChanged } from '../../core/claudeWatchPolicy';
+import {
+  appendsChanged,
+  dirsChanged,
+  missFresh,
+  newestTranscripts,
+  projectDirName,
+} from '../../core/claudeWatchPolicy';
 import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
@@ -21,6 +27,11 @@ const POLL_MS = 30_000;
 // change check every WSL_CHANGE_CHECK_MS.
 const HOT_POLL_MS = 2_000;
 export const WSL_CHANGE_CHECK_MS = 300_000;
+// The change check also stats this many of the most recently listed
+// transcripts so appends (which leave the project dir mtime alone) count.
+const APPEND_CHECK_COUNT = 5;
+
+type ChangeSnapshot = { dirs: Map<string, number>; files: Map<string, number> };
 
 export class ClaudeStore {
   private configDirFn: string | (() => string);
@@ -30,12 +41,15 @@ export class ClaudeStore {
   private watchTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hotTimer: NodeJS.Timeout | null = null;
-  private hotIds: () => string[] = () => [];
+  private hotIds: () => { id: string; cwd: string | null }[] = () => [];
   private visible: () => boolean = () => false;
   private inotify: ChildProcess | null = null;
   // hot session id -> resolved transcript path + last known mtime
   private hotPaths = new Map<string, { path: string; mtime: number }>();
-  private dirMtimeSnapshot: Map<string, number> | null = null;
+  // hot id -> time its transcript lookup last missed; skipped for one change-check period
+  private hotMisses = new Map<string, number>();
+  private changeSnapshot: ChangeSnapshot | null = null;
+  private lastRows: ClaudeStoreSession[] = [];
   private hotTickInFlight = false;
   private started = false;
   private watchRestarts = 0;
@@ -51,8 +65,8 @@ export class ClaudeStore {
     this.onChange = opts.onChange;
   }
 
-  /** Sessions whose transcripts get the 2 s hot-stat tier; visible() gates it. */
-  hot(ids: () => string[], visible: () => boolean): void {
+  /** This host's sessions whose transcripts get the 2 s hot-stat tier; visible() gates it. */
+  hot(ids: () => { id: string; cwd: string | null }[], visible: () => boolean): void {
     this.hotIds = ids;
     this.visible = visible;
   }
@@ -74,7 +88,7 @@ export class ClaudeStore {
   async list(): Promise<ClaudeStoreSession[]> {
     const sdk = await loadSdk();
     const infos = await this.run(() => sdk.listSessions({ includeProgrammatic: true }));
-    return infos.map((info) => ({
+    const rows = infos.map((info) => ({
       id: info.sessionId,
       host: this.host.id,
       // The SDK already resolves title precedence: custom title →
@@ -87,6 +101,8 @@ export class ClaudeStore {
       lastModified: info.lastModified,
       fileSize: info.fileSize ?? null,
     }));
+    this.lastRows = rows;
+    return rows;
   }
 
   async rename(id: string, title: string): Promise<void> {
@@ -242,8 +258,8 @@ export class ClaudeStore {
   // Shared by inotify and poll-only wsl modes; a no-op when already running.
   private startChangeCheck(): void {
     if (this.pollTimer) return;
-    void this.dirMtimes().then((m) => {
-      this.dirMtimeSnapshot ??= m;
+    void this.changeMtimes().then((m) => {
+      this.changeSnapshot ??= m;
     });
     this.pollTimer = setInterval(() => {
       void this.changeCheck();
@@ -251,29 +267,47 @@ export class ClaudeStore {
     this.pollTimer.unref?.();
   }
 
-  // projectDir -> mtimeMs; null when the projects dir can't be read.
-  private async dirMtimes(): Promise<Map<string, number> | null> {
+  // projectDir -> mtimeMs, plus <projectDir>/<id>.jsonl -> mtimeMs for the
+  // newest APPEND_CHECK_COUNT listed transcripts (≤5 extra stats per check;
+  // a project dir not in the readdir result is skipped, never searched).
+  // null when the projects dir can't be read.
+  private async changeMtimes(): Promise<ChangeSnapshot | null> {
     try {
-      const next = new Map<string, number>();
+      const dirs = new Map<string, number>();
       for (const project of await readdir(this.projectsDir)) {
         try {
-          next.set(project, (await statFile(join(this.projectsDir, project))).mtimeMs);
+          dirs.set(project, (await statFile(join(this.projectsDir, project))).mtimeMs);
         } catch {
           /* removed between readdir and stat */
         }
       }
-      return next;
+      const files = new Map<string, number>();
+      for (const { id, cwd } of newestTranscripts(this.lastRows, APPEND_CHECK_COUNT)) {
+        const project = projectDirName(cwd);
+        if (!dirs.has(project)) continue;
+        const key = `${project}/${id}.jsonl`;
+        try {
+          files.set(key, (await statFile(join(this.projectsDir, project, `${id}.jsonl`))).mtimeMs);
+        } catch {
+          /* removed since the last list */
+        }
+      }
+      return { dirs, files };
     } catch {
       return null;
     }
   }
 
   private async changeCheck(): Promise<void> {
-    const next = await this.dirMtimes();
+    const next = await this.changeMtimes();
     if (!next) return;
-    const changed = dirsChanged(this.dirMtimeSnapshot, next);
-    this.dirMtimeSnapshot = next;
+    const prev = this.changeSnapshot;
+    const changed =
+      dirsChanged(prev?.dirs ?? null, next.dirs) || appendsChanged(prev?.files ?? null, next.files);
+    this.changeSnapshot = next;
     if (!changed) return;
+    // A dir/file change may be the transcript a missed hot id was waiting for.
+    this.hotMisses.clear();
     log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 1 } });
     this.onChange([]);
   }
@@ -284,17 +318,29 @@ export class ClaudeStore {
     if (this.hotTickInFlight || !this.visible()) return;
     this.hotTickInFlight = true;
     try {
-      const ids = this.hotIds();
+      const hot = this.hotIds();
+      const ids = hot.map((h) => h.id);
       for (const id of [...this.hotPaths.keys()]) {
         if (!ids.includes(id)) this.hotPaths.delete(id);
       }
+      for (const id of [...this.hotMisses.keys()]) {
+        if (!ids.includes(id)) this.hotMisses.delete(id);
+      }
       const changed: string[] = [];
-      for (const id of ids) {
+      for (const { id, cwd } of hot) {
         let entry = this.hotPaths.get(id);
         if (!entry) {
           // Resolved once per id; a new file counts as changed immediately.
-          const path = await this.transcriptFor(id);
+          // The cwd-derived path is one access; the full scan is a readdir +
+          // one access per project dir over UNC, so an id whose scan missed
+          // waits one change-check period (or a reported dir change).
+          let path = cwd ? await this.directTranscript(id, cwd) : null;
+          if (!path && !missFresh(this.hotMisses.get(id), Date.now(), WSL_CHANGE_CHECK_MS)) {
+            path = await this.transcriptFor(id);
+            if (!path) this.hotMisses.set(id, Date.now());
+          }
           if (!path) continue;
+          this.hotMisses.delete(id);
           entry = { path, mtime: -1 };
           this.hotPaths.set(id, entry);
         }
@@ -318,6 +364,16 @@ export class ClaudeStore {
       /* transient stat failures - next tick retries */
     } finally {
       this.hotTickInFlight = false;
+    }
+  }
+
+  private async directTranscript(id: string, cwd: string): Promise<string | null> {
+    const candidate = join(this.projectsDir, projectDirName(cwd), `${id}.jsonl`);
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      return null;
     }
   }
 

@@ -1,13 +1,14 @@
 // Background-agent poller: `claude agents --json --all` on a focus-aware
 // cadence (15 s focused / 60 s unfocused, plus an immediate poll on focus and
-// after stop). Output parses through the tolerant core/claudeAgents.ts
+// after stop; wsl hosts poll 120 s / 300 s and re-poll on focus only when the
+// last poll started ≥ 60 s ago). Output parses through the tolerant core/claudeAgents.ts
 // parser — the item shape comes from `claude agents --json --all` output
 // (docs/evidence/claude-agents-probe.json). Logs counts only.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ClaudeAgent, HostId } from '../../shared/ipc';
-import { parseAgentsJson } from '../../core/claudeAgents';
+import { focusRefreshDue, parseAgentsJson } from '../../core/claudeAgents';
 import { log } from '../log';
 import { state, testMode } from '../state';
 import { resolveClaudePath } from './claudePath';
@@ -44,6 +45,7 @@ export class ClaudeBackgroundAgents {
   private inFlight = false;
   private dirty: 'timer' | 'focus' | 'manual' | 'mutate' | null = null;
   private running = false;
+  private lastStartedAt: number | null = null;
 
   constructor(opts: {
     cliPath: () => string | null;
@@ -86,7 +88,10 @@ export class ClaudeBackgroundAgents {
   }
 
   onWindowFocus(): void {
-    if (this.running && !this.inFlight) void this.refresh('focus');
+    if (!this.running || this.inFlight) return;
+    // A wsl poll is a wsl.exe spawn — alt-tabbing must not fire one per focus.
+    if (!focusRefreshDue(this.hostId, this.lastStartedAt, Date.now())) return;
+    void this.refresh('focus');
   }
 
   async refresh(
@@ -98,6 +103,7 @@ export class ClaudeBackgroundAgents {
     }
     this.inFlight = true;
     const t0 = Date.now();
+    this.lastStartedAt = t0;
     try {
       let stdout: string;
       if (this.execList) {

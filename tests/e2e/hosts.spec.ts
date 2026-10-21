@@ -281,6 +281,54 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
   }
 });
 
+test('a local transcript change re-lists only the local host', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const lists = async (source: string) =>
+    (await readEvents(logFile))
+      .filter(
+        (e) =>
+          e.event === 'claude-list' &&
+          (e.detail as { source?: string } | undefined)?.source === source,
+      )
+      .map((e) => e.detail as { listedHosts?: number; skippedHosts?: string[] });
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    // Positive control: a full refresh lists both hosts.
+    await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh());
+    await expect
+      .poll(async () => (await lists('test')).at(-1)?.listedHosts, { timeout: 10_000 })
+      .toBe(2);
+    const before = (await lists('watch')).length;
+    const id = '22222222-0000-4000-8000-0000000000aa';
+    writeFileSync(
+      join(claudeHome, 'projects', 'C--work-alpha', `${id}.jsonl`),
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: 'local line' },
+        uuid: '22222222-0000-4000-8000-0000000000ab',
+        timestamp: new Date().toISOString(),
+        cwd: 'C:\\work\\alpha',
+        sessionId: id,
+      }) + '\n',
+    );
+    await expect.poll(async () => (await lists('watch')).length, { timeout: 10_000 }).toBeGreaterThan(before);
+    const watchList = (await lists('watch')).at(-1)!;
+    expect(watchList.listedHosts).toBe(1);
+    expect(watchList.skippedHosts).toEqual([]);
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('a WSL transcript change does not trigger a full claude-list', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   // inotify mode: events carry file names; the projects dir must exist before

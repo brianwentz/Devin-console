@@ -107,7 +107,20 @@ export class ClaudeHooks {
       } finally {
         this.applying = false;
       }
-    })();
+    })().catch((error: unknown) => {
+      this.hooks = {
+        ...this.hooks,
+        installed: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      this.owner.emit();
+    });
+  }
+
+  /** Drop the lastApplied gate (explicit hosts refresh) so the next apply re-writes. */
+  forgetApplied(id?: HostId): void {
+    if (id) this.lastApplied.delete(id);
+    else this.lastApplied.clear();
   }
 
   private async applyOnce(): Promise<void> {

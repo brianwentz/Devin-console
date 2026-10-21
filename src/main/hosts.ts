@@ -641,6 +641,8 @@ export class HostsRegistry {
   hookAddrBind: ((addr: string) => void) | null = null;
   /** Called when a probe/env capture finishes so consumers can re-publish. */
   onStatusChange: (() => void) | null = null;
+  /** Called at the start of an explicit refresh (hosts:refresh) — never on enumeration. */
+  onExplicitRefresh: ((id?: HostId) => void) | null = null;
 
   /** The vEthernet address a NAT-mode host reaches the hook listener on. */
   hookAddrFor(id: string): string | null {
@@ -843,6 +845,8 @@ export class HostsRegistry {
 
   /** hosts:refresh — re-enumerate and re-probe. */
   async refresh(id?: string): Promise<void> {
+    // Explicit only — enumerations and probes never call this.
+    this.onExplicitRefresh?.(id as HostId | undefined);
     this.distros = null;
     await this.enumerateAsync();
     const targets = id

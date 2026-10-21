@@ -301,6 +301,8 @@ export function registerTestHooks(): void {
       devinUsageState: () => devinUsage().state,
       devinUsageRefresh: () => devinUsage().refresh(),
       claudeRefresh: () => claudeSessions().refresh('test'),
+      // The status-driven (non-explicit) hooks apply that enumeration/probe changes run.
+      claudeApplyHooks: () => claudeSessions().applyHooks(),
       claudeSelect: (id: string | null) => {
         if (id === null) {
           state.claudeSessionId = null;

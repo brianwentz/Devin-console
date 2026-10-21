@@ -1,7 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseAgentsJson } from '../../src/core/claudeAgents';
+import { focusRefreshDue, parseAgentsJson } from '../../src/core/claudeAgents';
+
+describe('focusRefreshDue', () => {
+  it('always re-polls the local host on focus', () => {
+    expect(focusRefreshDue('local', 1_000, 1_001)).toBe(true);
+  });
+  it('re-polls a wsl host that never polled', () => {
+    expect(focusRefreshDue('wsl:D', null, 1_000)).toBe(true);
+  });
+  it('skips a wsl host whose last poll started under 60 s ago', () => {
+    expect(focusRefreshDue('wsl:D', 1_000, 60_999)).toBe(false);
+  });
+  it('re-polls a wsl host once 60 s elapsed', () => {
+    expect(focusRefreshDue('wsl:D', 1_000, 61_000)).toBe(true);
+  });
+});
 
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '../fixtures/claude-agents.json'), 'utf8'),

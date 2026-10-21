@@ -8,6 +8,16 @@
 
 import type { ClaudeAgent } from '../shared/ipc';
 
+/** Minimum gap between wsl agent polls triggered by window focus (each is a wsl.exe spawn). */
+export const WSL_FOCUS_MIN_MS = 60_000;
+
+/** Whether a window-focus event should re-poll this host's agents now:
+ * local always; a wsl host only when its last poll started ≥ WSL_FOCUS_MIN_MS ago. */
+export function focusRefreshDue(hostId: string, lastStartedAt: number | null, now: number): boolean {
+  if (hostId === 'local') return true;
+  return lastStartedAt === null || now - lastStartedAt >= WSL_FOCUS_MIN_MS;
+}
+
 type ParseAgentsResult = {
   agents: ClaudeAgent[];
   unknownKeys: string[];
