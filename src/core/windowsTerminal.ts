@@ -166,16 +166,25 @@ export function resolveProfileCommand(profile: WtProfile, ctx: ResolveCtx): Reso
  * Where the WT profile match gets its installed-distro names. WSL enabled →
  * the hosts enumeration once it has completed (never a spawn); WSL disabled →
  * the enumeration is empty by design, so one lazy `wsl -l -q` per run
- * (`needLazyList` until it lands). `distros: null` = not known yet.
+ * (`needLazyList` until it lands). `distros: null` = not known yet — also
+ * after a failed lazy list (profiles stay usable); the list is retried once
+ * `LAZY_LIST_RETRY_MS` after the failure.
  */
+export const LAZY_LIST_RETRY_MS = 5 * 60_000;
+
 export function wtDistroList(input: {
   wslEnabled: boolean;
   enumCompleted: boolean;
   enumNames: string[];
   lazyNames: string[] | null;
+  /** When the lazy list last failed (ms); null/absent = it hasn't. */
+  lazyFailedAtMs?: number | null;
+  nowMs?: number;
 }): { distros: string[] | null; needLazyList: boolean } {
   if (input.wslEnabled) return { distros: input.enumCompleted ? input.enumNames : null, needLazyList: false };
-  return { distros: input.lazyNames, needLazyList: input.lazyNames === null };
+  const retryDue =
+    input.lazyFailedAtMs == null || (input.nowMs ?? Date.now()) - input.lazyFailedAtMs >= LAZY_LIST_RETRY_MS;
+  return { distros: input.lazyNames, needLazyList: input.lazyNames === null && retryDue };
 }
 
 // Known settings.json locations (packaged, packaged Preview, unpackaged).

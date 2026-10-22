@@ -169,9 +169,22 @@ describe('helper usage.scan time zone + coalescing (R28)', () => {
     const la = (await h['usage.scan']!({ months, timeZone: 'America/Los_Angeles' })) as { buckets: UsageBuckets };
     expect(la.buckets['2026-11']).toBeUndefined();
     expect(la.buckets['2026-10']?.byDay['2026-10-31']?.['helper-test-model']).toBe(10);
-    await expect(async () => h['usage.scan']!({ months, timeZone: 'Nowhere/Zone' })).rejects.toMatchObject({
+    await expect(async () => h['usage.scan']!({ months, timeZone: 42 })).rejects.toMatchObject({
       code: 'bad-params',
     });
+  });
+
+  it('a zone this Node cannot resolve falls back to distro-local keys and says so (R32)', async () => {
+    const dir = join(home.dir, 'projects', '-home-u-fb');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'fb.jsonl'), usageLine('req-fb', 9, '2026-10-20T12:00:00.000Z'));
+    const h = usageHandlers(home.dir);
+    const months = ['2026-10'];
+    const res = (await h['usage.scan']!({ months, timeZone: 'Nowhere/Zone' })) as { buckets: UsageBuckets; zoneFallback?: boolean };
+    expect(res.zoneFallback).toBe(true);
+    expect(res.buckets['2026-10']).toBeDefined();
+    const ok = (await h['usage.scan']!({ months, timeZone: 'Asia/Tokyo' })) as { zoneFallback?: boolean };
+    expect(ok.zoneFallback).toBeUndefined();
   });
 
   it('overlapping scans join the running walk', async () => {

@@ -648,18 +648,18 @@ export class ClaudeUsageService {
     host: ExecHost,
     months: string[],
     timeZone: string | undefined,
-  ): Promise<{ buckets: UsageBuckets; files: number; changed: number; skipped: number } | null> {
+  ): Promise<{ buckets: UsageBuckets; files: number; changed: number; skipped: number; zoneFallback: boolean } | null> {
     const channel = hosts().channel(host);
     if (!channel) return null;
     const t0 = Date.now();
     try {
-      const res = await channel.request<{ buckets?: unknown; files?: unknown; changed?: unknown; skipped?: unknown } | null>(
+      const res = await channel.request<{ buckets?: unknown; files?: unknown; changed?: unknown; skipped?: unknown; zoneFallback?: unknown } | null>(
         'usage.scan',
         timeZone ? { months, timeZone } : { months },
       );
       if (!res || !isBuckets(res.buckets)) return null;
       const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-      return { buckets: res.buckets, files: count(res.files), changed: count(res.changed), skipped: count(res.skipped) };
+      return { buckets: res.buckets, files: count(res.files), changed: count(res.changed), skipped: count(res.skipped), zoneFallback: res.zoneFallback === true };
     } catch (error) {
       if (error instanceof HostRpcError && error.code === 'timeout') {
         log('claude', 'usage-scan-host-timeout', { detail: { host: host.id, ms: Date.now() - t0 } });
@@ -667,6 +667,8 @@ export class ClaudeUsageService {
       return null;
     }
   }
+
+  private readonly zoneFallbackLogged = new Set<string>();
 
   private scanAll(): Promise<void> {
     return (this.scanTask ??= this.runScan().finally(() => {
@@ -799,9 +801,15 @@ export class ClaudeUsageService {
         Array.from({ length: Math.min(SCAN_WORKERS, tasks.length) }, () => worker()),
       );
       let wslFiles = 0;
+      let zoneFallback = false;
       for (const { host, result } of await remote) {
         if (!result) continue;
         wslFiles += result.files;
+        // The distro's Node can't resolve the app's zone: reported once per host.
+        if (result.zoneFallback && !this.zoneFallbackLogged.has(host.id)) {
+          this.zoneFallbackLogged.add(host.id);
+          zoneFallback = true;
+        }
         changed += result.changed;
         skipped += result.skipped;
         const byModel = Object.values(result.buckets[current]?.byModel ?? {});
@@ -845,6 +853,7 @@ export class ClaudeUsageService {
           changed,
           skipped,
           skippedHosts,
+          ...(zoneFallback ? { zoneFallback } : {}),
           ms: Date.now() - start,
         },
       });

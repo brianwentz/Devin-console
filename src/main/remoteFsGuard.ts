@@ -11,6 +11,11 @@
 //
 // What the guard cannot see:
 // - relative paths resolved against a UNC cwd (the app's cwd is never UNC);
+// - the `cwd` option of `glob` and glob patterns passed as arrays (only a
+//   string pattern is checked);
+// - fd-based ops (`fchown`, `futimes`, …) — fds are not paths;
+// - `fs.Dir`/`FileHandle` methods on an already-opened remote handle (the
+//   `open`/`opendir` that produced it is what the guard refuses);
 // - the `\\.\UNC\wsl.localhost` device-namespace form;
 // - native addons (node-pty's cwd) and Node/Electron internals calling the
 //   C++ fs bindings directly;
@@ -51,7 +56,9 @@ const TWO_PATH = new Set(['rename', 'renameSync', 'copyFile', 'copyFileSync', 'c
 
 const FS_OPS = [
   'access', 'accessSync', 'appendFile', 'appendFileSync', 'chmod', 'chmodSync', 'copyFile', 'copyFileSync',
-  'cp', 'cpSync', 'createReadStream', 'createWriteStream', 'existsSync', 'link', 'linkSync', 'lstat',
+  'chown', 'chownSync', 'cp', 'cpSync', 'createReadStream', 'createWriteStream', 'exists', 'existsSync',
+  'glob', 'globSync', 'lchown', 'lchownSync', 'lutimes', 'lutimesSync', 'mkdtemp', 'mkdtempSync', 'readlink',
+  'readlinkSync', 'statfs', 'statfsSync', 'link', 'linkSync', 'lstat',
   'lstatSync', 'mkdir', 'mkdirSync', 'open', 'openSync', 'opendir', 'opendirSync', 'readdir', 'readdirSync',
   'readFile', 'readFileSync', 'realpath', 'realpathSync', 'rename', 'renameSync', 'rm', 'rmSync', 'rmdir',
   'rmdirSync', 'stat', 'statSync', 'symlink', 'symlinkSync', 'truncate', 'truncateSync', 'unlink',
@@ -59,10 +66,14 @@ const FS_OPS = [
 ];
 
 const PROMISE_OPS = [
-  'access', 'appendFile', 'chmod', 'copyFile', 'cp', 'link', 'lstat', 'mkdir', 'open', 'opendir', 'readdir',
-  'readFile', 'realpath', 'rename', 'rm', 'rmdir', 'stat', 'symlink', 'truncate', 'unlink', 'utimes', 'watch',
-  'writeFile',
+  'access', 'appendFile', 'chmod', 'chown', 'copyFile', 'cp', 'glob', 'lchown', 'link', 'lstat', 'lutimes', 'mkdir',
+  'mkdtemp', 'open', 'opendir', 'readdir', 'readFile', 'readlink', 'realpath', 'rename', 'rm', 'rmdir', 'stat',
+  'statfs', 'symlink', 'truncate', 'unlink', 'utimes', 'watch', 'writeFile',
 ];
+
+/** fs/promises functions that return an async iterator, not a promise — a
+ * violation throws synchronously (a rejected promise isn't iterable). */
+const PROMISE_ITERATORS = new Set(['glob', 'watch']);
 
 function normalise(path: string): string {
   const slashed = path.replace(/\//g, '\\');
@@ -151,7 +162,7 @@ export function installRemoteFsGuard(opts: RemoteFsGuardOptions): void {
         }
         if (opts.throwOnViolation) {
           const error = new RemoteFsViolation(op);
-          if (isPromise) return Promise.reject(error);
+          if (isPromise && !PROMISE_ITERATORS.has(name)) return Promise.reject(error);
           throw error;
         }
         break;

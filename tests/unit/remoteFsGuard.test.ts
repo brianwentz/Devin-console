@@ -51,6 +51,37 @@ describe('remoteFsGuard', () => {
     expect(remoteFsViolationCount()).toBeGreaterThan(20);
   });
 
+  it('covers exists, readlink, mkdtemp, statfs, chown, lchown, lutimes and glob (all forms)', async () => {
+    const logged: string[] = [];
+    installRemoteFsGuard({ throwOnViolation: true, extraPrefixes: [], log: (op) => logged.push(op) });
+    const p = PREFIXED[0]!;
+    const noop = () => undefined;
+    expect(() => fs.exists(p, noop)).toThrow(RemoteFsViolation);
+    for (const [name, args] of [
+      ['readlink', [p]],
+      ['mkdtemp', [p + '-']],
+      ['statfs', [p]],
+      ['chown', [p, 0, 0]],
+      ['lchown', [p, 0, 0]],
+      ['lutimes', [p, 0, 0]],
+    ] as const) {
+      const sync = (fs as unknown as Record<string, (...a: unknown[]) => unknown>)[`${name}Sync`];
+      expect(() => sync!(...args), `${name}Sync`).toThrow(RemoteFsViolation);
+      expect(() => (fs as unknown as Record<string, (...a: unknown[]) => unknown>)[name]!(...args, noop), name).toThrow(
+        RemoteFsViolation,
+      );
+      const promised = (fs.promises as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[name]!;
+      await expect(promised(...args), `promises.${name}`).rejects.toBeInstanceOf(RemoteFsViolation);
+    }
+    const pattern = `${p}\\**`;
+    expect(() => fs.globSync(pattern)).toThrow(RemoteFsViolation);
+    expect(() => fs.glob(pattern, noop)).toThrow(RemoteFsViolation);
+    expect(() => fs.promises.glob(pattern)).toThrow(RemoteFsViolation);
+    expect(logged).toEqual(
+      expect.arrayContaining(['exists', 'readlink', 'readlinkSync', 'promises.readlink', 'mkdtemp', 'statfs', 'chown', 'lchown', 'lutimes', 'glob', 'globSync', 'promises.glob']),
+    );
+  });
+
   it('test mode logs once per op before throwing', () => {
     const logged: string[] = [];
     installRemoteFsGuard({ throwOnViolation: true, extraPrefixes: [], log: (op) => logged.push(op) });

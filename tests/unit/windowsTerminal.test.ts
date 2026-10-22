@@ -8,6 +8,7 @@ import {
   splitCommandline,
   type ResolveCtx,
   type WtProfile,
+  LAZY_LIST_RETRY_MS,
   wtDistroList,
 } from '../../src/core/windowsTerminal';
 
@@ -184,6 +185,19 @@ describe('wtDistroList', () => {
     expect(wtDistroList({ wslEnabled: false, enumCompleted: true, enumNames: [], lazyNames: ['Ubuntu-22.04'] })).toEqual({
       distros: ['Ubuntu-22.04'],
       needLazyList: false,
+    });
+  });
+
+  it('WSL disabled, lazy list failed: stays unknown (null), retried only after 5 minutes', () => {
+    const base = { wslEnabled: false, enumCompleted: true, enumNames: [], lazyNames: null };
+    const failedAtMs = 1_000_000;
+    expect(wtDistroList({ ...base, lazyFailedAtMs: failedAtMs, nowMs: failedAtMs + 60_000 })).toEqual({
+      distros: null,
+      needLazyList: false,
+    });
+    expect(wtDistroList({ ...base, lazyFailedAtMs: failedAtMs, nowMs: failedAtMs + LAZY_LIST_RETRY_MS })).toEqual({
+      distros: null,
+      needLazyList: true,
     });
   });
 });

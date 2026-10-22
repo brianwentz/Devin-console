@@ -232,19 +232,26 @@ function monthsParam(params: unknown): string[] {
   return v as string[];
 }
 
-function timeZoneParam(params: unknown): string | undefined {
+/** A zone name this Node's ICU can't resolve (e.g. built without full ICU) is not
+ * the caller's error: scan in distro-local time and report `fallback`. */
+function timeZoneParam(params: unknown): { zone: string | undefined; fallback: boolean } {
   const v = objOf(params).timeZone;
-  if (v === undefined || v === null) return undefined;
-  if (typeof v !== 'string' || v === '' || v.length > 64 || !isValidTimeZone(v)) {
+  if (v === undefined || v === null) return { zone: undefined, fallback: false };
+  if (typeof v !== 'string' || v === '' || v.length > 64) {
     throw new RpcError('bad-params', 'timeZone must be an IANA zone name');
   }
-  return v;
+  return isValidTimeZone(v) ? { zone: v, fallback: false } : { zone: undefined, fallback: true };
 }
 
 export function usageHandlers(configDir: string): Record<string, Handler> {
   const scanner = new UsageScanner(join(configDir, 'projects'));
   return {
-    'usage.scan': (params) => scanner.scan(monthsParam(params), timeZoneParam(params)),
+    'usage.scan': async (params) => {
+      const months = monthsParam(params);
+      const { zone, fallback } = timeZoneParam(params);
+      const result = await scanner.scan(months, zone);
+      return fallback ? { ...result, zoneFallback: true } : result;
+    },
     'usage.accounts': () => readUsageAccounts(configDir),
   };
 }

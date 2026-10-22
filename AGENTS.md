@@ -792,11 +792,11 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `analytics-refresh` / `analytics-view-created` / `analytics` | `mode: reload\|navigate`; `load-error`. |
 | `analytics-refresh-skipped` | `{ tab }` — surface re-entered on the Claude tab (nothing hosted to reload). |
 | `usage-fetch` | `{ ok, status, ms, stale, accounts, skippedHosts }` — OAuth `/usage` fetch per account group (the bearer token is never logged); `skippedHosts` = hosts whose channel is not ready, whose `usage.accounts` timed out, or (local) past `HOST_FS_BUDGET_MS`. |
-| `usage-scan` | `{ files, wslFiles, changed, skipped, skippedHosts, ms }` (`files` includes `wslFiles` = files the WSL helpers scanned via `usage.scan`; `changed`/`skipped` sum both sides) — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
+| `usage-scan` | `{ files, wslFiles, changed, skipped, skippedHosts, zoneFallback?, ms }` (`files` includes `wslFiles` = files the WSL helpers scanned via `usage.scan`; `changed`/`skipped` sum both sides; `zoneFallback: true` once per host whose Node cannot resolve the app time zone, so its helper keys days in distro-local time) — transcript-scan pass over `<configDir>/projects/**/*.jsonl` (incl. `subagents/`). |
 | `claude-hooks-install-skipped` | No detail — `AGENT_WORKSPACE_SKIP_HOOKS_INSTALL=1` suppressed the hooks install (once per run). |
 | `usage-scan-host-timeout` | `{ host, ms }` — the local projects walk exceeded `HOST_FS_BUDGET_MS`, or a WSL host's `usage.scan` hit its 60 s channel timeout; the host lands in `skippedHosts` for that pass. |
 | `usage-cache-load` | `{ files }` — `userData/claude-usage-cache.json` loaded. |
-| `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. pre-S7 `local:` keys from a WSL store). |
+| `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. wsl/local keys left by older builds). |
 | `devin-usage-fetch` | `{ ok, status, ms, stale, reason? }` — `reason: login-required\|no-devindebug\|view-not-ready\|timeout\|error\|http\|parse\|network\|disabled` (channel `cloud`; token never logged). |
 | `devin-usage-cache` | `{ loaded }` — `userData/devin-usage-cache.json` load. |
 | `usage-alert` | `{ metric, threshold, percent }` — a threshold crossed (fires even when the kind is muted; channel `shell`). |

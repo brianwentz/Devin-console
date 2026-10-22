@@ -262,10 +262,12 @@ export class HostsRegistry {
 
   private installedLazy: string[] | null = null;
   private installedLazyTask: Promise<void> | null = null;
+  private installedLazyFailedAt: number | null = null;
 
   /** Installed distro names for the Windows Terminal profile match
    * (`wtDistroList`): the enumeration while WSL is enabled; with WSL disabled
-   * (the enumeration is empty by design) one lazy async `wsl -l -q` per run.
+   * (the enumeration is empty by design) one lazy async `wsl -l -q` per run
+   * (a failed one is retried after 5 minutes).
    * null = not known yet. Never spawns synchronously. */
   installedDistroNames(): string[] | null {
     const pick = wtDistroList({
@@ -273,10 +275,12 @@ export class HostsRegistry {
       enumCompleted: this.distros.completed,
       enumNames: this.distros.rows.map((row) => row.name),
       lazyNames: this.installedLazy,
+      lazyFailedAtMs: this.installedLazyFailedAt,
     });
     if (pick.needLazyList) {
       this.installedLazyTask ??= this.runWsl(['-l', '-q'], { kind: 'enum', host: 'all', requireSuccess: false }).then(
         ({ stdout }) => {
+          this.installedLazyTask = null;
           // UTF-16LE; strip the BOM/NULs and the "(Default)"-style notes.
           this.installedLazy = stdout
             .toString('utf16le')
@@ -285,7 +289,9 @@ export class HostsRegistry {
             .filter((line) => line.length > 0 && !line.startsWith('('));
         },
         () => {
-          this.installedLazy = [];
+          // Unknown, not empty: [] would hide every WT WSL profile for the run.
+          this.installedLazyTask = null;
+          this.installedLazyFailedAt = Date.now();
         },
       );
     }
