@@ -197,6 +197,8 @@ export class HostChannel {
   reset(): void {
     this.breaker = resetBreaker();
     this.afterRedeploy = false;
+    // An explicit Re-check allows one more pre-hello repair.
+    this.earlyRedeployUsed = false;
     this.clearRespawn();
     this.stopped = false;
     // Inside stop()'s grace the old child may still be draining its EOF: a
@@ -513,10 +515,16 @@ export class HostChannel {
       earlyRedeploy ||
       (code === HELPER_MISSING_EXIT && this.opts.redeploy && !this.afterRedeploy)
     ) {
+      const prevAfterRedeploy = this.afterRedeploy;
       this.afterRedeploy = true;
       this.redeploying = true;
       this.setState('starting', 'redeploy');
-      this.gatedRedeploy();
+      // A refused/abandoned gate deployed nothing: the once-per-run repair stays available.
+      this.gatedRedeploy(() => {
+        this.afterRedeploy = prevAfterRedeploy;
+        if (earlyRedeploy) this.earlyRedeployUsed = false;
+        if (hashRedeploy) this.hashRedeployUsed = false;
+      });
       return;
     }
     this.breaker = onExit(this.breaker, now);
@@ -526,7 +534,7 @@ export class HostChannel {
   /** The deploy is a `wsl.exe -d D` run as well: it passes the same fresh
    * spawn gate first — a distro stopped since the last list (`wsl --terminate`
    * between spawn and hello) halts the channel instead of being booted. */
-  private gatedRedeploy(): void {
+  private gatedRedeploy(rollback: () => void): void {
     const redeploy = (): void => {
       void this.opts
         .redeploy!()
@@ -543,13 +551,19 @@ export class HostChannel {
       redeploy();
       return;
     }
+    // halt() bumps gateSeq: a result requested before a stop() is stale.
+    const seq = ++this.gateSeq;
     void gate()
       .catch(() => false)
       .then((ok) => {
-        // stop() during the gate: nothing runs. (start/reset wait on
-        // `redeploying`, so no other spawn raced this one.)
-        if (this.stopped) {
-          this.redeploying = false;
+        if (seq !== this.gateSeq || this.stopped) {
+          if (this.stopped) {
+            this.redeploying = false;
+            rollback();
+          } else {
+            // stop() then start() (which waits on `redeploying`): ask afresh.
+            this.gatedRedeploy(rollback);
+          }
           return;
         }
         if (ok) {
@@ -557,6 +571,7 @@ export class HostChannel {
           return;
         }
         this.redeploying = false;
+        rollback();
         this.halt('distro-unavailable');
       });
   }

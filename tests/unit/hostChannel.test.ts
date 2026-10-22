@@ -477,6 +477,129 @@ describe('HostChannel fix round 1', () => {
     expect(channel.info().running).toBe(false);
   });
 
+  it('iteration 3 N1: a refused exit-86 redeploy is not used up — the next 86 after start() still redeploys', async () => {
+    let allowed = true;
+    const canSpawn = vi.fn(async () => allowed);
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last, logs } = make({ canSpawn, redeploy });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false; // a failed `wsl -l -v`: refused, no hold
+    last().exit(86);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(logs.some((l) => l.event === 'host-helper' && l.detail.reason === 'distro-unavailable')).toBe(true);
+    // The next good enumeration restarts via start(), not reset().
+    allowed = true;
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    last().exit(86);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(3);
+    expect(channel.info().failures).toBe(0);
+  });
+
+  it('iteration 3 N1: a refused pre-hello redeploy is not used up', async () => {
+    let allowed = true;
+    const canSpawn = vi.fn(async () => allowed);
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last } = make({ canSpawn, redeploy, bundlePreexisting: () => true });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false;
+    last().exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).not.toHaveBeenCalled();
+    allowed = true;
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    last().exit(1); // the bundle is also truncated
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(3);
+    expect(channel.info().failures).toBe(0);
+  });
+
+  it('iteration 3 N1: reset() (explicit Re-check) re-arms the pre-hello redeploy', async () => {
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last } = make({ redeploy, bundlePreexisting: () => true });
+    channel.start();
+    last().exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(2);
+    last().exit(1); // right after a redeploy: a failed start, no second redeploy
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(channel.info().failures).toBe(1);
+    channel.reset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(3);
+    last().exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(2);
+    expect(children).toHaveLength(4);
+  });
+
+  it('iteration 3 N2: stop() then start() while the redeploy gate is in flight — stale result ignored, one redeploy, one spawn', async () => {
+    const releases: Array<(ok: boolean) => void> = [];
+    let calls = 0;
+    const canSpawn = vi.fn(() => {
+      calls++;
+      return calls === 1 ? Promise.resolve(true) : new Promise<boolean>((r) => releases.push(r));
+    });
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last } = make({ canSpawn, redeploy });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    last().exit(86);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(releases).toHaveLength(1);
+    channel.stop();
+    channel.start();
+    // The stale gate (requested before the stop) says no: ignored, a fresh gate runs.
+    releases[0]!(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(releases).toHaveLength(2);
+    releases[1]!(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    // post-redeploy respawn gate
+    expect(releases).toHaveLength(3);
+    releases[2]!(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    expect(channel.info().running).toBe(true);
+  });
+
+  it('iteration 3 N2: hash mismatch with the gate refusing halts distro-unavailable without a deploy', async () => {
+    let allowed = true;
+    const canSpawn = vi.fn(async () => allowed);
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last, logs } = make({ canSpawn, redeploy, expectedHash: 'abcdef012345' });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false;
+    last().hello('000000000000');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(children).toHaveLength(1);
+    expect(channel.state).toBe('reconnecting');
+    expect(logs.some((l) => l.event === 'host-helper' && l.detail.reason === 'distro-unavailable')).toBe(true);
+    // Not used up: back up, a mismatch still gets its one redeploy.
+    allowed = true;
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    last().hello('000000000000');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(3);
+  });
+
   it('killStopped(): a child still alive after stop() is killed synchronously (quit)', () => {
     const { channel, last } = make();
     channel.start();
