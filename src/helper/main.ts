@@ -24,6 +24,7 @@ import { hooksHandlers, hooksOffOnce } from './hooks';
 import { RpcError, safeMessage, str, type Handler } from './params';
 import { changePayload, storeHandlers, type StoreChanged } from './store';
 import { usageHandlers } from './usage';
+import { stageEnv } from './envStage';
 import { ProjectsWatcher, type WatchChange } from './watch';
 
 export const TOUCH_INTERVAL_MS = 3_600_000;
@@ -254,6 +255,7 @@ function run(): void {
     ...usageHandlers(configDir),
     'fs.stat': (params) => statPath(str(params, 'path')),
     'fs.readdir': (params) => readDirs(str(params, 'path')),
+    'env.stage': (params) => stageEnv(home, params),
   };
 
   let inFlight = 0;

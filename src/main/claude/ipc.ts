@@ -186,7 +186,7 @@ export function setupClaude(): ClaudeSessions {
   handleResult(IpcChannels.hostsReaddir, HostReaddirSchema, ({ hostId, path }) => readRemoteDir(hostId, path));
   guardedOn(IpcChannels.hostsFolderPromptResolve, (_event, payload: unknown) => {
     const parsed = FolderPromptResolveArg.safeParse(payload);
-    if (parsed.success) resolveFolderPrompt(parsed.data);
+    if (parsed.success) void resolveFolderPrompt(parsed.data);
   });
 
   return sessions;

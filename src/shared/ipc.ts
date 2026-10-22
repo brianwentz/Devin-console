@@ -436,6 +436,36 @@ export const DevinUsageStateSchema = z.object({
   nextPollAt: z.string().nullable(),
 });
 export type DevinUsageState = z.infer<typeof DevinUsageStateSchema>;
+// P3 ssh host entry: canonical (lower-case) alias.
+const SshHostEntrySchema = z.object({ alias: z.string().max(128).regex(SSH_ALIAS_CANONICAL_RE), enabled: z.boolean() });
+
+/** Fix round 1 M4: aliases are lower-cased and only malformed entries (and
+ * later duplicates) drop — one bad entry never costs the whole list. The
+ * dropped raw entries stay in settings.json (core/settings.ts serialize). */
+export function sanitizeSshHostList(raw: unknown): unknown {
+  if (!Array.isArray(raw)) return raw;
+  const seen = new Set<string>();
+  const out: { alias: string; enabled: boolean }[] = [];
+  for (const entry of raw) {
+    const parsed = canonicalSshHostEntry(entry);
+    if (!parsed || seen.has(parsed.alias)) continue;
+    seen.add(parsed.alias);
+    out.push(parsed);
+  }
+  return out;
+}
+
+/** One raw entry → its canonical form, or null when malformed. */
+export function canonicalSshHostEntry(entry: unknown): { alias: string; enabled: boolean } | null {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+  const { alias, enabled } = entry as { alias?: unknown; enabled?: unknown };
+  const parsed = SshHostEntrySchema.safeParse({
+    alias: typeof alias === 'string' ? alias.trim().toLowerCase() : alias,
+    enabled,
+  });
+  return parsed.success ? parsed.data : null;
+}
+
 // Execution hosts (WSL). wslDistros: null = auto (running + default);
 // overrides: per-host path/shell/env-capture settings keyed by HostId.
 const HostsFields = {
@@ -452,9 +482,7 @@ const HostsFields = {
     }),
   ),
   // P3: ssh hosts by canonical (lower-case) ~/.ssh/config alias.
-  ssh: z
-    .array(z.object({ alias: z.string().max(128).regex(SSH_ALIAS_CANONICAL_RE), enabled: z.boolean() }))
-    .max(50),
+  ssh: z.preprocess(sanitizeSshHostList, z.array(SshHostEntrySchema).max(50)),
 };
 // F3: tenant/api URLs must be https (http allowed for localhost only).
 const AppUrl = z.url().refine(isAllowedAppUrl, 'must be https (http allowed for localhost only)');
@@ -981,6 +1009,8 @@ export const ShellStateSchema = z.object({
       /** Host-side folder the input starts in (picker folder on that host, else its home). */
       start: z.string().nullable(),
       hosts: z.array(z.object({ id: HostIdSchema, label: z.string(), home: z.string().nullable() })),
+      /** Why the last answer was refused (missing / not a folder on the host). */
+      error: z.string().nullable(),
     })
     .nullable(),
 });

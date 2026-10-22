@@ -490,7 +490,8 @@ export class TerminalHost {
       if (wslExec) {
         // Wrap in `wsl.exe -d D --cd <linux cwd> -e <shell> -ilc 'exec …'` so
         // the pty runs an interactive login shell inside the distro.
-        const spec = hosts().ptySpawnSpec(execHost, {
+        // ssh: async — the hook token is staged on the host, never in argv.
+        const spec = await hosts().remotePtySpawnSpec(execHost, {
           file: command.file,
           args,
           // devin's normalized is the UNC workspace — convert to host form.

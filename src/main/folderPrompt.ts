@@ -24,6 +24,8 @@ interface OpenPrompt {
   hostId: string;
   start: string | null;
   hosts: PromptHost[];
+  /** User-visible rejection of the last answer (missing / not a folder). */
+  error: string | null;
   resolve: (path: string | null) => void;
 }
 
@@ -37,7 +39,7 @@ export function folderPromptOpen(): boolean {
 /** ShellState.folderPrompt. */
 export function folderPromptPublic(): ShellState['folderPrompt'] {
   return open
-    ? { id: open.id, title: open.title, hostId: open.hostId, start: open.start, hosts: open.hosts }
+    ? { id: open.id, title: open.title, hostId: open.hostId, start: open.start, hosts: open.hosts, error: open.error }
     : null;
 }
 
@@ -88,14 +90,17 @@ export function promptRemoteFolder(
   if (testMode && process.env.AGENT_WORKSPACE_TEST_PICKER_CANCEL === '1') return Promise.resolve(null);
   close(null);
   return new Promise((resolve) => {
-    open = { id: randomUUID(), title, hostId, start, hosts: choices, resolve };
+    open = { id: randomUUID(), title, hostId, start, hosts: choices, error: null, resolve };
     raiseShell();
     applyLayout();
   });
 }
 
-/** hosts:folderPromptResolve — validated: the prompt id, an offered host, an absolute posix path. */
-export function resolveFolderPrompt(arg: { id: string; hostId?: string | undefined; path: string | null }): void {
+/** hosts:folderPromptResolve — validated: the prompt id, an offered host, an
+ * absolute posix path that is an existing directory on that host (the
+ * helper's `fs.stat`; M6). A missing / non-directory path keeps the prompt
+ * open with a message. */
+export async function resolveFolderPrompt(arg: { id: string; hostId?: string | undefined; path: string | null }): Promise<void> {
   const current = open;
   if (!current || arg.id !== current.id) return;
   if (arg.path === null) {
@@ -109,6 +114,26 @@ export function resolveFolderPrompt(arg: { id: string; hostId?: string | undefin
     return;
   }
   const normalized = posix.normalize(arg.path).replace(/(.)\/+$/, '$1');
+  const channel = hosts().fsReady(host) ? hosts().channel(host) : null;
+  let found: { exists?: unknown; dir?: unknown } | null = null;
+  try {
+    found = channel ? await channel.request<{ exists?: unknown; dir?: unknown } | null>('fs.stat', { path: normalized }) : null;
+  } catch {
+    found = null;
+  }
+  if (open !== current) return;
+  const error = !channel
+    ? 'The host helper is not ready — try again in a moment'
+    : found?.exists !== true
+      ? 'That folder does not exist on the host'
+      : found.dir !== true
+        ? 'That path is not a folder'
+        : null;
+  if (error) {
+    current.error = error;
+    applyLayout();
+    return;
+  }
   close(hosts().windowsPath(host, normalized));
 }
 

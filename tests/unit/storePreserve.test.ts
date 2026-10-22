@@ -208,11 +208,16 @@ describe('hosts.ssh preservation (P3)', () => {
     ]);
   });
 
-  it('an untouched invalid ssh list is written back raw', () => {
-    const raw = { hosts: { ssh: [{ alias: 'Bad Alias', enabled: true, extra: 1 }] } };
+  it('M4: malformed ssh entries are kept raw in the file (after the valid ones), even when hosts.ssh is rewritten', () => {
+    const bad = { alias: 'Bad Alias', enabled: true, extra: 1 };
+    const raw = { hosts: { ssh: [{ alias: 'ok', enabled: true }, bad] } };
     const { settings, invalid } = parseSettingsFile(raw);
-    const out = serializeSettingsFile(raw, settings, invalid, new Set());
-    expect((out.hosts as Record<string, unknown>).ssh).toEqual(raw.hosts.ssh);
+    expect(settings.hosts.ssh).toEqual([{ alias: 'ok', enabled: true }]);
+    const untouched = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect((untouched.hosts as Record<string, unknown>).ssh).toEqual([{ alias: 'ok', enabled: true }, bad]);
+    const next = { ...settings, hosts: { ...settings.hosts, ssh: [{ alias: 'new', enabled: true }] } };
+    const touched = serializeSettingsFile(raw, next, invalid, new Set(['hosts.ssh']));
+    expect((touched.hosts as Record<string, unknown>).ssh).toEqual([{ alias: 'new', enabled: true }, bad]);
   });
 });
 

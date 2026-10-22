@@ -140,7 +140,7 @@ const localStatus = (): HostStatus => {
 /** Every `wsl.exe` invocation logs `host-exec {host, kind}` so a soak can count them. */
 type WslExecKind = 'enum' | 'probe' | 'env' | 'exec' | 'spawn' | 'helper';
 
-type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store';
+type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store' | 'hooks';
 
 interface WslRun {
   stdout: Buffer;
@@ -180,6 +180,7 @@ export class HostsRegistry {
       publish: () => this.publish(),
       setPart: (id, part, message) => this.setPart(id, part, message),
       hookPort: () => this.hookPort?.() ?? null,
+      hookToken: () => this.hookToken?.() ?? null,
       bundle: () => helperBundle(),
       quitting: () => this.quitting,
       overrides: (id) => this.overrides(id),
@@ -330,8 +331,21 @@ export class HostsRegistry {
 
   /** Window focus: re-enumerate only when the cache has gone stale. */
   onWindowFocus(): void {
+    this.ssh.recover('focus');
     if (!this.started) return;
     if (!this.distros.isFresh(ENUM_CACHE_MS)) void this.enumerateAsync();
+  }
+
+  /** powerMonitor resume / unlock-screen: retry ssh hosts that failed for a
+   * connection reason (throttled ≤1/min inside SshHosts.recover). */
+  recoverSsh(trigger: 'resume' | 'unlock', opts: { force?: boolean } = {}): number {
+    return this.ssh.recover(trigger, opts);
+  }
+
+  /** ssh: the hook forward is up and its listener proved the token (hook
+   * injection / the remote hooks block are allowed only then). */
+  hookForwardVerified(id: string): boolean {
+    return id.startsWith('ssh:') && this.ssh.forwardVerified(id as HostId);
   }
 
   /** Fires onStatusChange only when the status rows changed structurally. */
@@ -1067,6 +1081,8 @@ export class HostsRegistry {
 
   /** Wired by the hook collaborator: the listener port and a vEthernet bind. */
   hookPort: (() => number | null) | null = null;
+  /** The hook listener's bearer token (the ssh forward challenge). */
+  hookToken: (() => string | null) | null = null;
   hookAddrBind: ((addr: string) => void) | null = null;
   /** Called when a probe/env capture finishes so consumers can re-publish. */
   onStatusChange: (() => void) | null = null;
@@ -1171,10 +1187,10 @@ export class HostsRegistry {
   }
 
   spawnOn(host: ExecHost, cmd: HostCommand, opts?: { signal?: AbortSignal }): ChildProcess {
-    // ssh: `cd <cwd> && exec /usr/bin/env <login env> …` over `ssh -T` (logs host-ssh + host-exec).
-    const spec = isSshHost(host)
-      ? { ...this.ssh.spawnSpec(host.id, cmd), cwd: null }
-      : spawnSpec(host, cmd, this.cachedEnv(host));
+    // ssh: `/bin/sh` → login shell over `ssh -T`; the app's extra env goes in
+    // as the first stdin line, never in argv (logs host-ssh + host-exec).
+    const sshSpec = isSshHost(host) ? this.ssh.spawnSpec(host.id, cmd) : null;
+    const spec = sshSpec ? { file: sshSpec.file, args: sshSpec.args, cwd: null } : spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
     const t0 = Date.now();
     if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'spawn' } });
@@ -1185,6 +1201,10 @@ export class HostsRegistry {
       signal: opts?.signal,
       stdio: 'pipe',
     });
+    if (sshSpec) {
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.write(sshSpec.stdinPrefix);
+    }
     child.once('spawn', () => {
       log('host', 'host-spawn', {
         detail: { host: host.id, kind: 'pipe', ok: true, ms: Date.now() - t0 },
@@ -1210,9 +1230,8 @@ export class HostsRegistry {
       throw new Error('distro is stopped');
     }
     await this.shellEnv(host, opts);
-    const spec = isSshHost(host)
-      ? { ...this.ssh.spawnSpec(host.id, cmd), cwd: null }
-      : spawnSpec(host, cmd, this.cachedEnv(host));
+    if (isSshHost(host)) return this.execSsh(host, cmd, timeout);
+    const spec = spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
     if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'exec' } });
     const { stdout } = await execFileAsync(applied.file, applied.args, {
@@ -1225,9 +1244,38 @@ export class HostsRegistry {
     return stdout;
   }
 
-  /** node-pty spec; the caller supplies the pty options (cols/rows/env). */
+  /** execOn for ssh: the env line on stdin (like spawnOn), stdout collected, killed after `timeout`. */
+  private execSsh(host: ExecHost, cmd: HostCommand, timeout: number): Promise<string> {
+    return new Promise((resolveRun, reject) => {
+      const child = this.spawnOn(host, cmd);
+      child.stdin?.end();
+      const out: Buffer[] = [];
+      const timer = setTimeout(() => child.kill(), timeout);
+      timer.unref?.();
+      child.stdout?.on('data', (chunk: Buffer) => out.push(chunk));
+      child.stderr?.resume();
+      child.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once('exit', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolveRun(Buffer.concat(out).toString('utf8'));
+        else reject(new Error(`ssh command exited ${code ?? 'unknown'}`));
+      });
+    });
+  }
+
+  /** node-pty spec for an ssh host: async — a non-empty env is staged on the
+   * host first (helper `env.stage`) so no secret reaches the argv. */
+  async remotePtySpawnSpec(host: ExecHost, cmd: HostCommand): Promise<HostPtySpec> {
+    if (!isSshHost(host)) return this.ptySpawnSpec(host, cmd);
+    return { ...(await this.ssh.ptySpec(host.id, cmd)), cwd: null };
+  }
+
+  /** node-pty spec; the caller supplies the pty options (cols/rows/env). ssh hosts: remotePtySpawnSpec. */
   ptySpawnSpec(host: ExecHost, cmd: HostCommand): HostPtySpec {
-    if (isSshHost(host)) return { ...this.ssh.ptySpec(host.id, cmd), cwd: null };
+    if (isSshHost(host)) throw new Error('ptySpawnSpec: use remotePtySpawnSpec for ssh hosts');
     const shell = isWslHost(host) ? (this.entries.get(host.id)?.status.shell ?? null) : null;
     const spec = ptySpec(host, cmd, shell);
     const applied = this.applyWslCmd(spec);

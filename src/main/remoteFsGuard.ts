@@ -22,9 +22,11 @@
 //   C++ fs bindings directly;
 // - child processes (`wsl.exe`, the in-distro helper);
 // - Explorer: `shell.showItemInFolder` opening a `\\wsl.localhost` path on the
-//   user's click (Reveal) — the one documented exception. Folder picks on a
-//   remote host never reach the native dialog: they go through the in-app
-//   RemoteFolderInput over the helper channel (P3, src/main/folderPrompt.ts).
+//   user's click (Reveal), and the native folder dialog when the USER browses
+//   to `\\wsl.localhost` in it — Explorer's access, not the app's. The app
+//   never opens that dialog on a remote path: folder picks for a remote host
+//   go through the in-app RemoteFolderInput over the helper channel (P3,
+//   src/main/folderPrompt.ts).
 //
 // Both modes log `remote-fs-violation {op}` once per op. Test mode then throws
 // RemoteFsViolation (promise forms reject); production lets the call through.

@@ -248,6 +248,7 @@ export class ClaudeSessions {
       resolveHost: (id) => this.hostIdFor(id),
     };
     hosts().hookPort = () => this.hook.info()?.port ?? null;
+    hosts().hookToken = () => this.hook.info()?.token ?? null;
     hosts().hookAddrBind = (addr) => this.hook.listenOn(addr);
     // The Settings refresh button re-writes the hooks block even when the
     // gate key is unchanged (repairs a hand-edited settings.json).
@@ -311,10 +312,11 @@ export class ClaudeSessions {
     sessionId: string,
     mode: 'resume' | 'new' | 'attach',
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
-    return this.hook.injection(
-      mode,
-      hosts().hookAddrFor(this.hostIdFor(sessionId)) ?? undefined,
-    );
+    const hostId = this.hostIdFor(sessionId);
+    // ssh (fix round 1 #1c): hooks only through a forward whose listener
+    // proved the token — never toward whoever holds the remote port.
+    if (hostId.startsWith('ssh:') && !hosts().hookForwardVerified(hostId)) return null;
+    return this.hook.injection(mode, hosts().hookAddrFor(hostId) ?? undefined);
   }
 
   /** Recapture the shell environment for the session's host (claude:recheckEnv). */

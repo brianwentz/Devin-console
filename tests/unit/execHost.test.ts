@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -13,7 +14,13 @@ import {
   sshCommandSpec,
   sshEnvSpec,
   sshProbeSpec,
-  sshReplayEnv,
+  sshEnvLine,
+  sshEnvFileContent,
+  sshForwardSpec,
+  sshFailureClass,
+  sshRecoveryDue,
+  SSH_RUN_STDIN_SCRIPT,
+  SSH_RUN_FILE_SCRIPT,
   normalizeWorkspacePath,
   INVALID_SSH_PATH_MESSAGE,
   deriveHelperState,
@@ -487,7 +494,8 @@ describe('ssh host kind', () => {
   it('rejects invalid aliases', () => {
     for (const bad of ['', '-oProxyCommand=x', '-x', 'a b', 'a;b', 'a/b', 'a$b', 'a\nb', "a'b", 'a@b']) {
       expect(() => sshHost(bad)).toThrow();
-      expect(() => sshSpawnSpec(bad, '/h', {}, 'claude', [])).toThrow();
+      expect(() => sshSpawnSpec(bad, '/h', '/bin/sh', 'claude', [])).toThrow();
+      expect(() => sshForwardSpec(bad, 4567)).toThrow();
       expect(() => sshHelperSpec(bad, '/h', '/bin/bash', 'abcdef012345')).toThrow();
       expect(() => sshHelperDeploySpec(bad, '/h', 'abcdef012345', 1)).toThrow();
       if (!bad.includes('/')) expect(hostIdForPath(`ssh://${bad}/x`)).toBe('local');
@@ -523,40 +531,99 @@ describe('ssh host kind', () => {
     expect(splitWords(NASTY.map(sshQuote).join(' '))).toEqual(NASTY);
     for (const s of ['a b', '$x', `a'b`]) expect(sshQuote(s)).toBe(posixQuote(s));
   });
-  it('sshSpawnSpec builds one quoted remote string', () => {
-    const spec = sshSpawnSpec('box', '/home/u/my proj', { B: '2 3', A: `it's` }, 'claude', ['-p', '$(id)', 'x;y', "o'k"]);
+  const BASE = ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10'];
+  it('sshSpawnSpec (fix round 1 #4): login shell via /bin/sh, env only on stdin — never in argv', () => {
+    const spec = sshSpawnSpec('box', '/home/u/my proj', '/bin/zsh', 'claude', ['-p', '$(id)', 'x;y', "o'k"]);
     expect(spec.file).toBe('ssh.exe');
     expect(spec.cwd).toBeNull();
-    expect(spec.args.slice(0, 7)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-T', 'box', '--']);
-    expect(spec.args).toHaveLength(8);
-    expect(spec.args[7]).toBe(
-      `cd '/home/u/my proj' && exec /usr/bin/env 'A=it'\\''s' 'B=2 3' 'claude' '-p' '$(id)' 'x;y' 'o'\\''k'`,
+    expect(spec.args.slice(0, 9)).toEqual([...BASE, '-T', 'box', '--']);
+    expect(spec.args).toHaveLength(10);
+    expect(spec.args[9]!.startsWith('exec ')).toBe(true);
+    const words = splitWords(spec.args[9]!.slice(5));
+    expect(words.slice(0, 2)).toEqual(['/bin/sh', '-c']);
+    expect(words[2]).toBe(SSH_RUN_STDIN_SCRIPT);
+    expect(words.slice(3)).toEqual(['exec "$0" "$@"', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
+    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[9]!.slice(5))[3]).toBe('exec $argv');
+  });
+  it('sshEnvLine: base64 of `export K=V` lines; values never appear in clear', () => {
+    const env = { TOKEN: 's3cr3t-value', B: "it's $(x)" };
+    const line = sshEnvLine(env);
+    expect(line.endsWith('\n')).toBe(true);
+    expect(line).not.toContain('s3cr3t-value');
+    expect(Buffer.from(line.trim(), 'base64').toString('utf8')).toBe(sshEnvFileContent(env));
+    expect(sshEnvFileContent(env)).toBe(`export B='it'\\''s $(x)'\nexport TOKEN='s3cr3t-value'\n`);
+    expect(sshEnvLine({})).toBe('\n');
+    expect(() => sshEnvFileContent({ 'A;B': '1' })).toThrow();
+  });
+  // The remote half of the scripts, run by a real POSIX sh when one is on PATH
+  // (Git Bash on Windows runners/dev boxes; skipped otherwise).
+  const hasSh = spawnSync('sh', ['-c', 'command -v base64 >/dev/null'], { windowsHide: true }).status === 0;
+  it.skipIf(!hasSh)('SSH_RUN_STDIN_SCRIPT: real sh reads the env line, leaves the rest of stdin to the CLI', () => {
+    const env = { TOKEN: 's3cr3t', B: "it's $(x) \\ \"q\"" };
+    const r = spawnSync(
+      'sh',
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@"', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
+      { input: `${sshEnvLine(env)}rest-of-stdin\n`, encoding: 'utf8', windowsHide: true },
     );
+    expect(r.stdout.endsWith(`s3cr3t|it's $(x) \\ "q"|rest-of-stdin\n`)).toBe(true);
   });
-  it('sshSpawnSpec rejects relative cwd, bad env keys, option-like commands', () => {
-    expect(() => sshSpawnSpec('box', 'rel', {}, 'claude', [])).toThrow();
-    expect(() => sshSpawnSpec('box', '/h', { 'A;B': '1' }, 'claude', [])).toThrow();
-    expect(() => sshSpawnSpec('box', '/h', {}, '-oFoo', [])).toThrow();
+  it.skipIf(!hasSh)('SSH_RUN_FILE_SCRIPT: real sh sources then deletes the staged file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ssh-run-file-'));
+    const file = join(dir, 'env').replace(/\\/g, '/');
+    writeFileSync(file, sshEnvFileContent({ TOKEN: 'tok value' }));
+    const r = spawnSync('sh', ['-c', SSH_RUN_FILE_SCRIPT, 'exec "$0" "$@"', file, '/', 'sh', 'sh', '-c', 'printf "%s" "$TOKEN"'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(r.stdout.endsWith('tok value')).toBe(true);
+    expect(existsSync(join(dir, 'env'))).toBe(false);
   });
-  it('sshPtySpec forces a tty and wraps in the login shell', () => {
-    const spec = sshPtySpec('box', '/home/u', { K: 'v w' }, '/usr/bin/claude', ['-r', 'id'], '/bin/zsh');
-    expect(spec.args.slice(0, 7)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-t', 'box', '--']);
-    expect(spec.args[7]).toBe(
-      `cd '/home/u' && exec '/bin/zsh' -ilc 'exec "$0" "$@"' '/usr/bin/env' 'K=v w' '/usr/bin/claude' '-r' 'id'`,
-    );
-    expect(sshPtySpec('box', '/h', {}, 'c', [], '/usr/bin/fish').args[7]).toContain(`-ilc 'exec $argv'`);
+  it('sshSpawnSpec rejects relative cwd/shell and option-like commands', () => {
+    expect(() => sshSpawnSpec('box', 'rel', '/bin/sh', 'claude', [])).toThrow();
+    expect(() => sshSpawnSpec('box', '/h', 'bash', 'claude', [])).toThrow();
+    expect(() => sshSpawnSpec('box', '/h', '/bin/sh', '-oFoo', [])).toThrow();
   });
-  it('sshHelperSpec mirrors the wsl launch line (exit 86 when missing) and adds -R', () => {
-    const spec = sshHelperSpec('box', '/home/u', '/bin/bash', 'abcdef012345', 4567);
+  it('sshPtySpec forces a tty; the token travels in a staged file, only its path is in argv', () => {
+    const file = '/home/u/.agent-workspace/run/0123456789abcdef0123456789abcdef';
+    const spec = sshPtySpec('box', '/home/u', file, '/usr/bin/claude', ['-r', 'id'], '/bin/zsh');
+    expect(spec.args.slice(0, 9)).toEqual([...BASE, '-t', 'box', '--']);
+    const words = splitWords(spec.args[9]!.slice(5));
+    expect(words.slice(0, 2)).toEqual(['/bin/sh', '-c']);
+    expect(words[2]).toBe(SSH_RUN_FILE_SCRIPT);
+    expect(words.slice(3)).toEqual(['exec "$0" "$@"', file, '/home/u', '/bin/zsh', '/usr/bin/claude', '-r', 'id']);
+    expect(splitWords(sshPtySpec('box', '/h', null, 'c', [], '/usr/bin/fish').args[9]!.slice(5)).slice(3, 5)).toEqual([
+      'exec $argv',
+      '',
+    ]);
+    expect(() => sshPtySpec('box', '/h', 'relative', 'c', [], '/bin/sh')).toThrow();
+  });
+  it('sshHelperSpec mirrors the wsl launch line (exit 86 when missing) and never carries -R', () => {
+    const spec = sshHelperSpec('box', '/home/u', '/bin/bash', 'abcdef012345');
     expect(spec.args).toEqual([
-      '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-T', '-R', '4567:127.0.0.1:4567', 'box', '--',
+      ...BASE, '-T', 'box', '--',
       `cd '/home/u' && exec '/bin/bash' -ilc 'test -f "$0" || exit 86; exec node "$0" --stdio' '/home/u/.agent-workspace/helper-abcdef012345.mjs'`,
     ]);
-    expect(sshHelperSpec('box', '/home/u', '/bin/bash', 'abcdef012345').args).not.toContain('-R');
     expect(sshHelperSpec('box', '/h', '/usr/bin/fish', 'abcdef012345').args.at(-1)).toContain(
       `'test -f $argv[1]; or exit 86; exec node $argv --stdio'`,
     );
-    expect(() => sshHelperSpec('box', '/h', '/bin/bash', 'abcdef012345', 70000)).toThrow();
+  });
+  it('sshForwardSpec: its own -N connection, loopback-bound -R, fails closed', () => {
+    expect(sshForwardSpec('box', 4567)).toEqual({
+      file: 'ssh.exe',
+      args: [...BASE, '-o', 'ExitOnForwardFailure=yes', '-N', '-T', '-R', '127.0.0.1:4567:127.0.0.1:4567', 'box'],
+      cwd: null,
+    });
+    expect(() => sshForwardSpec('box', 0)).toThrow();
+    expect(() => sshForwardSpec('box', 70000)).toThrow();
+  });
+  it('sshFailureClass / sshRecoveryDue: only connection failures recover, throttled to 1/min', () => {
+    expect(sshFailureClass({ code: 255, timedOut: false })).toBe('connection');
+    expect(sshFailureClass({ code: null, timedOut: true })).toBe('connection');
+    expect(sshFailureClass({ code: 1, timedOut: false })).toBe('other');
+    expect(sshFailureClass({ code: 86, timedOut: false })).toBe('other');
+    expect(sshRecoveryDue(null, 1_000)).toBe(true);
+    expect(sshRecoveryDue(1_000, 30_000)).toBe(false);
+    expect(sshRecoveryDue(1_000, 61_000)).toBe(true);
   });
   it('sshHelperDeploySpec runs the same byte-gated atomic script', () => {
     const wsl = helperDeploySpec(UB, '/home/u', 'abcdef012345', 10).args[5]!;
@@ -592,27 +659,6 @@ describe('ssh host kind — P3 canonical alias, path normalisation, probe specs'
     expect(isSshPathLike('C:\\ssh\\x')).toBe(false);
     expect(isSshPathLike('\\\\wsl.localhost\\U\\x')).toBe(false);
   });
-  it('sshReplayEnv drops per-connection sshd vars and the helper connection agent socket', () => {
-    const captured = {
-      PATH: '/home/u/.nvm/bin:/usr/bin',
-      SSH_CONNECTION: '1 2 3 4',
-      SSH_CLIENT: '1 2 3',
-      SSH_TTY: '/dev/pts/1',
-      SSH_AUTH_SOCK: '/tmp/ssh-XXXX/agent.1',
-      XDG_SESSION_ID: '7',
-      TERM: 'dumb',
-      KEEP: 'x',
-    };
-    expect(sshReplayEnv(captured, { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', KEEP: 'y' })).toEqual({
-      PATH: '/home/u/.nvm/bin:/usr/bin',
-      KEEP: 'y',
-      CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
-    });
-    // A persistent agent socket set by an rc file is the user's: replayed.
-    expect(sshReplayEnv({ SSH_AUTH_SOCK: '/run/user/1000/keyring/ssh' }, {})).toEqual({
-      SSH_AUTH_SOCK: '/run/user/1000/keyring/ssh',
-    });
-  });
   it('normalizeWorkspacePath: ssh paths canonical, malformed ones rejected, others resolved', () => {
     const resolveLocal = (p: string) => `R(${p})`;
     expect(normalizeWorkspacePath('ssh://Box/home/u/', resolveLocal)).toBe('ssh://box/home/u');
@@ -628,9 +674,9 @@ describe('ssh host kind — P3 canonical alias, path normalisation, probe specs'
   it('sshCommandSpec quotes every argv word behind exec', () => {
     const spec = sshCommandSpec('box', ['curl', '-w', '%{http_code}', 'http://127.0.0.1:1/x y']);
     expect(spec.file).toBe('ssh.exe');
-    expect(spec.args.slice(0, 7)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-T', 'box', '--']);
-    expect(spec.args[7]).toBe(`exec 'curl' '-w' '%{http_code}' 'http://127.0.0.1:1/x y'`);
-    expect(splitWords(spec.args[7]!.slice('exec '.length))).toEqual([
+    expect(spec.args.slice(0, 9)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10', '-T', 'box', '--']);
+    expect(spec.args[9]).toBe(`exec 'curl' '-w' '%{http_code}' 'http://127.0.0.1:1/x y'`);
+    expect(splitWords(spec.args[9]!.slice('exec '.length))).toEqual([
       'curl',
       '-w',
       '%{http_code}',

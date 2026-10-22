@@ -9,6 +9,7 @@ import {
   type PreserveSpec,
 } from './storePreserve';
 import {
+  canonicalSshHostEntry,
   SettingsObject,
   SettingsPatchSchema,
   SettingsSchema,
@@ -240,7 +241,19 @@ export function serializeSettingsFile(
   for (const [path, rawValue] of Object.entries(invalid)) {
     if (!pathTouched(path, touched)) setPath(out, path, rawValue);
   }
+  keepMalformedSshEntries(raw, out);
   return out;
+}
+
+// M4: hosts.ssh entries the schema dropped as malformed (sanitizeSshHostList)
+// are not in memory, so the identity overlay would delete them — append them
+// back raw (ux3 S6: a build never deletes data it does not understand).
+function keepMalformedSshEntries(raw: Record<string, unknown>, out: Record<string, unknown>): void {
+  const rawSsh = isPlainObject(raw.hosts) ? raw.hosts.ssh : undefined;
+  if (!Array.isArray(rawSsh) || !isPlainObject(out.hosts) || !Array.isArray(out.hosts.ssh)) return;
+  const kept = out.hosts.ssh as unknown[];
+  const malformed = rawSsh.filter((entry) => canonicalSshHostEntry(entry) === null && !kept.includes(entry));
+  if (malformed.length) out.hosts = { ...out.hosts, ssh: [...kept, ...malformed] };
 }
 
 // exactOptionalPropertyTypes: spreading a Partial can write explicit

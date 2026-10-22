@@ -135,6 +135,8 @@ export function registerTestHooks(): void {
       hostChannelState: (id: string) => hosts().channelInfo(id),
       // P3: ssh hosts + the in-app remote folder prompt.
       hostSshAdd: (alias: string) => hosts().addSshHost(alias),
+      hostSshRecover: (trigger: 'resume' | 'unlock') => hosts().recoverSsh(trigger, { force: true }),
+      hostHookForwardVerified: (id: string) => hosts().hookForwardVerified(id),
       lastFolderPrompt: () => lastFolderPrompt(),
       // App-originated fs calls on a WSL path seen by the guard (launchApp
       // teardown asserts 0).

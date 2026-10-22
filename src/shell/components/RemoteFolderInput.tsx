@@ -210,6 +210,11 @@ export function RemoteFolderPrompt() {
           </select>
         </label>
         <RemoteFolderInput hostId={hostId} value={path} onChange={setPath} onSubmit={submit} autoFocus />
+        {prompt.error ? (
+          <span id="remoteFolderPromptError" role="alert" className="text-[11px] text-[#d08080]">
+            {prompt.error}
+          </span>
+        ) : null}
         <span id="remoteFolderPreview" className="truncate text-[11px] text-[#7f8ca0]">
           {valid ? previewOf(hostId, trimmed) : 'Enter an absolute path'}
         </span>

@@ -101,7 +101,8 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_CLAUDE_SDK` | test mode | An ESM module `loadSdk()` imports instead of the real SDK — `tests/fixtures/fakeClaudeSdk.ts` → `out/fixtures/fakeClaudeSdk.mjs` (`export *` real SDK + fake `query`; writes real-shaped jsonl into `CLAUDE_CONFIG_DIR/projects/<encoded cwd>/`; emits `message_start` per group). The fake reads `FAKE_CLAUDE_TOOL=1` (parks on `canUseTool`), `FAKE_CLAUDE_DELAY_MS` (stalls the deltas), `FAKE_CLAUDE_TWO_MESSAGES=1` (splits a turn into two API messages), `FAKE_CLAUDE_COST_USD` (`result.total_cost_usd`), `FAKE_CLAUDE_SPAWN=1` (when the caller passes `spawnClaudeCodeProcess` — remote hosts — the query runs it once with `[--fake-sdk-spawn]` and waits for the child; no local transcript is written). |
 | `AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD` | test mode | Replaces the folder `showOpenDialog` in `newSession(cwd|null)`. |
 | `AGENT_WORKSPACE_TEST_PICKER_CANCEL` | test mode | Every folder dialog routed through `src/main/dialogs.ts openFolderDialog` returns canceled immediately; the options are recorded for the `lastOpenDialogOptions()` test hook. The in-app remote folder prompt (`src/main/folderPrompt.ts promptRemoteFolder`) is cancelled the same way; its `{title, hostId, start, hosts}` are recorded for `lastFolderPrompt()`. |
-| `AGENT_WORKSPACE_TEST_SSH_CMD` | test mode | Full command line replacing `ssh.exe` for *every* ssh invocation (probe, env capture, deploy, helper launch, spawn, pty, hook curl). `launchApp` defaults it to `node out/fixtures/fakeSsh.cjs` with `FAKE_SSH_ROOT=<temp>` (and `hosts.ssh` is empty unless a spec adds a host), so no spec reaches a real host. The fake (`tests/fixtures/fakeSsh.ts`) parses `ssh [opts] <alias> -- <remote>`, splits the ONE remote string with a POSIX word splitter (sshQuote's forms), honours a leading `cd <dir> &&` and `exec`, then runs the argv on the same fake remote side as fakeWsl (`tests/fixtures/fakeHostRunner.ts`: probe line, env capture + `__DW_CLI__` lookups, byte-gated deploy, a real helper child, `/usr/bin/printf '%s\n'`, claude) — no real shell is needed. Knobs: `FAKE_SSH_ROOT` (remote fs root; default `FAKE_WSL_ROOT`), `FAKE_SSH_HOME` (default `/home/u`), `FAKE_SSH_LOG` (appends `{argv, alias, tty, reverse, remote}` per call), `FAKE_SSH_FAIL=1` (every connection exits 255), `FAKE_SSH_HOSTS` (comma list of known aliases; others exit 255); the `FAKE_WSL_*` remote knobs (`NO_NODE`, `NODE_VERSION`, `NO_CLAUDE`, `CLAUDE_CMD`, `HELPER_HANG`, …) apply too; its `curl` does a real GET (the hook listener is on loopback, as `-R` would make it). |
+| `AGENT_WORKSPACE_TEST_SSH_FORWARD_BACKOFF_MS` / `AGENT_WORKSPACE_TEST_SSH_RECOVERY_MS` | test mode | Replace the ssh hook-forward restart delays (10 s / 60 s / 300 s) / the 5-min ssh recovery interval. |
+| `AGENT_WORKSPACE_TEST_SSH_CMD` | test mode | Full command line replacing `ssh.exe` for *every* ssh invocation (probe, env capture, deploy, helper launch, spawn, pty, hook curl). `launchApp` defaults it to `node out/fixtures/fakeSsh.cjs` with `FAKE_SSH_ROOT=<temp>` (and `hosts.ssh` is empty unless a spec adds a host), so no spec reaches a real host. The fake (`tests/fixtures/fakeSsh.ts`) parses `ssh [opts] <alias> -- <remote>`, splits the ONE remote string with a POSIX word splitter (sshQuote's forms), honours a leading `cd <dir> &&` and `exec`, then runs the argv on the same fake remote side as fakeWsl (`tests/fixtures/fakeHostRunner.ts`: probe line, env capture + `__DW_CLI__` lookups, byte-gated deploy, a real helper child, `/usr/bin/printf '%s\n'`, claude) — no real shell is needed. Knobs: `FAKE_SSH_ROOT` (remote fs root; default `FAKE_WSL_ROOT`), `FAKE_SSH_HOME` (default `/home/u`), `FAKE_SSH_LOG` (appends `{argv, alias, tty, reverse, remote}` per call), `FAKE_SSH_FAIL=1` (every connection exits 255), `FAKE_SSH_FAIL_FILE` (same while that file exists — network down, then back), `FAKE_SSH_HOSTS` (comma list of known aliases; others exit 255), `FAKE_SSH_FORWARD_FAIL=1` (the `-N` hook forward exits 255 — a squatted port; otherwise it stays up as a no-op), and the staged env of the run scripts (stdin line / env file) is decoded with only its KEYS appended to `FAKE_SSH_LOG` as `{stagedEnvKeys}`; the `FAKE_WSL_*` remote knobs (`NO_NODE`, `NODE_VERSION`, `NO_CLAUDE`, `CLAUDE_CMD`, `HELPER_HANG`, …) apply too; its `curl` does a real GET (the hook listener is on loopback, as `-R` would make it). |
 | `AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_CMD` | test mode | Whole command, e.g. `node out/fixtures/fakeClaudeAgents.cjs` — replaces the `claude` binary for background agents; the fake prints `FAKE_CLAUDE_AGENTS` for `agents --json --all` and appends `stop <id>` to `FAKE_CLAUDE_AGENTS_LOG`. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS` | test mode | Background-agent poll interval. |
 | `AGENT_WORKSPACE_TEST_HELPER_SILENCE_MS` | test mode | Replaces the helper channel's 15 s silence-before-ping; the kill threshold becomes 3x this value (the 15 s / 45 s ratio). |
@@ -617,17 +618,40 @@ variable that selects it.
   lower case everywhere (`sshHost`/`parseSshUri`/`canonicalSshAlias` in `core/execHost.ts`). Path form `ssh://<alias>/<abs>` is the stored identity of
   ssh workspaces/cwds (`normalizeWorkspacePath` canonicalises it at every input boundary; a malformed `ssh:` path throws
   `INVALID_SSH_PATH_MESSAGE` — never `resolve()`d). No enumeration: configured + enabled is the channel's `canSpawn`; the lazy probe is one
-  `ssh -T <alias> -- exec /bin/sh -c <probe line>` (exit 255 = connection failed → row `error`, no retry until Re-check) + one login-shell run
+  `ssh -T <alias> -- exec /bin/sh -c <probe line>` (exit 255 = connection failed → row `error`, automatic retry only for connection-class failures, below) + one login-shell run
   (`sshEnvSpec`: env, node, `claude`/`devin`/`gh` paths, `claude --version`) + the byte-gated stdin deploy; the channel launch is
-  `sshHelperSpec(…, hookPort)` → `-R <port>:127.0.0.1:<port>` so remote hooks reach the Windows listener (hooks block URLs stay 127.0.0.1; the
-  `hooks` status is a remote `curl` through the forward once per ready). Spawns replay the helper's `env.get` through `sshReplayEnv` (drops
-  `SSH_ENV_DENYLIST` + an sshd `SSH_AUTH_SOCK` under `/tmp/ssh-`) — a non-interactive ssh command sources no rc files; ptys use `-t` + the login
-  shell. csh/tcsh login shells are refused (`UNSUPPORTED_SHELL_MESSAGE`, `#sshShellHint-<id>`; Overrides → Shell fixes it). Claude only: Devin Local
+  `sshHelperSpec` (no `-R`). Every ssh.exe argv starts `-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10`; ssh.exe is spawned by
+  absolute path (first `where.exe` line via `%SystemRoot%\System32\where.exe`, else `%SystemRoot%\System32\OpenSSH\ssh.exe`; `/usr/bin/ssh`
+  elsewhere) — never a bare-name search.
+  - Hook forward (fix round 1 #1): its own connection per host, `sshForwardSpec` = `-o ExitOnForwardFailure=yes -N -T -R
+    127.0.0.1:<p>:127.0.0.1:<p> <alias>`, started when the channel is ready; a squatted remote port ends it (exit 255) — fail closed — and it
+    restarts after 10 s → 60 s → 300 s (`AGENT_WORKSPACE_TEST_SSH_FORWARD_BACKOFF_MS`). Trust needs the challenge: a fresh 128-bit nonce, a remote
+    `curl -s -m 2 http://127.0.0.1:<p>/agent-workspace/hook/health?nonce=<n>` through the forward, and the body must equal
+    HMAC-SHA256(token, nonce) (`src/main/claude/hookChallenge.ts`; the listener answers that route, the plain `health` route stays `{}` for the
+    WSL probe). Until verified: `HostStatus.hooks` `unreachable` + the `hooks` host-error part (`FORWARD_FAILED_MESSAGE` /
+    `FORWARD_UNVERIFIED_MESSAGE`, shown in Settings `[data-host-errors]` and the Claude sidebar), `sessions.hookInjection` returns null for that
+    host's ptys (no `--settings`, no token), and `hooks.ts` applies the block with `enabled:false` there (removal) — `hosts().hookForwardVerified(id)`.
+  - Secrets off argv (fix round 1 #4): the captured login env is never replayed. A piped spawn is `sshSpawnSpec` = `exec /bin/sh -c
+    SSH_RUN_STDIN_SCRIPT <body> <cwd> <shell> <cmd> <args…>`; `spawnOn` writes `sshEnvLine(cmd.env)` (base64 of `export K='v'` lines) as the
+    first stdin line, which the script reads (`IFS= read -r`, byte-wise on a pipe), `eval`s, then `cd`s and execs the CLI through the login
+    shell `-ilc` (PATH/nvm from rc files). A pty is `sshPtySpec` (`-t`, `SSH_RUN_FILE_SCRIPT`): its env (the hook token) is staged first through the
+    helper's `env.stage {vars}` → `<home>/.agent-workspace/run/<32 hex>` (dir 0700, file 0600, `O_EXCL`, ≤64 vars / 64 KB, files older than 1 h
+    swept; `src/helper/envStage.ts`); only that path is in argv and the script sources then deletes it. Without a ready channel an ssh pty that
+    needs env is refused (`hosts().remotePtySpawnSpec` is async; `ptySpawnSpec` throws for ssh).
+  - Recovery (fix round 1 #3): `sshFailureClass` — exit 255 or a timeout/kill = `connection`, anything else `other`. `SshHosts.recover(trigger)`
+    re-probes hosts in `error` with a connection-class probe failure, resets a `degraded` channel whose helper died for a connection reason, and
+    restarts a backing-off forward; triggers: powerMonitor `resume` / `unlock-screen` (`hosts().recoverSsh`), window focus
+    (`hosts().onWindowFocus`) — throttled to 1/min (`sshRecoveryDue`) — and an unthrottled 5-min timer
+    (`AGENT_WORKSPACE_TEST_SSH_RECOVERY_MS`). Shell/node/helper failures stay until Re-check. csh/tcsh login shells are refused (`UNSUPPORTED_SHELL_MESSAGE`, `#sshShellHint-<id>`; Overrides → Shell fixes it). Claude only: Devin Local
   refuses `ssh://` workspaces; Reveal transcript / Reveal in Explorer / Open terminal here are hidden for ssh. Every ssh.exe run logs
   `host-ssh {aliasHash, op}` + `host-exec`; `log()` (`src/main/log.ts`, pure `core/sshLog.ts scrubSshAliases`) rewrites any `ssh:<alias>` /
-  `ssh://<alias>` in a record to `ssh:#<sha256-8>` — the alias never reaches the event log. IPC: `hosts:sshAdd {alias}` (validated + lower-cased →
+  `ssh://<alias>` in a record to `ssh:#<sha256-8>` — the alias never reaches the event log. `hosts.ssh` (M4): `sanitizeSshHostList` lower-cases
+  aliases and drops only malformed entries / later duplicates; `serializeSettingsFile` appends the dropped raw entries back (ux3 S6). Claude's
+  `settings.json` (local `hooksInstall.ts` and the helper's `hooks.apply`) is written 0600 — tmp file and one-time backup — or a stricter existing
+  mode (`secureFileMode` in `core/hooksApply.ts`). IPC: `hosts:sshAdd {alias}` (validated + lower-cased →
   `LocalResult<HostId>`), `hosts:sshRemove {id}`, `hosts:readdir` (`HostReaddirSchema {hostId, path}` → helper `fs.readdir`: directories only,
-  sorted, ≤500 + `truncated`), `hosts:folderPromptResolve` (send; `FolderPromptResolveArg`). Settings → General `#hostsBlock`: `#sshHostAdd` →
+  sorted, ≤500 + `truncated`), `hosts:folderPromptResolve` (send; `FolderPromptResolveArg`; M6: main `fs.stat`s the folder over the channel — missing / not a directory
+  keeps the prompt open with `ShellState.folderPrompt.error` → `#remoteFolderPromptError`). Settings → General `#hostsBlock`: `#sshHostAdd` →
   `#sshHostAliasInput` + `#sshHostAddConfirm` (`#sshHostAliasInputError`), rows `[data-host-id="ssh:<alias>"]` with `[data-host-enabled]` and
   `[data-host-remove]`. RemoteFolderInput (`src/shell/components/RemoteFolderInput.tsx`): the prompt `ShellState.folderPrompt
   {id,title,hostId,start,hosts}` raises the shell (`overlayOpen`) — `#remoteFolderPrompt`, `#remoteFolderHost`, `#remoteFolderInput`,
@@ -672,8 +696,8 @@ variable that selects it.
   `[data-host-helper=<state>]` and `#hostHelperHint-<id>` for node-missing / unsupported-node.
 - Settings: `hosts.{wslEnabled,wslDistros:null|auto,overrides[id].{claudePath,devinPath,home,shell,envCaptureDisabled},ssh:{alias,enabled}[]}`
   (`hosts.ssh`: P3, canonical lower-case aliases matching `SSH_ALIAS_CANONICAL_RE`, max 50; `SETTINGS_PRESERVE_SPEC` keeps it as an array by
-  `alias` — unknown per-entry fields survive; an invalid alias drops the whole `hosts.ssh` leaf in memory (`settings-repaired`), the raw list is
-  written back until touched); the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`). The default-distro select moved to the per-surface keys `local.defaultWslDistro` / `claude.defaultWslDistro` (see Settings keys) — `hosts.defaultWslDistro` is migrated away on load.
+  `alias` — unknown per-entry fields survive; aliases are lower-cased on load and a malformed entry drops alone
+  (`sanitizeSshHostList`) — its raw form is always written back after the valid ones); the Settings → General `#hostsBlock` lists every distro (enabled rows probed, others `stopped`/`disabled`). The default-distro select moved to the per-surface keys `local.defaultWslDistro` / `claude.defaultWslDistro` (see Settings keys) — `hosts.defaultWslDistro` is migrated away on load.
 
 ### Deferrals closed (landed Phase 6)
 - Subagent transcripts under a session row — `claude:subagents` (`loadSubagents`, lazy + cached, invalidated at turn end and on watch changes, title =
@@ -769,6 +793,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `lastOpenDialogOptions()` | The options of the most recent `openFolderDialog` call (recorded in test mode). |
 | `lastFolderPrompt()` | `{title, hostId, start, hosts}` of the most recent in-app remote folder prompt (P3; null before one opened). |
 | `hostSshAdd(alias)` | `hosts().addSshHost(alias)` — the `hosts:sshAdd` path (validation + lower-casing) without the Settings UI. |
+| `hostSshRecover(trigger)` / `hostHookForwardVerified(id)` | Run the ssh connection-failure recovery now (unthrottled) / whether that ssh host's hook forward passed the challenge. |
 | `hostHelperKill(id)` / `hostChannelState(id)` | Kill the host's live helper child (reconnect path) / the channel snapshot `{state, watchMode, failures, open, pending, running}` (null before a channel exists). |
 | `hostEnumerateIfStale()` | The background-check re-list: runs `wsl -l -v` only when the cached table is older than `ENUM_FRESH_MS` (inside a failure backoff it is a no-op). |
 | `remoteFsViolations()` | App `fs` calls on a WSL path the remote-fs guard saw since start (both modes); `launchApp` teardown asserts 0. |
@@ -851,7 +876,10 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `claude-store-list` | `{ host, count, ms }` — one full `store.list` over a WSL host's helper channel (the soak's per-distro list timing). |
 | `claude-patch` | `{ host, updated, removed }` — a `store.changed` delta applied to that host's rows without a list. |
 | `host-exec` | `{ host, kind: 'enum'\|'probe'\|'env'\|'exec'\|'spawn'\|'helper' }` — one per `wsl.exe` invocation (enumeration incl. the WSL-disabled lazy `-l -q` for Windows Terminal profiles, probe/CLI resolution/hook curl, env capture, `execOn`, `spawnOn`, pty spawn, each `ghSpec` use, each helper channel launch = `helper`; `claude agents` on a WSL host runs inside the helper and is not counted) so a soak can count them; ids and enums only. |
-| `host-ssh` | `{ aliasHash, op }` (P3) — `aliasHash` = sha256-8 of the canonical alias (the alias is never logged); `op` = `probe\|env\|deploy\|helper\|hooks\|hooks-off\|exec\|spawn\|pty` per ssh.exe invocation (plus `add`/`remove` from Settings). Every other record's `ssh:<alias>` / `ssh://<alias>` (e.g. `host-exec`/`host-helper` `host`) is written as `ssh:#<aliasHash>`. |
+| `host-ssh` | `{ aliasHash, op }` (P3) — `aliasHash` = sha256-8 of the canonical alias (the alias is never logged); `op` = `probe\|env\|deploy\|helper\|forward\|challenge\|hooks-off\|exec\|spawn\|pty` per ssh.exe invocation (plus `add`/`remove` from Settings). Every other record's `ssh:<alias>` / `ssh://<alias>` (e.g. `host-exec`/`host-helper` `host`) is written as `ssh:#<aliasHash>`. |
+| `host-ssh-forward` | `{ host, state: 'starting'\|'verified'\|'unverified'\|'down', code?, failures?, attempts? }` — the ssh hook-forward connection (host id scrubbed to `ssh:#<hash>`). |
+| `host-probe` | `{ host, ok, ms, claude?, devin?, hooks?, reason?, failure? }` — one host probe; a failed ssh probe adds `failure: 'connection'\|'other'` (the recovery input), a refused csh/tcsh shell `reason: 'shell'`. |
+| `host-ssh-recover` | `{ trigger: 'resume'\|'unlock'\|'focus'\|'timer', count }` — ssh hosts retried after a connection-class failure (only logged when count > 0). |
 | `remote-fs-violation` | `{ op }` (e.g. `readFileSync`, `promises.stat`) — once per op per run: an app `fs` call hit a `\\wsl.localhost` / `\\wsl$` / `ssh://` path (or the test UNC root). Production passes the call through; test mode throws `RemoteFsViolation` after logging. Never the path. |
 | `host-helper` | `{ host, state, reason? }` — helper channel state change; `state` = `starting\|ready\|reconnecting\|degraded`, `reason` = `spawn\|hello\|exit\|spawn-error\|hello-timeout\|silence\|protocol\|redeploy\|redeploy-failed\|stopped\|reset\|breaker\|distro-unavailable\|hash-mismatch\|crash-loop`. |
 | `host-helper-wake` | `{ host, gapMs }` — a watchdog tick after a sleep/resume clock jump; the silence clock restarted instead of killing the helper. |

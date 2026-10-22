@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -39,14 +39,24 @@ const FAKE_PTY = `node ${join(process.cwd(), 'out/fixtures/fakePty.cjs')}`;
 const STORE_ID = '55555555-0000-4000-8000-000000000055';
 const ALIAS_HASH = createHash('sha256').update('box').digest('hex').slice(0, 8);
 
-type SshCall = { argv: string[]; alias: string; tty: boolean; reverse: string | null; remote: string };
-const sshCalls = (log: string): SshCall[] =>
+type SshCall = { argv: string[]; alias: string; tty: boolean; reverse: string | null; forward: boolean; remote: string };
+const logLines = (log: string): Record<string, unknown>[] =>
   existsSync(log)
     ? readFileSync(log, 'utf8')
         .split('\n')
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as SshCall)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
     : [];
+const sshCalls = (log: string): SshCall[] => logLines(log).filter((l) => Array.isArray(l.argv)) as SshCall[];
+/** KEYS of env the fake ssh decoded from a run script's stdin line / staged file (values are never logged). */
+const stagedEnvKeys = (log: string): string[][] =>
+  logLines(log)
+    .filter((l) => Array.isArray(l.stagedEnvKeys))
+    .map((l) => l.stagedEnvKeys as string[]);
+const hookInfo = (app: ElectronApplication) =>
+  app.evaluate(() => (globalThis as any).__agentworkspace.claudeHookInfo()) as Promise<{ port: number; token: string } | null>;
+const forwardVerified = (app: ElectronApplication) =>
+  app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHookForwardVerified(id), HOST) as Promise<boolean>;
 
 const transcriptLine = (id: string, cwd: string, text: string): string =>
   JSON.stringify({
@@ -135,12 +145,13 @@ test('add ssh host → helper ready → sessions listed with host chip', async (
     expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const call of calls) {
       expect(call.alias).toBe('box');
-      expect(call.argv.slice(0, 4)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15']);
       expect(call.argv).toContain('-T');
       expect(call.tty).toBe(false);
     }
     expect(calls.some((c) => c.remote.includes('mkdir -p "$1"'))).toBe(true);
     expect(calls.some((c) => c.remote.includes('exit 86;'))).toBe(true);
+    // Every invocation bounds the connect (fix round 1 #3).
+    for (const call of calls) expect(call.argv.slice(0, 6)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10']);
     await expect(shell.locator(`[data-host-id="${HOST}"] [data-host-helper]`)).toHaveAttribute('data-host-helper', 'ready');
 
     // The remote transcript lists over the channel as an ssh-host row.
@@ -157,7 +168,7 @@ test('add ssh host → helper ready → sessions listed with host chip', async (
   }
 });
 
-test('claude chat on an ssh workspace spawns via ssh -T with the quoted cwd', async () => {
+test('claude chat on an ssh workspace spawns via ssh -T with the quoted cwd — no env values in argv', async () => {
   const { app, root, sshLog, logFile } = await launchSsh({
     AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
     FAKE_CLAUDE_SPAWN: '1',
@@ -187,11 +198,15 @@ test('claude chat on an ssh workspace spawns via ssh -T with the quoted cwd', as
     expect(spawned.argv).toContain('-T');
     expect(spawned.tty).toBe(false);
     expect(spawned.argv.slice(spawned.argv.indexOf('box'), spawned.argv.indexOf('box') + 2)).toEqual(['box', '--']);
-    expect(spawned.remote.startsWith(`cd '/home/u/my proj' && exec /usr/bin/env `)).toBe(true);
-    expect(spawned.remote).toContain(`'CLAUDE_CODE_ENTRYPOINT=sdk-ts'`);
-    // The login env from the helper's env.get is replayed (no rc files run).
-    expect(spawned.remote).toContain(`'FAKE_WSL_HELPER=1'`);
-    expect(spawned.remote).toContain(`'/home/u/.local/bin/claude' '--fake-sdk-spawn'`);
+    // /bin/sh → the login shell; cwd and argv are quoted words.
+    expect(spawned.remote.startsWith(`exec '/bin/sh' '-c' `)).toBe(true);
+    expect(spawned.remote).toContain(`'/home/u/my proj' '/bin/bash' '/home/u/.local/bin/claude' '--fake-sdk-spawn'`);
+    // Fix round 1 #4: no env on the command line — neither the SDK's additions
+    // nor the captured login env; they arrive on stdin (keys logged by the fake).
+    for (const leaked of ['CLAUDE_CODE_ENTRYPOINT', 'sdk-ts', 'FAKE_WSL_HELPER', 'PATH=', 'HOME=']) {
+      expect(spawned.argv.join(' ')).not.toContain(leaked);
+    }
+    await expect.poll(() => stagedEnvKeys(sshLog).some((keys) => keys.includes('CLAUDE_CODE_ENTRYPOINT'))).toBe(true);
     await expect
       .poll(async () =>
         ((await app.evaluate(() => (globalThis as any).__agentworkspace.claudeChatState())) as {
@@ -206,11 +221,14 @@ test('claude chat on an ssh workspace spawns via ssh -T with the quoted cwd', as
   }
 });
 
-test('terminal uses ssh -t', async () => {
-  const { app } = await launchSsh({ AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY });
+test('terminal uses ssh -t; the hook token is staged, never in argv', async () => {
+  const { app, root } = await launchSsh({ AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY });
   try {
+    await expect.poll(() => hookInfo(app), { timeout: 15_000 }).not.toBeNull();
+    const { token } = (await hookInfo(app))!;
     await addSsh(app, 'box');
     await helperReady(app);
+    await expect.poll(() => forwardVerified(app), { timeout: 20_000 }).toBe(true);
     const id = (await app.evaluate(
       (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
       'ssh://box/home/u/proj',
@@ -226,10 +244,22 @@ test('terminal uses ssh -t', async () => {
         (_e, tid: string) => (globalThis as any).__agentworkspace.terminalRead(tid),
         opened.id!,
       ) as Promise<string>;
-    await expect.poll(read).toContain('-o BatchMode=yes -o ServerAliveInterval=15 -t box --');
-    await expect.poll(read).toContain(`cd '/home/u/proj' && exec '/bin/bash' -ilc 'exec "$0" "$@"' '/usr/bin/env'`);
-    await expect.poll(read).toContain(`'/home/u/.local/bin/claude'`);
-    expect(await read()).not.toContain(' -T ');
+    await expect.poll(read).toContain('-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10 -t box --');
+    await expect.poll(read).toContain(`exec '/bin/sh' '-c' `);
+    await expect.poll(read).toContain(`'/home/u/proj' '/bin/bash' '/home/u/.local/bin/claude'`);
+    // Verified forward → hooks injected: the --settings flag names only the
+    // env var; the token itself sits in a staged 0600 file whose path is the
+    // one thing in argv.
+    await expect.poll(read).toContain('--settings');
+    const text = await read();
+    expect(text).not.toContain(' -T ');
+    expect(text).not.toContain(token);
+    const staged = /'\/home\/u\/\.agent-workspace\/run\/([0-9a-f]{32})'/.exec(text);
+    expect(staged).not.toBeNull();
+    // The fake pty never runs the remote script, so the staged file is still there.
+    const stagedFile = join(root, 'home', 'u', '.agent-workspace', 'run', staged![1]!);
+    expect(readFileSync(stagedFile, 'utf8')).toContain(`export AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN='${token}'`);
+    if (process.platform !== 'win32') expect(statSync(stagedFile).mode & 0o777).toBe(0o600);
   } finally {
     await closeApp(app);
   }
@@ -274,6 +304,13 @@ test('RemoteFolderInput autocompletes via the channel and returns ssh://box/<pat
     await expect(shell.locator('#remoteFolderPrompt')).toBeVisible();
     await expect(shell.locator('#remoteFolderHost')).toHaveValue(HOST);
     await expect(shell.locator('#remoteFolderInput')).toHaveValue('/home/u/');
+    // M6: a folder that is not there is refused with a message; the prompt stays.
+    await shell.locator('#remoteFolderInput').fill('/home/u/projects/nope');
+    await shell.locator('#remoteFolderConfirm').click();
+    await expect(shell.locator('#remoteFolderPromptError')).toHaveText('That folder does not exist on the host');
+    await shell.locator('#remoteFolderInput').fill('/home/u/projects/afile.txt');
+    await shell.locator('#remoteFolderConfirm').click();
+    await expect(shell.locator('#remoteFolderPromptError')).toHaveText('That path is not a folder');
     await shell.locator('#remoteFolderInput').fill('/home/u/projects/a');
     const options = shell.locator('[data-remote-folder-option]');
     await expect(options).toHaveCount(2);
@@ -365,10 +402,15 @@ test('hooks reach the listener through -R', async () => {
     await addSsh(app, 'box');
     await helperReady(app);
 
-    // The helper's ssh connection carries the reverse forward to the listener.
+    // Fix round 1 #1: the forward is its own -N connection (ExitOnForwardFailure,
+    // remote-loopback bind); the helper connection carries no -R.
     const launch = sshCalls(sshLog).find((c) => c.remote.includes('exit 86;'))!;
-    expect(launch.reverse).toBe(`${port}:127.0.0.1:${port}`);
-    expect(launch.argv).toEqual(expect.arrayContaining(['-T', '-R', `${port}:127.0.0.1:${port}`]));
+    expect(launch.reverse).toBeNull();
+    await expect.poll(() => sshCalls(sshLog).find((c) => c.forward) ?? null).not.toBeNull();
+    const forward = sshCalls(sshLog).find((c) => c.forward)!;
+    expect(forward.reverse).toBe(`127.0.0.1:${port}:127.0.0.1:${port}`);
+    expect(forward.argv).toEqual(expect.arrayContaining(['-N', '-o', 'ExitOnForwardFailure=yes']));
+    expect(forward.remote).toBe('');
 
     // hooks.apply wrote the remote settings.json with loopback URLs.
     const settingsFile = join(root, 'home', 'u', '.claude', 'settings.json');
@@ -380,9 +422,11 @@ test('hooks reach the listener through -R', async () => {
     expect(stop.url).toBe(`http://127.0.0.1:${port}/agent-workspace/hook/Stop`);
     expect(stop.headers.Authorization).toBe(`Bearer ${token}`);
 
-    // The remote reachability probe (curl over ssh, through the forward) says ok.
+    // The challenge (a remote curl of health?nonce= through the forward,
+    // answered with HMAC(token, nonce)) verified the forward.
     await expect.poll(async () => (await hostRow(app))?.hooks, { timeout: 15_000 }).toBe('ok');
-    expect(sshCalls(sshLog).some((c) => c.remote.startsWith(`exec 'curl'`))).toBe(true);
+    expect(sshCalls(sshLog).some((c) => c.remote.startsWith(`exec 'curl'`) && c.remote.includes('health?nonce='))).toBe(true);
+    expect(await forwardVerified(app)).toBe(true);
 
     // A hook posted to that URL (what the remote CLI does via -R) lands.
     const body = JSON.stringify({ session_id: STORE_ID, hook_event_name: 'Stop' });
@@ -403,6 +447,64 @@ test('hooks reach the listener through -R', async () => {
       .poll(async () => (await readEvents(logFile)).some((e) => e.event === 'claude-hook' && (e.detail as { event?: string }).event === 'Stop'))
       .toBe(true);
     await expectAliasNeverLogged(logFile);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('a squatted hook port (forward fails closed) → no hook injection in an ssh pty, hooks unreachable, no hooks block', async () => {
+  const { app, root, sshLog } = await launchSsh({
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY,
+    FAKE_SSH_FORWARD_FAIL: '1',
+    AGENT_WORKSPACE_TEST_SSH_FORWARD_BACKOFF_MS: '60000',
+  });
+  try {
+    await expect.poll(() => hookInfo(app), { timeout: 15_000 }).not.toBeNull();
+    const shell = await shellPage(app);
+    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { hooksEnabled: true } }));
+    await addSsh(app, 'box');
+    await helperReady(app);
+    await expect.poll(() => sshCalls(sshLog).some((c) => c.forward), { timeout: 15_000 }).toBe(true);
+    await expect.poll(async () => (await hostRow(app))?.hooks, { timeout: 15_000 }).toBe('unreachable');
+    expect(await forwardVerified(app)).toBe(false);
+    const errors = ((await state(app)) as unknown as { claude: { hostErrors: Record<string, string> } }).claude.hostErrors;
+    expect(errors[HOST]).toContain('Hooks unavailable');
+    // The remote settings.json never got our block.
+    const settingsFile = join(root, 'home', 'u', '.claude', 'settings.json');
+    if (existsSync(settingsFile)) expect(readFileSync(settingsFile, 'utf8')).not.toContain('/agent-workspace/hook/');
+    const id = (await app.evaluate(
+      (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
+      'ssh://box/home/u/proj',
+    )) as string;
+    const opened = (await app.evaluate(
+      (_e, sessionId: string) => (globalThis as any).__agentworkspace.claudeTerminalOpen(sessionId),
+      id,
+    )) as { ok: boolean; id?: string };
+    expect(opened.ok).toBe(true);
+    const read = () =>
+      app.evaluate((_e, tid: string) => (globalThis as any).__agentworkspace.terminalRead(tid), opened.id!) as Promise<string>;
+    await expect.poll(read).toContain(`'/home/u/.local/bin/claude'`);
+    const text = await read();
+    expect(text).not.toContain('--settings');
+    expect(text).not.toContain('.agent-workspace/run/');
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('an ssh host whose connection failed recovers on resume once the network is back', async () => {
+  const failFile = join(mkdtempSync(join(tmpdir(), 'agent-workspace-ssh-fail-')), 'down');
+  writeFileSync(failFile, '');
+  const { app, logFile } = await launchSsh({ FAKE_SSH_FAIL_FILE: failFile });
+  try {
+    await addSsh(app, 'box');
+    await expect.poll(async () => (await hostRow(app))?.state, { timeout: 30_000 }).toBe('error');
+    expect((await hostRow(app))?.error).toContain('exit 255');
+    rmSync(failFile);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.hostSshRecover('resume'));
+    await helperReady(app);
+    const recovered = (await readEvents(logFile)).filter((e) => e.event === 'host-ssh-recover');
+    expect(recovered.map((e) => e.detail)).toContainEqual({ trigger: 'resume', count: 1 });
   } finally {
     await closeApp(app);
   }

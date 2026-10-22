@@ -7,7 +7,7 @@ import './remoteFsGuardInstall';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { app, BaseWindow, dialog, Menu, screen, session, webContents, WebContentsView } from 'electron';
+import { app, BaseWindow, dialog, Menu, powerMonitor, screen, session, webContents, WebContentsView } from 'electron';
 import { clampFraction01 } from '../core/layout';
 import { auditCookies, startCookieAudit } from './cookieAudit';
 import { CredentialStore } from './credentials';
@@ -455,6 +455,10 @@ async function createWindow(): Promise<void> {
     hosts().onWindowFocus();
     updateOnWindowFocus();
   });
+  // ssh hosts whose connection failed (sleep / network change) retry on wake
+  // (throttled ≤1/min in hosts().recoverSsh).
+  powerMonitor.on('resume', () => hosts().recoverSsh('resume'));
+  powerMonitor.on('unlock-screen', () => hosts().recoverSsh('unlock'));
   state.windowRef.on('close', (event) => {
     // Post-shutdown lifecycle: app.quit() closes the window again — let it.
     if (state.shutdownComplete) return;

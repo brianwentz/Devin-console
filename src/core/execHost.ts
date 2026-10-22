@@ -282,35 +282,6 @@ export function mergeShellEnv(
   return out;
 }
 
-/** Per-connection variables sshd sets for the helper's own session — never
- * replayed into another ssh connection. */
-export const SSH_ENV_DENYLIST: ReadonlySet<string> = new Set([
-  'SSH_CONNECTION',
-  'SSH_CLIENT',
-  'SSH_TTY',
-  'SSH_ORIGINAL_COMMAND',
-  'XDG_SESSION_ID',
-  'XDG_SESSION_TYPE',
-  'XDG_SESSION_CLASS',
-  'MOTD_SHOWN',
-]);
-
-/**
- * The helper's login env → the env an ssh spawn replays (a non-interactive
- * `ssh … -- cmd` sources no rc files, so PATH/nvm come from here): the WSL
- * denylist plus SSH_ENV_DENYLIST, and an `SSH_AUTH_SOCK` sshd created for the
- * helper's connection (`/tmp/ssh-…`, gone with it); `extra` wins.
- */
-export function sshReplayEnv(captured: Record<string, string>, extra: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(mergeShellEnv(captured, {}))) {
-    if (SSH_ENV_DENYLIST.has(key)) continue;
-    if (key === 'SSH_AUTH_SOCK' && value.startsWith('/tmp/ssh-')) continue;
-    out[key] = value;
-  }
-  return { ...out, ...extra };
-}
-
 /** The helper's `env.get` result → a spawnable env: string values under valid
  * keys only, minus WSL_ENV_DENYLIST. */
 export function sanitizeEnv(raw: unknown): Record<string, string> {
@@ -585,7 +556,8 @@ export function helperDeploySpec(host: ExecHost, home: string, hash: string, byt
 // is quoted with sshQuote. The string parses identically under POSIX shells
 // and fish.
 
-const SSH_BASE_ARGS = ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15'];
+// ConnectTimeout bounds a dead network (fix round 1 #3); BatchMode never prompts.
+const SSH_BASE_ARGS = ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10'];
 
 /**
  * posixQuote, plus backslash handling: fish treats `\\` and `\'` as escapes
@@ -611,15 +583,8 @@ function assertAbs(p: string, what: string): void {
 }
 
 function assertCmd(cmd: string): void {
-  // A leading '-' would be read as an option by /usr/bin/env.
+  // A leading '-' would be read as an option by the exec'ing shell.
   if (!cmd || cmd.startsWith('-')) throw new Error('ssh: invalid command');
-}
-
-function sshEnvWords(env: Record<string, string>): string[] {
-  for (const key of Object.keys(env)) {
-    if (!ENV_KEY.test(key)) throw new Error('ssh: invalid env key');
-  }
-  return kvPairs(env).map(sshQuote);
 }
 
 function sshSpec(alias: string, flags: string[], remote: string): HostSpawnSpec {
@@ -627,25 +592,68 @@ function sshSpec(alias: string, flags: string[], remote: string): HostSpawnSpec 
   return { file: 'ssh.exe', args: [...SSH_BASE_ARGS, ...flags, alias, '--', remote], cwd: null };
 }
 
-/** ssh counterpart of spawnSpec: `cd <cwd> && exec /usr/bin/env K=V… <cmd> <args…>`. `env` is the already merged env. */
-export function sshSpawnSpec(
-  alias: string,
-  cwd: string,
-  env: Record<string, string>,
-  cmd: string,
-  args: string[],
-): HostSpawnSpec {
-  assertAbs(cwd, 'cwd');
-  assertCmd(cmd);
-  const words = [...sshEnvWords(env), sshQuote(cmd), ...args.map(sshQuote)];
-  return sshSpec(alias, ['-T'], `cd ${sshQuote(cwd)} && exec /usr/bin/env ${words.join(' ')}`);
+/**
+ * Env for an ssh spawn/pty (fix round 1 #4): only the app's own additions
+ * (SDK vars, the hook token) — never the captured login env — as `export
+ * K='v'` lines. They never appear in any argv: a piped spawn sends them
+ * base64'd as the first stdin line (sshEnvLine), a pty sources a 0600 file the
+ * helper staged (`env.stage`) and only that random path is in argv.
+ */
+export function sshEnvFileContent(env: Record<string, string>): string {
+  return Object.keys(env)
+    .sort()
+    .map((key) => {
+      if (!ENV_KEY.test(key)) throw new Error('ssh: invalid env key');
+      if (env[key]!.includes('\0')) throw new Error('ssh: NUL in env value');
+      return `export ${key}=${posixQuote(env[key]!)}\n`;
+    })
+    .join('');
 }
 
-/** ssh counterpart of ptySpec: forced tty, interactive login shell `exec`ing the CLI. */
+const base64Utf8 = (text: string): string => {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+};
+
+/** The first stdin line of an sshSpawnSpec child: base64 of sshEnvFileContent (empty line = no env). */
+export function sshEnvLine(env: Record<string, string>): string {
+  const content = sshEnvFileContent(env);
+  return content ? `${base64Utf8(content)}\n` : '\n';
+}
+
+/** `sh -c` script of sshSpawnSpec — $0 = login-shell body, $1 cwd, $2 shell, rest = argv. Reads the env line from stdin (one byte at a time on a pipe, so the CLI keeps the rest of stdin). */
+export const SSH_RUN_STDIN_SCRIPT =
+  'IFS= read -r e || exit 97; if [ -n "$e" ]; then eval "$(printf %s "$e" | base64 -d)" || exit 97; fi; ' +
+  'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
+
+/** `sh -c` script of sshPtySpec — $0 body, $1 staged env file ('' = none, removed after sourcing), $2 cwd, $3 shell, rest = argv. */
+export const SSH_RUN_FILE_SCRIPT =
+  'f="$1"; shift; if [ -n "$f" ]; then set -a; . "$f" || exit 97; set +a; rm -f "$f"; fi; ' +
+  'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
+
+const loginBody = (shell: string): string => (shellFamily(shell) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"');
+
+/**
+ * ssh counterpart of spawnSpec: `/bin/sh` (any login shell may be fish) reads
+ * the env line from stdin, `cd`s and execs the CLI through the user's
+ * interactive login shell (PATH/nvm come from it — the captured env is never
+ * replayed). The caller writes sshEnvLine(env) to the child's stdin first.
+ */
+export function sshSpawnSpec(alias: string, cwd: string, shell: string, cmd: string, args: string[]): HostSpawnSpec {
+  assertAbs(cwd, 'cwd');
+  assertAbs(shell, 'shell');
+  assertCmd(cmd);
+  const words = ['/bin/sh', '-c', SSH_RUN_STDIN_SCRIPT, loginBody(shell), cwd, shell, cmd, ...args].map(sshQuote);
+  return sshSpec(alias, ['-T'], `exec ${words.join(' ')}`);
+}
+
+/** ssh counterpart of ptySpec: forced tty; env (the hook token) from a staged file whose path alone is in argv. */
 export function sshPtySpec(
   alias: string,
   cwd: string,
-  env: Record<string, string>,
+  envFile: string | null,
   cmd: string,
   args: string[],
   shell: string | null,
@@ -653,40 +661,56 @@ export function sshPtySpec(
   const sh = shell ?? '/bin/bash';
   assertAbs(cwd, 'cwd');
   assertAbs(sh, 'shell');
+  if (envFile !== null) assertAbs(envFile, 'env file');
   assertCmd(cmd);
-  const body = shellFamily(sh) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"';
-  const words = [sshQuote('/usr/bin/env'), ...sshEnvWords(env), sshQuote(cmd), ...args.map(sshQuote)];
-  return sshSpec(
-    alias,
-    ['-t'],
-    `cd ${sshQuote(cwd)} && exec ${sshQuote(sh)} -ilc ${sshQuote(body)} ${words.join(' ')}`,
-  );
+  const words = ['/bin/sh', '-c', SSH_RUN_FILE_SCRIPT, loginBody(sh), envFile ?? '', cwd, sh, cmd, ...args].map(sshQuote);
+  return sshSpec(alias, ['-t'], `exec ${words.join(' ')}`);
 }
 
-/** ssh counterpart of helperSpec; `reversePort` adds `-R <p>:127.0.0.1:<p>` so remote hooks reach the Windows listener. */
+/** ssh counterpart of helperSpec (the hook forward is a separate connection: sshForwardSpec). */
 export function sshHelperSpec(
   alias: string,
   home: string,
   shell: string,
   hash: string,
-  reversePort?: number,
   mode: HelperMode = '--stdio',
 ): HostSpawnSpec {
   assertAbs(home, 'home');
   assertAbs(shell, 'shell');
   if (!HELPER_HASH_RE.test(hash)) throw new Error('ssh: invalid helper hash');
-  const flags = ['-T'];
-  if (reversePort !== undefined) {
-    if (!Number.isInteger(reversePort) || reversePort < 1 || reversePort > 65535) {
-      throw new Error('ssh: invalid reverse port');
-    }
-    flags.push('-R', `${reversePort}:127.0.0.1:${reversePort}`);
-  }
   return sshSpec(
     alias,
-    flags,
+    ['-T'],
     `cd ${sshQuote(home)} && exec ${sshQuote(shell)} -ilc ${sshQuote(helperLaunchLine(shell, mode))} ${sshQuote(helperPath(home, hash))}`,
   );
+}
+
+/**
+ * The hook listener's reverse forward on its own connection (fix round 1 #1):
+ * no remote command (`-N`), bound to the remote loopback only, and
+ * `ExitOnForwardFailure` — a port already taken on the remote (squatted)
+ * ends the connection instead of leaving hooks pointed at someone else.
+ */
+export function sshForwardSpec(alias: string, port: number): HostSpawnSpec {
+  assertAlias(alias);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ssh: invalid forward port');
+  return {
+    file: 'ssh.exe',
+    args: [...SSH_BASE_ARGS, '-o', 'ExitOnForwardFailure=yes', '-N', '-T', '-R', `127.0.0.1:${port}:127.0.0.1:${port}`, alias],
+    cwd: null,
+  };
+}
+
+/** A failed ssh run worth retrying on its own (network/sleep): exit 255 or a timeout. Shell/node/helper failures are not. */
+export function sshFailureClass(run: { code: number | null; timedOut: boolean }): 'connection' | 'other' {
+  return run.timedOut || run.code === 255 ? 'connection' : 'other';
+}
+
+export const SSH_RECOVERY_MIN_MS = 60_000;
+
+/** Recovery triggers (resume / unlock / focus) run at most once a minute. */
+export function sshRecoveryDue(lastAt: number | null, now: number, minMs = SSH_RECOVERY_MIN_MS): boolean {
+  return lastAt === null || now - lastAt >= minMs;
 }
 
 /** One plain command on the remote (probe curl, `claude stop`): `exec <argv…>`, every word quoted. */

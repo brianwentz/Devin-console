@@ -17,19 +17,33 @@
 //   FAKE_SSH_HOME   remote home (default /home/u)
 //   FAKE_SSH_LOG    appends {argv, alias, tty, reverse, remote} per invocation
 //   FAKE_SSH_FAIL=1 every connection fails: exit 255 (no output)
+//   FAKE_SSH_FAIL_FILE  same while that file exists (network down, then back)
 //   FAKE_SSH_HOSTS  comma list of known aliases (default: any) — others exit 255
+//   FAKE_SSH_FORWARD_FAIL=1  the `-N -R` hook forward exits 255 (port squatted)
+// The ssh run scripts' staged env (stdin line / env file) is decoded and only
+// its KEYS are appended to FAKE_SSH_LOG as {stagedEnvKeys}.
 // The shared FAKE_WSL_* knobs (NO_NODE, NODE_VERSION, NO_CLAUDE, CLAUDE_CMD,
 // HELPER_HANG, …) apply to the ssh remote too. curl does a REAL GET (the
 // hook listener is on this machine's loopback, as the -R forward would make it).
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { createRunner, STAY_ALIVE } from './fakeHostRunner';
 
 const runner = createRunner({
   root: process.env.FAKE_SSH_ROOT ?? process.env.FAKE_WSL_ROOT ?? '.',
   home: process.env.FAKE_SSH_HOME ?? '/home/u',
   realCurl: true,
+  onStagedEnv: (keys) => logLine({ stagedEnvKeys: keys }),
 });
+
+function logLine(entry: Record<string, unknown>): void {
+  if (!process.env.FAKE_SSH_LOG) return;
+  try {
+    appendFileSync(process.env.FAKE_SSH_LOG, `${JSON.stringify(entry)}\n`);
+  } catch {
+    /* log failure never fails the fake */
+  }
+}
 
 const OPTION_WITH_VALUE = new Set(['-o', '-R', '-L', '-p', '-i', '-l', '-F', '-J', '-D', '-E', '-S', '-W', '-b', '-c', '-m', '-O', '-Q', '-w', '-B', '-e', '-I']);
 
@@ -79,9 +93,11 @@ const main = (): number => {
   let i = 0;
   let tty = false;
   let reverse: string | null = null;
+  let noCommand = false;
   while (i < args.length && args[i]!.startsWith('-') && args[i] !== '--') {
     const opt = args[i]!;
     if (opt === '-t') tty = true;
+    if (opt === '-N') noCommand = true;
     if (opt === '-R') reverse = args[i + 1] ?? null;
     i += OPTION_WITH_VALUE.has(opt) ? 2 : 1;
   }
@@ -89,15 +105,14 @@ const main = (): number => {
   i++;
   if (args[i] === '--') i++;
   const remote = args.slice(i).join(' ');
-  if (process.env.FAKE_SSH_LOG) {
-    try {
-      appendFileSync(process.env.FAKE_SSH_LOG, `${JSON.stringify({ argv: args, alias, tty, reverse, remote })}\n`);
-    } catch {
-      /* log failure never fails the fake */
-    }
-  }
+  logLine({ argv: args, alias, tty, reverse, forward: noCommand, remote });
   const known = process.env.FAKE_SSH_HOSTS?.split(',').filter(Boolean);
-  if (process.env.FAKE_SSH_FAIL === '1' || !alias || (known && !known.includes(alias))) return 255;
+  const failFile = process.env.FAKE_SSH_FAIL_FILE;
+  if ((failFile && existsSync(failFile)) || process.env.FAKE_SSH_FAIL === '1' || !alias || (known && !known.includes(alias))) return 255;
+  // `-N -R …` hook forward: the listener is on this machine's loopback already,
+  // so the forward is a no-op that stays up; FAKE_SSH_FORWARD_FAIL=1 is
+  // ExitOnForwardFailure on a squatted remote port (exit 255 at once).
+  if (noCommand) return process.env.FAKE_SSH_FORWARD_FAIL === '1' ? 255 : STAY_ALIVE;
   let words = splitRemote(remote);
   let cwd = process.cwd();
   if (words[0] === 'cd' && words[2] === '&&') {

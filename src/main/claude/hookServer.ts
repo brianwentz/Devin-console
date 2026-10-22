@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { HOOK_EVENTS, HOOK_PATH_PREFIX, LEGACY_HOOK_PATH_PREFIXES } from '../../core/claudeHooks';
 import type { ClaudeHookEvent } from '../../core/claudeActivity';
 import { log } from '../log';
+import { challengeMac, healthChallengeNonce } from './hookChallenge';
 
 const PORT_MIN = 49_152;
 const PORT_SPAN = 65_535 - PORT_MIN;
@@ -146,6 +147,16 @@ export class ClaudeHookServer {
     const prefixes: readonly string[] = [HOOK_PATH_PREFIX, ...LEGACY_HOOK_PATH_PREFIXES];
     if (request.method === 'GET' && prefixes.some((p) => request.url === `${p}health`)) {
       response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      return;
+    }
+    // ssh hook-forward proof: HMAC-SHA256(token, nonce) (hookChallenge.ts).
+    const nonce = request.method === 'GET' ? healthChallengeNonce(request.url ?? '', prefixes) : null;
+    if (nonce !== null) {
+      if (!nonce || !this.config?.token) {
+        response.writeHead(400).end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/plain' }).end(challengeMac(this.config.token, nonce));
       return;
     }
     const match = new RegExp(`^(?:${prefixes.join('|')})([A-Za-z]+)$`).exec(request.url ?? '');

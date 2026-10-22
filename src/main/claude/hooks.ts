@@ -156,6 +156,10 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
+      // ssh (fix round 1 #1): the block's 127.0.0.1:<port> URLs only go in
+      // while that host's forward is verified (the listener proved the token);
+      // otherwise the block is removed — never left pointing at a squatter.
+      const hostEnabled = enabled && (host.kind !== 'ssh' || hosts().hookForwardVerified(host.id));
       // Hooks back on: a pending-removal error no longer applies (a host that
       // is applied below overwrites hooksInstall anyway).
       if (enabled && this.offUnavailable.delete(host.id)) hosts().setError(host.id, 'hooksInstall', null);
@@ -163,12 +167,12 @@ export class ClaudeHooks {
       // opt-out also cleans a disabled-but-running one (our block carries the
       // token): over the channel when it is up, else one `--apply-hooks-off`
       // run of the deployed helper — never a Stopped distro, never UNC.
-      if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
+      if (hostEnabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
       const channelReady = !isRemoteHost(host) || hosts().channel(host)?.state === 'ready';
       // An enabled host's channel is (re)starting: its ready transition
       // re-runs this apply — no one-shot spawn for it.
       const listed = hosts().list().some((h) => h.id === host.id);
-      if (!channelReady && !enabled && listed) {
+      if (!channelReady && !hostEnabled && listed) {
         // A degraded helper never turns ready on its own: say so instead of a
         // clean opt-out while our block stays. The key stays unrecorded, so
         // the ready transition (reset / Re-check) re-runs the removal.
@@ -181,22 +185,22 @@ export class ClaudeHooks {
         }
         continue;
       }
-      if (!channelReady && enabled) continue;
+      if (!channelReady && hostEnabled) continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,
-        enabled,
+        hostEnabled,
         buildHooksBlock({ port: info.port, auth: { kind: 'token', token: info.token }, ...(addr ? { addr } : {}) }),
       );
       let result: { installed: boolean; error: string | null };
       if (this.lastApplied.get(host.id) === key) {
         // Already written in this state; lastApplied is only recorded on success.
-        result = { installed: enabled, error: null };
+        result = { installed: hostEnabled, error: null };
       } else {
         result = !isRemoteHost(host)
-          ? await applyGlobalHooks(hosts().localConfigDir(), enabled, info.port, info.token, addr)
+          ? await applyGlobalHooks(hosts().localConfigDir(), hostEnabled, info.port, info.token, addr)
           : channelReady
-            ? await this.applyOverChannel(host, enabled, info, addr)
+            ? await this.applyOverChannel(host, hostEnabled, info, addr)
             : await this.removeOnce(host);
         if (result.error === null) this.lastApplied.set(host.id, key);
         else this.lastApplied.delete(host.id);

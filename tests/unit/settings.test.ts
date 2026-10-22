@@ -528,11 +528,24 @@ describe('hosts.ssh (P3)', () => {
     ]);
   });
 
-  it('rejects malformed aliases, upper case and a leading dash', () => {
-    for (const alias of ['', '-oProxyCommand=x', 'Box', 'a b', 'a;b', 'ssh://box', 'a/b']) {
-      expect(SettingsSchema.safeParse({ hosts: { ssh: [{ alias, enabled: true }] } }).success, alias).toBe(false);
-    }
-    expect(SettingsSchema.safeParse({ hosts: { ssh: [{ alias: 'box' }] } }).success).toBe(false);
+  it('M4: lower-cases aliases and drops only malformed entries (the rest of the list survives)', () => {
+    const settings = SettingsSchema.parse({
+      hosts: {
+        ssh: [
+          { alias: ' Box ', enabled: true },
+          ...['', '-oProxyCommand=x', 'a b', 'a;b', 'ssh://box', 'a/b'].map((alias) => ({ alias, enabled: true })),
+          { alias: 'nobool' },
+          'junk',
+          { alias: 'BOX', enabled: false },
+          { alias: 'dev', enabled: false },
+        ],
+      },
+    });
+    // Canonical, deduplicated (first wins), malformed entries gone.
+    expect(settings.hosts.ssh).toEqual([
+      { alias: 'box', enabled: true },
+      { alias: 'dev', enabled: false },
+    ]);
   });
 
   it('a patch replaces the ssh list and keeps the other hosts fields', () => {
@@ -543,14 +556,13 @@ describe('hosts.ssh (P3)', () => {
     expect(next.hosts.overrides).toEqual({});
   });
 
-  it('an invalid alias is repaired at leaf level: hosts.ssh dropped, the rest of hosts kept', () => {
+  it('an invalid alias drops only that entry: the valid ones and the rest of hosts are kept', () => {
     const raw = {
       hosts: { wslEnabled: false, ssh: [{ alias: 'ok', enabled: true }, { alias: '-bad', enabled: true }] },
     };
-    const { settings, dropped, invalid } = parseSettingsFile(raw);
-    expect(dropped).toEqual(['hosts.ssh']);
-    expect(invalid['hosts.ssh']).toEqual(raw.hosts.ssh);
-    expect(settings.hosts.ssh).toEqual([]);
+    const { settings, dropped } = parseSettingsFile(raw);
+    expect(dropped).toEqual([]);
+    expect(settings.hosts.ssh).toEqual([{ alias: 'ok', enabled: true }]);
     expect(settings.hosts.wslEnabled).toBe(false);
   });
 });

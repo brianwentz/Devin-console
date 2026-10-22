@@ -49,7 +49,7 @@
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const STAY_ALIVE = -1; // process keeps running until killed
@@ -75,6 +75,8 @@ export interface RunnerConfig {
   home: string;
   /** curl performs a real HTTP GET (ssh: the hook listener is reachable on loopback). */
   realCurl?: boolean;
+  /** Called with the KEYS (never values) of env staged by the ssh run scripts. */
+  onStagedEnv?: (keys: string[]) => void;
 }
 
 export function createRunner(cfg: RunnerConfig) {
@@ -254,19 +256,26 @@ export function createRunner(cfg: RunnerConfig) {
     return argv;
   };
 
-  // curl -s -m 2 -o /dev/null -w %{http_code} <url> → reachability probe.
+  // curl -s -m 2 -o /dev/null -w %{http_code} <url> → reachability probe;
+  // `realCurl`: a real GET, printing the status (-w) or the body (the ssh
+  // hook-forward challenge `curl -s -m 2 <url>?nonce=…`).
   const curl = (args: string[]): number => {
-    if (!args.some((a) => a.includes('http_code'))) return 0;
+    const statusOnly = args.some((a) => a.includes('http_code'));
     if (cfg.realCurl) {
       const url = args[args.length - 1] ?? '';
       const script =
-        "require('http').get(process.argv[1], (r) => { process.stdout.write(String(r.statusCode)); r.resume(); })" +
-        ".on('error', () => process.stdout.write('000')).setTimeout(2000, function () { this.destroy(); });";
-      const result = spawnSync(process.execPath, ['-e', script, url], { encoding: 'utf8', windowsHide: true });
-      const code = (result.stdout ?? '').trim() || '000';
-      process.stdout.write(code);
-      return code === '000' ? 7 : 0;
+        "require('http').get(process.argv[1], (r) => { let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => " +
+        "process.stdout.write(process.argv[2] === '1' ? String(r.statusCode) : b)); })" +
+        ".on('error', () => process.stdout.write(process.argv[2] === '1' ? '000' : '')).setTimeout(2000, function () { this.destroy(); });";
+      const result = spawnSync(process.execPath, ['-e', script, url, statusOnly ? '1' : '0'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      const outText = result.stdout ?? '';
+      process.stdout.write(outText);
+      return statusOnly ? (outText.trim() === '000' || !outText.trim() ? 7 : 0) : outText ? 0 : 7;
     }
+    if (!statusOnly) return 0;
     const ok = process.env.FAKE_WSL_HOOKS === 'ok';
     process.stdout.write(ok ? '200' : '000');
     return ok ? 0 : 7;
@@ -316,6 +325,53 @@ export function createRunner(cfg: RunnerConfig) {
     return runLocal([cmd, ...posargs], cwd, {});
   };
 
+  // One line from stdin, byte by byte (what sh `read` does on a pipe) — the
+  // rest of stdin stays for the exec'd CLI.
+  const readStdinLine = (): string => {
+    const one = Buffer.alloc(1);
+    let line = '';
+    for (;;) {
+      let n = 0;
+      try {
+        n = readSync(0, one, 0, 1, null);
+      } catch {
+        break;
+      }
+      if (n === 0 || one[0] === 10) break;
+      line += String.fromCharCode(one[0]!);
+    }
+    return line;
+  };
+
+  // `export K='v'` lines (posixQuote: '…' runs joined by \') → env.
+  const parseExportLines = (text: string): Record<string, string> => {
+    const env: Record<string, string> = {};
+    const re = /export ([A-Za-z_][A-Za-z0-9_]*)=/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      let i = re.lastIndex;
+      let value = '';
+      for (;;) {
+        if (text[i] === "'") {
+          const end = text.indexOf("'", i + 1);
+          value += text.slice(i + 1, end);
+          i = end + 1;
+        } else if (text[i] === '\\' && text[i + 1] === "'") {
+          value += "'";
+          i += 2;
+        } else break;
+      }
+      env[m[1]!] = value;
+      re.lastIndex = i;
+    }
+    return env;
+  };
+
+  const runStaged = (staged: Record<string, string>, runCwd: string, cmd: string, args: string[]): number => {
+    cfg.onStagedEnv?.(Object.keys(staged).sort());
+    return runArgv(['/usr/bin/env', ...Object.entries(staged).map(([k, v]) => `${k}=${v}`), cmd, ...args], linuxToLocal(runCwd));
+  };
+
   /** Runs one remote argv (after `wsl.exe -d D [--cd C] -e` / `ssh … -- [cd C &&] exec`). */
   const runArgv = (rest: string[], cwd: string): number => {
     if (!rest.length) return 1;
@@ -337,6 +393,23 @@ export function createRunner(cfg: RunnerConfig) {
       const present = checked !== undefined && existsSync(linuxFile(checked));
       process.stdout.write(`${HOME}\nu\n/bin/bash\n${present ? 'HELPER_PRESENT\n' : ''}`);
       return 0;
+    }
+    // The ssh run scripts (core/execHost SSH_RUN_STDIN_SCRIPT / SSH_RUN_FILE_SCRIPT):
+    // `/bin/sh -c <script> <login body> [<envfile>] <cwd> <shell> <cmd> <args…>`.
+    if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('IFS= read -r e')) {
+      const [, , , runCwd, , cmd, ...args] = tail;
+      const decoded = Buffer.from(readStdinLine(), 'base64').toString('utf8');
+      return runStaged(parseExportLines(decoded), runCwd ?? '/', cmd ?? '', args);
+    }
+    if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('. "$f"')) {
+      const [, , , envFile, runCwd, , cmd, ...args] = tail;
+      let staged: Record<string, string> = {};
+      if (envFile) {
+        const local = linuxFile(envFile);
+        staged = parseExportLines(readFileSync(local, 'utf8'));
+        rmSync(local, { force: true });
+      }
+      return runStaged(staged, runCwd ?? '/', cmd ?? '', args);
     }
     if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('mkdir -p "$1"')) {
       return helperDeploy(tail[3] ?? '', tail[4] ?? '', tail[5]);
