@@ -99,8 +99,23 @@ type SshSettings = {
 };
 const settingsOf = async (app: ElectronApplication) => (await state(app)).settings as unknown as SshSettings;
 const hostRow = async (app: ElectronApplication, id = HOST) => (await state(app)).hosts.find((h) => h.id === id);
-const helperReady = (app: ElectronApplication, id = HOST) =>
-  expect.poll(async () => (await hostRow(app, id))?.helper?.state, { timeout: 30_000 }).toBe('ready');
+const hostSummary = async (app: ElectronApplication, id: string): Promise<string> => {
+  const row = await hostRow(app, id);
+  return row ? `${row.state}|helper=${row.helper?.state ?? '-'}|${row.error ?? ''}` : 'no-row';
+};
+// Two conditions, not one wall-clock budget for the whole chain: the host
+// stays `probing` through probe → env capture → deploy (each ssh run bounded
+// by its own timeout in sshHosts.ts), and only then does the helper channel
+// start and say hello. Under full-suite load the probe chain alone can eat a
+// single 30 s budget; the failure message carries state|helper|error.
+const helperReady = async (app: ElectronApplication, id = HOST): Promise<void> => {
+  await expect
+    .poll(() => hostSummary(app, id), { timeout: 90_000, message: `${id} probe finished` })
+    .not.toMatch(/^(no-row|probing\|)/);
+  await expect
+    .poll(() => hostSummary(app, id), { timeout: 45_000, message: `${id} helper ready` })
+    .toMatch(/^ready\|helper=ready\|/);
+};
 const addSsh = (app: ElectronApplication, alias: string) =>
   app.evaluate((_e, a: string) => (globalThis as any).__agentworkspace.hostSshAdd(a), alias) as Promise<{ ok: boolean }>;
 const claudeRows = async (app: ElectronApplication) =>
