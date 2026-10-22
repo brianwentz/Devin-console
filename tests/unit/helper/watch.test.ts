@@ -1,7 +1,8 @@
+import { EventEmitter } from 'node:events';
 import { appendFileSync, mkdirSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ProjectsWatcher, type WatchChange } from '../../../src/helper/watch';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProjectsWatcher, WATCH_DEBOUNCE_MS, type WatchChange } from '../../../src/helper/watch';
 import { changePayload, type StoreChanged } from '../../../src/helper/store';
 import { SESSION_A, SESSION_B, copyClaudeHome, transcriptLines } from './fixtureHome';
 
@@ -55,24 +56,51 @@ async function until<T>(fn: () => T | undefined, ms = 3000): Promise<T> {
 }
 
 describe('helper watch', () => {
-  it('watch emits {files, sessions} within 1 s of an append, debounced', async () => {
+  it('watch emits {files, sessions} within 1 s of an append', async () => {
     const { payloads } = startWatching();
     expect(watcher!.mode).toBe('watch');
     await settle(100);
     const file = join(projects(), 'C--work-alpha', `${SESSION_A}.jsonl`);
     const t0 = Date.now();
-    for (let i = 0; i < 5; i++) {
-      appendFileSync(file, transcriptLines(SESSION_A, 1).replace(`${SESSION_A}-m0`, `${SESSION_A}-x${i}`));
-      await settle(20);
-    }
+    appendFileSync(file, transcriptLines(SESSION_A, 1).replace(`${SESSION_A}-m0`, `${SESSION_A}-x0`));
     const first = await until(() => payloads.find((p) => p.files.length > 0));
     expect(Date.now() - t0).toBeLessThan(1000);
     expect(first.files).toEqual([`C--work-alpha/${SESSION_A}.jsonl`]);
     expect(first.sessions.map((s) => s.sessionId)).toEqual([SESSION_A]);
     expect(first.removed).toEqual([]);
-    await settle(400);
-    // Five appends 20 ms apart coalesce into one notification (250 ms window).
-    expect(payloads.filter((p) => p.files.length > 0)).toHaveLength(1);
+  });
+
+  it('events inside one debounce window coalesce into one change; the window is fixed from the first event', () => {
+    // Real fs.watch delivery timing is up to the OS, so the coalescing contract is
+    // pinned with an injected watcher and fake timers.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const listeners = new Map<string, (event: string, name: string | null) => void>();
+      const { raw } = startWatching({
+        watchFn: ((p: string, _o: { persistent: boolean }, l: (e: string, n: string | null) => void) => {
+          listeners.set(p, l);
+          return Object.assign(new EventEmitter(), { close: () => undefined });
+        }) as never,
+      });
+      expect(watcher!.mode).toBe('watch');
+      const alpha = listeners.get(join(projects(), 'C--work-alpha'))!;
+      expect(alpha).toBeDefined();
+      for (let i = 0; i < 5; i++) {
+        alpha('change', `${SESSION_A}.jsonl`);
+        vi.advanceTimersByTime(20);
+      }
+      expect(raw).toEqual([]);
+      vi.advanceTimersByTime(WATCH_DEBOUNCE_MS - 100);
+      expect(raw).toEqual([{ files: [`C--work-alpha/${SESSION_A}.jsonl`], removed: [] }]);
+      // A later event opens a new window → exactly one more change.
+      alpha('change', `${SESSION_A}.jsonl`);
+      vi.advanceTimersByTime(WATCH_DEBOUNCE_MS - 1);
+      expect(raw).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(raw).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('deleted transcript → removed', async () => {
