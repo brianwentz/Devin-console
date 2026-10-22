@@ -323,7 +323,7 @@ class Notifier {
             ownerUserId: null,
             sessionTitle: 'Agent Workspace',
             title: 'Could not determine your user',
-            body: 'Could not determine your user — sign in with the Devin CLI (devin auth login) or set your user id in Settings.',
+            body: 'Could not determine your user — sign in with the Devin CLI (devin auth login) or set your user id in Settings → Devin.',
             createdAt: Date.now(),
           });
         }
@@ -459,8 +459,8 @@ class Notifier {
             title: 'Devin API token rejected',
             body:
               kind === 'forbidden'
-                ? 'The API returned 403 Forbidden for this token — PR tabs and notifications are paused. Check the token in Settings (it must be a Devin v3 personal API token).'
-                : 'The API returned 401 Unauthorized for this token — PR tabs and notifications are paused. Check the token in Settings.',
+                ? 'The API returned 403 Forbidden for this token — PR tabs and notifications are paused. Check the token in Settings → Devin (it must be a Devin v3 personal API token).'
+                : 'The API returned 401 Unauthorized for this token — PR tabs and notifications are paused. Check the token in Settings → Devin.',
             createdAt: Date.now(),
           });
         }
