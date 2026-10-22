@@ -5,22 +5,12 @@
 // in-distro helper. Local config dir only — a WSL host's file is written by
 // its helper (hooks.apply over the channel, see hooks.ts).
 
-import { copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
-import { applyHooksToSettings, type SettingsFileIo } from '../../core/hooksApply';
+import { applyHooksToSettings, createSettingsFileIo, type SettingsFileIo } from '../../core/hooksApply';
 import { log } from '../log';
 
-const localIo: SettingsFileIo = {
-  exists: (path) =>
-    stat(path).then(
-      () => true,
-      () => false,
-    ),
-  read: (path) => readFile(path, 'utf8'),
-  write: (path, data) => writeFile(path, data, 'utf8'),
-  rename: (from, to) => rename(from, to),
-  copy: (from, to) => copyFile(from, to),
-};
+const localIo: SettingsFileIo = createSettingsFileIo(fsPromises);
 
 export async function applyGlobalHooks(
   configDir: string,

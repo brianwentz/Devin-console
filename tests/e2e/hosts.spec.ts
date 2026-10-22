@@ -401,12 +401,12 @@ test('a local transcript change re-lists only the local host', async () => {
     FAKE_WSL_ROOT: uncRoot,
   });
   const logFile = join(profile, 'events.jsonl');
-  const lists = async (source: string) =>
+  const lists = async (source?: string) =>
     (await readEvents(logFile))
       .filter(
         (e) =>
           e.event === 'claude-list' &&
-          (e.detail as { source?: string } | undefined)?.source === source,
+          (source === undefined || (e.detail as { source?: string } | undefined)?.source === source),
       )
       .map((e) => e.detail as { listedHosts?: number; skippedHosts?: string[] });
   try {
@@ -421,11 +421,13 @@ test('a local transcript change re-lists only the local host', async () => {
         timeout: 30_000,
       })
       .toBe('ready');
-    // Positive control: a full refresh lists both hosts.
+    // Positive control: a full refresh lists both hosts. A refresh that lands while
+    // another is in flight is coalesced and keeps only the latest dirty source, so
+    // the full pass may carry any source, not just 'test'.
     await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh());
     await expect
-      .poll(async () => (await lists('test')).at(-1)?.listedHosts, { timeout: 10_000 })
-      .toBe(2);
+      .poll(async () => (await lists()).some((l) => l.listedHosts === 2), { timeout: 10_000 })
+      .toBe(true);
     const before = (await lists('watch')).length;
     const id = '22222222-0000-4000-8000-0000000000aa';
     writeFileSync(
@@ -1023,7 +1025,9 @@ test('an explicit start on a stopped distro re-reads its state promptly', async 
 });
 
 // Task 10: the picker start folder is checked inside the distro (helper
-// `fs.stat`) and the probed distro home is used unchecked. The app's UNC
+// `fs.stat`) and the probed distro home is used unchecked. Since P3 the pick
+// itself is the in-app RemoteFolderInput (no native dialog on a WSL path):
+// its start folder is the host-side path. The app's UNC
 // stand-in (AGENT_WORKSPACE_TEST_WSL_UNC_ROOT) stays an EMPTY dir — the folder
 // exists only in the helper's fs (FAKE_WSL_ROOT), so a Windows-side existence
 // check would call it missing.
@@ -1041,6 +1045,10 @@ test('WSL picker default path needs no Windows-side fs', async () => {
   const lastDialog = () =>
     app.evaluate(
       () => (globalThis as any).__agentworkspace.lastOpenDialogOptions() as { defaultPath?: string } | null,
+    );
+  const lastPrompt = () =>
+    app.evaluate(
+      () => (globalThis as any).__agentworkspace.lastFolderPrompt() as { hostId: string; start: string | null } | null,
     );
   const missingCount = async () =>
     (await readEvents(logFile)).filter((e) => e.event === 'picker-folder-missing').length;
@@ -1067,19 +1075,23 @@ test('WSL picker default path needs no Windows-side fs', async () => {
     };
     const pickDefault = async () => {
       expect(await app.evaluate(() => (globalThis as any).__agentworkspace.claudeNewSession(null))).toBeNull();
-      return (await lastDialog())?.defaultPath;
+      expect((await lastPrompt())?.hostId).toBe('wsl:Fake');
+      return (await lastPrompt())?.start;
     };
 
     // A UNC folder that exists inside the distro wins.
     const picks = join(uncRoot, 'home', 'u', 'picks');
     await setPicker(picks);
-    expect(await pickDefault()).toBe(picks);
+    expect(await pickDefault()).toBe('/home/u/picks');
     expect(await missingCount()).toBe(0);
 
     // A UNC folder gone inside the distro → the probed home, unchecked.
     await setPicker(join(uncRoot, 'home', 'u', 'gone'));
-    expect(await pickDefault()).toBe(join(uncRoot, 'home', 'u'));
+    expect(await pickDefault()).toBe('/home/u');
     expect(await missingCount()).toBe(1);
+
+    // The native dialog never opened on a WSL path.
+    expect(await lastDialog()).toBeNull();
 
     // Nothing touched the Windows-side stand-in.
     expect(readdirSync(uncRoot)).toEqual([]);

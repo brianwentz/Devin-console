@@ -1,22 +1,12 @@
 // hooks.apply: the same core/hooksApply.ts the app runs for its local config
 // dir, against the distro's native <configDir>/settings.json.
 
-import { copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
-import { applyHooksToSettings, type HooksApplyOptions, type SettingsFileIo } from '../core/hooksApply';
+import { applyHooksToSettings, createSettingsFileIo, type HooksApplyOptions, type SettingsFileIo } from '../core/hooksApply';
 import { bool, int, optStr, safeMessage, str } from './params';
 
-const io: SettingsFileIo = {
-  exists: (path) =>
-    stat(path).then(
-      () => true,
-      () => false,
-    ),
-  read: (path) => readFile(path, 'utf8'),
-  write: (path, data) => writeFile(path, data, 'utf8'),
-  rename: (from, to) => rename(from, to),
-  copy: (from, to) => copyFile(from, to),
-};
+const io: SettingsFileIo = createSettingsFileIo(fsPromises);
 
 // JSON.parse messages quote the offending input — keep only our own prefix.
 const PARSE_PREFIX = 'settings.json is not valid JSON';

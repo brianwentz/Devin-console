@@ -24,6 +24,7 @@ import { handleLink } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
+import { lastFolderPrompt } from './folderPrompt';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -132,6 +133,19 @@ export function registerTestHooks(): void {
       // Helper channel: kill the live child (reconnect path) / lifecycle snapshot.
       hostHelperKill: (id: string) => hosts().killHelper(id),
       hostChannelState: (id: string) => hosts().channelInfo(id),
+      // P3: ssh hosts + the in-app remote folder prompt.
+      hostSshAdd: (alias: string) => hosts().addSshHost(alias),
+      hostSshRecover: (trigger: 'resume' | 'unlock') => hosts().recoverSsh(trigger, { force: true }),
+      hostHookForwardVerified: (id: string) => hosts().hookForwardVerified(id),
+      // R39 #3: close the hook forward's stdin (what the app's death does) → the remote `cat` ends it.
+      hostSshForwardEndStdin: (id: string) => hosts().sshForwardEndStdin(id),
+      // execOn over a host (R36 #2 drain check): stdout of `file args…` run in the host home.
+      hostExecOn: (id: string, file: string, args: string[]) => {
+        const host = hosts().hostById(id);
+        if (!host) throw new Error('unknown host');
+        return hosts().execOn(host, { file, args, cwd: host.kind === 'local' ? process.cwd() : (host.home ?? '/') }, 30_000);
+      },
+      lastFolderPrompt: () => lastFolderPrompt(),
       // App-originated fs calls on a WSL path seen by the guard (launchApp
       // teardown asserts 0).
       remoteFsViolations: () => remoteFsViolationCount(),

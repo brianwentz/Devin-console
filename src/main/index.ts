@@ -7,7 +7,7 @@ import './remoteFsGuardInstall';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { app, BaseWindow, dialog, Menu, screen, session, webContents, WebContentsView } from 'electron';
+import { app, BaseWindow, dialog, Menu, powerMonitor, screen, session, webContents, WebContentsView } from 'electron';
 import { clampFraction01 } from '../core/layout';
 import { auditCookies, startCookieAudit } from './cookieAudit';
 import { CredentialStore } from './credentials';
@@ -64,6 +64,7 @@ import { setupUpdater } from './updater';
 import { notifier } from './notifier';
 import { SecretStore } from './secrets';
 import { requestSettingsFlush } from './settingsFlush';
+import { cancelFolderPrompt } from './folderPrompt';
 
 // Windows toasts require an AppUserModelID; match electron-builder's appId.
 if (process.platform === 'win32') app.setAppUserModelId('io.github.brianwentz.agent-workspace');
@@ -438,6 +439,11 @@ async function createWindow(): Promise<void> {
     maxLiveTabs: saved.tabs.maxLiveTabs,
   });
 
+  // A reload / navigation drops the renderer that would answer an open
+  // remote folder prompt (R39 #12) — resolve it as cancelled.
+  state.shellView.webContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) cancelFolderPrompt();
+  });
   state.shellView.webContents.on('did-finish-load', () => {
     log('shell', 'shell-ready', { url: state.shellView?.webContents.getURL() });
     notifyShell();
@@ -455,6 +461,10 @@ async function createWindow(): Promise<void> {
     hosts().onWindowFocus();
     updateOnWindowFocus();
   });
+  // ssh hosts whose connection failed (sleep / network change) retry on wake
+  // (throttled ≤1/min in hosts().recoverSsh).
+  powerMonitor.on('resume', () => hosts().recoverSsh('resume'));
+  powerMonitor.on('unlock-screen', () => hosts().recoverSsh('unlock'));
   state.windowRef.on('close', (event) => {
     // Post-shutdown lifecycle: app.quit() closes the window again — let it.
     if (state.shutdownComplete) return;
@@ -476,6 +486,8 @@ async function createWindow(): Promise<void> {
     // The shell view dies with the window; late publishes must see null, not
     // a view whose webContents getter already returns undefined.
     state.shellView = null;
+    // Nothing is left to answer an open remote folder prompt (R39 #12).
+    cancelFolderPrompt();
   });
 
   const activeId = state.tabManager.activeId;

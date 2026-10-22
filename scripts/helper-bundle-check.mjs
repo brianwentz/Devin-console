@@ -54,7 +54,7 @@ function run(cmd, args, opts = {}) {
 // helper-<hash>.mjs name and driven over NDJSON stdio until stdin EOF.
 const BUILT_DIR = join(root, 'out', 'helper')
 const A_ID = '11111111-0000-4000-8000-00000000000a'
-const REQUESTS = [
+const requests = (home) => [
   { id: 1, method: 'ping', params: {} },
   { id: 2, method: 'store.list', params: {} },
   { id: 3, method: 'store.messages', params: { sessionId: A_ID, offset: 0, limit: 500 } },
@@ -63,6 +63,7 @@ const REQUESTS = [
   { id: 6, method: 'env.get', params: {} },
   { id: 7, method: 'watch.subscribe', params: {} },
   { id: 8, method: 'no.such', params: {} },
+  { id: 9, method: 'fs.readdir', params: { path: home } },
 ]
 function checkBuilt(r, work, hash) {
   const home = join(work, `built-${r.label.replace(/\W/g, '')}`)
@@ -72,7 +73,7 @@ function checkBuilt(r, work, hash) {
   const file = join(home, '.agent-workspace', `helper-${hash}.mjs`)
   cpSync(join(BUILT_DIR, 'agent-workspace-helper.mjs'), file)
   const res = run(r.cmd, [...r.pre, file, '--stdio'], {
-    input: REQUESTS.map((q) => JSON.stringify(q)).join('\n') + '\n',
+    input: requests(home).map((q) => JSON.stringify(q)).join('\n') + '\n',
     env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: cfg },
   })
   const frames = res.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l))
@@ -88,6 +89,7 @@ function checkBuilt(r, work, hash) {
   if (byId.get(6)?.result?.env?.CLAUDE_CONFIG_DIR !== cfg) problems.push('env.get')
   if (!byId.get(7)?.result) problems.push('watch.subscribe')
   if (byId.get(8)?.error?.code !== 'unknown-method') problems.push('unknown-method')
+  if (!byId.get(9)?.result?.entries?.some?.((e) => e.name === '.claude' && e.dir === true)) problems.push('fs.readdir')
   if (res.code !== 0) problems.push(`exit ${res.code}`)
   return { problems, out: res.out }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeSettings, migrateSettingsRaw, parseSettingsFile } from '../../src/core/settings';
+import { mergeSettings, migrateSettingsRaw, parseSettingsFile, serializeSettingsFile } from '../../src/core/settings';
 import { SettingsPatchSchema, SettingsSchema, type Settings } from '../../src/shared/ipc';
 
 describe('parseSettingsFile', () => {
@@ -473,6 +473,7 @@ describe('hosts settings', () => {
       wslEnabled: true,
       wslDistros: null,
       overrides: {},
+      ssh: [],
     });
   });
 
@@ -513,6 +514,80 @@ describe('hosts settings', () => {
     expect(
       SettingsPatchSchema.safeParse({ hosts: { wslDistros: 'Ubuntu' } }).success,
     ).toBe(false);
+  });
+});
+
+describe('hosts.ssh (P3)', () => {
+  it('accepts {alias, enabled} entries with canonical (lower-case) aliases', () => {
+    const settings = SettingsSchema.parse({
+      hosts: { ssh: [{ alias: 'box', enabled: true }, { alias: 'dev.example-1', enabled: false }] },
+    });
+    expect(settings.hosts.ssh).toEqual([
+      { alias: 'box', enabled: true },
+      { alias: 'dev.example-1', enabled: false },
+    ]);
+  });
+
+  it('M4: lower-cases aliases and drops only malformed entries (the rest of the list survives)', () => {
+    const settings = SettingsSchema.parse({
+      hosts: {
+        ssh: [
+          { alias: ' Box ', enabled: true },
+          ...['', '-oProxyCommand=x', 'a b', 'a;b', 'ssh://box', 'a/b'].map((alias) => ({ alias, enabled: true })),
+          { alias: 'nobool' },
+          'junk',
+          { alias: 'BOX', enabled: false },
+          { alias: 'dev', enabled: false },
+        ],
+      },
+    });
+    // Canonical, deduplicated (first wins), malformed entries gone.
+    expect(settings.hosts.ssh).toEqual([
+      { alias: 'box', enabled: true },
+      { alias: 'dev', enabled: false },
+    ]);
+  });
+
+  it('a patch replaces the ssh list and keeps the other hosts fields', () => {
+    const base = mergeSettings(SettingsSchema.parse({}), { hosts: { wslEnabled: false } });
+    const next = mergeSettings(base, { hosts: { ssh: [{ alias: 'box', enabled: true }] } });
+    expect(next.hosts.ssh).toEqual([{ alias: 'box', enabled: true }]);
+    expect(next.hosts.wslEnabled).toBe(false);
+    expect(next.hosts.overrides).toEqual({});
+  });
+
+  it('an invalid alias drops only that entry: the valid ones and the rest of hosts are kept', () => {
+    const raw = {
+      hosts: { wslEnabled: false, ssh: [{ alias: 'ok', enabled: true }, { alias: '-bad', enabled: true }] },
+    };
+    const { settings, dropped } = parseSettingsFile(raw);
+    expect(dropped).toEqual([]);
+    expect(settings.hosts.ssh).toEqual([{ alias: 'ok', enabled: true }]);
+    expect(settings.hosts.wslEnabled).toBe(false);
+  });
+
+  it('reserved aliases (ssh/local/wsl) are invalid in memory but preserved raw in the file (S6)', () => {
+    const raw = {
+      hosts: { ssh: [{ alias: 'box', enabled: true }, { alias: 'SSH', enabled: true, x: 1 }, { alias: 'local', enabled: false }] },
+    };
+    const { settings } = parseSettingsFile(raw);
+    expect(settings.hosts.ssh).toEqual([{ alias: 'box', enabled: true }]);
+    const out = serializeSettingsFile(raw, settings, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
+    expect(out.hosts.ssh).toEqual([
+      { alias: 'box', enabled: true },
+      { alias: 'SSH', enabled: true, x: 1 },
+      { alias: 'local', enabled: false },
+    ]);
+  });
+
+  it('a settings commit adding a reserved alias fails with a user-facing error', () => {
+    for (const alias of ['ssh', 'Wsl']) {
+      const parsed = SettingsPatchSchema.safeParse({ hosts: { ssh: [{ alias, enabled: true }] } });
+      expect(parsed.success, alias).toBe(false);
+      expect(parsed.error?.issues.map((i) => i.message).join(' '), alias).toMatch(/reserved/);
+    }
+    const ok = SettingsPatchSchema.safeParse({ hosts: { ssh: [{ alias: ' Box ', enabled: true }] } });
+    expect(ok.success && ok.data.hosts?.ssh).toEqual([{ alias: 'box', enabled: true }]);
   });
 });
 
@@ -640,5 +715,45 @@ describe('ux3 S0 — sessionOrder + pickerFolder contracts', () => {
     expect(bad.dropped).toEqual(['local.defaultMode']);
     expect(bad.settings.local.defaultMode).toBeNull();
     expect(bad.settings.local.devinPath).toBe('D:\\devin.exe');
+  });
+});
+
+describe('R40 L1: hosts.ssh raw entries keep their form and unknown fields (ux3 S6)', () => {
+  it('a mixed-case entry keeps its raw alias + unknown fields; memory (enabled) wins; a later duplicate is kept raw', () => {
+    const raw = {
+      hosts: {
+        ssh: [
+          { alias: 'MyBox', enabled: true, future: 1 },
+          { alias: 'other', enabled: true },
+          { alias: 'MYBOX', enabled: false, dup: true },
+        ],
+      },
+    };
+    const { settings } = parseSettingsFile(raw);
+    expect(settings.hosts.ssh).toEqual([
+      { alias: 'mybox', enabled: true },
+      { alias: 'other', enabled: true },
+    ]);
+    const value = mergeSettings(settings, {
+      hosts: { ssh: [{ alias: 'mybox', enabled: false }, { alias: 'other', enabled: true }] },
+    });
+    const out = serializeSettingsFile(raw, value, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
+    expect(out.hosts.ssh).toEqual([
+      { alias: 'MyBox', enabled: false, future: 1 },
+      { alias: 'other', enabled: true },
+      { alias: 'MYBOX', enabled: false, dup: true },
+    ]);
+    // Reloading the written file gives the same in-memory list.
+    expect(parseSettingsFile(out).settings.hosts.ssh).toEqual([
+      { alias: 'mybox', enabled: false },
+      { alias: 'other', enabled: true },
+    ]);
+  });
+  it('removing a host drops its raw entry and its raw duplicates', () => {
+    const raw = { hosts: { ssh: [{ alias: 'Box', enabled: true, x: 1 }, { alias: 'BOX', enabled: true }, { alias: '-bad', enabled: true }] } };
+    const { settings } = parseSettingsFile(raw);
+    const value = { ...settings, hosts: { ...settings.hosts, ssh: [] } };
+    const out = serializeSettingsFile(raw, value, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
+    expect(out.hosts.ssh).toEqual([{ alias: '-bad', enabled: true }]);
   });
 });

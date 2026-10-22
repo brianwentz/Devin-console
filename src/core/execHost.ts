@@ -5,7 +5,7 @@
 
 import type { HostStatus } from '../shared/ipc';
 
-export type HostId = 'local' | `wsl:${string}`;
+export type HostId = 'local' | `wsl:${string}` | `ssh:${string}`;
 
 export type ExecHost =
   | { id: 'local'; kind: 'local' }
@@ -16,6 +16,13 @@ export type ExecHost =
       home: string | null;
       /** Automount root for drive paths, '/mnt' unless wsl.conf says otherwise. */
       mount: string;
+    }
+  | {
+      id: HostId;
+      kind: 'ssh';
+      /** A Host alias from the user's ~/.ssh/config (validated by SSH_ALIAS_RE). */
+      alias: string;
+      home: string | null;
     };
 
 export const LOCAL_HOST: ExecHost = { id: 'local', kind: 'local' };
@@ -27,6 +34,107 @@ export function isWslHost(host: ExecHost): host is Extract<ExecHost, { kind: 'ws
 /** Whether a host's config dir may be touched from the main process: local always; a wsl host only once its probe is `ready` (an unresponsive distro makes every UNC call block the loop for the SMB timeout). */
 export function isFsReady(host: ExecHost, state: string | null | undefined): boolean {
   return host.kind === 'local' || state === 'ready';
+}
+
+/** An ssh alias: no leading '-' (would be parsed as an ssh option), no shell/URL metacharacters. */
+export const SSH_ALIAS_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+
+/** The stored/keyed form: SSH_ALIAS_RE lower-cased (OpenSSH matches `Host`
+ * patterns case-insensitively, so `Box` and `box` are one host). */
+export const SSH_ALIAS_CANONICAL_RE = /^[a-z0-9._][a-z0-9._-]*$/;
+
+/** User input → canonical alias (trimmed, lower-cased); null when invalid. */
+export function canonicalSshAlias(input: string): string | null {
+  const alias = input.trim().toLowerCase();
+  return alias.length > 0 && alias.length <= 128 && SSH_ALIAS_RE.test(alias) ? alias : null;
+}
+
+/** Aliases that would read as another host kind (`ssh:ssh`, `ssh:local`,
+ * `ssh:wsl`) and collide with the log scrub's host-id words. Refused when a
+ * host or ssh:// workspace is added; an existing entry is invalid in memory
+ * (kept raw in settings.json, ux3 S6). */
+const RESERVED_SSH_ALIASES: ReadonlySet<string> = new Set(['ssh', 'local', 'wsl']);
+
+export const RESERVED_SSH_ALIAS_MESSAGE = '"ssh", "local" and "wsl" are reserved — give the host a different alias in ~/.ssh/config';
+
+export const INVALID_SSH_ALIAS_MESSAGE =
+  'Invalid SSH alias — use a Host name from ~/.ssh/config (letters, digits, ".", "_", "-"; not starting with "-")';
+
+/** Case-insensitive, after trimming. */
+export function isReservedSshAlias(alias: string): boolean {
+  return RESERVED_SSH_ALIASES.has(alias.trim().toLowerCase());
+}
+
+/** hosts:sshAdd input → canonical alias, or the user-facing reason it is refused. */
+export function validateSshAliasInput(input: string): { ok: true; alias: string } | { ok: false; error: string } {
+  const alias = canonicalSshAlias(input);
+  if (!alias) return { ok: false, error: INVALID_SSH_ALIAS_MESSAGE };
+  if (isReservedSshAlias(alias)) return { ok: false, error: RESERVED_SSH_ALIAS_MESSAGE };
+  return { ok: true, alias };
+}
+
+export function isSshHost(host: ExecHost): host is Extract<ExecHost, { kind: 'ssh' }> {
+  return host.kind === 'ssh';
+}
+
+export function isValidSshAlias(alias: string): boolean {
+  return SSH_ALIAS_RE.test(alias);
+}
+
+/** Builds the ssh host for an alias, keyed by its canonical (lower-case) form. */
+export function sshHost(alias: string, home: string | null = null): ExecHost {
+  if (!isValidSshAlias(alias)) throw new Error('invalid ssh alias');
+  const canonical = alias.toLowerCase();
+  return { id: `ssh:${canonical}`, kind: 'ssh', alias: canonical, home };
+}
+
+/** `ssh://<alias>/<abs>` (scheme and alias case-insensitive; the alias is
+ * returned canonical, lower-case) → alias + posix path; null when not that
+ * form, the alias is invalid or the path carries a backslash. */
+export function parseSshUri(p: string): { alias: string; path: string } | null {
+  const m = /^ssh:\/\/([^/]*)(\/.*)?$/i.exec(p);
+  if (!m || !m[1] || !isValidSshAlias(m[1])) return null;
+  const path = m[2] ?? '/';
+  if (path.includes('\\') || path.includes('\0')) return null;
+  return { alias: m[1].toLowerCase(), path };
+}
+
+/** Anything that claims to be an ssh path (`ssh:` scheme, any case) — the
+ * input boundary rejects it explicitly when normalizeSshPath returns null. */
+export function isSshPathLike(p: string): boolean {
+  return /^ssh:/i.test(p.trim());
+}
+
+/** Canonical stored form `ssh://<alias>/<abs>` (lower-case alias, collapsed
+ * slashes, no trailing slash); null for a malformed ssh path. */
+export function normalizeSshPath(p: string): string | null {
+  const parsed = parseSshUri(p.trim());
+  if (!parsed) return null;
+  return `ssh://${parsed.alias}${stripTrailing(collapseSlashes(parsed.path))}`;
+}
+
+export const INVALID_SSH_PATH_MESSAGE = 'Invalid SSH path — use ssh://<alias>/<absolute path>';
+
+/** Workspace/cwd key at the input boundary: an ssh path is canonicalised (a
+ * malformed one throws INVALID_SSH_PATH_MESSAGE — never `resolve()`d into a
+ * Windows path), anything else goes through `resolveLocal`. A reserved alias
+ * throws RESERVED_SSH_ALIAS_MESSAGE unless `existing` (rename/remove of an
+ * entry that is already stored). */
+export function normalizeWorkspacePath(
+  p: string,
+  resolveLocal: (p: string) => string,
+  opts: { existing?: boolean } = {},
+): string {
+  if (!isSshPathLike(p)) return resolveLocal(p);
+  const parsed = parseSshUri(p.trim());
+  if (!parsed) throw new Error(INVALID_SSH_PATH_MESSAGE);
+  if (!opts.existing && isReservedSshAlias(parsed.alias)) throw new Error(RESERVED_SSH_ALIAS_MESSAGE);
+  return normalizeSshPath(p)!;
+}
+
+/** A host that is reached over the helper channel (WSL or SSH). */
+export function isRemoteHost(host: ExecHost): host is Exclude<ExecHost, { kind: 'local' }> {
+  return host.kind !== 'local';
 }
 
 export function wslHost(distro: string, home: string | null, mount = '/mnt'): ExecHost {
@@ -69,6 +177,8 @@ const plainUnc = (p: string): string => p.replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, '
 // spellings '//wsl.localhost/<d>/…' and the `\\?\UNC\` extended-length forms.
 // Server part is case-insensitive.
 export function hostIdForPath(rawPath: string): HostId {
+  const ssh = parseSshUri(rawPath);
+  if (ssh) return `ssh:${ssh.alias}`;
   const p = plainUnc(rawPath);
   const m = /^[\\/]{2}([^\\/]+)[\\/]([^\\/]+)/.exec(p);
   if (m && m[1] && m[2] && WSL_UNC_SERVERS.includes(m[1].toLowerCase())) {
@@ -83,6 +193,10 @@ const stripTrailing = (s: string): string => (s.length > 1 ? s.replace(/\/+$/g, 
 /** Windows-side path → the path as the host sees it. */
 export function toHostPath(host: ExecHost, winPath: string): string {
   if (host.kind === 'local') return winPath;
+  if (host.kind === 'ssh') {
+    const ssh = parseSshUri(winPath);
+    return ssh && ssh.alias === host.alias ? stripTrailing(collapseSlashes(ssh.path)) : winPath;
+  }
   const norm = plainUnc(winPath).replace(/\\/g, '/');
   const unc = /^\/{2}([^/]+)\/([^/]+)(\/.*)?$/.exec(norm);
   if (unc && unc[1] && unc[2] && WSL_UNC_SERVERS.includes(unc[1].toLowerCase()) && unc[2] === host.distro) {
@@ -102,6 +216,7 @@ export function toHostPath(host: ExecHost, winPath: string): string {
 /** Host-side path → the Windows-side form. */
 export function toWindowsPath(host: ExecHost, hostPath: string): string {
   if (host.kind === 'local') return hostPath;
+  if (host.kind === 'ssh') return `ssh://${host.alias}${hostPath.startsWith('/') ? '' : '/'}${hostPath}`;
   const norm = hostPath.replace(/\\/g, '/');
   // <mount>/<drive>/<rest> → 'X:\rest'
   const mount = host.mount.endsWith('/') ? host.mount.slice(0, -1) : host.mount;
@@ -122,12 +237,15 @@ export function toWindowsPath(host: ExecHost, hostPath: string): string {
 export function workspaceLabel(path: string): string {
   const id = hostIdForPath(path);
   if (id === 'local') return path;
-  const host = wslHost(id.slice(4), null);
+  const host = id.startsWith('ssh:') ? sshHost(id.slice(4)) : wslHost(id.slice(4), null);
   return displayPath(host, toHostPath(host, path), true);
 }
 
 export function displayPath(host: ExecHost, hostPath: string, multiHost: boolean): string {
-  return multiHost && isWslHost(host) ? `${host.distro} · ${hostPath}` : hostPath;
+  if (!multiHost) return hostPath;
+  if (isWslHost(host)) return `${host.distro} · ${hostPath}`;
+  if (isSshHost(host)) return `${host.alias} · ${hostPath}`;
+  return hostPath;
 }
 
 /** Per-invocation variables WSL itself provides — they must be the ones of the
@@ -225,6 +343,7 @@ export function spawnSpec(
   if (host.kind === 'local') {
     return { file: cmd.file, args: cmd.args, cwd: cmd.cwd };
   }
+  if (host.kind === 'ssh') throw new Error('spawnSpec: use sshSpawnSpec for ssh hosts');
   const env = mergeShellEnv(shellEnv ?? {}, cmd.env ?? {});
   return {
     file: 'wsl.exe',
@@ -264,6 +383,7 @@ export function ptySpec(
   if (host.kind === 'local') {
     return { file: cmd.file, args: cmd.args, cwd: cmd.cwd };
   }
+  if (host.kind === 'ssh') throw new Error('ptySpec: use sshPtySpec for ssh hosts');
   const env = mergeShellEnv({}, cmd.env ?? {});
   const family = shellFamily(shell);
   return {
@@ -410,6 +530,15 @@ export function deriveHelperState(input: {
  */
 export type HelperMode = '--stdio' | '--apply-hooks-off';
 
+function helperLaunchLine(shell: string, mode: HelperMode): string {
+  return shellFamily(shell) === 'fish'
+    ? `test -f $argv[1]; or exit ${HELPER_MISSING_EXIT}; exec node $argv ${mode}`
+    : `test -f "$0" || exit ${HELPER_MISSING_EXIT}; exec node "$0" ${mode}`;
+}
+
+const HELPER_DEPLOY_SCRIPT =
+  'mkdir -p "$1" && cat > "$1/.tmp.$$" && test "$(wc -c < "$1/.tmp.$$")" -eq "$3" && mv "$1/.tmp.$$" "$1/$2" || { rm -f "$1/.tmp.$$"; exit 1; }';
+
 export function helperSpec(
   host: ExecHost,
   home: string,
@@ -418,10 +547,7 @@ export function helperSpec(
   mode: HelperMode = '--stdio',
 ): HostSpawnSpec {
   if (host.kind !== 'wsl') throw new Error('helperSpec: not a wsl host');
-  const line =
-    shellFamily(shell) === 'fish'
-      ? `test -f $argv[1]; or exit ${HELPER_MISSING_EXIT}; exec node $argv ${mode}`
-      : `test -f "$0" || exit ${HELPER_MISSING_EXIT}; exec node "$0" ${mode}`;
+  const line = helperLaunchLine(shell, mode);
   return {
     file: 'wsl.exe',
     args: ['-d', host.distro, '--cd', home, '-e', shell, '-ilc', line, helperPath(home, hash)],
@@ -445,7 +571,7 @@ export function helperDeploySpec(host: ExecHost, home: string, hash: string, byt
       '-e',
       '/bin/sh',
       '-c',
-      'mkdir -p "$1" && cat > "$1/.tmp.$$" && test "$(wc -c < "$1/.tmp.$$")" -eq "$3" && mv "$1/.tmp.$$" "$1/$2" || { rm -f "$1/.tmp.$$"; exit 1; }',
+      HELPER_DEPLOY_SCRIPT,
       'sh',
       `${home.replace(/\/+$/, '')}/${HELPER_DIR}`,
       helperFileName(hash),
@@ -453,6 +579,311 @@ export function helperDeploySpec(host: ExecHost, home: string, hash: string, byt
     ],
     cwd: null,
   };
+}
+
+// ---- ssh transport ---------------------------------------------------------
+// ssh.exe sends the remote side ONE command string that the remote login shell
+// parses (unlike wsl.exe -e, which passes argv), so every user-influenced word
+// is quoted with sshQuote. The string parses identically under POSIX shells
+// and fish.
+
+// ConnectTimeout bounds a dead network (fix round 1 #3); BatchMode never
+// prompts; no OpenSSH multiplexing (R36 #6) — a user's ControlMaster could
+// otherwise keep a hook forward alive past child.kill() or let a client
+// return at once while a mux master holds the connection.
+const SSH_BASE_ARGS = [
+  '-o',
+  'BatchMode=yes',
+  '-o',
+  'ServerAliveInterval=15',
+  '-o',
+  'ConnectTimeout=10',
+  '-o',
+  'ControlMaster=no',
+  '-o',
+  'ControlPath=none',
+];
+
+/**
+ * posixQuote, plus backslash handling: fish treats `\\` and `\'` as escapes
+ * inside single quotes (a trailing backslash would swallow the closing quote),
+ * POSIX does not. A backslash is emitted as `"\\"` (double-quoted), which both
+ * shell families read as one literal backslash. Identical to posixQuote when
+ * the input has no backslash.
+ */
+export function sshQuote(s: string): string {
+  if (s.includes('\0')) throw new Error('ssh: NUL in argument');
+  return s
+    .split('\\')
+    .map((part) => posixQuote(part))
+    .join('"\\\\"');
+}
+
+function assertAlias(alias: string): void {
+  if (!isValidSshAlias(alias)) throw new Error('ssh: invalid alias');
+}
+
+function assertAbs(p: string, what: string): void {
+  if (!p.startsWith('/')) throw new Error(`ssh: ${what} must be an absolute posix path`);
+}
+
+function assertCmd(cmd: string): void {
+  // A leading '-' would be read as an option by the exec'ing shell.
+  if (!cmd || cmd.startsWith('-')) throw new Error('ssh: invalid command');
+}
+
+function sshSpec(alias: string, flags: string[], remote: string): HostSpawnSpec {
+  assertAlias(alias);
+  return { file: 'ssh.exe', args: [...SSH_BASE_ARGS, ...flags, alias, '--', remote], cwd: null };
+}
+
+/**
+ * Env for an ssh spawn/pty (fix round 1 #4) as `export K='v'` lines — a pty
+ * gets only the app's own additions (the hook token; its login shell supplies
+ * the rest), a piped spawn sshSpawnEnv. They never appear in any argv: a piped spawn sends them
+ * base64'd as the first stdin line (sshEnvLine), a pty sources a 0600 file the
+ * helper staged (`env.stage`) and only that random path is in argv.
+ */
+export function sshEnvFileContent(env: Record<string, string>): string {
+  return Object.keys(env)
+    .sort()
+    .map((key) => {
+      if (!ENV_KEY.test(key)) throw new Error('ssh: invalid env key');
+      if (env[key]!.includes('\0')) throw new Error('ssh: NUL in env value');
+      return `export ${key}=${posixQuote(env[key]!)}\n`;
+    })
+    .join('');
+}
+
+const base64Utf8 = (text: string): string => {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+};
+
+/** The first stdin line of an sshSpawnSpec child: base64 of sshEnvFileContent (empty line = no env). */
+export function sshEnvLine(env: Record<string, string>): string {
+  const content = sshEnvFileContent(env);
+  return content ? `${base64Utf8(content)}\n` : '\n';
+}
+
+/**
+ * `sh -c` script of sshSpawnSpec — $0 = 'agent-workspace' (error prefix), $1
+ * cwd, rest = argv. The env line is read from stdin (one byte at a time on a
+ * pipe, so the CLI keeps the rest), `cd`, then the CLI is exec'd directly with
+ * stdin untouched. No login shell runs here, so no rc file can read the CLI's
+ * stdin (R36 #5) or close a descriptor it needs: macOS bash 3.2's interactive
+ * login startup closed every inherited fd above 2. The login env comes from
+ * the separate capture instead (sshSpawnEnv) — the way VS Code Remote and
+ * JetBrains resolve a shell env. A line that does not decode fails closed
+ * (exit 97 + one stderr line) instead of running the CLI without its env (R36 #3).
+ */
+export const SSH_RUN_STDIN_SCRIPT =
+  'IFS= read -r e || exit 97; ' +
+  // `-d` is GNU/busybox, `--decode` is BSD/macOS (whose documented short form is -D);
+  // each attempt gets its own printf, so a failed one never eats the next one's input.
+  'if [ -n "$e" ]; then v=$(printf \'%s\\n\' "$e" | base64 -d 2>/dev/null) || v=$(printf \'%s\\n\' "$e" | base64 --decode 2>/dev/null) || { echo "agent-workspace: env decode failed" >&2; exit 97; }; eval "$v"; fi; ' +
+  'cd "$1" || exit 1; shift; exec "$@"';
+
+/** Per-connection variables sshd sets — the spawn's own connection has its
+ * own; the capture connection's (a dead agent socket) are never replayed. */
+const SSH_SESSION_ENV: ReadonlySet<string> = new Set(['SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'SSH_AUTH_SOCK', 'SSH_ORIGINAL_COMMAND']);
+
+/** The env line of an ssh piped spawn: the captured login env (probe capture
+ * or helper `env.get`; null = plain sshd env, e.g. envCaptureDisabled) minus
+ * per-invocation and per-connection vars, with the app's `extra` overlaid. */
+export function sshSpawnEnv(captured: Record<string, string> | null, extra: Record<string, string>): Record<string, string> {
+  const base: Record<string, string> = {};
+  for (const [key, value] of Object.entries(captured ?? {})) {
+    if (!SSH_SESSION_ENV.has(key)) base[key] = value;
+  }
+  return mergeShellEnv(base, extra);
+}
+
+/** `sh -c` script of sshPtySpec — $0 body, $1 staged env file ('' = none, removed after sourcing), $2 cwd, $3 shell, rest = argv. */
+export const SSH_RUN_FILE_SCRIPT =
+  'f="$1"; shift; if [ -n "$f" ]; then set -a; . "$f" || exit 97; set +a; rm -f "$f"; fi; ' +
+  'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
+
+const loginBody = (shell: string): string => (shellFamily(shell) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"');
+
+/**
+ * ssh counterpart of spawnSpec: `/bin/sh` reads the env line from stdin, `cd`s
+ * and execs the CLI directly (like wsl.exe `-e /usr/bin/env K=V …`). The caller
+ * writes sshEnvLine(sshSpawnEnv(captured, extra)) to the child's stdin first —
+ * PATH/nvm come from that captured login env, never from argv.
+ */
+export function sshSpawnSpec(alias: string, cwd: string, cmd: string, args: string[]): HostSpawnSpec {
+  assertAbs(cwd, 'cwd');
+  assertCmd(cmd);
+  const words = ['/bin/sh', '-c', SSH_RUN_STDIN_SCRIPT, 'agent-workspace', cwd, cmd, ...args].map(sshQuote);
+  return sshSpec(alias, ['-T'], `exec ${words.join(' ')}`);
+}
+
+/** ssh counterpart of ptySpec: forced tty; env (the hook token) from a staged file whose path alone is in argv. */
+export function sshPtySpec(
+  alias: string,
+  cwd: string,
+  envFile: string | null,
+  cmd: string,
+  args: string[],
+  shell: string | null,
+): HostSpawnSpec {
+  const sh = shell ?? '/bin/bash';
+  assertAbs(cwd, 'cwd');
+  assertAbs(sh, 'shell');
+  if (envFile !== null) assertAbs(envFile, 'env file');
+  assertCmd(cmd);
+  const words = ['/bin/sh', '-c', SSH_RUN_FILE_SCRIPT, loginBody(sh), envFile ?? '', cwd, sh, cmd, ...args].map(sshQuote);
+  return sshSpec(alias, ['-t'], `exec ${words.join(' ')}`);
+}
+
+/** ssh counterpart of helperSpec (the hook forward is a separate connection: sshForwardSpec). */
+export function sshHelperSpec(
+  alias: string,
+  home: string,
+  shell: string,
+  hash: string,
+  mode: HelperMode = '--stdio',
+): HostSpawnSpec {
+  assertAbs(home, 'home');
+  assertAbs(shell, 'shell');
+  if (!HELPER_HASH_RE.test(hash)) throw new Error('ssh: invalid helper hash');
+  return sshSpec(
+    alias,
+    ['-T'],
+    `cd ${sshQuote(home)} && exec ${sshQuote(shell)} -ilc ${sshQuote(helperLaunchLine(shell, mode))} ${sshQuote(helperPath(home, hash))}`,
+  );
+}
+
+/**
+ * The hook listener's reverse forward on its own connection (fix round 1 #1):
+ * bound to the remote loopback only, and `ExitOnForwardFailure` — a port
+ * already taken on the remote (squatted) ends the connection instead of
+ * leaving hooks pointed at someone else. Not `-N` (R39 #3): the remote command
+ * reads the app's stdin pipe and exits on EOF, so the forward dies with the
+ * app (crash / kill included) instead of orphaning the remote port.
+ */
+export const SSH_FORWARD_REMOTE = 'exec cat >/dev/null';
+
+export function sshForwardSpec(alias: string, port: number): HostSpawnSpec {
+  assertAlias(alias);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ssh: invalid forward port');
+  return {
+    file: 'ssh.exe',
+    args: [
+      ...SSH_BASE_ARGS,
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-T',
+      '-R',
+      `127.0.0.1:${port}:127.0.0.1:${port}`,
+      alias,
+      '--',
+      SSH_FORWARD_REMOTE,
+    ],
+    cwd: null,
+  };
+}
+
+/** A failed ssh run worth retrying on its own (network/sleep): exit 255 or a timeout. Shell/node/helper failures are not. */
+export function sshFailureClass(run: { code: number | null; timedOut: boolean }): 'connection' | 'other' {
+  return run.timedOut || run.code === 255 ? 'connection' : 'other';
+}
+
+export const SSH_RECOVERY_MIN_MS = 60_000;
+
+/** Recovery triggers (resume / unlock / focus) run at most once a minute. */
+export function sshRecoveryDue(lastAt: number | null, now: number, minMs = SSH_RECOVERY_MIN_MS): boolean {
+  return lastAt === null || now - lastAt >= minMs;
+}
+
+/** One plain command on the remote (probe curl, `claude stop`): `exec <argv…>`, every word quoted. */
+export function sshCommandSpec(alias: string, argv: string[]): HostSpawnSpec {
+  if (argv.length === 0) throw new Error('ssh: empty command');
+  assertCmd(argv[0]!);
+  return sshSpec(alias, ['-T'], `exec ${argv.map(sshQuote).join(' ')}`);
+}
+
+/** The WSL probe line (home / user / login shell / helper presence) under
+ * `/bin/sh -c` — the remote login shell may be fish, which can't parse it. */
+export function sshProbeSpec(alias: string, hash: string | null, home: string | null): HostSpawnSpec {
+  return sshCommandSpec(alias, ['/bin/sh', '-c', probeLine(hash, home)]);
+}
+
+/** Marker between the node version and the CLI lookups in sshEnvSpec's output. */
+export const CLI_MARKER = '__DW_CLI__';
+
+/**
+ * One interactive-login run per ssh probe (each ssh.exe is a full handshake):
+ * the env capture, the node version, then `claude`/`devin`/`gh` lookups and
+ * `claude --version`. Plain `cmd || cmd` and `;` only, so POSIX shells and
+ * fish ≥ 3 parse it alike.
+ */
+export function sshEnvSpec(alias: string, shell: string): HostSpawnSpec {
+  assertAbs(shell, 'shell');
+  const cmd =
+    `printf "\\0__DW_ENV__\\0"; env -0; printf "\\0${NODE_MARKER}\\0"; ` +
+    'command -v node >/dev/null && node -p process.versions.node || echo NONODE; ' +
+    `printf "\\0${CLI_MARKER}\\0"; ` +
+    'printf "claude="; command -v claude || echo; ' +
+    'printf "devin="; command -v devin || echo; ' +
+    'printf "gh="; command -v gh || echo; ' +
+    'printf "version="; claude --version 2>/dev/null || echo';
+  return sshSpec(alias, ['-T'], `exec ${sshQuote(shell)} -ilc ${sshQuote(cmd)}`);
+}
+
+export interface SshEnvProbe {
+  env: Record<string, string> | null;
+  node: string | null;
+  claude: string | null;
+  devin: string | null;
+  gh: boolean;
+  version: string | null;
+}
+
+/** sshEnvSpec output → env / node / CLI paths. Everything is null/false when the markers are missing. */
+export function parseSshEnvProbe(stdout: Uint8Array | string): SshEnvProbe {
+  const text = typeof stdout === 'string' ? stdout : new TextDecoder('utf-8').decode(stdout);
+  const sep = `\0${CLI_MARKER}\0`;
+  const at = text.lastIndexOf(sep);
+  const head = at === -1 ? text : text.slice(0, at);
+  const env = parseShellEnv(head, '__DW_ENV__');
+  const node = env === null ? null : parseNodeVersion(head, NODE_MARKER);
+  const lines = at === -1 ? [] : text.slice(at + sep.length).split('\n');
+  const field = (key: string): string | null => {
+    const line = lines.find((l) => l.startsWith(`${key}=`));
+    const value = line?.slice(key.length + 1).trim() ?? '';
+    return value || null;
+  };
+  const abs = (value: string | null): string | null => (value && value.startsWith('/') ? value : null);
+  const version = field('version')?.split(/\s+/)[0] ?? null;
+  return {
+    env,
+    node,
+    claude: abs(field('claude')),
+    devin: abs(field('devin')),
+    gh: abs(field('gh')) !== null,
+    version: version && SEMVER_LINE.test(version) ? version : null,
+  };
+}
+
+/** ssh counterpart of helperDeploySpec: same byte-count-gated atomic script, bundle on stdin. */
+export function sshHelperDeploySpec(alias: string, home: string, hash: string, bytes: number): HostSpawnSpec {
+  assertAbs(home, 'home');
+  if (!HELPER_HASH_RE.test(hash)) throw new Error('ssh: invalid helper hash');
+  if (!Number.isInteger(bytes) || bytes < 0) throw new Error('ssh: invalid byte count');
+  const words = [
+    '/bin/sh',
+    '-c',
+    HELPER_DEPLOY_SCRIPT,
+    'sh',
+    `${home.replace(/\/+$/, '')}/${HELPER_DIR}`,
+    helperFileName(hash),
+    String(bytes),
+  ].map(sshQuote);
+  return sshSpec(alias, ['-T'], `exec ${words.join(' ')}`);
 }
 
 /**

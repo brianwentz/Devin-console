@@ -77,11 +77,45 @@ export function buildHooksBlock(opts: { port: number; auth: HookAuth; addr?: str
   return { hooks };
 }
 
+/**
+ * Whether the global (literal-token) block goes into a host's settings.json
+ * (R39 #1). Never on an ssh host: the file outlives the app, the forward and
+ * the host's membership, and on a shared machine any co-tenant can bind the
+ * deterministic loopback port it points at — every `claude` run there would
+ * then post prompts, Bash output and the token to them. ssh sessions report
+ * only through app-launched ptys (`--settings`, env-var auth, verified forward).
+ */
+export function globalHooksEnabledFor(hooksEnabled: boolean, hostKind: 'local' | 'wsl' | 'ssh'): boolean {
+  return hooksEnabled && hostKind !== 'ssh';
+}
+
 /** Compact JSON for `claude --settings <json>` with env-var auth. */
 export function settingsFlagJson(port: number, envVar: string, addr?: string): string {
   return JSON.stringify(
     buildHooksBlock({ port, auth: { kind: 'env', envVar }, ...(addr ? { addr } : {}) }),
   );
+}
+
+/**
+ * Spawn additions for a claude-kind pty. `attach` gets none (the background
+ * agent already runs). `--permission-mode` is always passed otherwise; the
+ * `--settings` hook block and the token env only with `hooks` — null when
+ * there is no listener or an ssh host's forward is not verified (R40 M1: an
+ * unverified forward must not cost the user their configured permission mode).
+ */
+export function claudePtyInjection(opts: {
+  mode: 'resume' | 'new' | 'attach';
+  permissionMode: string;
+  hooks: { port: number; envVar: string; token: string; addr?: string | undefined } | null;
+}): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
+  if (opts.mode === 'attach') return null;
+  const permission = ['--permission-mode', opts.permissionMode];
+  if (!opts.hooks) return { extraArgs: permission, extraEnv: {} };
+  const { port, envVar, token, addr } = opts.hooks;
+  return {
+    extraArgs: ['--settings', settingsFlagJson(port, envVar, addr), ...permission],
+    extraEnv: { [envVar]: token },
+  };
 }
 
 /** Identity of one host's hooks write: an unchanged key means settings.json is already in the desired state, so the UNC round-trip is skipped. */

@@ -14,7 +14,9 @@ import {
   hostIdForPath as coreHostIdForPath,
   mergeShellEnv,
   isFsReady,
+  isSshHost,
   isWslHost,
+  validateSshAliasInput,
   LOCAL_HOST,
   parseShellEnv,
   parseWslList,
@@ -50,6 +52,7 @@ import { HostChannel, type HelperStatus } from './hostChannel';
 import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
 import { hooksOffSpawnError } from '../core/hooksOffBackoff';
 import { wtDistroList } from '../core/windowsTerminal';
+import { SshHostDisabledError, SshHosts, aliasHash as aliasHashOf } from './sshHosts';
 
 const execFileAsync = promisify(execFile);
 
@@ -72,6 +75,8 @@ function enumFreshMs(): number {
   return Number.isFinite(override) && override > 0 ? override : ENUM_FRESH_MS;
 }
 const PROBE_TIMEOUT_MS = 10_000;
+/** After a timeout kill, how long 'exit' waits for 'close' before settling. */
+const CLOSE_GRACE_MS = 2_000;
 const ENV_MARKER = '__DW_ENV__';
 const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
 
@@ -137,7 +142,7 @@ const localStatus = (): HostStatus => {
 /** Every `wsl.exe` invocation logs `host-exec {host, kind}` so a soak can count them. */
 type WslExecKind = 'enum' | 'probe' | 'env' | 'exec' | 'spawn' | 'helper';
 
-type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store';
+type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store' | 'hooks';
 
 interface WslRun {
   stdout: Buffer;
@@ -167,10 +172,21 @@ export class HostsRegistry {
   /** The local Claude home, captured once at construction (ux3 S7: app code
    * never reads `process.env.CLAUDE_CONFIG_DIR` live). */
   private readonly localConfigDirValue: string;
+  /** `ssh:<alias>` hosts from settings.hosts.ssh (P3). */
+  private readonly ssh: SshHosts;
 
   constructor() {
     this.localConfigDirValue = resolveLocalConfigDir(process.env, homedir(), join);
     this.ready = this.resolveWsl();
+    this.ssh = new SshHosts({
+      publish: () => this.publish(),
+      setPart: (id, part, message) => this.setPart(id, part, message),
+      hookPort: () => this.hookPort?.() ?? null,
+      hookToken: () => this.hookToken?.() ?? null,
+      bundle: () => helperBundle(),
+      quitting: () => this.quitting,
+      overrides: (id) => this.overrides(id),
+    });
   }
 
   // --- command plumbing ----------------------------------------------------
@@ -230,25 +246,50 @@ export class HostsRegistry {
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
         let timedOut = false;
+        let exited = false;
+        let exitCode: number | null = null;
+        let settled = false;
+        let grace: ReturnType<typeof setTimeout> | null = null;
+        const finish = (code: number | null): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (grace) clearTimeout(grace);
+          if (requireSuccess && code !== 0) {
+            reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
+            return;
+          }
+          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, timedOut });
+        };
+        // A killed wsl.exe whose pipes are still held may never emit 'close':
+        // after a timeout, 'exit' + a short grace is enough (as sshHosts.ts).
+        const armGrace = (): void => {
+          if (!timedOut || !exited || grace) return;
+          grace = setTimeout(() => finish(exitCode), CLOSE_GRACE_MS);
+          grace.unref?.();
+        };
         const timer = setTimeout(() => {
           timedOut = true;
           child.kill('SIGKILL');
+          armGrace();
         }, timeout);
         timer.unref?.();
         child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
         child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
         child.once('error', (error) => {
           clearTimeout(timer);
+          if (grace) clearTimeout(grace);
+          settled = true;
           reject(error);
         });
         child.once('exit', (code) => {
-          clearTimeout(timer);
-          if (requireSuccess && code !== 0) {
-            reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
-            return;
-          }
-          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, timedOut });
+          exited = true;
+          exitCode = code;
+          armGrace();
         });
+        // 'close', not 'exit': stdout is fully drained by then — 'exit' can fire
+        // with the output still buffered (a probe read as an empty home).
+        child.once('close', (code) => finish(code));
       });
     });
   }
@@ -317,8 +358,26 @@ export class HostsRegistry {
 
   /** Window focus: re-enumerate only when the cache has gone stale. */
   onWindowFocus(): void {
+    this.ssh.recover('focus');
     if (!this.started) return;
     if (!this.distros.isFresh(ENUM_CACHE_MS)) void this.enumerateAsync();
+  }
+
+  /** powerMonitor resume / unlock-screen: retry ssh hosts that failed for a
+   * connection reason (throttled ≤1/min inside SshHosts.recover). */
+  recoverSsh(trigger: 'resume' | 'unlock', opts: { force?: boolean } = {}): number {
+    return this.ssh.recover(trigger, opts);
+  }
+
+  /** ssh: the hook forward is up and its listener proved the token (hook
+   * injection / the remote hooks block are allowed only then). */
+  /** Test seam (R39 #3): EOF the hook forward's stdin; true when there was one. */
+  sshForwardEndStdin(id: string): boolean {
+    return id.startsWith('ssh:') && this.ssh.forwardEndStdin(id as HostId);
+  }
+
+  hookForwardVerified(id: string): boolean {
+    return id.startsWith('ssh:') && this.ssh.forwardVerified(id as HostId);
   }
 
   /** Fires onStatusChange only when the status rows changed structurally. */
@@ -433,12 +492,13 @@ export class HostsRegistry {
     return entry;
   }
 
-  /** Enabled ExecHosts: local first, then each enabled wsl distro. */
+  /** Enabled ExecHosts: local first, then each enabled wsl distro, then each enabled ssh host. */
   list(): ExecHost[] {
     const hosts: ExecHost[] = [LOCAL_HOST];
     for (const { name, stopped } of this.enabledDistros()) {
       hosts.push(this.entryFor(name, stopped).host);
     }
+    hosts.push(...this.ssh.list());
     return hosts;
   }
 
@@ -460,6 +520,7 @@ export class HostsRegistry {
    * the in-flight run), then fsReady. Work over the helper channel uses
    * fsReady alone — it never re-lists. */
   async backgroundReady(host: ExecHost): Promise<boolean> {
+    if (isSshHost(host)) return this.fsReady(host);
     if (!isWslHost(host)) return true;
     await this.enumerateIfStale();
     return this.fsReady(host);
@@ -477,6 +538,7 @@ export class HostsRegistry {
     const seen = new Map<HostId, ExecHost>();
     for (const host of this.list()) seen.set(host.id, host);
     for (const entry of this.entries.values()) seen.set(entry.host.id, entry.host);
+    for (const host of this.ssh.all()) seen.set(host.id, host);
     return [LOCAL_HOST, ...[...seen.values()].filter((h) => h.id !== 'local')];
   }
 
@@ -484,6 +546,7 @@ export class HostsRegistry {
    * host only while its helper channel is `ready` (without a shipped bundle,
    * once its probe is `ready` — UNC on a hung distro blocks). */
   fsReady(host: ExecHost): boolean {
+    if (isSshHost(host)) return this.ssh.fsReady(host.id);
     if (!isWslHost(host)) return true;
     // A stale `ready` entry outlives disabling or stopping the distro.
     if (this.enumStopped(host.id)) return false;
@@ -496,6 +559,7 @@ export class HostsRegistry {
   /** fsReady without the enabled check: the hooks opt-out still removes our
    * block (it embeds the bearer token) from a disabled but running distro. */
   fsSafe(host: ExecHost): boolean {
+    if (isSshHost(host)) return this.ssh.fsSafe(host.id);
     if (!isWslHost(host)) return true;
     if (this.enumStopped(host.id)) return false;
     return isFsReady(host, this.entries.get(host.id)?.status.state);
@@ -508,6 +572,7 @@ export class HostsRegistry {
 
   hostById(id: HostId | string): ExecHost | null {
     if (id === 'local') return LOCAL_HOST;
+    if (id.startsWith('ssh:')) return this.ssh.hostById(id);
     return this.entries.get(id as HostId)?.host ?? null;
   }
 
@@ -558,6 +623,7 @@ export class HostsRegistry {
         void this.probe(entry);
       }
     }
+    statuses.push(...this.ssh.statuses());
     return statuses;
   }
 
@@ -752,6 +818,7 @@ export class HostsRegistry {
 
   /** The host's helper channel (null for local, before the first eligible start, or without a bundle). */
   channel(host: ExecHost): HostChannel | null {
+    if (isSshHost(host)) return this.ssh.channel(host.id);
     if (!isWslHost(host)) return null;
     return this.entries.get(host.id)?.channel ?? null;
   }
@@ -883,11 +950,13 @@ export class HostsRegistry {
     this.quitting = true;
     const live = [...this.entries.values()].filter((e) => e.channel?.running);
     for (const entry of live) entry.channel!.stop();
+    const sshChannels = this.ssh.stopChannels();
     // Give the EOFs a moment to land, then kill what is left: stop()'s grace
     // timer is unref'd and would not fire before the process exits.
-    if (live.length) await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+    if (live.length || sshChannels.length) await new Promise((resolveWait) => setTimeout(resolveWait, 300));
     // Every channel — one halted moments earlier still has its child in the grace.
     for (const entry of this.entries.values()) entry.channel?.killStopped();
+    for (const channel of sshChannels) channel.killStopped();
   }
 
   /**
@@ -898,6 +967,9 @@ export class HostsRegistry {
    * Stopped distro. Exit 86 (bundle gone) → deploy once and retry.
    */
   async hooksOffOnce(host: ExecHost): Promise<{ ok: boolean; error: string | null }> {
+    // ssh: never — the global block is never installed there and its removal
+    // only runs over a ready channel (R39 #1 / R40 f; the ssh one-shot was deleted).
+    if (isSshHost(host)) return { ok: false, error: 'not a wsl host' };
     if (!isWslHost(host) || this.quitting) return { ok: false, error: 'not a wsl host' };
     const entry = this.entries.get(host.id);
     const bundle = helperBundle();
@@ -926,10 +998,12 @@ export class HostsRegistry {
 
   /** Test hooks: kill the live helper / read the channel state. */
   killHelper(id: string): boolean {
+    if (id.startsWith('ssh:')) return this.ssh.channel(id as HostId)?.kill() ?? false;
     return this.entries.get(id as HostId)?.channel?.kill() ?? false;
   }
 
   channelInfo(id: string): ReturnType<HostChannel['info']> | null {
+    if (id.startsWith('ssh:')) return this.ssh.channel(id as HostId)?.info() ?? null;
     return this.entries.get(id as HostId)?.channel?.info() ?? null;
   }
 
@@ -1041,6 +1115,8 @@ export class HostsRegistry {
 
   /** Wired by the hook collaborator: the listener port and a vEthernet bind. */
   hookPort: (() => number | null) | null = null;
+  /** The hook listener's bearer token (the ssh forward challenge). */
+  hookToken: (() => string | null) | null = null;
   hookAddrBind: ((addr: string) => void) | null = null;
   /** Called when a probe/env capture finishes so consumers can re-publish. */
   onStatusChange: (() => void) | null = null;
@@ -1074,6 +1150,7 @@ export class HostsRegistry {
     host: ExecHost,
     opts?: { explicit?: boolean },
   ): Promise<Record<string, string> | null> {
+    if (isSshHost(host)) return this.ssh.shellEnv(host.id);
     if (!isWslHost(host)) return null;
     const entry = this.entries.get(host.id);
     if (!entry) return null;
@@ -1113,6 +1190,7 @@ export class HostsRegistry {
   /** env refresh for `claude:recheckEnv` — re-reads env.get over a ready
    * channel, else forces a capture for the host. */
   async recheckEnv(id: string): Promise<void> {
+    if (id.startsWith('ssh:')) return this.ssh.recheckEnv(id as HostId);
     const entry = this.entries.get(id as HostId);
     if (!entry) return;
     if (entry.channel?.state === 'ready') {
@@ -1143,7 +1221,10 @@ export class HostsRegistry {
   }
 
   spawnOn(host: ExecHost, cmd: HostCommand, opts?: { signal?: AbortSignal }): ChildProcess {
-    const spec = spawnSpec(host, cmd, this.cachedEnv(host));
+    // ssh: `/bin/sh` → login shell over `ssh -T`; the app's extra env goes in
+    // as the first stdin line, never in argv (logs host-ssh + host-exec).
+    const sshSpec = isSshHost(host) ? this.ssh.spawnSpec(host.id, cmd) : null;
+    const spec = sshSpec ? { file: sshSpec.file, args: sshSpec.args, cwd: null } : spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
     const t0 = Date.now();
     if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'spawn' } });
@@ -1154,6 +1235,10 @@ export class HostsRegistry {
       signal: opts?.signal,
       stdio: 'pipe',
     });
+    if (sshSpec) {
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.write(sshSpec.stdinPrefix);
+    }
     child.once('spawn', () => {
       log('host', 'host-spawn', {
         detail: { host: host.id, kind: 'pipe', ok: true, ms: Date.now() - t0 },
@@ -1178,7 +1263,10 @@ export class HostsRegistry {
     if (isWslHost(host) && !opts?.explicit && this.enumStopped(host.id)) {
       throw new Error('distro is stopped');
     }
+    // A disabled ssh host is never connected to (R39 #5).
+    if (isSshHost(host) && !this.ssh.enabled(host.id)) throw new SshHostDisabledError();
     await this.shellEnv(host, opts);
+    if (isSshHost(host)) return this.execSsh(host, cmd, timeout);
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
     const applied = this.applyWslCmd(spec);
     if (isWslHost(host)) log('host', 'host-exec', { detail: { host: host.id, kind: 'exec' } });
@@ -1192,8 +1280,39 @@ export class HostsRegistry {
     return stdout;
   }
 
-  /** node-pty spec; the caller supplies the pty options (cols/rows/env). */
+  /** execOn for ssh: the env line on stdin (like spawnOn), stdout collected, killed after `timeout`. */
+  private execSsh(host: ExecHost, cmd: HostCommand, timeout: number): Promise<string> {
+    return new Promise((resolveRun, reject) => {
+      const child = this.spawnOn(host, cmd);
+      child.stdin?.end();
+      const out: Buffer[] = [];
+      const timer = setTimeout(() => child.kill(), timeout);
+      timer.unref?.();
+      child.stdout?.on('data', (chunk: Buffer) => out.push(chunk));
+      child.stderr?.resume();
+      child.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      // 'close', not 'exit': stdout is fully drained by then (claude --version / stop output).
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolveRun(Buffer.concat(out).toString('utf8'));
+        else reject(new Error(`ssh command exited ${code ?? 'unknown'}`));
+      });
+    });
+  }
+
+  /** node-pty spec for an ssh host: async — a non-empty env is staged on the
+   * host first (helper `env.stage`) so no secret reaches the argv. */
+  async remotePtySpawnSpec(host: ExecHost, cmd: HostCommand): Promise<HostPtySpec> {
+    if (!isSshHost(host)) return this.ptySpawnSpec(host, cmd);
+    return { ...(await this.ssh.ptySpec(host.id, cmd)), cwd: null };
+  }
+
+  /** node-pty spec; the caller supplies the pty options (cols/rows/env). ssh hosts: remotePtySpawnSpec. */
   ptySpawnSpec(host: ExecHost, cmd: HostCommand): HostPtySpec {
+    if (isSshHost(host)) throw new Error('ptySpawnSpec: use remotePtySpawnSpec for ssh hosts');
     const shell = isWslHost(host) ? (this.entries.get(host.id)?.status.shell ?? null) : null;
     const spec = ptySpec(host, cmd, shell);
     const applied = this.applyWslCmd(spec);
@@ -1246,7 +1365,7 @@ export class HostsRegistry {
       );
     }
     const host = this.hostById(id);
-    if (!host || !isWslHost(host) || !this.fsReady(host)) return false;
+    if (!host || host.kind === 'local' || !this.fsReady(host)) return false;
     const channel = this.channel(host);
     if (!channel) return false;
     try {
@@ -1267,6 +1386,17 @@ export class HostsRegistry {
 
   /** hosts:setEnabled — the explicit wslDistros list is the source of truth. */
   setEnabled(id: string, enabled: boolean): void {
+    if (id.startsWith('ssh:')) {
+      const current = state.settings?.current.hosts.ssh ?? [];
+      if (!current.some((h) => `ssh:${h.alias}` === id)) return;
+      state.settings?.merge({
+        hosts: { ssh: current.map((h) => (`ssh:${h.alias}` === id ? { ...h, enabled } : h)) },
+      });
+      this.ssh.sync();
+      this.lastPublished = null;
+      this.publish();
+      return;
+    }
     const distro = id.startsWith('wsl:') ? id.slice(4) : null;
     if (!distro) return;
     const current = state.settings?.current.hosts.wslDistros ?? null;
@@ -1290,6 +1420,27 @@ export class HostsRegistry {
   async refresh(id?: string): Promise<void> {
     // Explicit only — enumerations and probes never call this.
     this.onExplicitRefresh?.(id as HostId | undefined);
+    if (id?.startsWith('ssh:')) {
+      await this.ssh.refresh(id as HostId);
+      this.lastPublished = null;
+      this.publish();
+      return;
+    }
+    // ssh probes (10–60 s per unreachable host) run beside the WSL re-check,
+    // never ahead of it (R40 M2).
+    const sshDone = id === undefined ? this.ssh.refresh() : Promise.resolve();
+    try {
+      await this.refreshWsl(id);
+    } finally {
+      await Promise.allSettled([sshDone]);
+      // An explicit refresh always republishes, even when nothing changed, so
+      // consumers retry work that failed earlier (e.g. the hooks write).
+      this.lastPublished = null;
+      this.publish();
+    }
+  }
+
+  private async refreshWsl(id: string | undefined): Promise<void> {
     this.distros.invalidate();
     await this.distros.refreshFresh();
     const targets = id
@@ -1337,14 +1488,53 @@ export class HostsRegistry {
     };
   }
 
+  // --- ssh membership (P3) ------------------------------------------------------
+
+  /** hosts:sshAdd — validates + canonicalises (lower-case) the alias (reserved
+   * names refused); an existing alias is re-enabled. The probe runs on the next status read. */
+  addSshHost(input: string): { ok: true; id: HostId } | { ok: false; error: string } {
+    const checked = validateSshAliasInput(input);
+    if (!checked.ok) return checked;
+    const { alias } = checked;
+    const current = state.settings?.current.hosts.ssh ?? [];
+    const known = current.some((h) => h.alias === alias);
+    if (!known && current.length >= 50) return { ok: false, error: 'Too many SSH hosts (50 max)' };
+    const next = known
+      ? current.map((h) => (h.alias === alias ? { ...h, enabled: true } : h))
+      : [...current, { alias, enabled: true }];
+    state.settings?.merge({ hosts: { ssh: next } });
+    log('host', 'host-ssh', { detail: { aliasHash: aliasHashOf(alias), op: 'add' } });
+    this.ssh.sync();
+    this.lastPublished = null;
+    this.publish();
+    return { ok: true, id: `ssh:${alias}` };
+  }
+
+  /** hosts:sshRemove — drops the entry and stops its helper. */
+  removeSshHost(id: string): void {
+    const current = state.settings?.current.hosts.ssh ?? [];
+    const next = current.filter((h) => `ssh:${h.alias}` !== id);
+    if (next.length === current.length) return;
+    state.settings?.merge({ hosts: { ssh: next } });
+    // The host's overrides go with it (R39 #11) — a named removal of the one
+    // key this host owns (ux3 S6: merge() never deletes).
+    state.settings?.removeHostOverride(id);
+    log('host', 'host-ssh', { detail: { aliasHash: aliasHashOf(id.slice(4)), op: 'remove' } });
+    this.ssh.sync();
+    this.lastPublished = null;
+    this.publish();
+  }
+
   // --- test seams ---------------------------------------------------------------
 
   /** Test hooks: status rows and env key names (never values). */
   status(id: string): HostStatus | null {
+    if (id.startsWith('ssh:')) return this.ssh.status(id as HostId);
     return this.entries.get(id as HostId)?.status ?? null;
   }
 
   shellEnvKeys(id: string): string[] {
+    if (id.startsWith('ssh:')) return this.ssh.envKeys(id as HostId);
     const entry = this.entries.get(id as HostId);
     return Object.keys(entry?.channelEnv ?? entry?.env ?? {}).sort();
   }

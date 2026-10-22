@@ -3,8 +3,11 @@
 // round-trip through `-e /usr/bin/printf`, UNC listSessions/stat timings,
 // fs.watch over the UNC dir, inotifywait presence, hook reachability
 // (127.0.0.1 + vEthernet). Evidence → docs/evidence/hosts-probe.json;
+// `--host ssh:<alias>` instead probes one ssh host (helper ready, store.list
+// ms, argv round-trip — see probeSsh) into the file's `ssh` key;
 // exit 0 even when wsl.exe or distros are absent (reported in the file).
-// Uses only core/execHost.ts — never src/main/** (that pulls Electron state).
+// Uses only core/execHost.ts — never src/main/** (that pulls Electron state);
+// the one exception is src/main/sshResolve.ts (no electron import).
 //
 // `--soak <minutes> [--profile <dir>]` instead launches the BUILT app (out/main.cjs)
 // against a throwaway COPY of the profile (default %APPDATA%\agent-workspace; the
@@ -49,7 +52,20 @@ import { createRequire } from 'node:module';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { reduceEventLog, summarizeSoak } from '../src/core/soak';
+import { createHash } from 'node:crypto';
+import { resolveWindowsSsh } from '../src/main/sshResolve';
+import { LineDecoder, encodeFrame } from '../src/core/hostRpc';
 import {
+  isValidSshAlias,
+  parseHelperHash,
+  parseHelperPresent,
+  parseProbeOutput,
+  parseSshEnvProbe,
+  sshCommandSpec,
+  sshEnvSpec,
+  sshHelperDeploySpec,
+  sshHelperSpec,
+  sshProbeSpec,
   hostIdForPath,
   isWslHost,
   mergeShellEnv,
@@ -252,7 +268,162 @@ async function soak(minutes: number): Promise<void> {
   }
 }
 
+// --- `--host ssh:<alias>` (P3, E3.1) -------------------------------------------
+// One real ssh host end to end with the app's own specs: probe line, login-env
+// capture (node / claude), argv round-trip through the remote shell (sshQuote),
+// stdin deploy of out/helper, helper launch → hello → store.list (ms recorded).
+// The alias is recorded only as its sha256-8. AGENT_WORKSPACE_TEST_SSH_CMD
+// (e.g. `node out/fixtures/fakeSsh.cjs`) runs the same steps against the fake.
+
+/** The ssh client: the test seam, else an absolute path (R36 #1 — never a bare-name / cwd search). Set by probeSsh. */
+let sshCmd: string[] = [];
+
+async function resolveSshCmd(): Promise<string[]> {
+  const override = process.env.AGENT_WORKSPACE_TEST_SSH_CMD?.trim().split(/\s+/).filter(Boolean);
+  if (override?.length) return override;
+  if (process.platform !== 'win32') return ['/usr/bin/ssh'];
+  const found = await resolveWindowsSsh();
+  if (!found) throw new Error('OpenSSH client (ssh.exe) not found');
+  return [found];
+}
+
+function runSshSpec(
+  spec: { args: string[] },
+  opts: { input?: Buffer; timeout?: number } = {},
+): Promise<{ stdout: Buffer; code: number | null; ms: number }> {
+  const [file, ...prefix] = sshCmd;
+  const t0 = Date.now();
+  return new Promise((resolveRun, reject) => {
+    const child = spawn(file!, [...prefix, ...spec.args], {
+      stdio: [opts.input ? 'pipe' : 'ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    if (opts.input) {
+      child.stdin!.on('error', () => undefined);
+      child.stdin!.end(opts.input);
+    }
+    const out: Buffer[] = [];
+    const timer = setTimeout(() => child.kill('SIGKILL'), opts.timeout ?? 30_000);
+    child.stdout!.on('data', (c: Buffer) => out.push(c));
+    child.once('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolveRun({ stdout: Buffer.concat(out), code, ms: Date.now() - t0 });
+    });
+  });
+}
+
+async function sshHelperRun(spec: { args: string[] }): Promise<Record<string, unknown>> {
+  const [file, ...prefix] = sshCmd;
+  const t0 = Date.now();
+  const child = spawn(file!, [...prefix, ...spec.args], { stdio: 'pipe', windowsHide: true });
+  child.stderr.resume();
+  const decoder = new LineDecoder();
+  const result: Record<string, unknown> = { ready: false };
+  return new Promise((resolveRun) => {
+    const timer = setTimeout(() => {
+      result.error = 'timeout';
+      child.kill();
+    }, 90_000);
+    let listSentAt = 0;
+    child.stdout.on('data', (chunk: Buffer) => {
+      for (const frame of decoder.push(chunk)) {
+        const f = frame as { method?: string; id?: number; result?: unknown; error?: unknown; params?: { node?: string } };
+        if (f.method === 'hello') {
+          result.ready = true;
+          result.helloMs = Date.now() - t0;
+          result.node = f.params?.node ?? null;
+          listSentAt = Date.now();
+          child.stdin.write(encodeFrame({ id: 1, method: 'store.list', params: {} }));
+        } else if (f.id === 1) {
+          result.storeListMs = Date.now() - listSentAt;
+          result.storeListCount = Array.isArray(f.result) ? f.result.length : null;
+          if (f.error) result.storeListError = (f.error as { code?: string }).code ?? 'error';
+          child.stdin.end();
+        }
+      }
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      result.exit = code;
+      resolveRun(result);
+    });
+  });
+}
+
+async function probeSsh(alias: string): Promise<void> {
+  const entry: Record<string, unknown> = {
+    id: `ssh:#${createHash('sha256').update(alias.toLowerCase()).digest('hex').slice(0, 8)}`,
+    fake: Boolean(process.env.AGENT_WORKSPACE_TEST_SSH_CMD),
+  };
+  out.ssh = entry;
+  try {
+    sshCmd = await resolveSshCmd();
+    const hashJson = existsSync('out/helper/helper-hash.json') ? readFileSync('out/helper/helper-hash.json', 'utf8') : null;
+    const hash = parseHelperHash(hashJson);
+    const probe = await runSshSpec(sshProbeSpec(alias, hash, null));
+    const parsed = parseProbeOutput(probe.stdout.toString('utf8'));
+    entry.probe = {
+      ms: probe.ms,
+      exit: probe.code,
+      home: parsed.home ?? null,
+      shell: parsed.shell ?? null,
+      helperPresent: parseHelperPresent(probe.stdout.toString('utf8')),
+    };
+    if (probe.code !== 0 || !parsed.home?.startsWith('/')) throw new Error(`probe failed (exit ${probe.code})`);
+    const home = parsed.home;
+    const shell = parsed.shell ?? '/bin/sh';
+    const env = await runSshSpec(sshEnvSpec(alias, shell));
+    const envProbe = parseSshEnvProbe(env.stdout);
+    entry.envCapture = {
+      ms: env.ms,
+      ok: envProbe.env !== null,
+      count: Object.keys(envProbe.env ?? {}).length,
+      node: envProbe.node,
+      claude: envProbe.claude !== null,
+      claudeVersion: envProbe.version,
+      gh: envProbe.gh,
+    };
+    const strings = [
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:1/x' }] }] } }),
+      'two words',
+      'a"q',
+      '50%',
+      'trail\\',
+      '$HOME',
+      'unicode é',
+      `it's`,
+      '$(id)',
+    ];
+    const rt = await runSshSpec(sshCommandSpec(alias, ['/usr/bin/printf', '%s\\n', ...strings]));
+    const lines = rt.stdout.toString('utf8').split('\n').filter((l) => l.length > 0);
+    const ok = lines.length === strings.length && strings.every((s, i) => lines[i] === s);
+    entry.argvRoundTrip = { sent: strings.length, got: lines.length, ok };
+    if (!hash) {
+      entry.helper = { error: 'no out/helper bundle — run npm run build' };
+      return;
+    }
+    const bundle = readFileSync('out/helper/agent-workspace-helper.mjs');
+    const deploy = await runSshSpec(sshHelperDeploySpec(alias, home, hash, bundle.length), { input: bundle, timeout: 60_000 });
+    const helper = await sshHelperRun(sshHelperSpec(alias, home, shell, hash));
+    entry.helper = { deployMs: deploy.ms, deployOk: deploy.code === 0, bytes: bundle.length, ...helper };
+  } catch (error) {
+    entry.error = String(error).slice(0, 200);
+  }
+}
+
 async function main(): Promise<void> {
+  const hostArg = argValue('--host');
+  if (hostArg !== undefined) {
+    const alias = hostArg.startsWith('ssh:') ? hostArg.slice(4) : '';
+    if (!isValidSshAlias(alias)) throw new Error('--host needs ssh:<alias> (a Host from ~/.ssh/config)');
+    await probeSsh(alias);
+    finish(true, 'ssh');
+    return;
+  }
   const soakMinutes = argValue('--soak');
   if (soakMinutes !== undefined) {
     const n = Number(soakMinutes);
@@ -482,14 +653,18 @@ async function main(): Promise<void> {
   finish();
 }
 
-function finish(merge = false): void {
+/** `merge`: keep the previous file and replace only `key` (soak runs: merged per label; ssh: replaced). */
+function finish(merge = false, key: 'soak' | 'ssh' = 'soak'): void {
   mkdirSync('docs/evidence', { recursive: true });
   const file = join('docs', 'evidence', 'hosts-probe.json');
   let result: Record<string, unknown> = out;
   if (merge && existsSync(file)) {
     try {
       const prev = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-      result = { ...prev, soak: { ...((prev.soak ?? {}) as object), ...(out.soak as object) } };
+      result =
+        key === 'soak'
+          ? { ...prev, soak: { ...((prev.soak ?? {}) as object), ...(out.soak as object) } }
+          : { ...prev, ssh: out.ssh };
     } catch {
       /* unreadable previous evidence — write fresh */
     }

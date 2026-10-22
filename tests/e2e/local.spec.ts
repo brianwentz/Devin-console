@@ -1279,9 +1279,11 @@ test('Local sidebar: session row drag reorders inside the section and persists',
 });
 
 // ux3 S3 — Settings → Devin Local "Folder pickers start in": the Add
-// workspace dialog opens there (defaultPath), with the default-WSL-distro
-// home as the fallback when the folder is gone (logged, never cleared).
-test('Local picker start folder: configured folder wins, missing folder falls back to the distro home', async () => {
+// workspace dialog opens there (defaultPath); a folder that is gone is logged
+// (never cleared). P3: with a default WSL distro the pick is the in-app
+// RemoteFolderInput starting in the distro home — the native dialog never
+// opens on a WSL path.
+test('Local picker start folder: configured folder wins, missing folder is logged, a default distro picks in RemoteFolderInput', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-picker-'));
   const startDir = mkdtempSync(join(tmpdir(), 'agent-workspace-picker-start-'));
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
@@ -1328,22 +1330,42 @@ test('Local picker start folder: configured folder wins, missing folder falls ba
     expect((await lastDialog())?.title).toBe('Add workspace folder');
     expect((await readEvents(logFile)).some((e) => e.event === 'picker-folder-missing')).toBe(false);
 
-    // Missing folder + default distro → the distro home; the setting stays.
+    // Missing folder → logged, the dialog opens without a start; the setting stays.
     const gone = join(startDir, 'gone');
     await shell.evaluate(
-      (value: string) =>
-        (window as any).agentworkspace.setSettings({
-          local: { pickerFolder: value, defaultWslDistro: 'Fake' },
-        }),
+      (value: string) => (window as any).agentworkspace.setSettings({ local: { pickerFolder: value } }),
       gone,
     );
     await expect.poll(pickerFolder).toBe(gone);
     await shell.locator('#workspaceAdd').click();
-    await expect.poll(async () => (await lastDialog())?.defaultPath).toBe(`${uncRoot}\\home\\u`);
     await waitForEvent(logFile, 'picker-folder-missing');
+    await expect.poll(async () => (await lastDialog())?.defaultPath ?? null).toBeNull();
     const missing = (await readEvents(logFile)).find((e) => e.event === 'picker-folder-missing');
     expect((missing?.detail as { surface?: string } | undefined)?.surface).toBe('local');
     expect(await pickerFolder()).toBe(gone);
+
+    // Default distro → the in-app RemoteFolderInput on that distro, starting in
+    // its probed home; the native dialog does not open again (P3).
+    const dialogBefore = await lastDialog();
+    // The prompt starts in the probed home: wait for the probe (slow under full-suite load).
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.home ?? null, { timeout: 60_000 })
+      .toBe('/home/u');
+    await shell.evaluate(() =>
+      (window as any).agentworkspace.setSettings({ local: { defaultWslDistro: 'Fake' } }),
+    );
+    await expect
+      .poll(
+        async () =>
+          ((await state(app)).settings as unknown as { local: { defaultWslDistro: string | null } }).local
+            .defaultWslDistro,
+      )
+      .toBe('Fake');
+    await shell.locator('#workspaceAdd').click();
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__agentworkspace.lastFolderPrompt()))
+      .toMatchObject({ hostId: 'wsl:Fake', start: '/home/u' });
+    expect(await lastDialog()).toEqual(dialogBefore);
   } finally {
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });

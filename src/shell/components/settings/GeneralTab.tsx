@@ -15,6 +15,65 @@ const HELPER_LABELS: Record<string, string> = {
 };
 const helperLabel = (state: string): string => HELPER_LABELS[state] ?? state;
 
+// P3 — "Add SSH host…": the alias is a Host from ~/.ssh/config; main
+// validates and lower-cases it (OpenSSH matches Host names case-insensitively).
+function SshHostAdd() {
+  const [open, setOpen] = useState(false);
+  const [alias, setAlias] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    const result = await window.agentworkspace.hostsSshAdd(alias);
+    if (result.ok) {
+      setAlias('');
+      setError(null);
+      setOpen(false);
+    } else setError(result.error);
+  };
+  if (!open) {
+    return (
+      <button
+        id="sshHostAdd"
+        type="button"
+        className="self-start text-xs text-[#6e9bd0]"
+        onClick={() => setOpen(true)}
+      >
+        Add SSH host…
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <div className="flex items-center gap-2">
+        <input
+          id="sshHostAliasInput"
+          className={inputClass}
+          value={alias}
+          autoFocus
+          spellCheck={false}
+          placeholder="Host alias from ~/.ssh/config"
+          aria-invalid={error ? 'true' : undefined}
+          onChange={(event) => setAlias(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void add();
+            if (event.key === 'Escape') setOpen(false);
+          }}
+        />
+        <button id="sshHostAddConfirm" type="button" className="text-xs text-[#6e9bd0]" onClick={() => void add()}>
+          Add
+        </button>
+        <button type="button" className="text-xs text-[#7f8ca0]" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+      <FieldError inputId="sshHostAliasInput" message={error ?? undefined} />
+      <span className="text-xs text-[#7f8ca0]">
+        Connects with <code>ssh -o BatchMode=yes</code>: key or agent authentication only, and the host key must
+        already be known (connect once in a terminal first). The host needs Node 18 or newer.
+      </span>
+    </div>
+  );
+}
+
 function HostsBlock() {
   const state = useShellState();
   const { draft } = useSettingsDraft();
@@ -80,16 +139,18 @@ function HostsBlock() {
       {hosts.map((host) => (
         <div key={host.id} data-host-id={host.id} className="flex flex-col gap-1 text-sm">
           <div className="flex items-center gap-2">
-            <span className="text-[#dfe6ef]">{host.label}</span>
+            <span className="text-[#dfe6ef]">
+              {host.kind === 'ssh' ? `SSH: ${host.label}` : host.label}
+            </span>
             <span data-host-state className="text-xs text-[#7f8ca0]">
               {host.state}
             </span>
-            {host.kind === 'wsl' && (
+            {(host.kind === 'wsl' || host.kind === 'ssh') && (
               <label className="flex items-center gap-1 text-xs">
                 <input
                   type="checkbox"
                   data-host-enabled
-                  checked={host.state !== 'disabled' && host.state !== 'stopped'}
+                  checked={host.state !== 'disabled' && (host.kind === 'ssh' || host.state !== 'stopped')}
                   onChange={(event) => {
                     void window.agentworkspace.hostsSetEnabled(
                       host.id,
@@ -116,6 +177,16 @@ function HostsBlock() {
             >
               Overrides
             </button>
+            {host.kind === 'ssh' && (
+              <button
+                type="button"
+                className="text-xs text-[#d08080]"
+                data-host-remove
+                onClick={() => void window.agentworkspace.hostsSshRemove(host.id)}
+              >
+                Remove
+              </button>
+            )}
           </div>
           <span data-host-facts className="text-xs text-[#7f8ca0]">
             {facts(host)}
@@ -135,8 +206,13 @@ function HostsBlock() {
           {host.helper?.state === 'node-missing' || host.helper?.state === 'unsupported-node' ? (
             <span id={`hostHelperHint-${host.id}`} className="text-xs text-[#d0a060]">
               {host.helper.state === 'unsupported-node' && host.node
-                ? `Node 18 or newer is required in this distro for the Agent Workspace helper (found ${host.node}).`
-                : 'Node 18 or newer is required in this distro for the Agent Workspace helper.'}
+                ? `Node 18 or newer is required ${host.kind === 'ssh' ? 'on this host' : 'in this distro'} for the Agent Workspace helper (found ${host.node}).`
+                : `Node 18 or newer is required ${host.kind === 'ssh' ? 'on this host' : 'in this distro'} for the Agent Workspace helper.`}
+            </span>
+          ) : null}
+          {host.kind === 'ssh' && /\/t?csh$/.test(host.shell ?? '') ? (
+            <span id={`sshShellHint-${host.id}`} className="text-xs text-[#d0a060]">
+              csh/tcsh login shells are not supported for SSH hosts — set Overrides → Shell to bash, zsh, sh or fish.
             </span>
           ) : null}
           {host.error ? (
@@ -145,7 +221,8 @@ function HostsBlock() {
           {openOverrides === host.id ? (
             <div data-host-overrides className="flex flex-col gap-2 border-l border-[#2c3949] pl-3">
               {overrideField(host, 'claudePath', 'Claude path')}
-              {overrideField(host, 'devinPath', 'devin path')}
+              {/* Devin Local never runs over SSH — no devin path to override there. */}
+              {host.kind !== 'ssh' && overrideField(host, 'devinPath', 'devin path')}
               {overrideField(host, 'home', 'Home directory')}
               {overrideField(host, 'shell', 'Shell')}
               <label className="flex items-center gap-2 text-xs">
@@ -163,6 +240,7 @@ function HostsBlock() {
           ) : null}
         </div>
       ))}
+      <SshHostAdd />
     </div>
   );
 }

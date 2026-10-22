@@ -1,11 +1,13 @@
 // Side-effect first: bootstrap applies the userData override and migrates
 // the legacy profile before this module resolves/mkdirs userData below.
 import './bootstrap';
+import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { app } from 'electron';
 import { LOG_MAX_BYTES, rotatedPath, shouldRotate } from '../core/logModel';
-import { testMode, type ViewName } from './state';
+import { scrubKnownAliases, scrubSshAliases } from '../core/sshLog';
+import { state, testMode, type ViewName } from './state';
 
 type LogEvent = {
   ts: string;
@@ -54,6 +56,24 @@ export function redactUrl(value: string): string {
   }
 }
 
+/** sha256-8 of the canonical (lower-case) ssh alias — the only form of an alias in the log (P3). */
+export function sshAliasHash(alias: string): string {
+  return createHash('sha256').update(alias.toLowerCase()).digest('hex').slice(0, 8);
+}
+
+// Every alias configured at any point this run: a removed host's in-flight
+// errors are still scrubbed (R40 / cb:review L2).
+const seenAliases = new Set<string>();
+
+function configuredAliases(): string[] {
+  try {
+    for (const h of state.settings?.current.hosts.ssh ?? []) seenAliases.add(h.alias);
+  } catch {
+    // settings not loaded yet
+  }
+  return [...seenAliases];
+}
+
 export function log(
   view: ViewName,
   event: string,
@@ -70,7 +90,20 @@ export function log(
     ...options,
   };
   if (record.url !== undefined) record.url = redactUrl(record.url);
-  const line = JSON.stringify(record);
+  let line = JSON.stringify(record);
+  // An `ssh:<alias>` id or `ssh://<alias>/…` path anywhere in the record
+  // becomes `ssh:#<hash>` — the alias itself is never written.
+  if (/ssh:/i.test(line)) line = JSON.stringify(scrubSshAliases(record, sshAliasHash));
+  // R39 #6: a configured alias as a bare word in free text (an ssh error
+  // message, a hostname in an exception) is hashed too.
+  const lower = line.toLowerCase();
+  const aliases = configuredAliases().filter((alias) => lower.includes(alias));
+  if (aliases.length > 0) {
+    const parsed = JSON.parse(line) as LogEvent;
+    const { ts, view: v, event: e, ...rest } = parsed;
+    const scrubbed = scrubKnownAliases(rest, aliases, sshAliasHash);
+    if (scrubbed !== rest) line = JSON.stringify({ ts, view: v, event: e, ...scrubbed });
+  }
   try {
     if (shouldRotate(writtenBytes, line.length + 1, logMaxBytes)) {
       renameSync(logFile, rotatedPath(logFile));

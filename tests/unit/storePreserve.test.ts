@@ -188,6 +188,39 @@ describe('SETTINGS_PRESERVE_SPEC tracks the zod schema', () => {
   });
 });
 
+describe('hosts.ssh preservation (P3)', () => {
+  it('unknown fields inside an ssh entry survive a save; membership and order come from memory', () => {
+    const raw = {
+      hosts: {
+        wslEnabled: true,
+        ssh: [
+          { alias: 'box', enabled: true, futurePort: 2222 },
+          { alias: 'gone', enabled: true, note: 'x' },
+        ],
+      },
+    };
+    const { settings, invalid } = parseSettingsFile(raw);
+    const next = { ...settings, hosts: { ...settings.hosts, ssh: [{ alias: 'new', enabled: true }, { alias: 'box', enabled: false }] } };
+    const out = serializeSettingsFile(raw, next, invalid, new Set(['hosts.ssh']));
+    expect((out.hosts as Record<string, unknown>).ssh).toEqual([
+      { alias: 'new', enabled: true },
+      { alias: 'box', enabled: false, futurePort: 2222 },
+    ]);
+  });
+
+  it('M4: malformed ssh entries are kept raw in the file (after the valid ones), even when hosts.ssh is rewritten', () => {
+    const bad = { alias: 'Bad Alias', enabled: true, extra: 1 };
+    const raw = { hosts: { ssh: [{ alias: 'ok', enabled: true }, bad] } };
+    const { settings, invalid } = parseSettingsFile(raw);
+    expect(settings.hosts.ssh).toEqual([{ alias: 'ok', enabled: true }]);
+    const untouched = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect((untouched.hosts as Record<string, unknown>).ssh).toEqual([{ alias: 'ok', enabled: true }, bad]);
+    const next = { ...settings, hosts: { ...settings.hosts, ssh: [{ alias: 'new', enabled: true }] } };
+    const touched = serializeSettingsFile(raw, next, invalid, new Set(['hosts.ssh']));
+    expect((touched.hosts as Record<string, unknown>).ssh).toEqual([{ alias: 'new', enabled: true }, bad]);
+  });
+});
+
 describe('parseSettingsFile — leaf-granular repair with invalid map', () => {
   it('drops only the failing leaf of a structural block and remembers its raw value', () => {
     const { settings, dropped, invalid } = parseSettingsFile({

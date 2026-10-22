@@ -1,6 +1,7 @@
 // Regression guard (spec §3.3): the app must never touch a WSL distro's
 // filesystem from Windows (`\\wsl.localhost` is 9P — hammering it wedged
 // users' WSL VMs). Every remote read goes over the per-host helper channel.
+// An `ssh://<alias>/…` path (P3) is remote too: it only exists on that host.
 //
 // The guard patches the `fs` / `fs/promises` module objects in place. The main
 // bundle is esbuild CJS, which compiles `import { readFile } from 'node:fs'`
@@ -20,8 +21,12 @@
 // - native addons (node-pty's cwd) and Node/Electron internals calling the
 //   C++ fs bindings directly;
 // - child processes (`wsl.exe`, the in-distro helper);
-// - Explorer: `shell.showItemInFolder` and the native folder dialog opening a
-//   `\\wsl.localhost` path on the user's click — the documented exception.
+// - Explorer: `shell.showItemInFolder` opening a `\\wsl.localhost` path on the
+//   user's click (Reveal), and the native folder dialog when the USER browses
+//   to `\\wsl.localhost` in it — Explorer's access, not the app's. The app
+//   never opens that dialog on a remote path: folder picks for a remote host
+//   go through the in-app RemoteFolderInput over the helper channel (P3,
+//   src/main/folderPrompt.ts).
 //
 // Both modes log `remote-fs-violation {op}` once per op. Test mode then throws
 // RemoteFsViolation (promise forms reject); production lets the call through.
@@ -111,6 +116,9 @@ function matchesRemote(path: string, extraRoots: string[]): boolean {
   // Every builtin root starts with a separator, so with no extra roots a path
   // that doesn't start with one can't match.
   const first = path.charCodeAt(0);
+  // `ssh://<alias>/…` (P3) exists only on the ssh host; Windows would read it
+  // as a relative path.
+  if ((first === 0x73 || first === 0x53) && /^ssh:/i.test(path)) return true;
   if (extraRoots.length === 0 && first !== 0x5c && first !== 0x2f) return false;
   const p = normalise(path);
   if (BUILTIN_PREFIXES.some((root) => startsWithRoot(p, root))) return true;

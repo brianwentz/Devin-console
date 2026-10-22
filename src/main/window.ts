@@ -1,3 +1,4 @@
+import { folderPromptOpen, folderPromptPublic } from './folderPrompt';
 import { screen, View, type WebContentsView } from 'electron';
 import {
   clampPaneWidth,
@@ -226,6 +227,7 @@ export function publicState(): ShellState {
         : (terminals.at(-1)?.id ?? null);
     })(),
     hosts: hosts().statuses(),
+    folderPrompt: folderPromptPublic(),
   };
 }
 
@@ -323,7 +325,8 @@ export function overlayOpen(): boolean {
     state.notificationsPanelOpen ||
     state.prsPanelOpen ||
     !!state.autofillPicker ||
-    !!state.autofillPrompt
+    !!state.autofillPrompt ||
+    folderPromptOpen()
   );
 }
 

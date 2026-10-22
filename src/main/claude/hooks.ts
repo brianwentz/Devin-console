@@ -8,12 +8,12 @@ import {
   type ActivityState,
   type ClaudeHookEvent,
 } from '../../core/claudeActivity';
-import { buildHooksBlock, hooksApplyKey, settingsFlagJson } from '../../core/claudeHooks';
+import { buildHooksBlock, claudePtyInjection, globalHooksEnabledFor, hooksApplyKey } from '../../core/claudeHooks';
 import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
-import { isWslHost, type ExecHost, type HostId } from '../../core/execHost';
+import { isRemoteHost, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
@@ -156,6 +156,12 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
+      // ssh (R39 #1): the global block is never installed — it would outlive
+      // the app, the forward and the host's membership on a possibly shared
+      // machine. The removal still runs (once per run, gated by lastApplied)
+      // whenever the channel is ready, so a block an earlier build wrote goes.
+      // ssh sessions report only through app-launched ptys (`--settings`).
+      const hostEnabled = globalHooksEnabledFor(enabled, host.kind);
       // Hooks back on: a pending-removal error no longer applies (a host that
       // is applied below overwrites hooksInstall anyway).
       if (enabled && this.offUnavailable.delete(host.id)) hosts().setError(host.id, 'hooksInstall', null);
@@ -163,12 +169,12 @@ export class ClaudeHooks {
       // opt-out also cleans a disabled-but-running one (our block carries the
       // token): over the channel when it is up, else one `--apply-hooks-off`
       // run of the deployed helper — never a Stopped distro, never UNC.
-      if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
-      const channelReady = !isWslHost(host) || hosts().channel(host)?.state === 'ready';
+      if (hostEnabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
+      const channelReady = !isRemoteHost(host) || hosts().channel(host)?.state === 'ready';
       // An enabled host's channel is (re)starting: its ready transition
       // re-runs this apply — no one-shot spawn for it.
       const listed = hosts().list().some((h) => h.id === host.id);
-      if (!channelReady && !enabled && listed) {
+      if (!channelReady && !hostEnabled && listed) {
         // A degraded helper never turns ready on its own: say so instead of a
         // clean opt-out while our block stays. The key stays unrecorded, so
         // the ready transition (reset / Re-check) re-runs the removal.
@@ -181,22 +187,22 @@ export class ClaudeHooks {
         }
         continue;
       }
-      if (!channelReady && enabled) continue;
+      if (!channelReady && hostEnabled) continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,
-        enabled,
+        hostEnabled,
         buildHooksBlock({ port: info.port, auth: { kind: 'token', token: info.token }, ...(addr ? { addr } : {}) }),
       );
       let result: { installed: boolean; error: string | null };
       if (this.lastApplied.get(host.id) === key) {
         // Already written in this state; lastApplied is only recorded on success.
-        result = { installed: enabled, error: null };
+        result = { installed: hostEnabled, error: null };
       } else {
-        result = !isWslHost(host)
-          ? await applyGlobalHooks(hosts().localConfigDir(), enabled, info.port, info.token, addr)
+        result = !isRemoteHost(host)
+          ? await applyGlobalHooks(hosts().localConfigDir(), hostEnabled, info.port, info.token, addr)
           : channelReady
-            ? await this.applyOverChannel(host, enabled, info, addr)
+            ? await this.applyOverChannel(host, hostEnabled, info, addr)
             : await this.removeOnce(host);
         if (result.error === null) this.lastApplied.set(host.id, key);
         else this.lastApplied.delete(host.id);
@@ -240,7 +246,8 @@ export class ClaudeHooks {
       if (!channel) throw new Error('helper channel is not ready');
       const r = await channel.request<{ installed?: unknown; changed?: unknown; error?: unknown } | null>(
         'hooks.apply',
-        { enabled, port: info.port, token: info.token, ...(addr ? { addr } : {}) },
+        // A removal never needs the token — don't send it (R40 f).
+        { enabled, port: info.port, token: enabled ? info.token : '', ...(addr ? { addr } : {}) },
       );
       changed = r?.changed === true;
       result = {
@@ -347,26 +354,21 @@ export class ClaudeHooks {
     });
   }
 
-  // Pty spawn injection for claude-kind terminals: `--settings` hook block +
-  // the bearer token env var. Mode `attach` gets none (the background agent
-  // already runs) and a failed listener means no injection at all.
+  // Pty spawn injection for claude-kind terminals (core claudePtyInjection):
+  // `--permission-mode` always (except attach); the `--settings` hook block +
+  // the bearer token env var only with a listener and `withHooks` (false for
+  // an ssh host whose forward is not verified — R40 M1).
   injection(
     mode: 'resume' | 'new' | 'attach',
     addr?: string,
+    withHooks = true,
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
-    if (mode === 'attach') return null;
-    const info = this.hookServer?.info();
-    if (!info) return null;
-    const envVar = 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN';
-    return {
-      extraArgs: [
-        '--settings',
-        settingsFlagJson(info.port, envVar, addr),
-        '--permission-mode',
-        state.settings?.current.claude.defaultPermissionMode ?? 'default',
-      ],
-      extraEnv: { [envVar]: info.token },
-    };
+    const info = withHooks ? this.hookServer?.info() : null;
+    return claudePtyInjection({
+      mode,
+      permissionMode: state.settings?.current.claude.defaultPermissionMode ?? 'default',
+      hooks: info ? { port: info.port, envVar: 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN', token: info.token, addr } : null,
+    });
   }
 
   info(): { port: number; token: string } | null {

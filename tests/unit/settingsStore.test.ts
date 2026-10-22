@@ -110,4 +110,24 @@ describe('SettingsStore round-trip (ux3 S6)', () => {
     expect(persisted.pane).toMatchObject({ open: true, fraction: 0.3, fx: 'y' });
     expect(persisted.tenantUrl).toBe('https://t.example');
   });
+  it('removeHostOverride drops exactly that host key from hosts.overrides (R39 #11)', () => {
+    writeFileSync(
+      file(),
+      JSON.stringify({
+        hosts: {
+          overrides: { 'ssh:box': { shell: '/bin/zsh' }, 'wsl:Ubuntu': { home: '/home/x' } },
+          futureHost: 1,
+        },
+      }),
+    );
+    const store = new SettingsStore(dir);
+    store.removeHostOverride('ssh:box');
+    expect(store.current.hosts.overrides).toEqual({ 'wsl:Ubuntu': { home: '/home/x' } });
+    const persisted = readFile();
+    expect(persisted.hosts.overrides).toEqual({ 'wsl:Ubuntu': { home: '/home/x' } });
+    expect(persisted.hosts.futureHost).toBe(1);
+    // Unknown id: nothing changes.
+    store.removeHostOverride('ssh:nope');
+    expect(readFile().hosts.overrides).toEqual({ 'wsl:Ubuntu': { home: '/home/x' } });
+  });
 });

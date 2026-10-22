@@ -18,7 +18,7 @@ import {
 import { IpcChannels, type TerminalSummary } from '../../shared/ipc';
 import { LinkScanner } from '../../core/prLinks';
 import { claudeScope, localScope } from '../../core/tabModel';
-import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
+import { isRemoteHost, isSshHost, isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
 import { hosts } from '../hosts';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
@@ -354,7 +354,7 @@ export class TerminalHost {
         : options.kind === 'devin'
           ? (hosts().hostById(hosts().pathHostId(options.workspace)) ?? LOCAL_HOST)
           : LOCAL_HOST;
-    const wslExec = isWslHost(execHost);
+    const wslExec = isRemoteHost(execHost);
     const normalized =
       options.kind === 'devin'
         ? resolve(options.workspace)
@@ -362,7 +362,7 @@ export class TerminalHost {
           ? wslExec
             ? // The linux cwd is used verbatim as `wsl.exe --cd`; a Windows
               // resolve() would mangle it and wsl.exe rejects UNC cwds.
-              (options.cwd ?? (isWslHost(execHost) ? (execHost.home ?? '/') : '/'))
+              (options.cwd ?? (isRemoteHost(execHost) ? (execHost.home ?? '/') : '/'))
             : // A session cwd that no longer exists can't host a pty (ConPTY
               // error 267) — fall back to home.
               resolve(options.cwd && existsSync(options.cwd) ? options.cwd : homedir())
@@ -413,7 +413,7 @@ export class TerminalHost {
             ? (status?.claude.path ?? 'claude')
             : (status?.devin.path ?? 'devin'),
         args: [],
-        label: isWslHost(execHost) ? execHost.distro : null,
+        label: isWslHost(execHost) ? execHost.distro : isSshHost(execHost) ? execHost.alias : null,
         appendCwd: false,
       };
     } else {
@@ -490,7 +490,8 @@ export class TerminalHost {
       if (wslExec) {
         // Wrap in `wsl.exe -d D --cd <linux cwd> -e <shell> -ilc 'exec …'` so
         // the pty runs an interactive login shell inside the distro.
-        const spec = hosts().ptySpawnSpec(execHost, {
+        // ssh: async — the hook token is staged on the host, never in argv.
+        const spec = await hosts().remotePtySpawnSpec(execHost, {
           file: command.file,
           args,
           // devin's normalized is the UNC workspace — convert to host form.

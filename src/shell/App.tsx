@@ -8,6 +8,7 @@ import { NotificationPanel } from './components/NotificationPanel';
 import { PrPanel } from './components/PrPanel';
 import { AccountPicker } from './components/AccountPicker';
 import { SavePasswordBanner } from './components/SavePasswordBanner';
+import { RemoteFolderPrompt } from './components/RemoteFolderInput';
 import { TitleBar } from './components/TitleBar';
 import { Splitter } from './components/Splitter';
 import { TerminalDock } from './components/TerminalDock';
@@ -130,6 +131,7 @@ export function App() {
       <PrPanel />
       <AccountPicker />
       <SavePasswordBanner />
+      <RemoteFolderPrompt />
       {state.surface === 'settings' && (
         <SettingsPanel
           settings={state.settings}

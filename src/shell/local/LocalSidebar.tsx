@@ -140,8 +140,8 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
     else window.agentworkspace.localActiveSession(result.value);
   };
 
-  const addWorkspace = async () => {
-    const picked = await window.agentworkspace.localPickWorkspace();
+  const addWorkspace = async (remote = false) => {
+    const picked = await window.agentworkspace.localPickWorkspace(remote ? { remote: true } : undefined);
     if (picked.ok && picked.value) selectWorkspace(picked.value);
     else if (!picked.ok) setError(picked.error);
   };
@@ -189,6 +189,7 @@ export function LocalSidebar({ rect }: { rect: Rect }) {
   const headerMenu = async (x: number, y: number) => {
     const { action } = await window.agentworkspace.localContextMenu({ kind: 'header', x, y });
     if (action === 'add') await addWorkspace();
+    else if (action === 'add-remote') await addWorkspace(true);
     return action;
   };
 
