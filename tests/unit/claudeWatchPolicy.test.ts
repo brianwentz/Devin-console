@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeRefreshHosts, throttleDue } from '../../src/core/claudeWatchPolicy';
+import { mergeRefreshHosts, statusRefreshTargets, throttleDue } from '../../src/core/claudeWatchPolicy';
 
 describe('throttleDue', () => {
   it('is due when never run', () => {
@@ -23,5 +23,21 @@ describe('mergeRefreshHosts', () => {
       'local',
       'wsl:D',
     ]);
+  });
+});
+
+describe('statusRefreshTargets (R27)', () => {
+  it('local plus every WSL host whose store is not watching yet — ready or not', () => {
+    expect(
+      statusRefreshTargets([
+        { id: 'local', wsl: false, watching: true },
+        { id: 'wsl:Slow', wsl: true, watching: false }, // still probing: reported as skipped, no I/O
+        { id: 'wsl:New', wsl: true, watching: false },
+        { id: 'wsl:Live', wsl: true, watching: true }, // resyncs itself on channel return
+      ]),
+    ).toEqual(['local', 'wsl:Slow', 'wsl:New']);
+  });
+  it('local is always a target', () => {
+    expect(statusRefreshTargets([])).toEqual(['local']);
   });
 });

@@ -15,3 +15,21 @@ export function mergeRefreshHosts(
   if (a === null || b === null) return null;
   return new Set([...a, ...b]);
 }
+
+/**
+ * Hosts a status-change refresh lists: local (cheap), plus every WSL host
+ * whose store has not started watching yet. A not-ready one costs no I/O —
+ * the refresh keeps its rows and reports it in `skippedHosts` (the startup
+ * gating evidence, hostsStartup.spec); a ready one gets its first list and
+ * starts watching. A store that already watches resyncs itself on its
+ * channel's return, so helper state flaps never re-list it.
+ */
+export function statusRefreshTargets(
+  hosts: ReadonlyArray<{ id: string; wsl: boolean; watching: boolean }>,
+): string[] {
+  const targets = ['local'];
+  for (const host of hosts) {
+    if (host.wsl && !host.watching) targets.push(host.id);
+  }
+  return targets;
+}

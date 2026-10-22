@@ -31,7 +31,7 @@ import {
 } from '../../core/workspaceTree';
 import { claudeScope } from '../../core/tabModel';
 import { LOCAL_HOST, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
-import { mergeRefreshHosts, throttleDue } from '../../core/claudeWatchPolicy';
+import { mergeRefreshHosts, statusRefreshTargets, throttleDue } from '../../core/claudeWatchPolicy';
 import { ClaudeContextMenu, type MenuAction } from './contextMenu';
 import { ClaudeHooks } from './hooks';
 import { ClaudePrTracking } from './prTracking';
@@ -465,19 +465,22 @@ export class ClaudeSessions {
     return agents;
   }
 
-  /** Hosts a status change must list: local (cheap), plus every ready WSL
-   * host whose store has not started watching yet (new, or created while the
-   * channel was down). A WSL store that already watches lists itself once on
-   * its channel's return (`resync`) — helper state flaps, env.get publishes
-   * and other hosts' changes never re-list it. A host that left list() drops
-   * out of any refresh. */
+  /** Hosts a status change must list (`statusRefreshTargets`): local, plus
+   * every WSL host whose store has not started watching yet. A not-ready one
+   * is only reported in `skippedHosts` (no I/O); a WSL store that already
+   * watches lists itself once on its channel's return (`resync`) — helper
+   * state flaps, env.get publishes and other hosts' changes never re-list it.
+   * A host that left list() drops out of any refresh. */
   private statusRefreshHosts(): HostId[] {
-    const targets: HostId[] = ['local'];
-    for (const host of hosts().list()) {
-      if (!isWslHost(host) || !hosts().fsReady(host)) continue;
-      if (!this.stores.get(host.id)?.started) targets.push(host.id);
-    }
-    return targets;
+    return statusRefreshTargets(
+      hosts()
+        .list()
+        .map((host) => ({
+          id: host.id,
+          wsl: isWslHost(host),
+          watching: this.stores.get(host.id)?.started === true,
+        })),
+    ) as HostId[];
   }
 
   /** Disposes per-host pollers/stores of hosts that left hosts().list(). A
@@ -549,6 +552,7 @@ export class ClaudeSessions {
       let localError: unknown = null;
       let storeComplete = true;
       const skippedHosts: HostId[] = [];
+      const listedWsl = new Set<string>();
       let listedHosts = 0;
       this.pruneHosts();
       for (const host of hosts().list()) {
@@ -577,6 +581,7 @@ export class ClaudeSessions {
           if (this.started) this.storeForHost(host).start();
           listedHosts += 1;
           list.push(...(await this.storeForHost(host).backend.list()));
+          if (isWslHost(host)) listedWsl.add(host.id);
           hosts().setError(host.id, 'store', null);
         } catch (error) {
           storeComplete = false;
@@ -616,6 +621,15 @@ export class ClaudeSessions {
       log('claude', 'claude-list', {
         detail: { count: list.length, skippedHosts, listedHosts, ms: Date.now() - t0, source },
       });
+      // A WSL listing is a first list or a channel resync: transcript writes
+      // that landed while the helper was down / not yet subscribed produced
+      // no watch event (the returning helper baselines existing files), so
+      // terminal-owned chats on that host reload once.
+      if (listedWsl.size > 0) {
+        for (const row of this.storeSessions) {
+          if (listedWsl.has(row.host)) this.scheduleTerminalHistoryReload(row.id);
+        }
+      }
       this.emit();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -785,25 +799,31 @@ export class ClaudeSessions {
             : null;
       if (!sessionId) continue;
       if (this.subagentLists.delete(sessionId)) this.emit();
-      if (getChatState().sessions[sessionId]?.terminalOwned !== true) continue;
-      if (this.historyInFlight.has(sessionId)) continue;
-      if (this.historyTimers.has(sessionId)) continue;
-      this.historyTimers.set(
-        sessionId,
-        setTimeout(() => {
-          this.historyTimers.delete(sessionId);
-          this.historyInFlight.add(sessionId);
-          const host = this.host;
-          if (!host) {
-            this.historyInFlight.delete(sessionId);
-            return;
-          }
-          void host.loadHistory(sessionId).finally(() => {
-            this.historyInFlight.delete(sessionId);
-          });
-        }, 1_000),
-      );
+      this.scheduleTerminalHistoryReload(sessionId);
     }
+  }
+
+  /** Debounced (1 s) loadHistory for a terminal-owned session; a no-op for
+   * any other session or while one is pending / in flight. */
+  private scheduleTerminalHistoryReload(sessionId: string): void {
+    if (getChatState().sessions[sessionId]?.terminalOwned !== true) return;
+    if (this.historyInFlight.has(sessionId)) return;
+    if (this.historyTimers.has(sessionId)) return;
+    this.historyTimers.set(
+      sessionId,
+      setTimeout(() => {
+        this.historyTimers.delete(sessionId);
+        this.historyInFlight.add(sessionId);
+        const host = this.host;
+        if (!host) {
+          this.historyInFlight.delete(sessionId);
+          return;
+        }
+        void host.loadHistory(sessionId).finally(() => {
+          this.historyInFlight.delete(sessionId);
+        });
+      }, 1_000),
+    );
   }
 
   // Terminal arg resolver for terminal:open — resume only when the transcript

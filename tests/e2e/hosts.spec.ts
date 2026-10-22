@@ -321,6 +321,67 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
   }
 });
 
+// R27: a terminal turn written while the helper was down (or not yet
+// subscribed) has no watch event — the returning helper baselines the file.
+// The resync list must reload the terminal-owned chat.
+test('a terminal-owned wsl session catches up on a transcript written while the helper was down', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
+  mkdirSync(projectDir, { recursive: true });
+  const { app } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakePty.cjs')}`,
+    // The killed helper stays down long enough for the write to land first.
+    AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '3000',
+  });
+  const shell = await shellPage(app);
+  const helperState = async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.helper?.state;
+  try {
+    await expect.poll(helperState, { timeout: 30_000 }).toBe('ready');
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    const id = (await app.evaluate(
+      (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
+      `${uncRoot}\\home\\u\\proj`,
+    )) as string;
+    const opened = (await app.evaluate(
+      (_e, sessionId: string) => (globalThis as any).__agentworkspace.claudeTerminalOpen(sessionId),
+      id,
+    )) as { ok: boolean };
+    expect(opened.ok).toBe(true);
+    await app.evaluate(
+      (_e, sessionId: string) => (globalThis as any).__agentworkspace.claudeSelect(sessionId),
+      id,
+    );
+    await app.evaluate((_e, hostId: string) => (globalThis as any).__agentworkspace.hostHelperKill(hostId), 'wsl:Fake');
+    await expect.poll(helperState, { timeout: 5_000 }).not.toBe('ready');
+    writeFileSync(
+      join(projectDir, `${id}.jsonl`),
+      JSON.stringify({
+        parentUuid: null,
+        isSidechain: false,
+        type: 'user',
+        message: { role: 'user', content: 'written while the helper was down' },
+        uuid: 'f6f6f6f6-0000-4000-8000-000000000002',
+        timestamp: new Date().toISOString(),
+        userType: 'external',
+        entrypoint: 'cli',
+        cwd: '/home/u/proj',
+        sessionId: id,
+        version: '2.1.302',
+        gitBranch: 'main',
+      }) + '\n',
+    );
+    await expect.poll(helperState, { timeout: 30_000 }).toBe('ready');
+    await expect(shell.locator('#messageList')).toContainText('written while the helper was down', {
+      timeout: 15_000,
+    });
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('a local transcript change re-lists only the local host', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {

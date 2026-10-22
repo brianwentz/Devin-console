@@ -360,7 +360,9 @@ test('env.get feeds spawnOn — no -ilc env-capture spawn after ready', async ()
 // focus #2) and a degraded channel resets when its distro comes back (R19a).
 const flipAndEnumerate = async (app: ElectronApplication, distros: string, spec: string) => {
   writeFileSync(distros, spec);
-  // A background check re-reads the (stale) table.
+  // A background check re-reads the table once it is stale: wait out the
+  // 300 ms fresh window (a list may have just run) so the call re-lists.
+  await new Promise((resolve) => setTimeout(resolve, 400));
   await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
 };
 
