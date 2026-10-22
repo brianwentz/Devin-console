@@ -4,6 +4,7 @@ import {
   claudeScope,
   effectiveScope,
   localScope,
+  providerScope,
   activateTab,
   activeIdFor,
   addTab,
@@ -367,21 +368,32 @@ describe('pickDiscardCandidates', () => {
     expect(localScope('x')).not.toBe(GLOBAL);
   });
 
-  it('effectiveScope picks the local session on the local surface, cloud otherwise', () => {
-    expect(effectiveScope('local', 'cloud-1', 'local-1', null)).toBe('local:local-1');
-    expect(effectiveScope('local', 'cloud-1', null, null)).toBe('cloud-1');
-    expect(effectiveScope('local', null, null, null)).toBe(GLOBAL);
-    expect(effectiveScope('cloud', 'cloud-1', 'local-1', null)).toBe('cloud-1');
-    expect(effectiveScope('settings', 'cloud-1', 'local-1', null)).toBe('cloud-1');
-    expect(effectiveScope('cloud', null, 'local-1', null)).toBe(GLOBAL);
+  it('providerScope prefixes the id with the provider scopePrefix', () => {
+    expect(providerScope('cloud', 'abc')).toBe('abc');
+    expect(providerScope('local', 'abc')).toBe('local:abc');
+    expect(providerScope('claude', 'abc')).toBe('claude:abc');
   });
 
-  it('effectiveScope picks the claude session on the claude surface, cloud otherwise', () => {
+  it('effectiveScope picks the selected surface session from the map', () => {
+    expect(effectiveScope('local', { cloud: 'c1', local: 'l1' })).toBe('local:l1');
+    expect(effectiveScope('claude', { claude: 'x' })).toBe('claude:x');
+    expect(effectiveScope('cloud', { cloud: 'c1', local: 'l1' })).toBe('c1');
     expect(claudeScope('abc')).toBe('claude:abc');
-    expect(effectiveScope('claude', 'cloud-1', 'local-1', 'claude-1')).toBe('claude:claude-1');
-    expect(effectiveScope('claude', 'cloud-1', 'local-1', null)).toBe('cloud-1');
-    expect(effectiveScope('claude', null, null, null)).toBe(GLOBAL);
-    expect(effectiveScope('settings', null, null, 'claude-1')).toBe(GLOBAL);
-    expect(effectiveScope('local', null, null, 'claude-1')).toBe(GLOBAL);
+  });
+
+  it('effectiveScope falls back to the cloud session, then GLOBAL', () => {
+    expect(effectiveScope('local', { cloud: 'c1', local: null })).toBe('c1');
+    expect(effectiveScope('claude', { cloud: 'c1', local: 'l1', claude: null })).toBe('c1');
+    expect(effectiveScope('settings', { cloud: 'c1' })).toBe('c1');
+    expect(effectiveScope('settings', {})).toBe(GLOBAL);
+    expect(effectiveScope('local', { claude: 'x' })).toBe(GLOBAL);
+    expect(effectiveScope('settings', { claude: 'x' })).toBe(GLOBAL);
+    expect(effectiveScope('cloud', { cloud: null, local: 'l1' })).toBe(GLOBAL);
+  });
+
+  it("effectiveScope honours scopeFallback 'global' (injected descriptor lookup)", () => {
+    const lookup = () => ({ scopePrefix: 'x:', scopeFallback: 'global' as const });
+    expect(effectiveScope('analytics', { cloud: 'c1', analytics: 'i1' }, lookup)).toBe('x:i1');
+    expect(effectiveScope('analytics', { cloud: 'c1', analytics: null }, lookup)).toBe(GLOBAL);
   });
 });

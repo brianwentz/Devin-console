@@ -364,7 +364,11 @@ export function lowerShell(): void {
 // each caller having to know about scopes.
 export function syncScope(): void {
   state.tabManager?.setScope(
-    effectiveScope(state.surface, state.currentSessionId, state.localSessionId, state.claudeSessionId),
+    effectiveScope(state.surface, {
+      cloud: state.currentSessionId,
+      local: state.localSessionId,
+      claude: state.claudeSessionId,
+    }),
   );
 }
 
