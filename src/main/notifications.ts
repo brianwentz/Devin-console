@@ -23,6 +23,7 @@ import {
   unknownPaths,
   type PreserveSpec,
 } from '../core/storePreserve';
+import { NotificationSourceSchema, UsageMetricSchema } from '../core/providers';
 import { IpcChannels } from '../shared/ipc';
 import { log } from './log';
 import { state } from './state';
@@ -33,9 +34,9 @@ const AppNotificationSchema = z.object({
   kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth', 'usage']),
   sessionId: z.string().nullable(),
   ownerUserId: z.string().nullable().optional(),
-  source: z.enum(['devin', 'claude']).optional(),
+  source: NotificationSourceSchema.optional(),
   sessionTitle: z.string(),
-  metric: z.enum(['devin-monthly', 'claude-session', 'claude-weekly']).optional(),
+  metric: UsageMetricSchema.optional(),
   accountKey: z.string().optional(),
   prUrl: z.string().optional(),
   prState: z.string().optional(),

@@ -28,7 +28,7 @@ import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
 import { cloudKeepAliveMs, cloudViews } from './cloudViews';
 import { SettingsStore } from './settings';
-import { CLAUDE_SCOPE_PREFIX } from '../core/tabModel';
+import { providerBySurface } from '../core/providers';
 import { fixtureOrigins, quiet, state, testMode } from './state';
 import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';
@@ -325,8 +325,9 @@ async function createWindow(): Promise<void> {
   terminalHost.onChange = notifyShell;
   terminalHost.onPullRequestUrl = (url, target) => {
     if (target.source === 'claude-terminal') {
-      const sessionId = target.scope.startsWith(CLAUDE_SCOPE_PREFIX)
-        ? target.scope.slice(CLAUDE_SCOPE_PREFIX.length)
+      const prefix = providerBySurface('claude')!.scopePrefix;
+      const sessionId = target.scope.startsWith(prefix)
+        ? target.scope.slice(prefix.length)
         : target.scope;
       claudeSessions().recordPr(sessionId, url, 'terminal');
     }

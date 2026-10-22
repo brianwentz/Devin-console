@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
-import { PROVIDER_SURFACES } from '../core/providers';
+import { NotificationSourceSchema, PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
 import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
 
@@ -1104,7 +1104,7 @@ export const SessionPrSchema = z.object({
   url: z.string(),
   state: z.string().nullable(),
   readAt: z.number().nullable(),
-  source: z.enum(['devin', 'claude']).default('devin'),
+  source: NotificationSourceSchema.default('devin'),
 });
 export type SessionPr = z.infer<typeof SessionPrSchema>;
 

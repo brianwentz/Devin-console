@@ -1,6 +1,8 @@
 // Usage alerts — threshold ledger + level/label helpers.
 import { describe, expect, it } from 'vitest';
+import { PROVIDER_USAGE_METRICS, UsageMetricSchema } from '../../src/core/providers';
 import {
+  USAGE_METRIC_LABEL,
   deriveUsageAlerts,
   emptyUsageLedger,
   ledgerKey,
@@ -134,5 +136,14 @@ describe('usageAlertTitle', () => {
       periodKey: 's1',
     };
     expect(usageAlertTitle(alert)).toBe('Claude session limit: 80% used');
+  });
+});
+
+describe('provider-derived metric enum', () => {
+  it('UsageMetricSchema options equal PROVIDER_USAGE_METRICS', () => {
+    expect([...UsageMetricSchema.options]).toEqual([...PROVIDER_USAGE_METRICS]);
+  });
+  it('metric labels keep their text', () => {
+    expect(USAGE_METRIC_LABEL['devin-monthly']).toBe('Devin Cloud monthly ACUs');
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NotificationSourceSchema } from '../../src/core/providers';
 import type { DevinSession } from '../../src/core/devinApi';
 import {
   addNotification,
@@ -368,5 +369,17 @@ describe('deriveNotifications ownerUserId', () => {
     expect(out).toHaveLength(1);
     expect(out[0]!.ownerUserId).toBe('user-9');
     expect(deriveNotifications(prev, next, ctx({ ownerUserId: null }))[0]!.ownerUserId).toBeNull();
+  });
+});
+
+describe('provider-derived source enum', () => {
+  it('NotificationSourceSchema accepts exactly devin and claude', () => {
+    expect(NotificationSourceSchema.safeParse('claude').success).toBe(true);
+    expect(NotificationSourceSchema.safeParse('devin').success).toBe(true);
+    expect(NotificationSourceSchema.safeParse('local').success).toBe(false);
+    expect(NotificationSourceSchema.options).toEqual(['devin', 'claude']);
+  });
+  it('itemKey defaults the source to devin', () => {
+    expect(itemKey({ kind: 'waiting', sessionId: 's1' } as never)).toBe('session:devin:s1');
   });
 });

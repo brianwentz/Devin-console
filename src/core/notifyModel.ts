@@ -1,4 +1,5 @@
 import type { DevinSession } from './devinApi';
+import type { ProviderSource } from './providers';
 
 export const ACTIVE_POLL_MS = 10_000;
 export const IDLE_POLL_MS = 60_000;
@@ -70,7 +71,7 @@ export interface SessionPrLink {
   url: string;
   state: string | null;
   // Which agent the PR belongs to; absent = Devin (API poller).
-  source?: 'devin' | 'claude' | undefined;
+  source?: ProviderSource | undefined;
 }
 
 // "owner/repo#123" for GitHub PR URLs, otherwise the URL host+path.

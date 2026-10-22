@@ -11,13 +11,14 @@ import {
   type UsageLedger,
   type UsageReading,
 } from '../core/usageAlerts';
+import type { ProviderSource } from '../core/providers';
 import { log } from './log';
 import { notificationStore } from './notifications';
 import { state } from './state';
 
 export interface UsageAlertInput extends UsageReading {
   body: string;
-  source: 'devin' | 'claude';
+  source: ProviderSource;
 }
 
 export class UsageAlertStore {

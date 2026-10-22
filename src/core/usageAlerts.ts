@@ -1,7 +1,10 @@
 // Pure helpers for usage alerts: threshold bookkeeping across metrics and
 // accounts. No I/O — the caller supplies readings and persists the ledger.
 
-export type UsageMetric = 'devin-monthly' | 'claude-session' | 'claude-weekly';
+import type { z } from 'zod';
+import type { UsageMetricSchema } from './providers';
+
+export type UsageMetric = z.infer<typeof UsageMetricSchema>;
 export const USAGE_THRESHOLDS = [50, 80] as const;
 export type UsageThreshold = (typeof USAGE_THRESHOLDS)[number];
 

@@ -1,11 +1,18 @@
+import { z } from 'zod';
 import type { SettingsTabId } from './settingsDraft';
 
 export type ProviderId = 'devin-cloud' | 'devin-local' | 'claude';
 
 export const PROVIDER_SURFACES = ['cloud', 'local', 'claude'] as const;
 export const PROVIDER_SOURCES = ['devin', 'claude'] as const;
+export const PROVIDER_VIEW_NAMES = ['cloud', 'local', 'claude'] as const;
 export const PROVIDER_ANALYTICS_TABS = ['devin', 'claude'] as const;
 export const PROVIDER_USAGE_METRICS = ['devin-monthly', 'claude-session', 'claude-weekly'] as const;
+
+export type ProviderSource = (typeof PROVIDER_SOURCES)[number];
+export type ProviderViewName = (typeof PROVIDER_VIEW_NAMES)[number];
+export const NotificationSourceSchema = z.enum(PROVIDER_SOURCES);
+export const UsageMetricSchema = z.enum(PROVIDER_USAGE_METRICS);
 
 export interface ProviderDescriptor {
   id: ProviderId;
@@ -13,7 +20,7 @@ export interface ProviderDescriptor {
   surface: (typeof PROVIDER_SURFACES)[number];
   label: string;
   railId: string;
-  viewName: string | null;
+  viewName: ProviderViewName | null;
   scopePrefix: string;
   scopeFallback: 'cloud' | 'global';
   source: (typeof PROVIDER_SOURCES)[number] | null;

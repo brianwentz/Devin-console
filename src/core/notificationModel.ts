@@ -3,6 +3,7 @@
 // entries are created by main (auto-updater), not by deriveNotifications.
 import type { DevinSession } from './devinApi';
 import { effectiveStatus, newPullRequests, prTitle } from './notifyModel';
+import type { ProviderSource } from './providers';
 import type { UsageMetric } from './usageAlerts';
 
 export type NotificationKind =
@@ -27,7 +28,7 @@ export interface AppNotification {
   // Which agent the entry is about: absent = Devin (Cloud poller), 'claude' = a
   // Claude Code session (hooks / SDK host). Claude entries are never pruned by
   // the Devin identity reconcile.
-  source?: 'devin' | 'claude' | undefined;
+  source?: ProviderSource | undefined;
   sessionTitle: string;
   // 'usage' entries: which metric/account the alert is about.
   metric?: UsageMetric | undefined;
