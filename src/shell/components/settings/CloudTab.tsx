@@ -1,4 +1,5 @@
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
+import { DevinTokenField } from './DevinTokenField';
 import { FieldError, fieldInputClass } from './fields';
 
 export function CloudTab() {
@@ -33,6 +34,49 @@ export function CloudTab() {
           placeholder="https://api.devin.ai"
         />
         <FieldError inputId="apiBaseInput" message={errors.apiBase} />
+      </label>
+      <DevinTokenField />
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">User ID override (optional)</span>
+        <input
+          id="userIdInput"
+          className={fieldInputClass(errors, 'userId')}
+          value={draft.userId}
+          aria-invalid={errors.userId ? 'true' : undefined}
+          onChange={(event) => updateDraft({ userId: event.target.value })}
+          placeholder="user-… (blank = detect automatically)"
+        />
+        <FieldError inputId="userIdInput" message={errors.userId} />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Organization ID (optional override)</span>
+        <input
+          id="orgIdInput"
+          className={fieldInputClass(errors, 'orgId')}
+          value={draft.orgId}
+          aria-invalid={errors.orgId ? 'true' : undefined}
+          onChange={(event) => updateDraft({ orgId: event.target.value })}
+          placeholder="org-… (blank = resolve from /v3/self)"
+        />
+        <FieldError inputId="orgIdInput" message={errors.orgId} />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Check Devin Cloud usage every (minutes)</span>
+        <input
+          id="usageDevinPollMinutes"
+          className={fieldInputClass(errors, 'usageDevinPollMinutes')}
+          type="number"
+          min={5}
+          max={240}
+          step={1}
+          value={draft.usageDevinPollMinutes}
+          aria-invalid={errors.usageDevinPollMinutes ? 'true' : undefined}
+          onChange={(event) => updateDraft({ usageDevinPollMinutes: event.target.value })}
+        />
+        <FieldError inputId="usageDevinPollMinutes" message={errors.usageDevinPollMinutes} />
+        <span className="text-xs text-[#7f8ca0]">
+          How often the app polls your monthly ACU usage for alerts (50% / 80%).
+        </span>
       </label>
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-[#aeb9c8]">Cloud sessions kept loaded</span>

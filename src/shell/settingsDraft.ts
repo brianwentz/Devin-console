@@ -8,9 +8,10 @@ import {
   type DraftErrors,
   type DraftField,
   type SettingsDraft,
+  type SettingsTabId,
 } from '../core/settingsDraft';
 import type { Settings } from '../shared/ipc';
-import { setSettingsTab } from './store';
+import { getShellState, setSettingsTab } from './store';
 
 export type CommitReason = 'tab' | 'surface' | 'quit';
 
@@ -150,6 +151,19 @@ export async function commitDraft(reason: CommitReason, settings: Settings): Pro
     set({ saving: false, message: "Changes weren't saved" });
     return false;
   }
+}
+
+// Tab click (and the auth/identity notification deep link): commit any dirty
+// draft first; a validation failure leaves the user on the erroring field.
+export async function switchSettingsTab(next: SettingsTabId): Promise<boolean> {
+  const settings = lastDraftSettings() ?? getShellState()?.settings;
+  if (!settings) {
+    setSettingsTab(next);
+    return true;
+  }
+  const ok = await commitDraft('tab', settings);
+  if (ok) setSettingsTab(next);
+  return ok;
 }
 
 // Quit path: a validation failure must not veto shutdown — always reply.

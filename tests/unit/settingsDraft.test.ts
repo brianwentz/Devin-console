@@ -5,6 +5,8 @@ import {
   fieldErrorsFromIssues,
   firstErrorField,
   isDraftDirty,
+  SETTINGS_TAB_ORDER,
+  settingsTabForNotification,
   validateDraft,
   type DraftField,
   type SettingsDraft,
@@ -324,18 +326,28 @@ describe('DRAFT_TAB / firstErrorField', () => {
   it('covers every draft field', () => {
     const draftKeys = Object.keys(draftFromSettings(defaults)) as DraftField[];
     expect(Object.keys(DRAFT_TAB).sort()).toEqual(draftKeys.sort());
-    expect(DRAFT_TAB.userId).toBe('notifications');
-    expect(DRAFT_TAB.orgId).toBe('notifications');
-    expect(DRAFT_TAB.tenantUrl).toBe('cloud');
-    expect(DRAFT_TAB.apiBase).toBe('cloud');
-    expect(DRAFT_TAB.sessionsMaxLiveViews).toBe('cloud');
-    expect(DRAFT_TAB.sessionsKeepAliveHours).toBe('cloud');
-    expect(DRAFT_TAB.localPickerFolder).toBe('local');
+    expect(DRAFT_TAB.localPickerFolder).toBe('devin');
     expect(DRAFT_TAB.claudePickerFolder).toBe('claude');
     expect(DRAFT_TAB.allowExternal).toBe('links');
-    // ux2: Devin Local fields route to the 'local' tab, every claude* field to 'claude'.
-    expect(DRAFT_TAB.devinPath).toBe('local');
-    expect(DRAFT_TAB.localDefaultWslDistro).toBe('local');
+    // Devin tab: the Devin Cloud and Devin Local sections share one tab.
+    for (const field of [
+      'tenantUrl',
+      'apiBase',
+      'sessionsMaxLiveViews',
+      'sessionsKeepAliveHours',
+      'usageDevinPollMinutes',
+      'userId',
+      'orgId',
+      'devinPath',
+      'localDefaultWslDistro',
+      'localDefaultMode',
+      'localPickerFolder',
+    ] as const) {
+      expect(DRAFT_TAB[field]).toBe('devin');
+    }
+    // Linked Context (GitHub tab pool) lives on Link Handling.
+    expect(DRAFT_TAB.keepAliveHours).toBe('links');
+    expect(DRAFT_TAB.maxLiveTabs).toBe('links');
     for (const field of [
       'claudePath',
       'claudeAutoArchiveDays',
@@ -349,10 +361,42 @@ describe('DRAFT_TAB / firstErrorField', () => {
     }
   });
 
+  it('routes every field to a real tab, and the tab order is fixed', () => {
+    expect(SETTINGS_TAB_ORDER).toEqual([
+      'general',
+      'devin',
+      'claude',
+      'links',
+      'passwords',
+      'notifications',
+      'updates',
+    ]);
+    for (const tab of Object.values(DRAFT_TAB)) {
+      expect(SETTINGS_TAB_ORDER).toContain(tab);
+    }
+  });
+
   it('returns the first erroring field in SettingsDraft key order', () => {
     expect(firstErrorField({})).toBeNull();
     expect(firstErrorField({ maxLiveTabs: 'x', tenantUrl: 'y' })).toBe('tenantUrl');
     expect(firstErrorField({ orgId: 'x', userId: 'y' })).toBe('userId');
+  });
+});
+
+describe('settingsTabForNotification', () => {
+  it.each([
+    ['auth', 'devin'],
+    ['identity', 'devin'],
+    ['usage', null],
+    ['update', null],
+    ['waiting', null],
+    ['approval', null],
+    ['blocked', null],
+    ['finished', null],
+    ['pr-opened', null],
+    ['pr-completed', null],
+  ] as const)('%s -> %s', (kind, tab) => {
+    expect(settingsTabForNotification(kind)).toBe(tab);
   });
 });
 
@@ -479,8 +523,8 @@ describe('localDefaultMode draft field', () => {
     expect(roundTrip.ok && mergeSettings(defaults, roundTrip.patch)).toEqual(withMode);
   });
 
-  it('routes its errors to the local tab', () => {
-    expect(DRAFT_TAB.localDefaultMode).toBe('local');
+  it('routes its errors to the devin tab', () => {
+    expect(DRAFT_TAB.localDefaultMode).toBe('devin');
     const { errors } = fieldErrorsFromIssues([
       { path: ['local', 'defaultMode'], message: 'bad mode' },
     ]);

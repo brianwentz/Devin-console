@@ -561,7 +561,7 @@ test('shows nothing for a service-user token when no identity resolves', async (
     // The Settings surface explains the empty state.
     await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
-    await evaluateInShell(app, `document.querySelector('[data-settings-tab="notifications"]').click()`);
+    await evaluateInShell(app, `document.querySelector('[data-settings-tab="devin"]').click()`);
     await expect
       .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('patNoUser'))`))
       .toBe(true);
@@ -1165,7 +1165,7 @@ test('service-user token resolves the user from the Devin CLI sign-in', async ()
     // Settings shows the resolved (masked) identity.
     await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
-    await evaluateInShell(app, `document.querySelector('[data-settings-tab="notifications"]').click()`);
+    await evaluateInShell(app, `document.querySelector('[data-settings-tab="devin"]').click()`);
     await expect
       .poll(async () =>
         evaluateInShell(app, `document.getElementById('identityStatus')?.getAttribute('data-identity-source')`),
