@@ -38,7 +38,7 @@ Because the build is not notarized, the Mac app does not auto-update: check the 
 
 Everything works out of the box except: the **Devin Local** surface and the terminal's `devin` tab need the [Devin CLI](https://devin.ai) (`devin` on PATH); the **Claude** surface needs the Claude Code CLI; and running sessions *inside* WSL distros is optional — without WSL everything stays on the Windows host.
 
-Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro** — see [Running sessions in WSL](#running-sessions-in-wsl).
+Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro** — see [Running sessions in WSL](#running-sessions-in-wsl). Claude sessions on another machine over SSH need the Windows OpenSSH client (`ssh.exe`, built in) and Node.js 18 or newer on that machine — see [SSH hosts](#ssh-hosts).
 
 ## Getting started
 
@@ -51,13 +51,26 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 
 ## Running sessions in WSL
 
-Add a workspace under `\\wsl.localhost\<distro>\…` on the **Local** or **Claude** surface and its sessions run inside that distro. Enable or disable distros under **Settings → General → Hosts**.
+Add a workspace inside a distro on the **Local** or **Claude** surface and its sessions run inside that distro. Enable or disable distros under **Settings → General → Hosts**.
 
-- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings, lists background agents, reads the distro's Claude sign-in details and counts its Claude usage totals for the Analytics page, and checks a "Folder pickers start in" folder that points into the distro — all inside the distro rather than through the `\\wsl.localhost` network share. (The folder picker itself is Windows' own dialog, so browsing a distro folder there still goes through that share.)
+- **Picking a folder in a distro** happens in the app, not in Windows' folder dialog: set a default WSL distro for the surface (**Settings → Devin Local / Claude Code**), or right-click the session column header → **Add WSL workspace…** (Local) / **Add remote workspace…** (Claude). Type a path — matching folders in the distro are suggested as you type (Tab or a click completes one) — and press **Choose folder**. Folders on this PC still use Windows' folder dialog.
+
+- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings, lists background agents, reads the distro's Claude sign-in details and counts its Claude usage totals for the Analytics page, checks a "Folder pickers start in" folder that points into the distro, and lists folders for the in-app folder picker — all inside the distro rather than through the `\\wsl.localhost` network share.
 - The helper is copied to `~/.agent-workspace/` in the distro on first use (one file per app version; copies unused for a week are cleaned up). Deleting the folder is safe — it is copied again on the next start.
 - Without Node.js (or with a version older than 18) the distro's row says **Node 18 or newer is required** and that distro's sessions don't load. Install Node in the distro, then press **Re-check**.
 - The app never starts a stopped distro. While a distro is stopped its helper shows as **paused** and its sessions keep their last state; they refresh once the distro runs again. If the helper keeps failing the row shows it stopped — **Re-check** tries again.
 - Turning off *Report Claude Code sessions started from other terminals* removes the hook block from every running, enabled distro that has Node.js 18 or newer (the helper does the removal — in a distro without it, remove the block from `~/.claude/settings.json` yourself), and also from a running distro you disabled since the app started. A distro that was already disabled when the app started is cleaned up when you enable it again; until then the app ignores the reports it sends. A stopped distro is never started for this. While the toggle is off, the app ignores reports from terminals it did not open itself.
+
+## SSH hosts
+
+Claude Code sessions can also run on another machine you reach over SSH (a Linux box, a VM, a WSL distro with its own sshd).
+
+- **Add the host:** **Settings → General → Hosts → Add SSH host…** and enter a `Host` alias from your `~/.ssh/config` (letters, digits, `.`, `_`, `-`; aliases are not case-sensitive). The app connects with the Windows OpenSSH client using that alias — user, port, key and jump hosts all come from your SSH config.
+- **Key or agent authentication only.** The app runs `ssh` in batch mode (`BatchMode=yes`): it never shows a password or passphrase prompt, and the host key must already be known — connect once with `ssh <alias>` in a terminal first. If the connection fails, the host's row shows the error; fix the config and press **Re-check**.
+- **Node.js 18 or newer is required on the remote machine**, the same helper as for WSL is copied to `~/.agent-workspace/` there, and the row shows **Node 18 or newer is required** when it is missing. The remote login shell must be bash, zsh, sh or fish — csh/tcsh login shells are not supported (set a shell under the host's **Overrides**).
+- **Workspaces:** right-click the Claude session column header → **Add remote workspace…**, pick the SSH host and type the folder (suggestions come from the remote machine). The workspace is stored as `ssh://<alias>/<path>`. Chats, the terminal tab (`ssh -t`) and background agents run on the remote machine; **Reveal in Explorer** and **Reveal transcript** are not available for SSH sessions. Devin Local sessions run on this PC and in WSL only.
+- **Hooks:** with *Report Claude Code sessions started from other terminals* on, the app forwards its hook listener's port to the remote machine over the same SSH connection (`ssh -R`), so terminals on that machine report to the app without extra network setup. Other users on a shared machine can reach that forwarded loopback port; the reports need the app's bearer token.
+- Disabling the host (checkbox) stops its helper; **Remove** forgets it. The event log never contains the alias — only a short hash of it.
 
 ## Where things live
 

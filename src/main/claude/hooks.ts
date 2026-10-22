@@ -13,7 +13,7 @@ import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
-import { isWslHost, type ExecHost, type HostId } from '../../core/execHost';
+import { isRemoteHost, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
@@ -164,7 +164,7 @@ export class ClaudeHooks {
       // token): over the channel when it is up, else one `--apply-hooks-off`
       // run of the deployed helper — never a Stopped distro, never UNC.
       if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
-      const channelReady = !isWslHost(host) || hosts().channel(host)?.state === 'ready';
+      const channelReady = !isRemoteHost(host) || hosts().channel(host)?.state === 'ready';
       // An enabled host's channel is (re)starting: its ready transition
       // re-runs this apply — no one-shot spawn for it.
       const listed = hosts().list().some((h) => h.id === host.id);
@@ -193,7 +193,7 @@ export class ClaudeHooks {
         // Already written in this state; lastApplied is only recorded on success.
         result = { installed: enabled, error: null };
       } else {
-        result = !isWslHost(host)
+        result = !isRemoteHost(host)
           ? await applyGlobalHooks(hosts().localConfigDir(), enabled, info.port, info.token, addr)
           : channelReady
             ? await this.applyOverChannel(host, enabled, info, addr)

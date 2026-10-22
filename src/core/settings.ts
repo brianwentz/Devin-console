@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { fractionFromPx } from './layout';
 import {
+  identityArray,
   isPlainObject,
   overlayKnown,
   setPath,
@@ -33,7 +34,8 @@ export const SETTINGS_PRESERVE_SPEC: PreserveSpec = structural({
   analytics: structural(),
   usage: structural(),
   claude: structural(),
-  hosts: structural(),
+  // ssh entries by alias: membership/order from memory, unknown per-entry fields survive.
+  hosts: structural({ ssh: identityArray('alias', structural()) }),
 });
 
 // F2: `pane.width` (px) was persisted against the 1400 px default window.

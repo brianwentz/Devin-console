@@ -142,6 +142,15 @@ await Promise.all([
     format: 'cjs',
     outfile: 'out/fixtures/fakeWsl.cjs',
   }),
+  // Fake ssh.exe for the ssh-host e2e (AGENT_WORKSPACE_TEST_SSH_CMD).
+  build({
+    entryPoints: ['tests/fixtures/fakeSsh.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'cjs',
+    outfile: 'out/fixtures/fakeSsh.cjs',
+  }),
   // `node -r` preload for the helper the fake launches (maps the linux claude path).
   build({
     entryPoints: ['tests/fixtures/fakeWslHelperPreload.ts'],

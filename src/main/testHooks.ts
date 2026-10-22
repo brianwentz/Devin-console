@@ -24,6 +24,7 @@ import { handleLink } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
+import { lastFolderPrompt } from './folderPrompt';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -132,6 +133,9 @@ export function registerTestHooks(): void {
       // Helper channel: kill the live child (reconnect path) / lifecycle snapshot.
       hostHelperKill: (id: string) => hosts().killHelper(id),
       hostChannelState: (id: string) => hosts().channelInfo(id),
+      // P3: ssh hosts + the in-app remote folder prompt.
+      hostSshAdd: (alias: string) => hosts().addSshHost(alias),
+      lastFolderPrompt: () => lastFolderPrompt(),
       // App-originated fs calls on a WSL path seen by the guard (launchApp
       // teardown asserts 0).
       remoteFsViolations: () => remoteFsViolationCount(),

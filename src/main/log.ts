@@ -1,10 +1,12 @@
 // Side-effect first: bootstrap applies the userData override and migrates
 // the legacy profile before this module resolves/mkdirs userData below.
 import './bootstrap';
+import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { app } from 'electron';
 import { LOG_MAX_BYTES, rotatedPath, shouldRotate } from '../core/logModel';
+import { scrubSshAliases } from '../core/sshLog';
 import { testMode, type ViewName } from './state';
 
 type LogEvent = {
@@ -54,6 +56,11 @@ export function redactUrl(value: string): string {
   }
 }
 
+/** sha256-8 of the canonical (lower-case) ssh alias — the only form of an alias in the log (P3). */
+export function sshAliasHash(alias: string): string {
+  return createHash('sha256').update(alias.toLowerCase()).digest('hex').slice(0, 8);
+}
+
 export function log(
   view: ViewName,
   event: string,
@@ -70,7 +77,10 @@ export function log(
     ...options,
   };
   if (record.url !== undefined) record.url = redactUrl(record.url);
-  const line = JSON.stringify(record);
+  let line = JSON.stringify(record);
+  // An `ssh:<alias>` id or `ssh://<alias>/…` path anywhere in the record
+  // becomes `ssh:#<hash>` — the alias itself is never written.
+  if (/ssh:/i.test(line)) line = JSON.stringify(scrubSshAliases(record, sshAliasHash));
   try {
     if (shouldRotate(writtenBytes, line.length + 1, logMaxBytes)) {
       renameSync(logFile, rotatedPath(logFile));

@@ -169,6 +169,10 @@ export async function launchApp(
       // specs that test the backoff itself pass their own values.
       AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '500',
       AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
+      // Every ssh.exe call goes to the fake too (no spec ever reaches a real
+      // host); hosts.ssh is empty unless a spec adds one.
+      AGENT_WORKSPACE_TEST_SSH_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeSsh.cjs')}`,
+      FAKE_SSH_ROOT: join(profileWslRoot, 'ssh-root'),
       ...extraEnv,
     },
   });

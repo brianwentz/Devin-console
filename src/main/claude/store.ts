@@ -1,7 +1,7 @@
 // Claude Code session store per host behind one StoreBackend interface:
 //   LocalBackend   — the Agent SDK in this process + fs.watch over the local
 //                    <configDir>/projects (a change → the controller re-lists).
-//   ChannelBackend — a WSL host: every call is an RPC to the in-distro helper
+//   ChannelBackend — a WSL or SSH host: every call is an RPC to the remote helper
 //                    (hosts().channel(host)); its `store.changed` notification
 //                    carries the changed sessions' SDK info, so the controller
 //                    patches rows instead of re-listing. The app never touches
@@ -14,7 +14,7 @@ import { access, readdir } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
 import { STORE_MAX_PAGES, STORE_MESSAGES_PAGE, pageAll } from '../../core/hostRpc';
-import { isWslHost, type ExecHost, type HostId } from '../../core/execHost';
+import { isRemoteHost, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
 import { HostRpcError, type HostChannel } from '../hostChannel';
@@ -315,6 +315,7 @@ export class ChannelBackend implements StoreBackend {
       sessionId: id,
     });
     const path = typeof result?.path === 'string' ? result.path : null;
+    // An ssh host has no Windows-openable path: Reveal is unavailable there.
     if (path === null || !isWslHost(this.host)) return null;
     if (path.startsWith('/')) return hosts().windowsPath(this.host, path);
     // A helper on a non-POSIX node (the e2e fake runs it on Windows) reports a
@@ -364,9 +365,9 @@ export class ChannelBackend implements StoreBackend {
   }
 }
 
-/** The backend for a host: the local SDK, or the helper channel for WSL. */
+/** The backend for a host: the local SDK, or the helper channel for WSL / SSH. */
 export function createStoreBackend(host: ExecHost, localConfigDir: string): StoreBackend {
-  return isWslHost(host) ? new ChannelBackend(host) : new LocalBackend(localConfigDir);
+  return isRemoteHost(host) ? new ChannelBackend(host) : new LocalBackend(localConfigDir);
 }
 
 /** Per-host store handle owned by the controller: the backend plus its watch. */
@@ -389,7 +390,7 @@ export class ClaudeStore {
   start(): void {
     if (this.unwatch) return;
     // A WSL store is only created/started while its channel is ready.
-    if (isWslHost(this.host) && !hosts().fsReady(this.host)) return;
+    if (isRemoteHost(this.host) && !hosts().fsReady(this.host)) return;
     this.unwatch = this.backend.watch(this.onChange);
   }
 

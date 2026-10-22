@@ -47,6 +47,7 @@ import {
 } from '../../core/storePreserve';
 import {
   hostIdForPath as coreHostIdForPath,
+  isSshPathLike,
   isWslHost,
   LOCAL_HOST,
   type ExecHost,
@@ -284,6 +285,9 @@ export class DevinLocalHost {
   }
 
   addWorkspace(path: string): string {
+    // Devin Local runs on this PC and in WSL only; an ssh:// path would be
+    // resolve()d into a bogus Windows path.
+    if (isSshPathLike(path)) throw new Error('SSH hosts are available for Claude Code sessions only');
     const normalized = resolve(path);
     if (!this.workspaces.includes(normalized)) {
       this.workspaces.push(normalized);

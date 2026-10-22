@@ -5,8 +5,8 @@
 // else is ever written there; diagnostics go to stderr as counts. Exits on
 // stdin EOF, SIGTERM and SIGHUP so a dropped channel never leaves an orphan.
 
-import { readdirSync, statSync, unlinkSync, utimesSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readdirSync, statSync, unlinkSync, utimesSync, type Dirent } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
@@ -93,6 +93,38 @@ export async function statPath(path: string): Promise<{ exists: boolean; dir: bo
   } catch {
     return { exists: false, dir: false };
   }
+}
+
+/** Bound on one fs.readdir answer (a home with thousands of dirs stays one small frame). */
+export const READDIR_MAX_ENTRIES = 500;
+
+/** fs.readdir: the directories directly under an absolute path (symlinks to
+ * directories included), sorted by name — the app's remote folder
+ * autocomplete. A missing or unreadable directory is an empty list. */
+export async function readDirs(path: string): Promise<{ entries: { name: string; dir: true }[]; truncated: boolean }> {
+  if (!isAbsolute(path)) throw new RpcError('bad-params', 'path must be absolute');
+  let dirents: Dirent[];
+  try {
+    dirents = await readdir(path, { withFileTypes: true });
+  } catch {
+    return { entries: [], truncated: false };
+  }
+  const names: string[] = [];
+  for (const d of dirents) {
+    if (d.isDirectory()) names.push(d.name);
+    else if (d.isSymbolicLink()) {
+      try {
+        if ((await stat(join(path, d.name))).isDirectory()) names.push(d.name);
+      } catch {
+        // dangling link
+      }
+    }
+  }
+  names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    entries: names.slice(0, READDIR_MAX_ENTRIES).map((name) => ({ name, dir: true as const })),
+    truncated: names.length > READDIR_MAX_ENTRIES,
+  };
 }
 
 const isRequest = (f: unknown): f is { id: number; method: string; params?: unknown } =>
@@ -221,6 +253,7 @@ function run(): void {
     ...agentsHandlers(),
     ...usageHandlers(configDir),
     'fs.stat': (params) => statPath(str(params, 'path')),
+    'fs.readdir': (params) => readDirs(str(params, 'path')),
   };
 
   let inFlight = 0;

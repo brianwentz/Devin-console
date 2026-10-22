@@ -139,6 +139,13 @@ describe('remoteFsGuard', () => {
     expect(isRemoteFsPath('C:\\Users\\u\\wsl.localhost', [])).toBe(false);
   });
 
+  it('an ssh:// path (P3) is remote: it only ever exists on the ssh host', () => {
+    expect(isRemoteFsPath('ssh://box/home/u', [])).toBe(true);
+    expect(isRemoteFsPath('SSH://Box/x', [])).toBe(true);
+    expect(isRemoteFsPath('C:\\ssh\\box', [])).toBe(false);
+    expect(isRemoteFsPath('sshfoo', [])).toBe(false);
+  });
+
   it('a path without a leading separator only matches an extra root', () => {
     expect(isRemoteFsPath('wsl.localhost\\D\\x', [])).toBe(false);
     expect(isRemoteFsPath('C:\\wsl.localhost\\D', [])).toBe(false);

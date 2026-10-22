@@ -36,7 +36,7 @@ import type {
 } from '../../shared/ipc';
 import { ClaudeUsageStateSchema, IpcChannels } from '../../shared/ipc';
 import { hosts } from '../hosts';
-import { isWslHost, type ExecHost } from '../../core/execHost';
+import { isRemoteHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { notifyShell } from '../window';
 import { createPushedStore } from '../pushedStore';
@@ -355,7 +355,7 @@ export class ClaudeUsageService {
       .map((h) => h.id);
     const members = await Promise.all(
       hosts().readyList().map(async (host) => {
-        if (isWslHost(host)) {
+        if (isRemoteHost(host)) {
           const remote = await this.wslAccount(host);
           if (remote === 'timeout') skippedHosts.push(host.id);
           if (!remote || remote === 'timeout') return null;
@@ -421,7 +421,7 @@ export class ClaudeUsageService {
         continue;
       }
       // A remote member's cache only ever arrives over its helper (above).
-      if (isWslHost(member.host)) continue;
+      if (isRemoteHost(member.host)) continue;
       const file = join(hosts().localConfigDir(), '.usage-cache');
       try {
         const stat = await statFile(file);
@@ -701,9 +701,9 @@ export class ClaudeUsageService {
         .filter((h) => !hosts().fsReady(h))
         .map((h) => h.id);
       const readyHosts = hosts().readyList();
-      const scannedHosts = readyHosts.filter((h) => !isWslHost(h));
+      const scannedHosts = readyHosts.filter((h) => !isRemoteHost(h));
       const remote = Promise.all(
-        readyHosts.filter(isWslHost).map(async (host) => {
+        readyHosts.filter(isRemoteHost).map(async (host) => {
           const result = await this.wslScan(host, [current, previous], timeZone);
           if (!result) skippedHosts.push(host.id);
           return { host, result };

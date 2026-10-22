@@ -1,16 +1,19 @@
 import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
 import { isAllowedAppUrl } from '../core/sessions';
+import { SSH_ALIAS_CANONICAL_RE } from '../core/execHost';
 
-// Execution hosts: 'local' is this machine, 'wsl:<distro>' runs inside WSL.
-export const HostIdSchema = z.string().regex(/^(local|wsl:[A-Za-z0-9._-]+)$/);
+// Execution hosts: 'local' is this machine, 'wsl:<distro>' runs inside WSL,
+// 'ssh:<alias>' on a remote machine reached through ssh.exe (canonical,
+// lower-case alias — OpenSSH matches Host patterns case-insensitively).
+export const HostIdSchema = z.string().regex(/^(local|wsl:[A-Za-z0-9._-]+|ssh:[a-z0-9._][a-z0-9._-]*)$/);
 export type HostId = z.infer<typeof HostIdSchema>;
 
 // Per-host status pushed to the shell (never carries env values or paths in
 // the log-safe fields beyond what the user configured).
 export const HostStatusSchema = z.object({
   id: HostIdSchema,
-  kind: z.enum(['local', 'wsl']),
+  kind: z.enum(['local', 'wsl', 'ssh']),
   label: z.string(),
   state: z.enum(['ready', 'probing', 'stopped', 'disabled', 'error']),
   error: z.string().nullable(),
@@ -24,7 +27,7 @@ export const HostStatusSchema = z.object({
   shellEnv: z.object({ ok: z.boolean(), count: z.number().int(), ms: z.number() }).nullable(),
   hooks: z.enum(['ok', 'unreachable', 'untested']),
   gh: z.boolean(),
-  /** In-distro helper (WSL only); absent while no helper bundle ships or for the local host. */
+  /** Remote helper (WSL / SSH); absent while no helper bundle ships or for the local host. */
   helper: z
     .object({
       state: z.enum(['absent', 'starting', 'ready', 'reconnecting', 'degraded', 'node-missing', 'unsupported-node']),
@@ -199,6 +202,11 @@ export const IpcChannels = {
   // Execution hosts (WSL): enumerate/probe and enable/disable.
   hostsRefresh: 'hosts:refresh',
   hostsSetEnabled: 'hosts:setEnabled',
+  // P3: ssh hosts + the in-app remote folder input.
+  hostsSshAdd: 'hosts:sshAdd',
+  hostsSshRemove: 'hosts:sshRemove',
+  hostsReaddir: 'hosts:readdir',
+  hostsFolderPromptResolve: 'hosts:folderPromptResolve',
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
@@ -443,6 +451,10 @@ const HostsFields = {
       envCaptureDisabled: z.boolean().optional(),
     }),
   ),
+  // P3: ssh hosts by canonical (lower-case) ~/.ssh/config alias.
+  ssh: z
+    .array(z.object({ alias: z.string().max(128).regex(SSH_ALIAS_CANONICAL_RE), enabled: z.boolean() }))
+    .max(50),
 };
 // F3: tenant/api URLs must be https (http allowed for localhost only).
 const AppUrl = z.url().refine(isAllowedAppUrl, 'must be https (http allowed for localhost only)');
@@ -592,8 +604,9 @@ export const SettingsObject = z.object({
       wslEnabled: HostsFields.wslEnabled.default(true),
       wslDistros: HostsFields.wslDistros.default(null),
       overrides: HostsFields.overrides.default({}),
+      ssh: HostsFields.ssh.default([]),
     })
-    .default({ wslEnabled: true, wslDistros: null, overrides: {} }),
+    .default({ wslEnabled: true, wslDistros: null, overrides: {}, ssh: [] }),
 });
 
 // Every field has a default or is optional, so parse({}) yields valid Settings.
@@ -958,6 +971,18 @@ export const ShellStateSchema = z.object({
   activeTerminalId: z.string().nullable(),
   // Execution hosts known to main (local first).
   hosts: z.array(HostStatusSchema),
+  // P3: the open in-app remote folder prompt (RemoteFolderInput), raised over
+  // the hosted views like the notifications panel; null when closed.
+  folderPrompt: z
+    .object({
+      id: z.string(),
+      title: z.string(),
+      hostId: HostIdSchema,
+      /** Host-side folder the input starts in (picker folder on that host, else its home). */
+      start: z.string().nullable(),
+      hosts: z.array(z.object({ id: HostIdSchema, label: z.string(), home: z.string().nullable() })),
+    })
+    .nullable(),
 });
 export type ShellState = z.infer<typeof ShellStateSchema>;
 
@@ -1096,7 +1121,10 @@ export const ClaudeRevealTranscriptArg = z.object({ sessionId: ClaudeSessionId }
 // ux2 D8: claude.workspaces mutations; path optional → folder picker.
 export const ClaudeWorkspaceAddArg = z.object({
   path: z.string().min(1).max(4096).optional(),
+  /** Header "Add remote workspace…": the in-app RemoteFolderInput even without a default distro. */
+  remote: z.boolean().optional(),
 });
+export const LocalWorkspacePickArg = z.object({ remote: z.boolean().optional() });
 export const ClaudeShowArchivedArg = z.object({ value: z.boolean() });
 export const ClaudePermissionModeSchema = z.enum([
   'default',
@@ -1137,6 +1165,24 @@ export const ClaudeRecheckEnvArg = z.object({ sessionId: ClaudeSessionId });
 // hosts:refresh — re-enumerate + re-probe (all hosts when id absent).
 export const HostsRefreshArg = z.object({ id: HostIdSchema.optional() });
 export const HostsSetEnabledArg = z.object({ id: HostIdSchema, enabled: z.boolean() });
+// hosts:sshAdd — raw user input; main validates + lower-cases it (canonicalSshAlias).
+export const HostsSshAddArg = z.object({ alias: z.string().max(256) });
+export const HostsSshRemoveArg = z.object({ id: HostIdSchema });
+// hosts:readdir — directories under an absolute host-side (posix) path, over
+// the host's helper channel (RemoteFolderInput autocomplete).
+export const HostReaddirSchema = z.object({
+  hostId: HostIdSchema,
+  path: z.string().min(1).max(4096).startsWith('/'),
+});
+export type HostReaddirArg = z.infer<typeof HostReaddirSchema>;
+export type HostReaddirResult = { entries: { name: string; dir: boolean }[]; truncated: boolean };
+// hosts:folderPromptResolve — the open in-app folder prompt's answer: a
+// host-side absolute path on one of the offered hosts, or null (cancel).
+export const FolderPromptResolveArg = z.object({
+  id: z.string().min(1).max(64),
+  hostId: HostIdSchema.optional(),
+  path: z.string().min(1).max(4096).startsWith('/').nullable(),
+});
 export const ClaudeContextMenuArg = z.object({
   kind: z.enum(['session', 'workspace', 'header', 'agent']),
   sessionId: ClaudeSessionId.optional(),

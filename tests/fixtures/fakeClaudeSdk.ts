@@ -7,6 +7,12 @@
 //   FAKE_CLAUDE_TOOL=1         → the first turn asks for a Bash permission
 //   FAKE_CLAUDE_DELAY_MS       → ms between the three text deltas (default 20)
 //   FAKE_CLAUDE_PR_URL         → the echo text includes this URL
+//   FAKE_CLAUDE_SPAWN=1        → when the caller passes spawnClaudeCodeProcess
+//                                (remote hosts), the query first runs it once
+//                                ({command: pathToClaudeCodeExecutable, args:
+//                                ['--fake-sdk-spawn'], cwd}) and waits for the
+//                                child to exit; no transcript is written
+//                                locally (the session lives on the remote)
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -48,12 +54,31 @@ export function query({ prompt, options }: { prompt: unknown; options: Rec }) {
   const cwd = String(options.cwd ?? '');
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() ?? '';
   const delayMs = Number(process.env.FAKE_CLAUDE_DELAY_MS ?? 20) || 0;
-  const file = configDir ? transcriptPath(configDir, cwd, sessionId) : null;
+  const spawnFn = options.spawnClaudeCodeProcess as
+    | ((o: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
+        once(event: 'exit' | 'error', fn: () => void): void;
+      })
+    | undefined;
+  const remoteSpawn = process.env.FAKE_CLAUDE_SPAWN === '1' && typeof spawnFn === 'function';
+  const file = configDir && !remoteSpawn ? transcriptPath(configDir, cwd, sessionId) : null;
 
   let interrupted = false;
   let closed = false;
 
   async function* run() {
+    if (remoteSpawn) {
+      await new Promise<void>((resolve) => {
+        const child = spawnFn!({
+          command: String(options.pathToClaudeCodeExecutable ?? 'claude'),
+          args: ['--fake-sdk-spawn'],
+          cwd,
+          env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' },
+          signal: new AbortController().signal,
+        });
+        child.once('exit', () => resolve());
+        child.once('error', () => resolve());
+      });
+    }
     yield {
       type: 'system',
       subtype: 'init',

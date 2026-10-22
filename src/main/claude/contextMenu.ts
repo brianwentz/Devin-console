@@ -6,6 +6,8 @@ import { resolve } from 'node:path';
 import type { ClaudeSessions } from './sessions';
 import { log } from '../log';
 import { state, testMode } from '../state';
+import { hosts } from '../hosts';
+import { isRemoteHost, isSshPathLike } from '../../core/execHost';
 
 export type MenuAction =
   | 'rename'
@@ -13,6 +15,7 @@ export type MenuAction =
   | 'open-terminal'
   | 'attach-agent'
   | 'add'
+  | 'add-remote'
   | null;
 
 export class ClaudeContextMenu {
@@ -82,10 +85,20 @@ export class ClaudeContextMenu {
             this.pendingAction = 'add';
           },
         },
+        {
+          // WSL / SSH folders through the in-app RemoteFolderInput (P3).
+          label: 'Add remote workspace…',
+          enabled: hosts().list().some(isRemoteHost),
+          click: () => {
+            this.pendingAction = 'add-remote';
+          },
+        },
         { label: 'Refresh', click: () => void this.owner.refresh('menu') },
       );
     } else if (arg.kind === 'workspace' && arg.path) {
       const path = arg.path;
+      // An ssh workspace has no Windows-side folder: no Explorer, no local shell.
+      const ssh = isSshPathLike(path);
       items.push(
         {
           label: 'New session here',
@@ -99,12 +112,14 @@ export class ClaudeContextMenu {
         },
         {
           label: 'Open terminal here',
+          visible: !ssh,
           click: () => {
             this.pendingAction = 'open-terminal';
           },
         },
         {
           label: 'Reveal in Explorer',
+          visible: !ssh,
           click: () => {
             shell.showItemInFolder(resolve(path));
           },
@@ -147,7 +162,12 @@ export class ClaudeContextMenu {
           click: () => void this.owner.recheckEnv(session.id),
         },
         { type: 'separator' },
-        { label: 'Reveal transcript', click: () => void this.owner.revealTranscript(session.id) },
+        {
+          // An ssh transcript has no Windows-openable path.
+          label: 'Reveal transcript',
+          visible: !session.host.startsWith('ssh:'),
+          click: () => void this.owner.revealTranscript(session.id),
+        },
         { label: 'Copy session id', click: () => this.owner.copySessionId(session.id) },
         { type: 'separator' },
         { label: 'Remove from list', click: () => void this.owner.sessionRemove(session.id) },

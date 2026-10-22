@@ -8,6 +8,7 @@ import { log } from '../log';
 import { defaultWorkspaceLabel } from '../../core/workspaceTree';
 import { getLocalState } from './localState';
 import { state, testMode } from '../state';
+import { hosts } from '../hosts';
 import type { DevinLocalHost } from './acpHost';
 import type { terminalHost as terminalHostSingleton } from './terminalHost';
 
@@ -19,6 +20,7 @@ export type LocalMenuAction =
   | 'remove'
   | 'delete'
   | 'add'
+  | 'add-remote'
   | 'refresh'
   | null;
 
@@ -149,6 +151,14 @@ export class LocalContextMenu {
           label: 'Add workspace…',
           click: () => {
             this.pendingAction = 'add';
+          },
+        },
+        {
+          // A WSL folder through the in-app RemoteFolderInput (P3).
+          label: 'Add WSL workspace…',
+          enabled: hosts().list().some((h) => h.kind === 'wsl'),
+          click: () => {
+            this.pendingAction = 'add-remote';
           },
         },
         {

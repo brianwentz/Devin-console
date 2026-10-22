@@ -6,8 +6,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
-import { openFolderDialog } from '../dialogs';
-import { pickerStartPath } from '../../core/pickerFolder';
+import { pickFolder } from '../folderPrompt';
 import { basename, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
@@ -29,7 +28,16 @@ import {
   defaultWorkspaceLabel,
 } from '../../core/workspaceTree';
 import { claudeScope } from '../../core/tabModel';
-import { LOCAL_HOST, isWslHost, type ExecHost, type HostId } from '../../core/execHost';
+import {
+  INVALID_SSH_PATH_MESSAGE,
+  LOCAL_HOST,
+  isRemoteHost,
+  isSshPathLike,
+  normalizeSshPath,
+  normalizeWorkspacePath,
+  type ExecHost,
+  type HostId,
+} from '../../core/execHost';
 import { mergeRefreshHosts, statusRefreshTargets, throttleDue } from '../../core/claudeWatchPolicy';
 import { ClaudeContextMenu, type MenuAction } from './contextMenu';
 import { ClaudeHooks } from './hooks';
@@ -141,7 +149,7 @@ export class ClaudeSessions {
    * sessions' info — patch those rows, never a full list; a channel that came
    * back (`resync`) may have missed events, so that host is listed in full. */
   private onStoreChange(host: ExecHost, ev: StoreChange): void {
-    if (!isWslHost(host)) {
+    if (!isRemoteHost(host)) {
       void this.refresh('watch', [host.id]);
     } else if (ev.resync) {
       void this.refresh('channel', [host.id]);
@@ -414,7 +422,7 @@ export class ClaudeSessions {
       const poller: ClaudeBackgroundAgents = new ClaudeBackgroundAgents({
         cliPath: () => this.cliPath,
         hostId: host.id,
-        ...(isWslHost(host)
+        ...(isRemoteHost(host)
           ? {
               // `claude agents` runs inside the helper (agents.list) — no
               // wsl.exe spawn per poll.
@@ -476,7 +484,7 @@ export class ClaudeSessions {
         .list()
         .map((host) => ({
           id: host.id,
-          wsl: isWslHost(host),
+          wsl: isRemoteHost(host),
           watching: this.stores.get(host.id)?.started === true,
         })),
     ) as HostId[];
@@ -580,11 +588,11 @@ export class ClaudeSessions {
           if (this.started) this.storeForHost(host).start();
           listedHosts += 1;
           list.push(...(await this.storeForHost(host).backend.list()));
-          if (isWslHost(host)) listedWsl.add(host.id);
+          if (isRemoteHost(host)) listedWsl.add(host.id);
           hosts().setError(host.id, 'store', null);
         } catch (error) {
           storeComplete = false;
-          if (!isWslHost(host)) {
+          if (!isRemoteHost(host)) {
             localError = error;
           } else {
             hosts().setError(
@@ -840,27 +848,20 @@ export class ClaudeSessions {
   async newSession(cwd: string | null): Promise<string | null> {
     let dir = cwd;
     if (!dir) {
-      const envCwd = testMode ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD?.trim() : '';
-      if (envCwd) dir = envCwd;
-      else {
-        const win = state.windowRef;
-        if (!win) return null;
-        const defaultPath = await this.pickerDefaultPath();
-        const result = await openFolderDialog(win, {
-          title: 'Choose the working directory for the new Claude session',
-          properties: ['openDirectory', 'createDirectory'],
-          ...(defaultPath ? { defaultPath } : {}),
-        });
-        if (result.canceled || result.filePaths.length === 0) return null;
-        dir = result.filePaths[0]!;
-      }
+      dir = await this.pickWorkspaceDir('Choose the working directory for the new Claude session');
+      if (!dir) return null;
     }
+    // A malformed ssh:// cwd is refused here, never resolved as a local path.
+    if (isSshPathLike(dir) && !normalizeSshPath(dir)) throw new Error(INVALID_SSH_PATH_MESSAGE);
     this.recordMutation('newSession', {});
-    // A UNC pick (\\wsl.localhost\<D>\…) selects the wsl host; the stored
-    // cwd is the linux path inside that distro.
+    // A UNC pick (\\wsl.localhost\<D>\…) selects the wsl host, `ssh://<alias>/…`
+    // the ssh host; the stored cwd is the posix path on that host.
     const hostId = hosts().pathHostId(dir);
     const execHost = hosts().hostById(hostId) ?? LOCAL_HOST;
-    const storedDir = isWslHost(execHost) ? hosts().hostPath(execHost, dir) : dir;
+    if (hostId.startsWith('ssh:') && execHost.kind === 'local') {
+      throw new Error('That SSH host is not configured — add it in Settings → General → Hosts');
+    }
+    const storedDir = isRemoteHost(execHost) ? hosts().hostPath(execHost, dir) : dir;
     const id = this.host?.newSession(storedDir, hostId) ?? null;
     if (id) {
       this.open(id);
@@ -914,46 +915,36 @@ export class ClaudeSessions {
   // The workspace list/labels live in settings.claude.*; a session's folder
   // is derived (exact host+cwd match in reconcile) — never stored.
 
-  // Where the New session / Add workspace pickers start (ux3 S3):
-  // claude.pickerFolder when it exists, else the configured default WSL
-  // distro's home, else undefined (the OS decides). A missing configured
-  // folder is logged and skipped, never cleared.
-  private pickerDefaultPath(): Promise<string | undefined> {
-    const claude = state.settings?.current.claude;
-    const defaultDistro = claude?.defaultWslDistro;
-    const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
-    const distroHome =
-      defaultHost && isWslHost(defaultHost)
-        ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
-        : undefined;
-    return pickerStartPath(claude?.pickerFolder ?? null, distroHome, (p) => hosts().pathExists(p), () =>
-      log('claude', 'picker-folder-missing', { detail: { surface: 'claude' } }),
-    );
-  }
-
-  // Picks a directory (same seam as newSession(null): test mode reads
-  // AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD, else the folder dialog starting in
-  // pickerDefaultPath()).
-  private async pickWorkspaceDir(title: string): Promise<string | null> {
+  // Picks a directory (newSession(null) and Add workspace): test mode reads
+  // AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD; otherwise folderPrompt.pickFolder —
+  // the in-app RemoteFolderInput for the default WSL distro / a remote picker
+  // folder / `remote` (WSL + SSH hosts), else the native dialog on this PC,
+  // starting in claude.pickerFolder (ux3 S3; missing → logged, never cleared).
+  private async pickWorkspaceDir(title: string, remote = false): Promise<string | null> {
     const envCwd = testMode ? process.env.AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD?.trim() : '';
     if (envCwd) return envCwd;
-    const win = state.windowRef;
-    if (!win) return null;
-    const defaultPath = await this.pickerDefaultPath();
-    const result = await openFolderDialog(win, {
+    const claude = state.settings?.current.claude;
+    return pickFolder({
+      surface: 'claude',
       title,
-      properties: ['openDirectory', 'createDirectory'],
-      ...(defaultPath ? { defaultPath } : {}),
+      defaultDistro: claude?.defaultWslDistro,
+      remote,
+      pickerFolder: claude?.pickerFolder,
+      onMissing: () => log('claude', 'picker-folder-missing', { detail: { surface: 'claude' } }),
+      native: (defaultPath) => ({
+        title,
+        properties: ['openDirectory', 'createDirectory'],
+        ...(defaultPath ? { defaultPath } : {}),
+      }),
     });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0]!;
   }
 
-  async workspaceAdd(path?: string): Promise<void> {
+  async workspaceAdd(path?: string, opts: { remote?: boolean } = {}): Promise<void> {
     this.recordMutation('workspaceAdd', {});
-    const picked = path ?? (await this.pickWorkspaceDir('Add Claude workspace folder'));
+    const picked = path ?? (await this.pickWorkspaceDir('Add Claude workspace folder', opts.remote === true));
     if (!picked) return;
-    const normalized = resolve(picked);
+    // ssh:// paths are canonicalised (lower-case alias), malformed ones refused.
+    const normalized = normalizeWorkspacePath(picked, resolve);
     const current = state.settings?.current.claude.workspaces ?? [];
     if (current.includes(normalized)) return;
     state.settings?.merge({ claude: { workspaces: [...current, normalized] } });
@@ -998,7 +989,7 @@ export class ClaudeSessions {
   workspaceRename(path: string, label: string): Promise<void> {
     this.recordMutation('workspaceRename', {});
     return this.mutate('workspaceRename', () => {
-      const normalized = resolve(path);
+      const normalized = normalizeWorkspacePath(path, resolve);
       const labels = state.settings?.current.claude.workspaceLabels ?? {};
       state.settings?.merge({
         claude: { workspaceLabels: renameWorkspace(labels, normalized, label) },
@@ -1019,13 +1010,13 @@ export class ClaudeSessions {
         buttons: ['Remove', 'Cancel'],
         defaultId: 0,
         cancelId: 1,
-        message: `Remove workspace "${defaultWorkspaceLabel(resolve(path))}"?`,
+        message: `Remove workspace "${defaultWorkspaceLabel(normalizeWorkspacePath(path, resolve))}"?`,
         detail: 'Sessions stay — they just file under Recent.',
       });
       confirmed = response === 0;
     }
     if (!confirmed) return;
-    const normalized = resolve(path);
+    const normalized = normalizeWorkspacePath(path, resolve);
     const current = state.settings?.current.claude;
     const labels = { ...(current?.workspaceLabels ?? {}) };
     delete labels[normalized];

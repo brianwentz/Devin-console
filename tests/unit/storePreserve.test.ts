@@ -188,6 +188,34 @@ describe('SETTINGS_PRESERVE_SPEC tracks the zod schema', () => {
   });
 });
 
+describe('hosts.ssh preservation (P3)', () => {
+  it('unknown fields inside an ssh entry survive a save; membership and order come from memory', () => {
+    const raw = {
+      hosts: {
+        wslEnabled: true,
+        ssh: [
+          { alias: 'box', enabled: true, futurePort: 2222 },
+          { alias: 'gone', enabled: true, note: 'x' },
+        ],
+      },
+    };
+    const { settings, invalid } = parseSettingsFile(raw);
+    const next = { ...settings, hosts: { ...settings.hosts, ssh: [{ alias: 'new', enabled: true }, { alias: 'box', enabled: false }] } };
+    const out = serializeSettingsFile(raw, next, invalid, new Set(['hosts.ssh']));
+    expect((out.hosts as Record<string, unknown>).ssh).toEqual([
+      { alias: 'new', enabled: true },
+      { alias: 'box', enabled: false, futurePort: 2222 },
+    ]);
+  });
+
+  it('an untouched invalid ssh list is written back raw', () => {
+    const raw = { hosts: { ssh: [{ alias: 'Bad Alias', enabled: true, extra: 1 }] } };
+    const { settings, invalid } = parseSettingsFile(raw);
+    const out = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect((out.hosts as Record<string, unknown>).ssh).toEqual(raw.hosts.ssh);
+  });
+});
+
 describe('parseSettingsFile — leaf-granular repair with invalid map', () => {
   it('drops only the failing leaf of a structural block and remembers its raw value', () => {
     const { settings, dropped, invalid } = parseSettingsFile({

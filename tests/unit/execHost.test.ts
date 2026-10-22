@@ -5,6 +5,17 @@ import { describe, expect, it } from 'vitest';
 import { loadHelperBundleInfo } from '../../src/main/helperBundle';
 import { isRemoteFsPath } from '../../src/main/remoteFsGuard';
 import {
+  canonicalSshAlias,
+  isRemoteHost,
+  isSshPathLike,
+  normalizeSshPath,
+  parseSshEnvProbe,
+  sshCommandSpec,
+  sshEnvSpec,
+  sshProbeSpec,
+  sshReplayEnv,
+  normalizeWorkspacePath,
+  INVALID_SSH_PATH_MESSAGE,
   deriveHelperState,
   displayPath,
   helperDeploySpec,
@@ -555,5 +566,111 @@ describe('ssh host kind', () => {
       `exec '/bin/sh' '-c' '${wsl}' 'sh' '/home/u/.agent-workspace' 'helper-abcdef012345.mjs' '10'`,
     );
     expect(splitWords(remote.slice('exec '.length))[2]).toBe(wsl);
+  });
+});
+
+describe('ssh host kind — P3 canonical alias, path normalisation, probe specs', () => {
+  it('canonical alias is trimmed + lower-cased; invalid input is null', () => {
+    expect(canonicalSshAlias('  Box.Example ')).toBe('box.example');
+    for (const bad of ['', ' ', '-x', 'a b', 'a/b', 'ssh://box', 'a;b', 'x'.repeat(129)]) {
+      expect(canonicalSshAlias(bad), bad).toBeNull();
+    }
+  });
+  it('the alias in ids and ssh:// paths is canonical (lower case)', () => {
+    expect(hostIdForPath('ssh://Box/home/u')).toBe('ssh:box');
+    expect(parseSshUri('ssh://BOX/a')).toEqual({ alias: 'box', path: '/a' });
+    expect(sshHost('Box').id).toBe('ssh:box');
+    expect(toHostPath(sshHost('box'), 'ssh://BOX/a/')).toBe('/a');
+  });
+  it('normalizeSshPath canonicalises and rejects malformed ssh paths', () => {
+    expect(normalizeSshPath('ssh://Box//home/u/')).toBe('ssh://box/home/u');
+    expect(normalizeSshPath('SSH://box')).toBe('ssh://box/');
+    for (const bad of ['ssh://-x/a', 'ssh:box/a', 'ssh:///a', 'ssh://a b/x', 'ssh://box\\x']) {
+      expect(isSshPathLike(bad), bad).toBe(true);
+      expect(normalizeSshPath(bad), bad).toBeNull();
+    }
+    expect(isSshPathLike('C:\\ssh\\x')).toBe(false);
+    expect(isSshPathLike('\\\\wsl.localhost\\U\\x')).toBe(false);
+  });
+  it('sshReplayEnv drops per-connection sshd vars and the helper connection agent socket', () => {
+    const captured = {
+      PATH: '/home/u/.nvm/bin:/usr/bin',
+      SSH_CONNECTION: '1 2 3 4',
+      SSH_CLIENT: '1 2 3',
+      SSH_TTY: '/dev/pts/1',
+      SSH_AUTH_SOCK: '/tmp/ssh-XXXX/agent.1',
+      XDG_SESSION_ID: '7',
+      TERM: 'dumb',
+      KEEP: 'x',
+    };
+    expect(sshReplayEnv(captured, { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', KEEP: 'y' })).toEqual({
+      PATH: '/home/u/.nvm/bin:/usr/bin',
+      KEEP: 'y',
+      CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
+    });
+    // A persistent agent socket set by an rc file is the user's: replayed.
+    expect(sshReplayEnv({ SSH_AUTH_SOCK: '/run/user/1000/keyring/ssh' }, {})).toEqual({
+      SSH_AUTH_SOCK: '/run/user/1000/keyring/ssh',
+    });
+  });
+  it('normalizeWorkspacePath: ssh paths canonical, malformed ones rejected, others resolved', () => {
+    const resolveLocal = (p: string) => `R(${p})`;
+    expect(normalizeWorkspacePath('ssh://Box/home/u/', resolveLocal)).toBe('ssh://box/home/u');
+    expect(normalizeWorkspacePath('C:\\work', resolveLocal)).toBe('R(C:\\work)');
+    expect(() => normalizeWorkspacePath('ssh:box/x', resolveLocal)).toThrow(INVALID_SSH_PATH_MESSAGE);
+    expect(() => normalizeWorkspacePath('ssh://-o/x', resolveLocal)).toThrow(INVALID_SSH_PATH_MESSAGE);
+  });
+  it('isRemoteHost: wsl and ssh, never local', () => {
+    expect(isRemoteHost(LOCAL_HOST)).toBe(false);
+    expect(isRemoteHost(wslHost('U', null))).toBe(true);
+    expect(isRemoteHost(sshHost('box'))).toBe(true);
+  });
+  it('sshCommandSpec quotes every argv word behind exec', () => {
+    const spec = sshCommandSpec('box', ['curl', '-w', '%{http_code}', 'http://127.0.0.1:1/x y']);
+    expect(spec.file).toBe('ssh.exe');
+    expect(spec.args.slice(0, 7)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-T', 'box', '--']);
+    expect(spec.args[7]).toBe(`exec 'curl' '-w' '%{http_code}' 'http://127.0.0.1:1/x y'`);
+    expect(splitWords(spec.args[7]!.slice('exec '.length))).toEqual([
+      'curl',
+      '-w',
+      '%{http_code}',
+      'http://127.0.0.1:1/x y',
+    ]);
+  });
+  it('sshProbeSpec runs the wsl probe line under /bin/sh (any login shell)', () => {
+    const spec = sshProbeSpec('box', 'abcdef012345', null);
+    const words = splitWords(spec.args.at(-1)!.slice('exec '.length));
+    expect(words).toEqual(['/bin/sh', '-c', probeLine('abcdef012345', null)]);
+    expect(splitWords(sshProbeSpec('box', null, '/srv/h').args.at(-1)!.slice('exec '.length))[2]).toBe(
+      probeLine(null, '/srv/h'),
+    );
+  });
+  it('sshEnvSpec + parseSshEnvProbe: env, node and CLI paths from one login-shell run', () => {
+    const spec = sshEnvSpec('box', '/bin/zsh');
+    const remote = spec.args.at(-1)!;
+    expect(remote.startsWith(`exec '/bin/zsh' -ilc `)).toBe(true);
+    const cmd = splitWords(remote.slice(`exec '/bin/zsh' -ilc `.length))[0]!;
+    expect(cmd).toContain('__DW_ENV__');
+    expect(cmd).toContain('__DW_NODE__');
+    expect(cmd).toContain('__DW_CLI__');
+    const out =
+      'motd junk\n\0__DW_ENV__\0HOME=/home/u\0PATH=/usr/bin\0\0__DW_NODE__\0/usr/bin/node\n20.11.1\n' +
+      '\0__DW_CLI__\0claude=/home/u/.local/bin/claude\ndevin=\ngh=/usr/bin/gh\nversion=2.1.296 (Claude Code)\n';
+    expect(parseSshEnvProbe(out)).toEqual({
+      env: { HOME: '/home/u', PATH: '/usr/bin' },
+      node: '20.11.1',
+      claude: '/home/u/.local/bin/claude',
+      devin: null,
+      gh: true,
+      version: '2.1.296',
+    });
+    expect(parseSshEnvProbe('nothing')).toEqual({
+      env: null,
+      node: null,
+      claude: null,
+      devin: null,
+      gh: false,
+      version: null,
+    });
   });
 });

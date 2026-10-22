@@ -41,7 +41,7 @@ import { getChatState, update, type ClaudeChatState } from './chatState';
 import { claudeUsage } from './usage';
 import { loadSdk } from './sdk';
 import { resolveClaudePath } from './claudePath';
-import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
+import { isRemoteHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
 import { hosts } from '../hosts';
 
 export type ClaudeChatSession = ChatSession & {
@@ -445,14 +445,14 @@ export class ClaudeHost {
     const t0 = Date.now();
     const onDisk = this.isOnDisk(id) || this.started.has(id);
     const execHost = this.hostFor(id);
-    if (isWslHost(execHost)) {
+    if (isRemoteHost(execHost)) {
       // Prime the §1.4 env cache so spawnOn uses the captured shell env.
       await hosts().shellEnv(execHost, { explicit: true });
     }
     const options = {
       cwd: session.cwd || undefined,
       pathToClaudeCodeExecutable:
-        (isWslHost(execHost)
+        (isRemoteHost(execHost)
           ? (hosts().status(execHost.id)?.claude.path ?? 'claude')
           : this.cliPath()) ?? undefined,
       permissionMode: session.permissionMode,
@@ -467,7 +467,7 @@ export class ClaudeHost {
         }),
       abortController: abort,
       ...(onDisk ? { resume: id } : { sessionId: id }),
-      ...(isWslHost(execHost)
+      ...(isRemoteHost(execHost)
         ? {
             // The SDK hands us {command,args,cwd,env,signal}; env is the full
             // Windows env, so only the SDK's own additions are forwarded.

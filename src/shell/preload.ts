@@ -10,6 +10,7 @@ import {
   type ClaudeChatStatePublic,
   type ClaudeUsageState,
   type HostId,
+  type HostReaddirResult,
   type ClaudePermissionMode,
   type ClaudeSubagent,
   type IdentityInfo,
@@ -42,8 +43,10 @@ const localApi = {
     ipcRenderer.on(IpcChannels.localUpdate, listener);
     return () => ipcRenderer.removeListener(IpcChannels.localUpdate, listener);
   },
-  localPickWorkspace: () =>
-    ipcRenderer.invoke(IpcChannels.localWorkspacePick) as Promise<LocalResult<string | null>>,
+  localPickWorkspace: (opts?: { remote?: boolean }) =>
+    ipcRenderer.invoke(IpcChannels.localWorkspacePick, opts?.remote ? { remote: true } : {}) as Promise<
+      LocalResult<string | null>
+    >,
   localAddWorkspace: (path: string) =>
     ipcRenderer.invoke(IpcChannels.localWorkspaceAdd, { path }) as Promise<LocalResult<string>>,
   localRemoveWorkspace: (path: string) =>
@@ -151,6 +154,15 @@ const hostsApi = {
     ipcRenderer.invoke(IpcChannels.hostsSetEnabled, { id, enabled }),
   claudeRecheckEnv: (sessionId: string) =>
     ipcRenderer.invoke(IpcChannels.claudeRecheckEnv, { sessionId }),
+  // P3: ssh hosts + the in-app remote folder input.
+  hostsSshAdd: (alias: string) =>
+    ipcRenderer.invoke(IpcChannels.hostsSshAdd, { alias }) as Promise<LocalResult<HostId>>,
+  hostsSshRemove: (id: HostId) =>
+    ipcRenderer.invoke(IpcChannels.hostsSshRemove, { id }) as Promise<LocalResult<null>>,
+  hostsReaddir: (hostId: HostId, path: string) =>
+    ipcRenderer.invoke(IpcChannels.hostsReaddir, { hostId, path }) as Promise<LocalResult<HostReaddirResult>>,
+  folderPromptResolve: (id: string, hostId: HostId, path: string | null) =>
+    ipcRenderer.send(IpcChannels.hostsFolderPromptResolve, { id, hostId, path }),
 };
 
 // P4b embedded terminal + F5 dock.
@@ -474,10 +486,11 @@ const api = {
   claudeRevealTranscript: (sessionId: string) => {
     if (isString(sessionId)) ipcRenderer.send(IpcChannels.claudeRevealTranscript, { sessionId });
   },
-  claudeWorkspaceAdd: (path?: string) =>
-    ipcRenderer.invoke(IpcChannels.claudeWorkspaceAdd, path ? { path } : {}) as Promise<
-      LocalResult<null>
-    >,
+  claudeWorkspaceAdd: (path?: string, opts?: { remote?: boolean }) =>
+    ipcRenderer.invoke(IpcChannels.claudeWorkspaceAdd, {
+      ...(path ? { path } : {}),
+      ...(opts?.remote ? { remote: true } : {}),
+    }) as Promise<LocalResult<null>>,
   claudeSessionReorder: (section: string, ids: string[]) =>
     ipcRenderer.invoke(IpcChannels.claudeSessionReorder, { section, ids }) as Promise<
       LocalResult<null>
@@ -505,7 +518,7 @@ const api = {
     y: number;
   }) =>
     ipcRenderer.invoke(IpcChannels.claudeContextMenu, request) as Promise<{
-      action: 'rename' | 'rename-session' | 'open-terminal' | 'attach-agent' | 'add' | null;
+      action: 'rename' | 'rename-session' | 'open-terminal' | 'attach-agent' | 'add' | 'add-remote' | null;
       sessionId?: string;
       agentId?: string;
     }>,

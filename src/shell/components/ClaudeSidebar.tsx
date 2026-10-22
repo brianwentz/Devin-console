@@ -32,7 +32,7 @@ const hostChip = (host: string) => (
     className="shrink-0 px-1 rounded bg-[#243447] text-[10px] leading-[14px] text-[#9fc4ea]"
     title={`Runs on ${host}`}
   >
-    {host.replace(/^wsl:/, '')}
+    {host.replace(/^(wsl|ssh):/, '')}
   </span>
 );
 
@@ -185,7 +185,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
   const state = useShellState();
   const claude = state!.claude;
   const hosts = state?.hosts ?? [];
-  const multiHost = hosts.some((host) => host.kind === 'wsl');
+  const multiHost = hosts.some((host) => host.kind !== 'local');
   const [renamingSession, setRenamingSession] = useState<string | null>(null);
   const collapsedFolders = state!.settings.claude.collapsedFolders;
   const { workspaces, workspaceLabels } = state!.settings.claude;
@@ -263,6 +263,7 @@ export function ClaudeSidebar({ rect }: { rect: Rect }) {
       y,
     });
     if (action === 'add') void window.agentworkspace.claudeWorkspaceAdd();
+    else if (action === 'add-remote') void window.agentworkspace.claudeWorkspaceAdd(undefined, { remote: true });
     return action;
   };
 

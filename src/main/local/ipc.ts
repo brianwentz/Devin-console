@@ -1,9 +1,9 @@
 import { resolve } from 'node:path';
-import { app, dialog } from 'electron';
-import { openFolderDialog } from '../dialogs';
-import { pickerStartPath } from '../../core/pickerFolder';
+import { app } from 'electron';
+import { pickFolder } from '../folderPrompt';
 import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
+  LocalWorkspacePickArg,
   IpcChannels,
   LocalActiveSessionArg,
   LocalContextMenuRequestSchema,
@@ -33,8 +33,6 @@ import { LocalContextMenu } from './contextMenu';
 import { renameWorkspace, reorderWorkspaces } from '../../core/workspaceTree';
 import { autoOpenLocalPr } from './prAutoOpen';
 import { getLocalState, publicLocalState } from './localState';
-import { hosts } from '../hosts';
-import { isWslHost } from '../../core/execHost';
 import { setupTerminalIpc } from './terminalIpc';
 import { terminalHost } from './terminalHost';
 
@@ -102,29 +100,26 @@ export function setupLocal(): void {
 
   guardedHandle(IpcChannels.localState, () => publicLocalState());
 
-  guardedHandle(IpcChannels.localWorkspacePick, async (): Promise<LocalResult<string | null>> => {
+  guardedHandle(IpcChannels.localWorkspacePick, async (_event, payload: unknown): Promise<LocalResult<string | null>> => {
     try {
-      // Start the picker in local.pickerFolder when it exists, else in the
-      // configured default WSL distro's home (ux3 S3 precedence).
+      const remote = LocalWorkspacePickArg.safeParse(payload ?? {}).data?.remote === true;
       const local = state.settings?.current.local;
-      const defaultDistro = local?.defaultWslDistro;
-      const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
-      const distroHome =
-        defaultHost && isWslHost(defaultHost) && defaultHost.home
-          ? hosts().windowsPath(defaultHost, defaultHost.home)
-          : undefined;
-      const defaultPath = await pickerStartPath(local?.pickerFolder ?? null, distroHome, (p) => hosts().pathExists(p), () =>
-        log('local', 'picker-folder-missing', { detail: { surface: 'local' } }),
-      );
-      const options: Electron.OpenDialogOptions = {
+      // A default WSL distro, a picker folder inside WSL, or "Add remote
+      // workspace…" picks in the in-app RemoteFolderInput over the helper
+      // channel; the native dialog only ever browses this PC (folderPrompt.ts).
+      const picked = await pickFolder({
+        surface: 'local',
         title: 'Add workspace folder',
-        properties: ['openDirectory'],
-        ...(defaultPath ? { defaultPath } : {}),
-      };
-      const result = state.windowRef
-        ? await openFolderDialog(state.windowRef, options)
-        : await dialog.showOpenDialog(options);
-      const picked = result.canceled ? null : (result.filePaths[0] ?? null);
+        defaultDistro: local?.defaultWslDistro,
+        remote,
+        pickerFolder: local?.pickerFolder,
+        onMissing: () => log('local', 'picker-folder-missing', { detail: { surface: 'local' } }),
+        native: (defaultPath) => ({
+          title: 'Add workspace folder',
+          properties: ['openDirectory'],
+          ...(defaultPath ? { defaultPath } : {}),
+        }),
+      });
       if (!picked) return { ok: true as const, value: null };
       return { ok: true as const, value: requireHost().addWorkspace(picked) };
     } catch (error) {

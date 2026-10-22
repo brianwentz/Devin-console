@@ -1023,7 +1023,9 @@ test('an explicit start on a stopped distro re-reads its state promptly', async 
 });
 
 // Task 10: the picker start folder is checked inside the distro (helper
-// `fs.stat`) and the probed distro home is used unchecked. The app's UNC
+// `fs.stat`) and the probed distro home is used unchecked. Since P3 the pick
+// itself is the in-app RemoteFolderInput (no native dialog on a WSL path):
+// its start folder is the host-side path. The app's UNC
 // stand-in (AGENT_WORKSPACE_TEST_WSL_UNC_ROOT) stays an EMPTY dir — the folder
 // exists only in the helper's fs (FAKE_WSL_ROOT), so a Windows-side existence
 // check would call it missing.
@@ -1041,6 +1043,10 @@ test('WSL picker default path needs no Windows-side fs', async () => {
   const lastDialog = () =>
     app.evaluate(
       () => (globalThis as any).__agentworkspace.lastOpenDialogOptions() as { defaultPath?: string } | null,
+    );
+  const lastPrompt = () =>
+    app.evaluate(
+      () => (globalThis as any).__agentworkspace.lastFolderPrompt() as { hostId: string; start: string | null } | null,
     );
   const missingCount = async () =>
     (await readEvents(logFile)).filter((e) => e.event === 'picker-folder-missing').length;
@@ -1067,19 +1073,23 @@ test('WSL picker default path needs no Windows-side fs', async () => {
     };
     const pickDefault = async () => {
       expect(await app.evaluate(() => (globalThis as any).__agentworkspace.claudeNewSession(null))).toBeNull();
-      return (await lastDialog())?.defaultPath;
+      expect((await lastPrompt())?.hostId).toBe('wsl:Fake');
+      return (await lastPrompt())?.start;
     };
 
     // A UNC folder that exists inside the distro wins.
     const picks = join(uncRoot, 'home', 'u', 'picks');
     await setPicker(picks);
-    expect(await pickDefault()).toBe(picks);
+    expect(await pickDefault()).toBe('/home/u/picks');
     expect(await missingCount()).toBe(0);
 
     // A UNC folder gone inside the distro → the probed home, unchecked.
     await setPicker(join(uncRoot, 'home', 'u', 'gone'));
-    expect(await pickDefault()).toBe(join(uncRoot, 'home', 'u'));
+    expect(await pickDefault()).toBe('/home/u');
     expect(await missingCount()).toBe(1);
+
+    // The native dialog never opened on a WSL path.
+    expect(await lastDialog()).toBeNull();
 
     // Nothing touched the Windows-side stand-in.
     expect(readdirSync(uncRoot)).toEqual([]);

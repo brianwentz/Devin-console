@@ -19,6 +19,10 @@ import {
   ClaudeSubagentsArg,
   HostsRefreshArg,
   HostsSetEnabledArg,
+  HostsSshAddArg,
+  HostsSshRemoveArg,
+  HostReaddirSchema,
+  FolderPromptResolveArg,
   ClaudePermissionArg,
   ClaudePromptArg,
   ClaudeRenameArg,
@@ -42,6 +46,7 @@ import { claudeUsage } from './usage';
 import { claudeHost } from './host';
 import { publicChatState } from './chatState';
 import { hosts } from '../hosts';
+import { readRemoteDir, resolveFolderPrompt } from '../folderPrompt';
 
 export function setupClaude(): ClaudeSessions {
   // Captured-at-startup local Claude home (app code never reads the env var).
@@ -83,8 +88,8 @@ export function setupClaude(): ClaudeSessions {
     sessions.revealTranscript(sessionId),
   );
   // Invoke-style: preload uses ipcRenderer.invoke → LocalResult<null>.
-  handleResult(IpcChannels.claudeWorkspaceAdd, ClaudeWorkspaceAddArg, ({ path }) =>
-    sessions.workspaceAdd(path),
+  handleResult(IpcChannels.claudeWorkspaceAdd, ClaudeWorkspaceAddArg, ({ path, remote }) =>
+    sessions.workspaceAdd(path, { remote: remote === true }),
   );
   handleResult(IpcChannels.claudeWorkspaceReorder, WorkspaceReorderSchema, ({ paths }) =>
     sessions.workspaceReorder(paths),
@@ -167,6 +172,21 @@ export function setupClaude(): ClaudeSessions {
   guardedHandle(IpcChannels.hostsSetEnabled, (_event, payload: unknown) => {
     const parsed = HostsSetEnabledArg.safeParse(payload);
     if (parsed.success) hosts().setEnabled(parsed.data.id, parsed.data.enabled);
+  });
+  // P3: ssh hosts (Settings → General → Hosts) and the remote folder input.
+  handleResult(IpcChannels.hostsSshAdd, HostsSshAddArg, ({ alias }) => {
+    const result = hosts().addSshHost(alias);
+    if (!result.ok) throw new Error(result.error);
+    return result.id;
+  });
+  handleResult(IpcChannels.hostsSshRemove, HostsSshRemoveArg, ({ id }) => {
+    hosts().removeSshHost(id);
+    return null;
+  });
+  handleResult(IpcChannels.hostsReaddir, HostReaddirSchema, ({ hostId, path }) => readRemoteDir(hostId, path));
+  guardedOn(IpcChannels.hostsFolderPromptResolve, (_event, payload: unknown) => {
+    const parsed = FolderPromptResolveArg.safeParse(payload);
+    if (parsed.success) resolveFolderPrompt(parsed.data);
   });
 
   return sessions;

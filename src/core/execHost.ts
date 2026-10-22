@@ -39,6 +39,16 @@ export function isFsReady(host: ExecHost, state: string | null | undefined): boo
 /** An ssh alias: no leading '-' (would be parsed as an ssh option), no shell/URL metacharacters. */
 export const SSH_ALIAS_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 
+/** The stored/keyed form: SSH_ALIAS_RE lower-cased (OpenSSH matches `Host`
+ * patterns case-insensitively, so `Box` and `box` are one host). */
+export const SSH_ALIAS_CANONICAL_RE = /^[a-z0-9._][a-z0-9._-]*$/;
+
+/** User input → canonical alias (trimmed, lower-cased); null when invalid. */
+export function canonicalSshAlias(input: string): string | null {
+  const alias = input.trim().toLowerCase();
+  return alias.length > 0 && alias.length <= 128 && SSH_ALIAS_RE.test(alias) ? alias : null;
+}
+
 export function isSshHost(host: ExecHost): host is Extract<ExecHost, { kind: 'ssh' }> {
   return host.kind === 'ssh';
 }
@@ -47,16 +57,53 @@ export function isValidSshAlias(alias: string): boolean {
   return SSH_ALIAS_RE.test(alias);
 }
 
+/** Builds the ssh host for an alias, keyed by its canonical (lower-case) form. */
 export function sshHost(alias: string, home: string | null = null): ExecHost {
   if (!isValidSshAlias(alias)) throw new Error('invalid ssh alias');
-  return { id: `ssh:${alias}`, kind: 'ssh', alias, home };
+  const canonical = alias.toLowerCase();
+  return { id: `ssh:${canonical}`, kind: 'ssh', alias: canonical, home };
 }
 
-/** `ssh://<alias>/<abs>` (scheme case-insensitive, alias case-sensitive) → alias + posix path; null when not that form or the alias is invalid. */
+/** `ssh://<alias>/<abs>` (scheme and alias case-insensitive; the alias is
+ * returned canonical, lower-case) → alias + posix path; null when not that
+ * form, the alias is invalid or the path carries a backslash. */
 export function parseSshUri(p: string): { alias: string; path: string } | null {
   const m = /^ssh:\/\/([^/]*)(\/.*)?$/i.exec(p);
   if (!m || !m[1] || !isValidSshAlias(m[1])) return null;
-  return { alias: m[1], path: m[2] ?? '/' };
+  const path = m[2] ?? '/';
+  if (path.includes('\\') || path.includes('\0')) return null;
+  return { alias: m[1].toLowerCase(), path };
+}
+
+/** Anything that claims to be an ssh path (`ssh:` scheme, any case) — the
+ * input boundary rejects it explicitly when normalizeSshPath returns null. */
+export function isSshPathLike(p: string): boolean {
+  return /^ssh:/i.test(p.trim());
+}
+
+/** Canonical stored form `ssh://<alias>/<abs>` (lower-case alias, collapsed
+ * slashes, no trailing slash); null for a malformed ssh path. */
+export function normalizeSshPath(p: string): string | null {
+  const parsed = parseSshUri(p.trim());
+  if (!parsed) return null;
+  return `ssh://${parsed.alias}${stripTrailing(collapseSlashes(parsed.path))}`;
+}
+
+export const INVALID_SSH_PATH_MESSAGE = 'Invalid SSH path — use ssh://<alias>/<absolute path>';
+
+/** Workspace/cwd key at the input boundary: an ssh path is canonicalised (a
+ * malformed one throws INVALID_SSH_PATH_MESSAGE — never `resolve()`d into a
+ * Windows path), anything else goes through `resolveLocal`. */
+export function normalizeWorkspacePath(p: string, resolveLocal: (p: string) => string): string {
+  if (!isSshPathLike(p)) return resolveLocal(p);
+  const normalized = normalizeSshPath(p);
+  if (!normalized) throw new Error(INVALID_SSH_PATH_MESSAGE);
+  return normalized;
+}
+
+/** A host that is reached over the helper channel (WSL or SSH). */
+export function isRemoteHost(host: ExecHost): host is Exclude<ExecHost, { kind: 'local' }> {
+  return host.kind !== 'local';
 }
 
 export function wslHost(distro: string, home: string | null, mount = '/mnt'): ExecHost {
@@ -233,6 +280,35 @@ export function mergeShellEnv(
     out[key] = value;
   }
   return out;
+}
+
+/** Per-connection variables sshd sets for the helper's own session — never
+ * replayed into another ssh connection. */
+export const SSH_ENV_DENYLIST: ReadonlySet<string> = new Set([
+  'SSH_CONNECTION',
+  'SSH_CLIENT',
+  'SSH_TTY',
+  'SSH_ORIGINAL_COMMAND',
+  'XDG_SESSION_ID',
+  'XDG_SESSION_TYPE',
+  'XDG_SESSION_CLASS',
+  'MOTD_SHOWN',
+]);
+
+/**
+ * The helper's login env → the env an ssh spawn replays (a non-interactive
+ * `ssh … -- cmd` sources no rc files, so PATH/nvm come from here): the WSL
+ * denylist plus SSH_ENV_DENYLIST, and an `SSH_AUTH_SOCK` sshd created for the
+ * helper's connection (`/tmp/ssh-…`, gone with it); `extra` wins.
+ */
+export function sshReplayEnv(captured: Record<string, string>, extra: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(mergeShellEnv(captured, {}))) {
+    if (SSH_ENV_DENYLIST.has(key)) continue;
+    if (key === 'SSH_AUTH_SOCK' && value.startsWith('/tmp/ssh-')) continue;
+    out[key] = value;
+  }
+  return { ...out, ...extra };
 }
 
 /** The helper's `env.get` result → a spawnable env: string values under valid
@@ -611,6 +687,76 @@ export function sshHelperSpec(
     flags,
     `cd ${sshQuote(home)} && exec ${sshQuote(shell)} -ilc ${sshQuote(helperLaunchLine(shell, mode))} ${sshQuote(helperPath(home, hash))}`,
   );
+}
+
+/** One plain command on the remote (probe curl, `claude stop`): `exec <argv…>`, every word quoted. */
+export function sshCommandSpec(alias: string, argv: string[]): HostSpawnSpec {
+  if (argv.length === 0) throw new Error('ssh: empty command');
+  assertCmd(argv[0]!);
+  return sshSpec(alias, ['-T'], `exec ${argv.map(sshQuote).join(' ')}`);
+}
+
+/** The WSL probe line (home / user / login shell / helper presence) under
+ * `/bin/sh -c` — the remote login shell may be fish, which can't parse it. */
+export function sshProbeSpec(alias: string, hash: string | null, home: string | null): HostSpawnSpec {
+  return sshCommandSpec(alias, ['/bin/sh', '-c', probeLine(hash, home)]);
+}
+
+/** Marker between the node version and the CLI lookups in sshEnvSpec's output. */
+export const CLI_MARKER = '__DW_CLI__';
+
+/**
+ * One interactive-login run per ssh probe (each ssh.exe is a full handshake):
+ * the env capture, the node version, then `claude`/`devin`/`gh` lookups and
+ * `claude --version`. Plain `cmd || cmd` and `;` only, so POSIX shells and
+ * fish ≥ 3 parse it alike.
+ */
+export function sshEnvSpec(alias: string, shell: string): HostSpawnSpec {
+  assertAbs(shell, 'shell');
+  const cmd =
+    `printf "\\0__DW_ENV__\\0"; env -0; printf "\\0${NODE_MARKER}\\0"; ` +
+    'command -v node >/dev/null && node -p process.versions.node || echo NONODE; ' +
+    `printf "\\0${CLI_MARKER}\\0"; ` +
+    'printf "claude="; command -v claude || echo; ' +
+    'printf "devin="; command -v devin || echo; ' +
+    'printf "gh="; command -v gh || echo; ' +
+    'printf "version="; claude --version 2>/dev/null || echo';
+  return sshSpec(alias, ['-T'], `exec ${sshQuote(shell)} -ilc ${sshQuote(cmd)}`);
+}
+
+export interface SshEnvProbe {
+  env: Record<string, string> | null;
+  node: string | null;
+  claude: string | null;
+  devin: string | null;
+  gh: boolean;
+  version: string | null;
+}
+
+/** sshEnvSpec output → env / node / CLI paths. Everything is null/false when the markers are missing. */
+export function parseSshEnvProbe(stdout: Uint8Array | string): SshEnvProbe {
+  const text = typeof stdout === 'string' ? stdout : new TextDecoder('utf-8').decode(stdout);
+  const sep = `\0${CLI_MARKER}\0`;
+  const at = text.lastIndexOf(sep);
+  const head = at === -1 ? text : text.slice(0, at);
+  const env = parseShellEnv(head, '__DW_ENV__');
+  const node = env === null ? null : parseNodeVersion(head, NODE_MARKER);
+  const lines = at === -1 ? [] : text.slice(at + sep.length).split('\n');
+  const field = (key: string): string | null => {
+    const line = lines.find((l) => l.startsWith(`${key}=`));
+    const value = line?.slice(key.length + 1).trim() ?? '';
+    return value || null;
+  };
+  const abs = (value: string | null): string | null => (value && value.startsWith('/') ? value : null);
+  const version = field('version')?.split(/\s+/)[0] ?? null;
+  return {
+    env,
+    node,
+    claude: abs(field('claude')),
+    devin: abs(field('devin')),
+    gh: abs(field('gh')) !== null,
+    version: version && SEMVER_LINE.test(version) ? version : null,
+  };
 }
 
 /** ssh counterpart of helperDeploySpec: same byte-count-gated atomic script, bundle on stdin. */
