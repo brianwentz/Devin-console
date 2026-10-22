@@ -1,6 +1,6 @@
 # Phase 9 — In-distro helper transport for WSL (and SSH) hosts
 
-Status: Plan reviewed 2026-10-21 (rounds 1–2) — P0 implemented (PR pending); revised after plan-review rounds 1–2 (breaker, ESM bundle, launch path, RPC trims, UNC inventory, spec/plan alignment).
+Status: Plan reviewed 2026-10-21 (rounds 1–2) — P0 implemented (PR pending); P1 implemented (PR pending); revised after plan-review rounds 1–2 (breaker, ESM bundle, launch path, RPC trims, UNC inventory, spec/plan alignment).
 
 Phase 8 (`exec-hosts-wsl.md`) chose option A: `wsl.exe` for processes, `\\wsl.localhost\<distro>` UNC (the 9P redirector) for every file the Windows side reads. Option C — a server in the distro, the VS Code Remote-WSL model — was rejected because it "would need Node in every distro and an update story", and §5 put "running the SDK or a helper inside the distro" out of scope. This phase reverses that decision on new evidence: with WSL hosts enabled, the user's whole WSL VM crashes or hard-hangs (new sessions fail, `\\wsl.localhost` stops answering, only `wsl --shutdown` or a reboot recovers).
 
