@@ -48,6 +48,7 @@ import { sdkTargetCliVersion } from './claude/sdk';
 import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 import { HostChannel, type HelperStatus } from './hostChannel';
 import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
+import { hooksOffSpawnError } from '../core/hooksOffBackoff';
 
 const execFileAsync = promisify(execFile);
 
@@ -695,7 +696,8 @@ export class HostsRegistry {
   }
 
   /** Stdin deploy of the bundle to `<home>/.agent-workspace/` (one wsl.exe
-   * run, no UNC); also the channel's exit-86 redeploy. Never on a Stopped distro. */
+   * run, no UNC); also the channel's redeploy, which HostChannel runs only
+   * after the fresh spawn gate (canSpawnHelper). Never on a Stopped distro. */
   private async deployHelper(entry: WslEntry): Promise<boolean> {
     const bundle = helperBundle();
     const home = entry.host.home;
@@ -889,7 +891,7 @@ export class HostsRegistry {
       return { ok, error: ok ? null : `hooks removal failed (exit ${result.code ?? 'unknown'})` };
     } catch (error) {
       log('host', 'host-hooks-off', { detail: { host: host.id, ok: false, code: null } });
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: hooksOffSpawnError(error) };
     }
   }
 

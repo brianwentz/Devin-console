@@ -33,6 +33,11 @@
 //                                 FAKE_WSL_ROOT, the canned env, FAKE_* knobs
 //                                 and FAKE_WSL_HELPER=1; stdio piped through
 //                                 (drained before the fake exits);
+//                                 FAKE_WSL_HELPER_TERMINATE_ONCE=<marker>: while
+//                                 the marker file exists, the launch deletes
+//                                 it, flips FAKE_WSL_DISTROS_FILE to Stopped
+//                                 and exits 1 before hello (`wsl --terminate`
+//                                 between spawn and hello);
 //                                 FAKE_WSL_HELPER_HANG=1 stops forwarding the
 //                                 child's stdout after its first line; node
 //                                 runs with `-r fakeWslHelperPreload.cjs` so the
@@ -43,7 +48,7 @@
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const ROOT = process.env.FAKE_WSL_ROOT ?? '.';
@@ -85,6 +90,13 @@ const helperEnv = (): Record<string, string> => {
 const helperLaunch = (file: string, cwd: string): number => {
   const local = linuxFile(file);
   if (!existsSync(local)) return 86;
+  const terminate = process.env.FAKE_WSL_HELPER_TERMINATE_ONCE;
+  const distros = process.env.FAKE_WSL_DISTROS_FILE;
+  if (terminate && distros && existsSync(terminate)) {
+    rmSync(terminate, { force: true });
+    writeFileSync(distros, readFileSync(distros, 'utf8').replace(/:Running/g, ':Stopped'));
+    return 1;
+  }
   // The preload sits next to this bundle in out/fixtures.
   const preload = join(__dirname, 'fakeWslHelperPreload.cjs');
   const child = spawn(process.env.FAKE_WSL_NODE ?? process.execPath, ['-r', preload, local, '--stdio'], {

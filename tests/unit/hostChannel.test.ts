@@ -413,12 +413,68 @@ describe('HostChannel fix round 1', () => {
     allowed = false;
     last().exit(86);
     await vi.advanceTimersByTimeAsync(0);
-    expect(redeploy).toHaveBeenCalledTimes(1);
+    // The redeploy is a `wsl.exe -d D` run too: gated like a spawn (M1).
+    expect(redeploy).toHaveBeenCalledTimes(0);
     expect(children).toHaveLength(2);
     allowed = false;
     channel.reset();
     await vi.advanceTimersByTimeAsync(0);
     expect(children).toHaveLength(2);
+  });
+
+  it('every redeploy runs the spawn gate first; a refusal halts as distro-unavailable', async () => {
+    let allowed = true;
+    const canSpawn = vi.fn(async () => allowed);
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last, logs } = make({ canSpawn, redeploy, bundlePreexisting: () => true });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(1);
+    // `wsl --terminate` between spawn and hello: the pre-existing bundle's
+    // early-exit redeploy must not boot the now-Stopped distro.
+    allowed = false;
+    const gatesBefore = canSpawn.mock.calls.length;
+    last().exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(canSpawn.mock.calls.length).toBe(gatesBefore + 1);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(children).toHaveLength(1);
+    expect(channel.info()).toMatchObject({ running: false, failures: 0 });
+    expect(channel.state).toBe('reconnecting');
+    expect(logs.some((l) => l.event === 'host-helper' && l.detail.reason === 'distro-unavailable')).toBe(true);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(children).toHaveLength(1);
+    // The distro is back: reset spawns; the gate allows the exit-86 redeploy.
+    allowed = true;
+    channel.reset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(children).toHaveLength(2);
+    last().exit(86);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).toHaveBeenCalledTimes(1);
+    expect(children).toHaveLength(3);
+  });
+
+  it('a stop() while the redeploy gate is in flight neither redeploys nor spawns', async () => {
+    let release: (ok: boolean) => void = () => undefined;
+    let calls = 0;
+    const canSpawn = vi.fn(() => {
+      calls++;
+      return calls === 1 ? Promise.resolve(true) : new Promise<boolean>((r) => (release = r));
+    });
+    const redeploy = vi.fn(async () => true);
+    const { channel, children, last } = make({ canSpawn, redeploy });
+    channel.start();
+    await vi.advanceTimersByTimeAsync(0);
+    last().exit(86);
+    await vi.advanceTimersByTimeAsync(0);
+    channel.stop();
+    release(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(redeploy).not.toHaveBeenCalled();
+    expect(children).toHaveLength(1);
+    expect(channel.info().running).toBe(false);
   });
 
   it('killStopped(): a child still alive after stop() is killed synchronously (quit)', () => {

@@ -1,10 +1,22 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
+import { HOOK_PATH_PREFIX, buildHooksBlock, mergeHooksIntoSettings } from '../../src/core/claudeHooks';
+import { HOOKS_OFF_HELPER_UNAVAILABLE } from '../../src/core/hooksOffBackoff';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { closeApp, launchWithClaudeFixture, readEvents, shellPage, state } from './helpers';
+import { closeApp, evaluateInShell, launchWithClaudeFixture, readEvents, shellPage, state } from './helpers';
 
 // Helper channel (P1 Task 8): the fake wsl.exe runs the REAL built helper
 // bundle under FAKE_WSL_ROOT over piped stdio — deploy, hello, liveness,
@@ -280,6 +292,68 @@ test('stopped distro is not respawned', async () => {
   }
 });
 
+// Self-review L3: hooks off while an enabled distro's helper is degraded —
+// Settings must not show a clean opt-out while our block stays; the removal
+// runs once the channel is back.
+test('hooks opt-out on a degraded helper reports the error and removes the block once ready', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const claudeDir = join(root, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  const seeded = mergeHooksIntoSettings(
+    JSON.stringify({ keepMe: true }),
+    buildHooksBlock({ port: 50000, auth: { kind: 'token', token: 't' } }),
+  );
+  if ('error' in seeded) throw new Error(seeded.error);
+  writeFileSync(settingsFile, seeded.json);
+  const ours = () => readFileSync(settingsFile, 'utf8').includes(HOOK_PATH_PREFIX);
+  // The helper's node does not exist yet: three failed starts → degraded.
+  const node = join(root, 'bin', 'node.exe');
+  const { app } = await launch({ FAKE_WSL_ROOT: root, FAKE_WSL_NODE: node });
+  const claude = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.claudeState()) as Promise<{
+      hooks: { error: string | null };
+      hostErrors: Record<string, string>;
+    }>;
+  try {
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('degraded');
+    await expect
+      .poll(async () => (await claude()).hooks.error, { timeout: 15_000 })
+      .toBe(HOOKS_OFF_HELPER_UNAVAILABLE);
+    expect((await claude()).hostErrors[HOST]).toContain(HOOKS_OFF_HELPER_UNAVAILABLE);
+    expect(ours()).toBe(true);
+    // Hooks back on: the pending-removal error no longer applies; off again → back.
+    const hooksEnabled = (on: boolean) =>
+      evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: ${on} } })`);
+    await hooksEnabled(true);
+    await expect
+      .poll(async () => (await claude()).hostErrors[HOST] ?? '', { timeout: 15_000 })
+      .not.toContain(HOOKS_OFF_HELPER_UNAVAILABLE);
+    await hooksEnabled(false);
+    await expect
+      .poll(async () => (await claude()).hooks.error, { timeout: 15_000 })
+      .toBe(HOOKS_OFF_HELPER_UNAVAILABLE);
+    expect(ours()).toBe(true);
+    // node appears; Re-check closes the breaker → ready → the pending removal runs.
+    mkdirSync(dirname(node), { recursive: true });
+    try {
+      linkSync(process.execPath, node);
+    } catch {
+      copyFileSync(process.execPath, node);
+    }
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostRefresh(id), HOST);
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(ours, { timeout: 15_000 }).toBe(false);
+    expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+    await expect.poll(async () => (await claude()).hooks.error, { timeout: 15_000 }).toBeNull();
+    expect((await claude()).hostErrors[HOST] ?? '').not.toContain(HOOKS_OFF_HELPER_UNAVAILABLE);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('FAKE_WSL_NO_NODE → node-missing + #hostHelperHint', async () => {
   const { app, root, spawnLog, logFile } = await launch({ FAKE_WSL_NO_NODE: '1' });
   try {
@@ -402,6 +476,42 @@ test('a helper killed by a distro stop is not respawned into the stopped distro'
     await flipAndEnumerate(app, distros, 'Fake:Running:default');
     await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
     expect(launches(spawnLog)).toBe(n + 1);
+  } catch (error) {
+    throw await withListTrace(error);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+// Self-review M1: the pre-hello redeploy of a pre-existing bundle is a
+// `wsl.exe -d D` run too — it goes through the fresh spawn gate, so a distro
+// terminated between spawn and hello is neither redeployed into nor booted.
+test('a helper that dies before hello as its distro stops is not redeployed into it', async () => {
+  const { root, distros } = flipRoot();
+  mkdirSync(join(root, 'home', 'u', '.agent-workspace'), { recursive: true });
+  writeFileSync(deployedFile(root), readFileSync(join(process.cwd(), 'out/helper/agent-workspace-helper.mjs')));
+  const marker = join(root, 'terminate-once');
+  writeFileSync(marker, '');
+  const { app, spawnLog, logFile } = await launch(flipEnv(root, distros, { FAKE_WSL_HELPER_TERMINATE_ONCE: marker }));
+  const deploys = async () => (await readEvents(logFile)).filter((e) => e.event === 'host-helper-deploy').length;
+  const deploySpawns = () => spawnLines(spawnLog).filter((argv) => argv.some((a) => a.includes('mkdir -p "$1"'))).length;
+  try {
+    await expect
+      .poll(async () => (await helperEvents(logFile)).some((e) => e.reason === 'distro-unavailable'), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    expect(existsSync(marker)).toBe(false);
+    await expect.poll(async () => (await hostRow(app))?.state, { timeout: 15_000 }).toBe('stopped');
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(await deploys()).toBe(0);
+    expect(deploySpawns()).toBe(0);
+    expect(launches(spawnLog)).toBe(1);
+    expect(await channelState(app)).toMatchObject({ state: 'reconnecting', running: false, failures: 0 });
+    await flipAndEnumerate(app, distros, 'Fake:Running:default');
+    await expect.poll(() => helperState(app), { timeout: 30_000 }).toBe('ready');
+    expect(launches(spawnLog)).toBe(2);
+    expect(await deploys()).toBe(0);
   } catch (error) {
     throw await withListTrace(error);
   } finally {

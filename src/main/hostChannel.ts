@@ -57,8 +57,9 @@ export interface HostChannelOptions {
   /** Exit 86 / hello hash mismatch: put the bundle back; resolves true when the file is deployed. */
   redeploy?: () => Promise<boolean>;
   /** Checked before EVERY spawn (start, backoff timer, immediate respawn,
-   * post-redeploy, reset): false = the distro is gone — the channel stops
-   * instead of a `wsl.exe -d D` that would boot it again. */
+   * post-redeploy, reset) and before every redeploy: false = the distro is
+   * gone — the channel stops instead of a `wsl.exe -d D` that would boot it
+   * again. */
   canSpawn?: () => Promise<boolean>;
   /** The deployed bundle's hash; a hello carrying another one is a stale helper. */
   expectedHash?: string;
@@ -515,6 +516,18 @@ export class HostChannel {
       this.afterRedeploy = true;
       this.redeploying = true;
       this.setState('starting', 'redeploy');
+      this.gatedRedeploy();
+      return;
+    }
+    this.breaker = onExit(this.breaker, now);
+    this.scheduleRespawn(now, reason);
+  }
+
+  /** The deploy is a `wsl.exe -d D` run as well: it passes the same fresh
+   * spawn gate first — a distro stopped since the last list (`wsl --terminate`
+   * between spawn and hello) halts the channel instead of being booted. */
+  private gatedRedeploy(): void {
+    const redeploy = (): void => {
       void this.opts
         .redeploy!()
         .catch(() => false)
@@ -524,10 +537,28 @@ export class HostChannel {
           if (ok) this.spawnNow('redeploy');
           else this.failed(Date.now(), 'redeploy-failed');
         });
+    };
+    const gate = this.opts.canSpawn;
+    if (!gate) {
+      redeploy();
       return;
     }
-    this.breaker = onExit(this.breaker, now);
-    this.scheduleRespawn(now, reason);
+    void gate()
+      .catch(() => false)
+      .then((ok) => {
+        // stop() during the gate: nothing runs. (start/reset wait on
+        // `redeploying`, so no other spawn raced this one.)
+        if (this.stopped) {
+          this.redeploying = false;
+          return;
+        }
+        if (ok) {
+          redeploy();
+          return;
+        }
+        this.redeploying = false;
+        this.halt('distro-unavailable');
+      });
   }
 
   private failed(now: number, reason: Reason): void {

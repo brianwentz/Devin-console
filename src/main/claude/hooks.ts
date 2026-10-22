@@ -23,7 +23,7 @@ import { claudeUsage } from './usage';
 import { applyGlobalHooks } from './hooksInstall';
 import { hosts } from '../hosts';
 import { terminalHost } from '../local/terminalHost';
-import { hooksOffDue, hooksOffFailed, type HooksOffBackoff } from '../../core/hooksOffBackoff';
+import { hooksOffChannelDown, hooksOffDue, hooksOffFailed, type HooksOffBackoff } from '../../core/hooksOffBackoff';
 import type { ClaudeSessions } from './sessions';
 
 export class ClaudeHooks {
@@ -47,6 +47,8 @@ export class ClaudeHooks {
   // error they reported — status changes inside the window spawn nothing.
   private readonly offBackoff = new Map<HostId, HooksOffBackoff & { error: string | null }>();
   private skipLogged = false;
+  // Hosts showing the hooks-off "helper unavailable" error (cleared once moot).
+  private readonly offUnavailable = new Set<HostId>();
 
   constructor(
     private readonly owner: ClaudeSessions,
@@ -154,6 +156,9 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
+      // Hooks back on: a pending-removal error no longer applies (a host that
+      // is applied below overwrites hooksInstall anyway).
+      if (enabled && this.offUnavailable.delete(host.id)) hosts().setError(host.id, 'hooksInstall', null);
       // Installs target enabled hosts only (their channel must be ready). The
       // opt-out also cleans a disabled-but-running one (our block carries the
       // token): over the channel when it is up, else one `--apply-hooks-off`
@@ -163,7 +168,20 @@ export class ClaudeHooks {
       // An enabled host's channel is (re)starting: its ready transition
       // re-runs this apply — no one-shot spawn for it.
       const listed = hosts().list().some((h) => h.id === host.id);
-      if (!channelReady && (enabled || listed)) continue;
+      if (!channelReady && !enabled && listed) {
+        // A degraded helper never turns ready on its own: say so instead of a
+        // clean opt-out while our block stays. The key stays unrecorded, so
+        // the ready transition (reset / Re-check) re-runs the removal.
+        const down = hooksOffChannelDown(hosts().channel(host)?.state);
+        if (down) {
+          this.lastApplied.delete(host.id);
+          this.offUnavailable.add(host.id);
+          hosts().setError(host.id, 'hooksInstall', down);
+          firstError ??= down;
+        }
+        continue;
+      }
+      if (!channelReady && enabled) continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,
@@ -187,6 +205,7 @@ export class ClaudeHooks {
         installed = result.installed;
         firstError = result.error;
       }
+      this.offUnavailable.delete(host.id);
       hosts().setError(host.id, 'hooksInstall', result.error);
       if (result.error && !firstError) firstError = result.error;
     }
