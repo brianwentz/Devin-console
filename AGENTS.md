@@ -764,6 +764,23 @@ variable that selects it.
 - Hooks: `claudeSubagents`, `claudeOpenSubagent`, `claudeChatMessageIds`, `shutdownState`. #11: `SessionStart` still never fires via `--settings` on 2.1.302
   (kept in `HOOK_EVENTS` as a no-op).
 
+## Providers
+
+- Registry `src/core/providers.ts` (pure): `PROVIDERS` descriptors (`devin-cloud`, `devin-local`, `claude`; rail order) + the derived tuples
+  `PROVIDER_SURFACES|SOURCES|VIEW_NAMES|ANALYTICS_TABS|USAGE_METRICS`; `NotificationSourceSchema`/`UsageMetricSchema` and `SurfaceSchema`
+  (`[...PROVIDER_SURFACES,'settings','analytics']`) are built from them, as are the `layout.ts` predicates (`dockSurface`, sessions column, shortcuts) and
+  `effectiveScope` / `providerScope` in `tabModel.ts`. `providerById` throws on an unknown id; `providerBySurface|Source` return undefined.
+- Shell: `PROVIDER_UI` (`src/shell/providers.tsx`, typed against the React-free `PROVIDER_UI_KEYS` in `src/shell/providerKeys.ts`) holds the rail button,
+  settings tab, analytics panel and source glyph per provider. `tests/unit/providerRegistry.test.ts` fails on any drift between descriptors, schemas and keys.
+- Main: `ProviderRuntime` (`src/main/providers/runtime.ts`, electron-free) = `start`/`dispose` + optional `onFocus`, `onSettingsChanged(previous, next)`,
+  `onPrPanelOpen`, `openPullRequests`, `openNotification`, `openSessionPr(sessionId, prUrl)`, `newSession`. `src/main/providers/index.ts` registers
+  `devinCloud`, `devinLocal`, `claude` in that order (wrappers delegate to the existing singletons); `disposeAll()` disposes in registration order and a
+  throwing `dispose` logs `provider-dispose-error {provider}` without stopping the rest. `runtimeFor(idOrSurface)` looks one up.
+- Adding a provider: add the descriptor and extend the tuples in `providers.ts` (plus `ProviderId`); add a `PROVIDER_UI` + `PROVIDER_UI_KEYS` entry; add a
+  runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
+  prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
+  from `src/shared/ipc.ts`; run `npm run smoke:install` when a settings schema changes.
+
 ## Conventions
 - `src/core/` is pure TS — no `electron` imports (unit-testable).
 - All IPC payloads are validated with the zod schemas in `src/shared/ipc.ts`; add a schema when adding a channel.
@@ -930,6 +947,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `host-probe` | `{ host, ok, ms, claude?, devin?, hooks?, reason?, failure? }` — one host probe; a failed ssh probe adds `failure: 'connection'\|'other'` (the recovery input), a refused csh/tcsh shell `reason: 'shell'`. |
 | `host-ssh-recover` | `{ trigger: 'resume'\|'unlock'\|'focus'\|'timer', count }` — ssh hosts retried after a connection-class failure (only logged when count > 0). |
 | `remote-fs-violation` | `{ op }` (e.g. `readFileSync`, `promises.stat`) — once per op per run: an app `fs` call hit a `\\wsl.localhost` / `\\wsl$` / `ssh://` path (or the test UNC root). Production passes the call through; test mode throws `RemoteFsViolation` after logging. Never the path. |
+| `provider-dispose-error` | `{ provider }` — a `ProviderRuntime.dispose()` threw during `disposeAll()` (channel `shell`); the remaining runtimes still dispose. |
 | `host-helper` | `{ host, state, reason? }` — helper channel state change; `state` = `starting\|ready\|reconnecting\|degraded`, `reason` = `spawn\|hello\|exit\|spawn-error\|hello-timeout\|silence\|protocol\|redeploy\|redeploy-failed\|stopped\|reset\|breaker\|distro-unavailable\|hash-mismatch\|crash-loop`. |
 | `host-helper-wake` | `{ host, gapMs }` — a watchdog tick after a sleep/resume clock jump; the silence clock restarted instead of killing the helper. |
 | `host-rpc-timeout` | `{ host, method, ms }` — a channel request got no answer within its timeout (10 s, 60 s for `store.list`/`usage.scan`). |
