@@ -1,5 +1,7 @@
-import { BarChart3, Bell, Sparkles } from 'lucide-react';
+import { BarChart3, Bell } from 'lucide-react';
 import { dockSurface, RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
+import { PROVIDERS } from '../../core/providers';
+import { PROVIDER_UI } from '../providers';
 import { useShellState } from '../store';
 import { requestSurface } from '../surface';
 import type { Surface } from '../../shared/ipc';
@@ -58,33 +60,6 @@ function NotificationsButton({ buttonClass }: { buttonClass: string }) {
   );
 }
 
-// Amber dot while any Claude session (hooks or chat) waits for a
-// permission decision — same style as #pollerWarning.
-function ClaudeButton({ surface, buttonClass }: { surface: Surface; buttonClass: string }) {
-  const state = useShellState();
-  const waiting = state?.claude.sessions.some((s) => s.activity === 'waiting') ?? false;
-  return (
-    <button
-      id="claudeButton"
-      type="button"
-      aria-label="Claude"
-      aria-pressed={surface === 'claude'}
-      title="Claude"
-      className={`${buttonClass} relative flex items-center justify-center`}
-      onClick={() => void requestSurface('claude')}
-    >
-      <Sparkles size={18} strokeWidth={1.8} />
-      {waiting && (
-        <span
-          id="claudeWaitingBadge"
-          className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#e0a03c]"
-          title="A Claude session is waiting for permission"
-        />
-      )}
-    </button>
-  );
-}
-
 // Usage alerts: a dot while any tracked metric is ≥50% of its limit — amber
 // for warn, red for critical; the tooltip lists the hot metrics.
 function AnalyticsButton({ surface, buttonClass }: { surface: Surface; buttonClass: string }) {
@@ -125,35 +100,21 @@ export function Rail({
   // Settings/Analytics: the dock is hidden and the toggle is inert (the
   // persisted preference survives the visit — see core/layout dockSurface).
   const terminalOffSurface = !dockSurface(surface);
+  const dockLabels = PROVIDERS.filter((p) => p.dock).map((p) => p.label);
+  const dockList =
+    dockLabels.length > 1
+      ? `${dockLabels.slice(0, -1).join(', ')} and ${dockLabels[dockLabels.length - 1]}`
+      : dockLabels.join('');
   return (
     <aside
       id="rail"
       className="shell-chrome absolute top-0 bottom-0 left-0 flex flex-col items-center gap-2.5 bg-[#101722]"
       style={{ width: RAIL_WIDTH, paddingTop: TITLE_BAR_HEIGHT + 8 }}
     >
-      <button
-        id="cloudButton"
-        type="button"
-        aria-label="Cloud"
-        aria-pressed={surface === 'cloud'}
-        title="Cloud"
-        className={buttonClass}
-        onClick={() => void requestSurface('cloud')}
-      >
-        ☁
-      </button>
-      <button
-        id="localButton"
-        type="button"
-        aria-label="Local"
-        aria-pressed={surface === 'local'}
-        title="Local"
-        className={buttonClass}
-        onClick={() => void requestSurface('local')}
-      >
-        ⌘
-      </button>
-      <ClaudeButton surface={surface} buttonClass={buttonClass} />
+      {PROVIDERS.map((p) => {
+        const RailButton = PROVIDER_UI[p.id].RailButton;
+        return <RailButton key={p.id} surface={surface} buttonClass={buttonClass} />;
+      })}
       <AnalyticsButton surface={surface} buttonClass={buttonClass} />
       <PrQuickOpen buttonClass={buttonClass} />
       <NotificationsButton buttonClass={buttonClass} />
@@ -165,7 +126,7 @@ export function Rail({
         aria-pressed={terminalOpen}
         title={
           terminalOffSurface
-            ? 'Terminal dock shows on Cloud, Local and Claude'
+            ? `Terminal dock shows on ${dockList}`
             : 'Toggle terminal (Ctrl+`)'
         }
         disabled={terminalOffSurface}

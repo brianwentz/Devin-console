@@ -2,16 +2,18 @@ import type { KeyboardEvent } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { Rect } from '../../core/layout';
 import { ANALYTICS_USAGE_ROW_HEIGHT } from '../../core/layout';
+import { PROVIDER_ANALYTICS_TABS } from '../../core/providers';
 import { fmt, shortDate } from '../../core/devinUsage';
 import type { DevinUsageState, LocalResult, Settings, ShellState } from '../../shared/ipc';
 import { useShellState } from '../store';
 
 export type AnalyticsTabId = Settings['analytics']['tab'];
 
-const TABS: { id: AnalyticsTabId; label: string }[] = [
-  { id: 'devin', label: 'Devin' },
-  { id: 'claude', label: 'Claude' },
-];
+const TAB_LABELS: Record<AnalyticsTabId, string> = { devin: 'Devin', claude: 'Claude' };
+const TABS: { id: AnalyticsTabId; label: string }[] = PROVIDER_ANALYTICS_TABS.map((id) => ({
+  id,
+  label: TAB_LABELS[id],
+}));
 
 export const ANALYTICS_TAB_IDS = TABS.map((tab) => tab.id);
 

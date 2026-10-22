@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import type { AppNotification } from '../../core/notificationModel';
 import { openNotificationEntry } from '../notificationOpen';
 import { useShellState } from '../store';
-import { ClaudeGlyph } from './NotificationPanel';
+import { SourceGlyph } from '../providers';
 
 const BANNER_MS = 8_000;
 
@@ -59,7 +59,7 @@ export function NotificationBanner() {
         dismiss();
       }}
     >
-      {current.source === 'claude' && <ClaudeGlyph />}
+      <SourceGlyph source={current.source} />
       <span className="truncate">
         {current.title} — {current.body}
       </span>

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
-import { NotificationSourceSchema, PROVIDER_SURFACES } from '../core/providers';
+import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
 import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
 
@@ -356,7 +356,7 @@ const TerminalFields = {
 // Analytics surface: which tab the column shows (Claude usage panel vs the
 // hosted tenant analytics view).
 const AnalyticsFields = {
-  tab: z.enum(['devin', 'claude']),
+  tab: z.enum(PROVIDER_ANALYTICS_TABS),
 };
 
 // Analytics Claude tab — pushed state (see plans/analytics-claude.md §3).

@@ -13,6 +13,8 @@ import {
 } from '../../src/core/settingsDraft';
 import { mergeSettings } from '../../src/core/settings';
 import { SettingsSchema } from '../../src/shared/ipc';
+import { PROVIDERS, providerBySource } from '../../src/core/providers';
+import { PROVIDER_UI_KEYS } from '../../src/shell/providerKeys';
 
 const defaults = SettingsSchema.parse({});
 
@@ -529,5 +531,28 @@ describe('localDefaultMode draft field', () => {
       { path: ['local', 'defaultMode'], message: 'bad mode' },
     ]);
     expect(errors.localDefaultMode).toBe('bad mode');
+  });
+});
+
+describe('provider registry shell lists (A1 T5)', () => {
+  it('every provider settingsTab is a known settings tab', () => {
+    for (const p of PROVIDERS) expect(SETTINGS_TAB_ORDER).toContain(p.settingsTab);
+  });
+
+  it('both devin providers share the devin tab', () => {
+    const tabs = PROVIDERS.filter((p) => p.id !== 'claude').map((p) => p.settingsTab);
+    expect(tabs).toEqual(['devin', 'devin']);
+  });
+
+  it('resolves providers by notification source', () => {
+    expect(providerBySource('claude')?.id).toBe('claude');
+    expect(providerBySource('devin')?.id).toBe('devin-cloud');
+  });
+
+  it('declares the shell UI slots per provider', () => {
+    expect(Object.keys(PROVIDER_UI_KEYS).sort()).toEqual(PROVIDERS.map((p) => p.id).sort());
+    expect(PROVIDER_UI_KEYS['devin-cloud']).toEqual({ analyticsPanel: true, sourceGlyph: false });
+    expect(PROVIDER_UI_KEYS['devin-local']).toEqual({ analyticsPanel: false, sourceGlyph: false });
+    expect(PROVIDER_UI_KEYS.claude).toEqual({ analyticsPanel: true, sourceGlyph: true });
   });
 });

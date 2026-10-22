@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { computeBounds, dockSurface, RAIL_WIDTH, sessionsColumnSurface } from '../core/layout';
+import { PROVIDERS, providerBySurface } from '../core/providers';
+import { PROVIDER_UI } from './providers';
 import { renderBadgeDataUrl } from './badge';
 import { handleSettingsFlush } from './settingsDraft';
 import { useShellState } from './store';
@@ -13,13 +15,7 @@ import { TitleBar } from './components/TitleBar';
 import { Splitter } from './components/Splitter';
 import { TerminalDock } from './components/TerminalDock';
 import { SettingsPanel } from './components/SettingsPanel';
-import { SessionSidebar } from './components/SessionSidebar';
-import { ClaudeSidebar } from './components/ClaudeSidebar';
-import { ClaudeView } from './claude/ClaudeView';
-import { LocalPanel } from './local/LocalPanel';
-import { LocalSidebar } from './local/LocalSidebar';
 import { AnalyticsTabs } from './components/AnalyticsTabs';
-import { ClaudeAnalyticsTab } from './components/analytics/ClaudeAnalyticsTab';
 
 function useWindowSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
@@ -90,6 +86,18 @@ export function App() {
   const analyticsTab = state.settings.analytics.tab;
   const paneVisible = state.paneOpen && !bounds.paneCollapsed;
   const mainRect = bounds.devin;
+  const surfaceProvider = providerBySurface(state.surface);
+  const Sidebar = surfaceProvider ? PROVIDER_UI[surfaceProvider.id].Sidebar : undefined;
+  const Panel = surfaceProvider ? PROVIDER_UI[surfaceProvider.id].Panel : undefined;
+  const analyticsProvider = PROVIDERS.find((p) => p.analyticsTab === analyticsTab);
+  const AnalyticsPanel = analyticsProvider ? PROVIDER_UI[analyticsProvider.id].AnalyticsPanel : undefined;
+  const mainStyle = {
+    position: 'absolute' as const,
+    left: Math.max(RAIL_WIDTH, mainRect.x),
+    top: mainRect.y,
+    width: mainRect.width,
+    height: mainRect.height,
+  };
 
   return (
     <>
@@ -99,9 +107,7 @@ export function App() {
         paneCollapsed={bounds.paneCollapsed}
         terminalOpen={state.terminalOpen}
       />
-      {state.surface === 'cloud' && bounds.sessions && <SessionSidebar rect={bounds.sessions} />}
-      {state.surface === 'claude' && bounds.sessions && <ClaudeSidebar rect={bounds.sessions} />}
-      {state.surface === 'local' && bounds.sessions && <LocalSidebar rect={bounds.sessions} />}
+      {Sidebar && bounds.sessions && <Sidebar rect={bounds.sessions} />}
       {bounds.sessionsSplitter && (
         <Splitter axis="s" rect={bounds.sessionsSplitter} enabled={state.sessionsOpen} />
       )}
@@ -143,17 +149,7 @@ export function App() {
           }}
         />
       )}
-      {state.surface === 'claude' && (
-        <ClaudeView
-          style={{
-            position: 'absolute',
-            left: Math.max(RAIL_WIDTH, mainRect.x),
-            top: mainRect.y,
-            width: mainRect.width,
-            height: mainRect.height,
-          }}
-        />
-      )}
+      {Panel && <Panel style={mainStyle} />}
       {state.surface === 'analytics' && bounds.analyticsTabs && (
         <AnalyticsTabs
           rect={bounds.analyticsTabs}
@@ -161,28 +157,7 @@ export function App() {
           onSelect={(tab) => void window.agentworkspace.setSettings({ analytics: { tab } })}
         />
       )}
-      {state.surface === 'analytics' && analyticsTab === 'claude' && (
-        <ClaudeAnalyticsTab
-          style={{
-            position: 'absolute',
-            left: Math.max(RAIL_WIDTH, mainRect.x),
-            top: mainRect.y,
-            width: mainRect.width,
-            height: mainRect.height,
-          }}
-        />
-      )}
-      {state.surface === 'local' && (
-        <LocalPanel
-          style={{
-            position: 'absolute',
-            left: Math.max(RAIL_WIDTH, mainRect.x),
-            top: mainRect.y,
-            width: mainRect.width,
-            height: mainRect.height,
-          }}
-        />
-      )}
+      {state.surface === 'analytics' && AnalyticsPanel && <AnalyticsPanel style={mainStyle} />}
     </>
   );
 }
