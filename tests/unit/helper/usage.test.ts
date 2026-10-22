@@ -153,3 +153,37 @@ describe('helper fs.stat', () => {
     await expect(statPath('relative/x')).rejects.toMatchObject({ code: 'bad-params' });
   });
 });
+
+describe('helper usage.scan time zone + coalescing (R28)', () => {
+  it("the helper's scan honours the timeZone param", async () => {
+    const projects = join(home.dir, 'projects');
+    const dir = join(projects, '-home-u-tz');
+    mkdirSync(dir, { recursive: true });
+    // Oct 31 13:00 in Los Angeles, Nov 1 05:00 in Tokyo.
+    writeFileSync(join(dir, 'tz.jsonl'), usageLine('req-tz', 9, '2026-10-31T20:00:00.000Z'));
+    const h = usageHandlers(home.dir);
+    const months = ['2026-11', '2026-10'];
+    const tokyo = (await h['usage.scan']!({ months, timeZone: 'Asia/Tokyo' })) as { buckets: UsageBuckets };
+    expect(tokyo.buckets['2026-11']?.byDay['2026-11-01']?.['helper-test-model']).toBe(10);
+    // A zone change re-keys the cached buckets (not reused from the Tokyo pass).
+    const la = (await h['usage.scan']!({ months, timeZone: 'America/Los_Angeles' })) as { buckets: UsageBuckets };
+    expect(la.buckets['2026-11']).toBeUndefined();
+    expect(la.buckets['2026-10']?.byDay['2026-10-31']?.['helper-test-model']).toBe(10);
+    await expect(async () => h['usage.scan']!({ months, timeZone: 'Nowhere/Zone' })).rejects.toMatchObject({
+      code: 'bad-params',
+    });
+  });
+
+  it('overlapping scans join the running walk', async () => {
+    const projects = join(home.dir, 'projects');
+    const once = new UsageScanner(projects);
+    await once.scan(MONTHS);
+    const scanner = new UsageScanner(projects);
+    const [a, b] = await Promise.all([scanner.scan(MONTHS), scanner.scan(MONTHS)]);
+    expect(scanner.bytesRead).toBe(once.bytesRead);
+    expect(b).toEqual(a);
+    // Once settled, a new scan runs again (incremental: nothing to read).
+    await scanner.scan(MONTHS);
+    expect(scanner.bytesRead).toBe(once.bytesRead);
+  });
+});

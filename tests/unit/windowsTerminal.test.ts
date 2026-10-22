@@ -8,6 +8,7 @@ import {
   splitCommandline,
   type ResolveCtx,
   type WtProfile,
+  wtDistroList,
 } from '../../src/core/windowsTerminal';
 
 // Shape mirrors a real settings.json (comments + trailing commas included).
@@ -153,5 +154,50 @@ describe('helpers', () => {
   });
   it('settingsCandidates lists the three known locations', () => {
     expect(settingsCandidates('L').filter((p) => p.endsWith('settings.json'))).toHaveLength(3);
+  });
+});
+
+// R28: WSL profile matching after P2 — the installed-distro list comes from
+// the hosts enumeration (WSL enabled) or one lazy `wsl -l -q` (disabled);
+// while neither is known, WSL profiles stay embeddable.
+describe('wtDistroList', () => {
+  it('WSL enabled: the enumeration names once it has completed', () => {
+    expect(wtDistroList({ wslEnabled: true, enumCompleted: true, enumNames: ['Ubuntu'], lazyNames: null })).toEqual({
+      distros: ['Ubuntu'],
+      needLazyList: false,
+    });
+  });
+
+  it('WSL enabled, enumeration not completed yet: unknown, no extra list', () => {
+    expect(wtDistroList({ wslEnabled: true, enumCompleted: false, enumNames: [], lazyNames: null })).toEqual({
+      distros: null,
+      needLazyList: false,
+    });
+  });
+
+  it('WSL disabled: needs the lazy list until it lands, then uses it', () => {
+    // The enumeration answers [] while WSL is disabled — never used.
+    expect(wtDistroList({ wslEnabled: false, enumCompleted: true, enumNames: [], lazyNames: null })).toEqual({
+      distros: null,
+      needLazyList: true,
+    });
+    expect(wtDistroList({ wslEnabled: false, enumCompleted: true, enumNames: [], lazyNames: ['Ubuntu-22.04'] })).toEqual({
+      distros: ['Ubuntu-22.04'],
+      needLazyList: false,
+    });
+  });
+});
+
+describe('resolveProfileCommand with an unknown distro list', () => {
+  it('keeps a WSL profile embeddable (wsl.exe -d <profile name>)', () => {
+    expect(resolveProfileCommand(byName('Ubuntu 22.04.5 LTS'), ctx({ distros: null }))).toEqual({
+      file: 'wsl.exe',
+      args: ['-d', 'Ubuntu 22.04.5 LTS'],
+      label: 'Ubuntu 22.04.5 LTS',
+    });
+  });
+
+  it('an empty known list still makes it unavailable', () => {
+    expect(resolveProfileCommand(byName('Ubuntu 22.04.5 LTS'), ctx({ distros: [] }))).toBeNull();
   });
 });

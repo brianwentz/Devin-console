@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -880,4 +880,59 @@ test.describe('dock surfaces', () => {
       }
     }
   });
+});
+
+// R28: with WSL disabled in the app the hosts enumeration is empty by design,
+// so the Windows Terminal profile match does one lazy async `wsl -l -q` per run
+// (pre-P2 behaviour, minus the sync spawn) — a WSL profile stays embeddable.
+test('terminal profiles: WSL disabled still lists an installed distro profile as embeddable', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-wtwsl-'));
+  const logFile = join(profile, 'events.jsonl');
+  writeFileSync(logFile, '', 'utf8');
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ hosts: { wslEnabled: false } }));
+  const localAppData = mkdtempSync(join(tmpdir(), 'agent-workspace-lad-'));
+  mkdirSync(join(localAppData, 'Microsoft', 'Windows Terminal'), { recursive: true });
+  writeFileSync(
+    join(localAppData, 'Microsoft', 'Windows Terminal', 'settings.json'),
+    JSON.stringify({
+      defaultProfile: '{00000000-0000-4000-8000-000000000001}',
+      profiles: {
+        list: [
+          { guid: '{00000000-0000-4000-8000-000000000001}', name: 'Fake', source: 'Windows.Terminal.Wsl' },
+          { guid: '{00000000-0000-4000-8000-000000000002}', name: 'Gone', source: 'Windows.Terminal.Wsl' },
+        ],
+      },
+    }),
+  );
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: TERMINAL_CMD,
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    LOCALAPPDATA: localAppData,
+  });
+  const profiles = async () =>
+    (await evaluateInShell(app, 'window.agentworkspace.terminalProfiles()')) as Array<{
+      name: string;
+      available: boolean;
+    }>;
+  const enums = async () =>
+    (await readEvents(logFile)).filter(
+      (e) => e.event === 'host-exec' && (e.detail as { kind?: string } | undefined)?.kind === 'enum',
+    ).length;
+  try {
+    await expect
+      .poll(async () => app.evaluate(() => Boolean((globalThis as G).__agentworkspace)))
+      .toBe(true);
+    expect(((await state(app)).settings as unknown as { hosts: { wslEnabled: boolean } }).hosts.wslEnabled).toBe(false);
+    // Once the lazy list lands: the installed distro matches, an unknown one does not.
+    await expect
+      .poll(async () => (await profiles()).map((p) => `${p.name}:${p.available}`).sort(), { timeout: 15_000 })
+      .toEqual(['Fake:true', 'Gone:false']);
+    // One `wsl -l -q` for the run, however often the picker asks.
+    for (let i = 0; i < 5; i++) await profiles();
+    expect(await enums()).toBe(1);
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(localAppData, { recursive: true, force: true });
+  }
 });

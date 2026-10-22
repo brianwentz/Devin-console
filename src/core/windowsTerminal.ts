@@ -134,7 +134,8 @@ export interface ResolvedShell {
 
 export interface ResolveCtx {
   env: Record<string, string | undefined>;
-  distros: string[];
+  /** Installed WSL distros; null = not known yet (WSL profiles stay embeddable). */
+  distros: string[] | null;
   pwshPath: string | null;
   windowsAppsDir: string | null;
   existsSync(p: string): boolean;
@@ -152,12 +153,29 @@ export function resolveProfileCommand(profile: WtProfile, ctx: ResolveCtx): Reso
     return ctx.pwshPath ? { file: ctx.pwshPath, args: [], label: profile.name } : null;
   }
   if (WSL_SOURCES.has(source) || DISTRO_SOURCE.test(source) || DISTRO_SOURCE.test(profile.name)) {
-    const distro = matchDistro(profile.name, ctx.distros);
+    // Unknown list: spawning is user-initiated and the pty surfaces a bad name.
+    const distro = ctx.distros === null ? profile.name : matchDistro(profile.name, ctx.distros);
     if (!distro) return null;
     return { file: 'wsl.exe', args: ['-d', distro], label: profile.name };
   }
   // Azure Cloud Shell / Visual Studio developer prompts need WT's own shell.
   return null;
+}
+
+/**
+ * Where the WT profile match gets its installed-distro names. WSL enabled →
+ * the hosts enumeration once it has completed (never a spawn); WSL disabled →
+ * the enumeration is empty by design, so one lazy `wsl -l -q` per run
+ * (`needLazyList` until it lands). `distros: null` = not known yet.
+ */
+export function wtDistroList(input: {
+  wslEnabled: boolean;
+  enumCompleted: boolean;
+  enumNames: string[];
+  lazyNames: string[] | null;
+}): { distros: string[] | null; needLazyList: boolean } {
+  if (input.wslEnabled) return { distros: input.enumCompleted ? input.enumNames : null, needLazyList: false };
+  return { distros: input.lazyNames, needLazyList: input.lazyNames === null };
 }
 
 // Known settings.json locations (packaged, packaged Preview, unpackaged).

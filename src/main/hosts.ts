@@ -49,6 +49,7 @@ import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 import { HostChannel, type HelperStatus } from './hostChannel';
 import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
 import { hooksOffSpawnError } from '../core/hooksOffBackoff';
+import { wtDistroList } from '../core/windowsTerminal';
 
 const execFileAsync = promisify(execFile);
 
@@ -262,6 +263,38 @@ export class HostsRegistry {
   }
 
   // --- enumeration -----------------------------------------------------------
+
+  private installedLazy: string[] | null = null;
+  private installedLazyTask: Promise<void> | null = null;
+
+  /** Installed distro names for the Windows Terminal profile match
+   * (`wtDistroList`): the enumeration while WSL is enabled; with WSL disabled
+   * (the enumeration is empty by design) one lazy async `wsl -l -q` per run.
+   * null = not known yet. Never spawns synchronously. */
+  installedDistroNames(): string[] | null {
+    const pick = wtDistroList({
+      wslEnabled: state.settings?.current.hosts.wslEnabled ?? true,
+      enumCompleted: this.distros.completed,
+      enumNames: this.distros.rows.map((row) => row.name),
+      lazyNames: this.installedLazy,
+    });
+    if (pick.needLazyList) {
+      this.installedLazyTask ??= this.runWsl(['-l', '-q'], { kind: 'enum', host: 'all', requireSuccess: false }).then(
+        ({ stdout }) => {
+          // UTF-16LE; strip the BOM/NULs and the "(Default)"-style notes.
+          this.installedLazy = stdout
+            .toString('utf16le')
+            .split(/[\r\n]+/)
+            .map((line) => line.replace(/[^\x20-\x7E]/g, '').trim())
+            .filter((line) => line.length > 0 && !line.startsWith('('));
+        },
+        () => {
+          this.installedLazy = [];
+        },
+      );
+    }
+    return pick.distros;
+  }
 
   /** Cached distro rows ([] until the first async `-l -v` lands). Read paths
    * (statuses/list/enabledDistros) never spawn: enumeration runs at start, on

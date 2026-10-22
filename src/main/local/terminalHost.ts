@@ -177,12 +177,11 @@ export class TerminalHost {
     return shell;
   }
 
-  // Installed distro names for WT profile matching: the registry's cached
-  // `wsl -l -v` table (every installed distro, enabled or not) — never a spawn.
-  private wslDistros(): string[] {
-    return hosts()
-      .enumerate()
-      .map((row) => row.name);
+  // Installed distro names for WT profile matching (null = not known yet →
+  // WSL profiles stay embeddable): the hosts enumeration, or with WSL disabled
+  // one lazy async `wsl -l -q` per run — never a sync spawn on the main thread.
+  private wslDistros(): string[] | null {
+    return hosts().installedDistroNames();
   }
 
   private pwshPathCache: string | null | undefined;

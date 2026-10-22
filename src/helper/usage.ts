@@ -12,6 +12,7 @@ import {
   aggregateUsageLines,
   fileMayContainMonths,
   fileScanPlan,
+  isValidTimeZone,
   mergeBuckets,
   type UsageBuckets,
 } from '../core/claudeUsage';
@@ -89,6 +90,11 @@ function pick(buckets: UsageBuckets, months: Set<string>): UsageBuckets {
 
 export class UsageScanner {
   private readonly cache = new Map<string, FileEntry>();
+  /** Zone the cached buckets are keyed in; a different zone drops the cache. */
+  private cacheZone: string | undefined;
+  /** One walk at a time: an identical overlapping request (e.g. the app's next
+   * pass after its 60 s timeout gave up on this one) joins the running walk. */
+  private inflight: { key: string; promise: Promise<UsageScanResult> } | null = null;
   /** Transcript bytes read so far (tests assert incremental reads). */
   bytesRead = 0;
 
@@ -109,7 +115,26 @@ export class UsageScanner {
     return lines;
   }
 
-  async scan(monthList: string[]): Promise<UsageScanResult> {
+  scan(monthList: string[], timeZone?: string): Promise<UsageScanResult> {
+    const key = JSON.stringify([monthList, timeZone ?? null]);
+    if (this.inflight?.key === key) return this.inflight.promise;
+    const previous = this.inflight?.promise;
+    const promise = (async () => {
+      // A different request waits for the running walk instead of overlapping it.
+      if (previous) await previous.catch(() => undefined);
+      return this.walk(monthList, timeZone);
+    })().finally(() => {
+      if (this.inflight?.promise === promise) this.inflight = null;
+    });
+    this.inflight = { key, promise };
+    return promise;
+  }
+
+  private async walk(monthList: string[], timeZone: string | undefined): Promise<UsageScanResult> {
+    if (timeZone !== this.cacheZone) {
+      this.cache.clear();
+      this.cacheZone = timeZone;
+    }
     const months = new Set(monthList);
     const files = await walkJsonl(this.projectsDir);
     let changed = 0;
@@ -128,7 +153,7 @@ export class UsageScanner {
         const cached = this.cache.get(path);
         const plan = fileScanPlan(cached, info.size, info.mtimeMs);
         let buckets: UsageBuckets = cached?.buckets ?? {};
-        if (plan !== 'reuse' && !fileMayContainMonths(info.mtimeMs, months)) {
+        if (plan !== 'reuse' && !fileMayContainMonths(info.mtimeMs, months, timeZone)) {
           skipped += 1;
           buckets = {};
           this.cache.set(path, { size: info.size, mtime: info.mtimeMs, offset: info.size, buckets });
@@ -143,7 +168,7 @@ export class UsageScanner {
           } catch {
             continue;
           }
-          const fresh = aggregateUsageLines(lines, { months });
+          const fresh = aggregateUsageLines(lines, { months, timeZone });
           buckets = offset > 0 && cached ? mergeBuckets(cached.buckets, fresh) : fresh;
           this.cache.set(path, { size: info.size, mtime: info.mtimeMs, offset: info.size, buckets });
         }
@@ -207,10 +232,19 @@ function monthsParam(params: unknown): string[] {
   return v as string[];
 }
 
+function timeZoneParam(params: unknown): string | undefined {
+  const v = objOf(params).timeZone;
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'string' || v === '' || v.length > 64 || !isValidTimeZone(v)) {
+    throw new RpcError('bad-params', 'timeZone must be an IANA zone name');
+  }
+  return v;
+}
+
 export function usageHandlers(configDir: string): Record<string, Handler> {
   const scanner = new UsageScanner(join(configDir, 'projects'));
   return {
-    'usage.scan': (params) => scanner.scan(monthsParam(params)),
+    'usage.scan': (params) => scanner.scan(monthsParam(params), timeZoneParam(params)),
     'usage.accounts': () => readUsageAccounts(configDir),
   };
 }
