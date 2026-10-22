@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CheckCheck, Sparkles, Trash2 } from 'lucide-react';
 import { RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
 import type { AppNotification } from '../../core/notificationModel';
+import { openNotificationEntry } from '../notificationOpen';
 import { useShellState } from '../store';
 import { relativeTime } from './relativeTime';
 
@@ -113,7 +114,7 @@ export function NotificationPanel() {
               <button
                 type="button"
                 className="min-w-0 flex-1 text-left"
-                onClick={() => window.agentworkspace.notificationsOpen(entry.id)}
+                onClick={() => openNotificationEntry(entry)}
               >
                 <div
                   className={`text-[12px] leading-tight ${

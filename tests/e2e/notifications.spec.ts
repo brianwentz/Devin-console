@@ -9,6 +9,7 @@ import {
   launchApp,
   openTab,
   readEvents,
+  setInputValue,
   state,
   waitForEvent,
   waitForTabCount,
@@ -1407,5 +1408,107 @@ test('catches up PRs that appeared while the poller was down, across a restart',
   } finally {
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+// UI-driven: the deep link lives in the shell (openNotificationEntry), so the
+// `notificationsOpen` test hook — which calls main directly — would bypass it.
+const activeSettingsTab = (app: ElectronApplication) =>
+  evaluateInShell(
+    app,
+    `document.querySelector('#settingsTabs [role="tab"][aria-selected="true"]')?.getAttribute('data-settings-tab') ?? null`,
+  );
+
+async function openSettingsTab(app: ElectronApplication, tab: string) {
+  await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
+  await expect.poll(async () => (await state(app)).surface).toBe('settings');
+  await expect
+    .poll(async () => evaluateInShell(app, `Boolean(document.querySelector('[data-settings-tab="${tab}"]'))`))
+    .toBe(true);
+  await evaluateInShell(app, `document.querySelector('[data-settings-tab="${tab}"]').click()`);
+  await expect.poll(async () => activeSettingsTab(app)).toBe(tab);
+}
+
+async function clickPanelRow(app: ElectronApplication, id: string) {
+  await evaluateInShell(app, `window.agentworkspace.notificationsPanel(true)`);
+  await expect
+    .poll(async () => evaluateInShell(app, `Boolean(document.querySelector('[data-notification-id="${id}"] > button'))`))
+    .toBe(true);
+  await evaluateInShell(app, `document.querySelector('[data-notification-id="${id}"] > button').click()`);
+}
+
+test('clicking an auth notification row opens Settings on the Devin tab', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
+  const app = await launch(profile, join(profile, 'events.jsonl'));
+  const h = hooks(app);
+  try {
+    await evaluateInShell(app, `window.agentworkspace.setSurface('cloud')`);
+    await expect.poll(async () => (await state(app)).surface).toBe('cloud');
+    const id = (await h.pushNotification({ kind: 'auth', title: 'Devin API token rejected', body: 'Open Settings' })) as string;
+    await clickPanelRow(app, id);
+    await expect.poll(async () => (await state(app)).surface).toBe('settings');
+    await expect.poll(async () => activeSettingsTab(app)).toBe('devin');
+    await expect
+      .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('settingsPanel-devin'))`))
+      .toBe(true);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('opening an auth notification from a dirty General tab saves the draft first', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
+  const app = await launch(profile, join(profile, 'events.jsonl'));
+  const h = hooks(app);
+  try {
+    await openSettingsTab(app, 'general');
+    await expect
+      .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('terminalShellInput'))`))
+      .toBe(true);
+    expect(await setInputValue(app, 'terminalShellInput', 'pwsh.exe')).toBe(true);
+    const id = (await h.pushNotification({ kind: 'auth', title: 'Devin API token rejected', body: 'Open Settings' })) as string;
+    await clickPanelRow(app, id);
+    await expect.poll(async () => activeSettingsTab(app)).toBe('devin');
+    await expect
+      .poll(async () => ((await state(app)).settings as any).terminal.shell)
+      .toBe('pwsh.exe');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('clicking the banner for an identity notification opens the Devin tab', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
+  const app = await launch(profile, join(profile, 'events.jsonl'), { AGENT_WORKSPACE_TEST_BANNER_MS: '20000' });
+  const h = hooks(app);
+  try {
+    await openSettingsTab(app, 'general');
+    await h.pushNotification({ kind: 'identity', title: 'Devin user not identified', body: 'Open Settings' });
+    await expect
+      .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('notificationBanner'))`))
+      .toBe(true);
+    await evaluateInShell(app, `document.getElementById('notificationBanner').click()`);
+    await expect.poll(async () => activeSettingsTab(app)).toBe('devin');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('opening a non-auth notification leaves the Settings tab alone', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notify-'));
+  const app = await launch(profile, join(profile, 'events.jsonl'));
+  const h = hooks(app);
+  try {
+    await openSettingsTab(app, 'links');
+    const id = (await h.pushNotification({ kind: 'usage', title: 'Usage 50%', body: 'Devin usage' })) as string;
+    await clickPanelRow(app, id);
+    await expect.poll(async () => (await state(app)).notifications.panelOpen).toBe(false);
+    // Opening a usage entry leaves Settings (Analytics); coming back shows the
+    // tab the user had selected, not Devin.
+    await expect.poll(async () => (await state(app)).surface).not.toBe('settings');
+    await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
+    await expect.poll(async () => activeSettingsTab(app)).toBe('links');
+  } finally {
+    await quit(app, profile);
   }
 });
