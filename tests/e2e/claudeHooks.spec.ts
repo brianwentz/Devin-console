@@ -111,6 +111,13 @@ function hooks(app: ElectronApplication) {
   };
 }
 
+async function enableHooks(app: ElectronApplication): Promise<void> {
+  await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+  await expect
+    .poll(() => app.evaluate(() => (globalThis as any).__agentworkspace.state().settings.claude.hooksEnabled))
+    .toBe(true);
+}
+
 function claudeEntries(list: NotificationEntry[]): NotificationEntry[] {
   return list.filter((n) => n.source === 'claude');
 }
@@ -127,6 +134,8 @@ test('hook events drive sidebar activity + notification entries (dedup + kinds)'
     await expect.poll(async () => await h.claudeHookInfo()).not.toBeNull();
     const { port } = (await h.claudeHookInfo())!;
     expect(port).toBeGreaterThan(0);
+    // External-terminal hook events are only accepted with the opt-in on.
+    await enableHooks(app);
 
     const shell = await shellPage(app);
     await h.setSurface('claude');
@@ -216,6 +225,8 @@ test('PostToolUse gh pr create → pr-opened entry + auto-opened tab in claude s
   const h = hooks(app);
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    // External-terminal hook events are only accepted with the opt-in on.
+    await enableHooks(app);
     const prUrl = `${fixtures.githubUrl}/cloudbeds/testrepo/pull/42`;
     expect(
       (
@@ -299,6 +310,8 @@ test('opening a waiting notification selects the session on the claude surface',
   try {
     await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
     await expect.poll(async () => await h.claudeHookInfo()).not.toBeNull();
+    // External-terminal hook events are only accepted with the opt-in on.
+    await enableHooks(app);
     const shell = await shellPage(app);
     await h.claudePostHook('PermissionRequest', {
       session_id: UA,
@@ -364,6 +377,44 @@ test('claude.hooksEnabled writes and removes our block in settings.json', async 
     const removed = readFileSync(settingsFile, 'utf8');
     expect(removed).not.toContain('/agent-workspace/hook/');
     expect(removed).toContain('echo foreign');
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('hooks install into the WSL settings.json via the channel', async () => {
+  // FAKE_WSL_ROOT is the distro's own filesystem (the helper writes there);
+  // the UNC root is a different, empty dir — a Windows-side \\wsl.localhost
+  // write would land in it instead.
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-helper-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const claudeDir = join(root, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  const ours = () => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/');
+  const helperReady = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.hostChannelState('wsl:Fake')?.state ?? null);
+  try {
+    await expect.poll(helperReady, { timeout: 30_000 }).toBe('ready');
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+    await expect.poll(ours, { timeout: 15_000 }).toBe(true);
+    expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+    // The helper runs the same core/hooksApply.ts: one-time backup next to it.
+    expect(existsSync(`${settingsFile}.agent-workspace.bak`)).toBe(true);
+    expect(existsSync(join(uncRoot, 'home', 'u', '.claude', 'settings.json'))).toBe(false);
+    expect((await hooks(app).claudeState()).hostErrors['wsl:Fake'] ?? null).toBeNull();
+
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`);
+    await expect.poll(ours, { timeout: 15_000 }).toBe(false);
+    expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
@@ -451,6 +502,41 @@ test('AGENT_WORKSPACE_SKIP_HOOKS_INSTALL leaves settings.json untouched and neve
     expect((await readEvents(logFile)).filter((e) => e.event === 'claude-hooks-install-skipped')).toHaveLength(1);
     expect(readFileSync(settingsFile, 'utf8')).toBe(original);
     expect(existsSync(`${settingsFile}.agent-workspace.bak`)).toBe(false);
+  } finally {
+    await closeApp(app);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a hook event is ignored while hooks are disabled; a session with an open claude pty is still accepted', async () => {
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    AGENT_WORKSPACE_TEST_CLAUDE_SDK: FAKE_SDK,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: FAKE_PTY,
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const h = hooks(app);
+  const ignoredOff = async () =>
+    (await readEvents(logFile)).filter(
+      (e) => e.event === 'claude-hook-ignored' && (e.detail as { reason?: string }).reason === 'hooks-off',
+    ).length;
+  try {
+    await expect.poll(async () => (await h.claudeState()).status).toBe('ready');
+    await expect.poll(async () => await h.claudeHookInfo()).not.toBeNull();
+    expect((await h.state()).settings.claude.hooksEnabled).toBe(false);
+    // A stale global block (opt-out failed to reach a distro) still posts with
+    // the right token: accepted at the HTTP level, ignored by the app.
+    expect((await h.claudePostHook('UserPromptSubmit', { session_id: UA, cwd: UA_CWD })).ok).toBe(true);
+    await expect.poll(ignoredOff).toBe(1);
+    expect((await h.claudeActivity())[UA]).toBeUndefined();
+    expect(claudeEntries(await h.notifications())).toEqual([]);
+
+    // The app's own claude pty for UA carries the token in its env: accepted.
+    const opened = await h.claudeTerminalOpen(UA);
+    expect(opened.ok).toBe(true);
+    expect((await h.claudePostHook('UserPromptSubmit', { session_id: UA, cwd: UA_CWD })).ok).toBe(true);
+    await expect.poll(async () => (await h.claudeActivity())[UA]?.activity).toBe('running');
+    expect(await ignoredOff()).toBe(1);
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });

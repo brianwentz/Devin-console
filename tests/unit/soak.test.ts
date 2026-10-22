@@ -44,3 +44,39 @@ describe('summarizeSoak', () => {
     expect(reduced.trim().split('\n')).toHaveLength(2);
   });
 });
+
+describe('helperTimings', () => {
+  it('per distro: deploy ms, spawn→hello ms, store.list ms and patch counts', () => {
+    const text = [
+      line(1, 'host-helper-deploy', { host: 'wsl:A', ok: true, bytes: 10, ms: 420 }),
+      line(2, 'host-helper', { host: 'wsl:A', state: 'starting', reason: 'spawn' }),
+      line(3.5, 'host-helper', { host: 'wsl:A', state: 'ready', reason: 'hello' }),
+      line(4, 'claude-store-list', { host: 'wsl:A', count: 716, ms: 900 }),
+      line(9, 'claude-store-list', { host: 'wsl:A', count: 717, ms: 1300 }),
+      line(10, 'claude-patch', { host: 'wsl:A', updated: 1, removed: 0 }),
+      line(11, 'host-helper', { host: 'wsl:A', state: 'reconnecting', reason: 'exit' }),
+      line(12, 'host-helper', { host: 'wsl:A', state: 'starting', reason: 'spawn' }),
+      line(12.25, 'host-helper', { host: 'wsl:A', state: 'ready', reason: 'hello' }),
+      line(20, 'host-helper', { host: 'wsl:B', state: 'starting', reason: 'spawn' }),
+      line(-5, 'claude-store-list', { host: 'wsl:A', count: 1, ms: 99_999 }),
+    ].join('\n');
+    const s = summarizeSoak(text, t0, 1);
+    expect(s.helpers['wsl:A']).toEqual({
+      deployMs: [420],
+      helloMs: [1500, 250],
+      storeListMs: [900, 1300],
+      storeListMaxMs: 1300,
+      storeListCount: 717,
+      patches: 1,
+      readyCount: 2,
+    });
+    // Started, never said hello: no hello timing.
+    expect(s.helpers['wsl:B']).toMatchObject({ helloMs: [], readyCount: 0 });
+    // The reduced log keeps the helper events (ids/enums/counts/ms only).
+    const reduced = reduceEventLog(text);
+    expect(reduced).toContain('host-helper-deploy');
+    expect(reduced).toContain('claude-store-list');
+    expect(reduced).toContain('"state":"ready"');
+    expect(reduced).not.toContain('bytes');
+  });
+});

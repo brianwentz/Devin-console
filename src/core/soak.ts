@@ -26,7 +26,34 @@ export type SoakSummary = {
   usageScanFilesMax: number;
   /** Max `wslFiles` over usage-scan events; null when no event carries the field (older builds). */
   wslUsageScanFiles: number | null;
+  /** Per WSL host: the helper channel's start-up and store timings. */
+  helpers: Record<string, HelperTimings>;
 };
+
+export type HelperTimings = {
+  /** `host-helper-deploy` ms per successful deploy. */
+  deployMs: number[];
+  /** `starting`(spawn) → `ready`(hello) per launch, from the event timestamps. */
+  helloMs: number[];
+  /** `claude-store-list` ms per full list over the channel. */
+  storeListMs: number[];
+  storeListMaxMs: number | null;
+  /** Session count of the last list. */
+  storeListCount: number | null;
+  /** `claude-patch` events (watch deltas applied without a list). */
+  patches: number;
+  readyCount: number;
+};
+
+const emptyTimings = (): HelperTimings => ({
+  deployMs: [],
+  helloMs: [],
+  storeListMs: [],
+  storeListMaxMs: null,
+  storeListCount: null,
+  patches: 0,
+  readyCount: 0,
+});
 
 type Parsed = { ts: number; event: string; detail: Record<string, unknown> };
 
@@ -49,14 +76,24 @@ export function parseEventLines(text: string): Parsed[] {
 }
 
 /** Keeps only the counted events with detail reduced to non-sensitive count fields. */
+const REDUCED_EVENTS = [
+  'host-exec',
+  'claude-list',
+  'usage-scan',
+  'host-helper',
+  'host-helper-deploy',
+  'claude-store-list',
+  'claude-patch',
+];
+
 export function reduceEventLog(text: string): string {
-  const keep = ['kind', 'source', 'host', 'count', 'files', 'wslFiles', 'ms'];
+  const keep = ['kind', 'source', 'host', 'count', 'files', 'wslFiles', 'ms', 'state', 'reason', 'ok', 'updated', 'removed'];
   const out: string[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (!line.startsWith('{')) continue;
     try {
       const rec = JSON.parse(line) as { ts?: string; event?: string; detail?: Record<string, unknown> };
-      if (!rec.event || !['host-exec', 'claude-list', 'usage-scan'].includes(rec.event)) continue;
+      if (!rec.event || !REDUCED_EVENTS.includes(rec.event)) continue;
       const detail: Record<string, unknown> = {};
       for (const k of keep) if (rec.detail && k in rec.detail) detail[k] = rec.detail[k];
       out.push(JSON.stringify({ ts: rec.ts, event: rec.event, detail }));
@@ -87,8 +124,47 @@ export function summarizeSoak(
   let scans = 0;
   let scanFilesMax = 0;
   let wslFilesMax: number | null = null;
+  const helpers: Record<string, HelperTimings> = {};
+  const spawnAt = new Map<string, number>();
+  const timingsFor = (host: unknown): HelperTimings | null => {
+    if (typeof host !== 'string') return null;
+    helpers[host] ??= emptyTimings();
+    return helpers[host];
+  };
   for (const e of events) {
     const post = e.ts >= graceEnd;
+    if (e.event === 'host-helper') {
+      const t = timingsFor(e.detail.host);
+      if (!t) continue;
+      const host = e.detail.host as string;
+      if (e.detail.state === 'starting') spawnAt.set(host, e.ts);
+      else if (e.detail.state === 'ready') {
+        t.readyCount += 1;
+        const at = spawnAt.get(host);
+        if (at !== undefined) t.helloMs.push(e.ts - at);
+        spawnAt.delete(host);
+      }
+      continue;
+    }
+    if (e.event === 'host-helper-deploy') {
+      const t = timingsFor(e.detail.host);
+      if (t && e.detail.ok === true && typeof e.detail.ms === 'number') t.deployMs.push(e.detail.ms);
+      continue;
+    }
+    if (e.event === 'claude-store-list') {
+      const t = timingsFor(e.detail.host);
+      if (t && typeof e.detail.ms === 'number') {
+        t.storeListMs.push(e.detail.ms);
+        t.storeListMaxMs = Math.max(t.storeListMaxMs ?? 0, e.detail.ms);
+        if (typeof e.detail.count === 'number') t.storeListCount = e.detail.count;
+      }
+      continue;
+    }
+    if (e.event === 'claude-patch') {
+      const t = timingsFor(e.detail.host);
+      if (t) t.patches += 1;
+      continue;
+    }
     if (e.event === 'host-exec') {
       const kind = typeof e.detail.kind === 'string' ? e.detail.kind : 'unknown';
       byKind[kind] = (byKind[kind] ?? 0) + 1;
@@ -126,5 +202,6 @@ export function summarizeSoak(
     usageScans: scans,
     usageScanFilesMax: scanFilesMax,
     wslUsageScanFiles: wslFilesMax,
+    helpers,
   };
 }

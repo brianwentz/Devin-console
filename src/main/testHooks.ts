@@ -125,7 +125,12 @@ export function registerTestHooks(): void {
       hosts: () => hosts().statuses(),
       hostStatus: (id: string) => hosts().status(id as HostId),
       hostRefresh: (id?: string) => hosts().refresh(id as HostId | undefined),
+      // The background-check re-list (stale-only, inside the failure backoff).
+      hostEnumerateIfStale: () => hosts().enumerateIfStale(),
       hostShellEnvKeys: (id: string) => hosts().shellEnvKeys(id as HostId),
+      // Helper channel: kill the live child (reconnect path) / lifecycle snapshot.
+      hostHelperKill: (id: string) => hosts().killHelper(id),
+      hostChannelState: (id: string) => hosts().channelInfo(id),
       // Holds a `withConfigDir` swap open for `ms` so a spec can race it
       // against readers of `configDir()` (the usage scanner); resolves to the
       // env value seen mid-swap vs the registry's answer for the local host.
@@ -316,6 +321,11 @@ export function registerTestHooks(): void {
       localMenuItems: () => localContextMenuItems(),
       localMenuClick: (id: string) => localContextMenuClick(id),
       claudeMutations: () => claudeSessions().mutationLog(),
+      // Store mutations without the menu round-trip (WSL ones go over the channel).
+      claudeRename: (id: string, title: string) => claudeSessions().rename(id, title),
+      claudeDeleteTranscript: (id: string) => claudeSessions().sessionDeleteTranscript(id),
+      claudeRevealTranscript: (id: string) => claudeSessions().revealTranscript(id),
+      claudeRevealed: () => claudeSessions().revealedPaths(),
       claudeConfigDir: () => claudeSessions().snapshot().configDir,
       // Chat.
       claudeChatState: () => publicChatState(),

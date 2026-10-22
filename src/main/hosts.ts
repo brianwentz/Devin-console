@@ -8,6 +8,8 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { app } from 'electron';
 import {
   hostIdForPath as coreHostIdForPath,
   mergeShellEnv,
@@ -26,6 +28,13 @@ import {
   type HostId,
   parseNodeVersion,
   parseProbeOutput,
+  parseHelperPresent,
+  probeLine,
+  deriveHelperState,
+  helperDeploySpec,
+  helperSpec,
+  HELPER_MISSING_EXIT,
+  sanitizeEnv,
   NODE_MARKER,
   statusesChanged,
 } from '../core/execHost';
@@ -36,8 +45,20 @@ import { state, testMode } from './state';
 import { resolveClaudePath } from './claude/claudePath';
 import { resolveDevinPath } from './local/acpHost';
 import { sdkTargetCliVersion } from './claude/sdk';
+import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
+import { HostChannel, type HelperStatus } from './hostChannel';
+import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
+import { hooksOffSpawnError } from '../core/hooksOffBackoff';
 
 const execFileAsync = promisify(execFile);
+
+let helperInfo: HelperBundleInfo | null | undefined;
+/** The shipped helper bundle (`out/helper/helper-hash.json`), null until the build produces one - then no deploy, no probe token, no channel. Read once per run. */
+export function helperBundle(): HelperBundleInfo | null {
+  if (helperInfo === undefined) helperInfo = loadHelperBundleInfo(join(app.getAppPath(), 'out'));
+  return helperInfo;
+}
+export const helperAvailable = (): boolean => helperBundle() !== null;
 
 const ENUM_CACHE_MS = 5 * 60_000;
 // Background WSL work (agents poll, change check, gh fallback) re-reads an
@@ -68,6 +89,22 @@ interface WslEntry {
   envAt: number;
   env: Record<string, string> | null;
   hookAddr: string | null;
+  /** The helper channel, created on the first eligible start; owns status.helper while running. */
+  channel: HostChannel | null;
+  /** `env.get` of the live channel — cached for the channel's lifetime. */
+  channelEnv: Record<string, string> | null;
+  channelEnvInFlight: Promise<Record<string, string> | null> | null;
+  /** The channel was stopped because the distro left Running/enabled; the next eligible sync resets the breaker. */
+  channelHeld: boolean;
+  /** The probe found the bundle on disk and this run has not (re)deployed it —
+   * it may be a truncated file from an earlier run's interrupted deploy. */
+  helperPreexisting: boolean;
+}
+
+function testNumber(name: string): number | null {
+  if (!testMode) return null;
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 // The local row re-resolves CLI paths at most once a minute — `where` spawns.
@@ -91,7 +128,6 @@ const localStatus = (): HostStatus => {
     devin: { path: resolveDevinPath(state.settings?.current.local.devinPath) },
     shellEnv: null,
     hooks: 'untested',
-    inotify: false,
     gh: true,
   };
   localStatusCache = { at: Date.now(), status };
@@ -99,7 +135,7 @@ const localStatus = (): HostStatus => {
 };
 
 /** Every `wsl.exe` invocation logs `host-exec {host, kind}` so a soak can count them. */
-type WslExecKind = 'enum' | 'probe' | 'env' | 'exec' | 'spawn';
+type WslExecKind = 'enum' | 'probe' | 'env' | 'exec' | 'spawn' | 'helper';
 
 type HostErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store';
 
@@ -107,6 +143,8 @@ interface WslRun {
   stdout: Buffer;
   stderr: Buffer;
   code: number | null;
+  /** Killed by the timeout (code may still be set on Windows). */
+  timedOut: boolean;
 }
 
 export class HostsRegistry {
@@ -114,9 +152,14 @@ export class HostsRegistry {
   /** Resolves once the async `wsl.exe` lookup settles; awaited where the
    * binary is needed, never on the publish path. */
   private ready: Promise<void>;
-  private distros: { at: number; rows: ReturnType<typeof parseWslList> } | null = null;
-  private enumInFlight: Promise<void> | null = null;
+  private readonly distros = new EnumerationCache<ReturnType<typeof parseWslList>[number]>(
+    () => this.listDistros(),
+    Date.now,
+    (ok) => this.onEnumerated(ok),
+    testNumber('AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS') ?? undefined,
+  );
   private started = false;
+  private quitting = false;
   private lastPublished: HostStatus[] | null = null;
   private enumWaiters: Array<() => void> = [];
   private entries = new Map<HostId, WslEntry>();
@@ -171,7 +214,7 @@ export class HostsRegistry {
   // already printed, and the marker-validated output is still usable).
   private runWsl(
     args: string[],
-    opts: { kind: WslExecKind; host: string; timeout?: number; requireSuccess?: boolean },
+    opts: { kind: WslExecKind; host: string; timeout?: number; requireSuccess?: boolean; input?: Buffer },
   ): Promise<WslRun> {
     const timeout = opts.timeout ?? PROBE_TIMEOUT_MS;
     const requireSuccess = opts.requireSuccess ?? true;
@@ -185,17 +228,24 @@ export class HostsRegistry {
         const [file, ...prefix] = cmd;
         log('host', 'host-exec', { detail: { host: opts.host, kind: opts.kind } });
         const child = spawn(file!, [...prefix, ...args], {
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [opts.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
           windowsHide: true,
         });
+        if (opts.input) {
+          // EPIPE when wsl.exe dies early surfaces through the exit code.
+          child.stdin!.on('error', () => undefined);
+          child.stdin!.end(opts.input);
+        }
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
+        let timedOut = false;
         const timer = setTimeout(() => {
+          timedOut = true;
           child.kill('SIGKILL');
         }, timeout);
         timer.unref?.();
-        child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
-        child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+        child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
+        child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
         child.once('error', (error) => {
           clearTimeout(timer);
           reject(error);
@@ -206,7 +256,7 @@ export class HostsRegistry {
             reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
             return;
           }
-          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code });
+          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, timedOut });
         });
       });
     });
@@ -224,7 +274,7 @@ export class HostsRegistry {
    * a 5-minute interval, on window focus once the cache is stale, and on
    * refresh(). */
   enumerate(): ReturnType<typeof parseWslList> {
-    return this.distros?.rows ?? [];
+    return this.distros.rows;
   }
 
   /** Kicks the first enumeration and the periodic re-enumeration. Idempotent. */
@@ -239,7 +289,7 @@ export class HostsRegistry {
   /** Window focus: re-enumerate only when the cache has gone stale. */
   onWindowFocus(): void {
     if (!this.started) return;
-    if (!this.distros || Date.now() - this.distros.at >= ENUM_CACHE_MS) void this.enumerateAsync();
+    if (!this.distros.isFresh(ENUM_CACHE_MS)) void this.enumerateAsync();
   }
 
   /** Fires onStatusChange only when the status rows changed structurally. */
@@ -254,38 +304,56 @@ export class HostsRegistry {
    * list — even an empty one — is already cached). Lets startup work that
    * maps UNC workspaces to distros wait without re-probing. */
   whenEnumerated(): Promise<void> {
-    if (this.distros) return Promise.resolve();
+    if (this.distros.completed) return Promise.resolve();
     void this.enumerateAsync();
     return new Promise((resolveWait) => this.enumWaiters.push(resolveWait));
   }
 
   private enumerateAsync(): Promise<void> {
-    this.enumInFlight ??= this.runEnumeration().finally(() => {
-      this.enumInFlight = null;
-    });
-    return this.enumInFlight;
+    return this.distros.refresh();
   }
 
-  private async runEnumeration(): Promise<void> {
+  /** One `wsl -l -v`. Rejects only on a timeout or spawn error (the cache
+   * keeps the previous rows and backs off); a prompt non-zero exit — no
+   * distros installed, or the inbox stub without the WSL feature — is an
+   * empty, successful list (`enumOutcome`; output text is never parsed). No
+   * wsl.exe at all, or WSL disabled, is empty too. */
+  private async listDistros(): Promise<ReturnType<typeof parseWslList>> {
+    const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
+    if (!wslEnabled) return [];
+    await this.ready;
+    if (!this.wslCmd()) return [];
+    const timeout = testNumber('AGENT_WORKSPACE_TEST_ENUM_TIMEOUT_MS') ?? PROBE_TIMEOUT_MS;
+    const { stdout, code, timedOut } = await this.runWsl(['-l', '-v'], {
+      kind: 'enum',
+      host: 'all',
+      timeout,
+      requireSuccess: false,
+    });
+    const outcome = enumOutcome(timedOut ? null : code);
+    if (outcome === 'failed') throw new Error('wsl -l -v timed out');
+    return outcome === 'ok' ? parseWslList(stdout.toString('utf16le')) : [];
+  }
+
+  private onEnumerated(ok: boolean): void {
     try {
-      const wslEnabled = state.settings?.current.hosts.wslEnabled ?? true;
-      let rows: ReturnType<typeof parseWslList> = [];
-      if (wslEnabled) {
-        try {
-          const { stdout } = await this.runWsl(['-l', '-v'], { kind: 'enum', host: 'all' });
-          rows = parseWslList(stdout.toString('utf16le'));
-        } catch {
-          rows = [];
-        }
-      }
-      this.distros = { at: Date.now(), rows };
-      log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0 } });
-      this.publish();
+      this.applyEnumeration(ok);
+    } catch (error) {
+      log('host', 'host-list-error', { detail: { kind: error instanceof Error ? error.name : typeof error } });
     } finally {
       const waiters = this.enumWaiters;
       this.enumWaiters = [];
       for (const wake of waiters) wake();
     }
+  }
+
+  private applyEnumeration(ok: boolean): void {
+    const rows = this.distros.rows;
+    log('host', 'host-list', { detail: { count: rows.length, wsl: rows.length > 0, ok } });
+    // A failed list says nothing about the distros: running channels keep
+    // running (their own liveness handles a dead VM) and nothing resets.
+    if (ok) for (const entry of this.entries.values()) this.syncChannel(entry);
+    this.publish();
   }
 
   /** Enabled wsl distros: explicit settings list, else Running or default. */
@@ -318,7 +386,6 @@ export class HostsRegistry {
           devin: { path: null },
           shellEnv: null,
           hooks: 'untested',
-          inotify: false,
           gh: false,
         },
         probed: false,
@@ -326,6 +393,11 @@ export class HostsRegistry {
         envAt: 0,
         env: null,
         hookAddr: null,
+        channel: null,
+        channelEnv: null,
+        channelEnvInFlight: null,
+        channelHeld: false,
+        helperPreexisting: false,
       };
       this.entries.set(id, entry);
     }
@@ -353,15 +425,21 @@ export class HostsRegistry {
     return this.enumStopped(id as HostId);
   }
 
-  /** Gate for recurring background WSL work: re-enumerates first when the
-   * cached table is older than ENUM_FRESH_MS (`wsl -l -v` never boots a
-   * distro; concurrent callers share the in-flight run), then fsReady. */
+  /** Gate for background work that spawns its own `wsl.exe` (the gh PR-state
+   * fallback): re-enumerates first when the cached table is older than
+   * ENUM_FRESH_MS (`wsl -l -v` never boots a distro; concurrent callers share
+   * the in-flight run), then fsReady. Work over the helper channel uses
+   * fsReady alone — it never re-lists. */
   async backgroundReady(host: ExecHost): Promise<boolean> {
     if (!isWslHost(host)) return true;
-    if (!this.distros || Date.now() - this.distros.at >= enumFreshMs()) {
-      await this.enumerateAsync();
-    }
+    await this.enumerateIfStale();
     return this.fsReady(host);
+  }
+
+  /** Re-runs `wsl -l -v` only when the cached table is older than
+   * ENUM_FRESH_MS (a failed list stays inside its backoff). */
+  async enumerateIfStale(): Promise<void> {
+    if (!this.distros.isFresh(enumFreshMs())) await this.enumerateAsync();
   }
 
   /** Enabled hosts plus every host we've seen this run — used by the hooks
@@ -373,14 +451,17 @@ export class HostsRegistry {
     return [LOCAL_HOST, ...[...seen.values()].filter((h) => h.id !== 'local')];
   }
 
-  /** True when main-process fs may touch the host's config dir: local always,
-   * a wsl host only once its probe is `ready` (UNC on a hung distro blocks). */
+  /** True when main-process work may reach the host: local always; a wsl
+   * host only while its helper channel is `ready` (without a shipped bundle,
+   * once its probe is `ready` — UNC on a hung distro blocks). */
   fsReady(host: ExecHost): boolean {
     if (!isWslHost(host)) return true;
     // A stale `ready` entry outlives disabling or stopping the distro.
     if (this.enumStopped(host.id)) return false;
     if (!this.enabledDistros().some((d) => `wsl:${d.name}` === host.id)) return false;
-    return isFsReady(host, this.entries.get(host.id)?.status.state);
+    const entry = this.entries.get(host.id);
+    if (helperAvailable()) return entry?.channel?.state === 'ready';
+    return isFsReady(host, entry?.status.state);
   }
 
   /** fsReady without the enabled check: the hooks opt-out still removes our
@@ -431,7 +512,6 @@ export class HostsRegistry {
             devin: { path: null },
             shellEnv: null,
             hooks: 'untested',
-            inotify: false,
             gh: false,
           });
         }
@@ -476,6 +556,7 @@ export class HostsRegistry {
       const distro = entry.host.distro;
       const id = entry.host.id;
       const overrides = this.overrides(id);
+      let helperPresent = false;
       try {
         // home / user / login shell in one sh call.
         const out = await this.execWsl(
@@ -485,12 +566,17 @@ export class HostsRegistry {
             '-e',
             '/bin/sh',
             '-c',
-            'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7',
+            probeLine(helperBundle()?.hash ?? null, overrides.home ?? null),
           ],
           'probe',
           id,
         );
         const parsed = parseProbeOutput(out);
+        helperPresent = parseHelperPresent(out);
+        // Only the first look counts: once a channel exists, any later deploy
+        // was ours (size-gated), so a re-probe never re-flags the file.
+        if (!helperPresent) entry.helperPreexisting = false;
+        else if (!entry.channel) entry.helperPreexisting = true;
         entry.host = { ...entry.host, home: overrides.home ?? parsed.home ?? null };
         entry.status = {
           ...entry.status,
@@ -505,13 +591,18 @@ export class HostsRegistry {
         return;
       }
       const shell = overrides.shell ?? entry.status.shell ?? '/bin/bash';
-      // §1.4 shell environment capture (escape hatch: envCaptureDisabled).
+      // §1.4 shell environment capture (escape hatch: envCaptureDisabled). A
+      // ready channel already holds the login env — re-read it, no -ilc spawn.
       if (overrides.envCaptureDisabled === true) {
         entry.env = null;
+        entry.channelEnv = null;
         // Without a timestamp shellEnv() (via the execOn below) would wait on
         // this very probe.
         entry.envAt = Date.now();
         entry.status = { ...entry.status, shellEnv: null };
+      } else if (entry.channel?.state === 'ready') {
+        entry.channelEnv = null;
+        await this.fetchChannelEnv(entry);
       } else {
         await this.captureEnv(entry, shell);
       }
@@ -527,7 +618,6 @@ export class HostsRegistry {
       const claudePath = overrides.claudePath ?? (await resolve('claude'));
       const devinPath = overrides.devinPath ?? (await resolve('devin'));
       const gh = (await resolve('gh')) !== null;
-      const inotify = (await resolve('inotifywait')) !== null;
       let version: string | null = null;
       if (claudePath) {
         try {
@@ -554,6 +644,8 @@ export class HostsRegistry {
       // Hook listener reachability: loopback first, then the WSL vEthernet
       // address for NAT-mode distros.
       const hooks = await this.probeHooks(entry);
+      // A running channel owns status.helper — a re-probe must not clobber it.
+      const helper = entry.channel?.running ? null : await this.prepareHelper(entry, helperPresent);
       entry.status = {
         ...entry.status,
         state: 'ready',
@@ -562,8 +654,8 @@ export class HostsRegistry {
         claude: { path: claudePath, version },
         devin: { path: devinPath },
         hooks,
-        inotify,
         gh,
+        ...(helper ? { helper } : {}),
       };
       log('host', 'host-probe', {
         detail: {
@@ -579,8 +671,237 @@ export class HostsRegistry {
     })().finally(() => {
       entry.probing = null;
       this.publish();
+      this.syncChannel(entry);
     });
     await entry.probing;
+  }
+
+  /**
+   * Initial helper status from the env capture's node version plus, when the
+   * bundle is absent from the distro, a stdin deploy (one wsl.exe run, no UNC).
+   * Only reached from a probe the P0 gates allow (never boots a stopped
+   * distro); unknown node (capture disabled/failed) stays eligible. Null = no
+   * bundle ships.
+   */
+  private async prepareHelper(
+    entry: WslEntry,
+    present: boolean,
+  ): Promise<NonNullable<HostStatus['helper']> | null> {
+    const bundle = helperBundle();
+    if (!bundle) return null;
+    const { node, shellEnv } = entry.status;
+    let derived = deriveHelperState({ envOk: shellEnv?.ok === true, node, present });
+    if (derived === 'absent' && (await this.deployHelper(entry))) derived = 'starting';
+    return { state: derived, watchMode: null };
+  }
+
+  /** Stdin deploy of the bundle to `<home>/.agent-workspace/` (one wsl.exe
+   * run, no UNC); also the channel's redeploy, which HostChannel runs only
+   * after the fresh spawn gate (canSpawnHelper). Never on a Stopped distro. */
+  private async deployHelper(entry: WslEntry): Promise<boolean> {
+    const bundle = helperBundle();
+    const home = entry.host.home;
+    if (!bundle || !home || this.enumStopped(entry.host.id)) return false;
+    const t0 = Date.now();
+    let ok = false;
+    let bytes = 0;
+    try {
+      const data = await readFile(bundle.file);
+      bytes = data.length;
+      const spec = helperDeploySpec(entry.host, home, bundle.hash, data.length);
+      await this.runWsl(spec.args, { kind: 'exec', host: entry.host.id, timeout: 30_000, input: data });
+      ok = true;
+      entry.helperPreexisting = false;
+    } catch {
+      ok = false;
+    }
+    log('host', 'host-helper-deploy', { detail: { host: entry.host.id, ok, bytes, ms: Date.now() - t0 } });
+    return ok;
+  }
+
+  // --- helper channel ------------------------------------------------------------
+
+  /** The host's helper channel (null for local, before the first eligible start, or without a bundle). */
+  channel(host: ExecHost): HostChannel | null {
+    if (!isWslHost(host)) return null;
+    return this.entries.get(host.id)?.channel ?? null;
+  }
+
+  /**
+   * Starts/stops the channel to match the distro: start only for an enabled
+   * distro the enumeration reports Running, probed `ready` with a home, the
+   * bundle shipped and node not missing/too old. Leaving Running/enabled →
+   * stop() with no respawn; coming back → reset() (breaker closed). `reset`
+   * forces the breaker closed (hosts:refresh).
+   */
+  private syncChannel(entry: WslEntry, opts: { reset?: boolean } = {}): void {
+    const bundle = helperBundle();
+    if (!bundle || this.quitting) return;
+    const helperState = entry.status.helper?.state;
+    const nodeBlocked = helperState === 'node-missing' || helperState === 'unsupported-node';
+    if (!this.distroLive(entry) || nodeBlocked) {
+      if (entry.channel) {
+        if (entry.channel.running) entry.channel.stop(nodeBlocked ? 'stopped' : 'distro-unavailable');
+        // Any channel — degraded included — resets when the distro is back.
+        entry.channelHeld = true;
+      }
+      return;
+    }
+    if (!entry.probed || entry.status.state !== 'ready' || !entry.host.home) {
+      // First start waits for the probe; a running channel rides out a re-probe.
+      if (!entry.channel?.running) return;
+    }
+    entry.channel ??= this.createChannel(entry, bundle.hash);
+    if (opts.reset || entry.channelHeld) {
+      entry.channelHeld = false;
+      entry.channel.reset();
+    } else {
+      entry.channel.start();
+    }
+  }
+
+  /** Listed, enabled and Running in the cached enumeration. */
+  private distroLive(entry: WslEntry): boolean {
+    const id = entry.host.id;
+    const running = this.enumerate().some((row) => `wsl:${row.name}` === id && row.state === 'Running');
+    return running && this.enabledDistros().some((d) => `wsl:${d.name}` === id);
+  }
+
+  /** The channel's pre-spawn gate: a fresh `wsl -l -v` (never boots a distro)
+   * — a helper killed by `wsl --terminate`/`--shutdown` must not respawn into
+   * (and thereby boot) the stopped distro. A non-Running row holds the
+   * channel until an enumeration reports it Running again (breaker reset); a
+   * failed list refuses without holding (`helperSpawnGate`). */
+  private async canSpawnHelper(entry: WslEntry): Promise<boolean> {
+    if (this.quitting) return false;
+    // Never an in-flight list that started before this request (it may
+    // predate a `wsl --terminate`); a failed list refuses too.
+    await this.distros.refreshFresh();
+    if (this.quitting) return false;
+    const gate = helperSpawnGate(this.distros.failed, this.distroLive(entry));
+    if (gate.hold) entry.channelHeld = true;
+    return gate.ok;
+  }
+
+  private createChannel(entry: WslEntry, hash: string): HostChannel {
+    const silenceMs = testNumber('AGENT_WORKSPACE_TEST_HELPER_SILENCE_MS');
+    const backoffMs = testNumber('AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS');
+    const channel = new HostChannel(entry.host, () => this.spawnHelper(entry, hash), {
+      ...(silenceMs !== null ? { silenceMs, killMs: silenceMs * 3 } : {}),
+      backoffMs,
+      redeploy: () => this.deployHelper(entry),
+      canSpawn: () => this.canSpawnHelper(entry),
+      bundlePreexisting: () => entry.helperPreexisting,
+      expectedHash: hash,
+      log: (event, detail) => log('host', event, { detail }),
+    });
+    channel.onState((status) => this.onChannelState(entry, channel, status));
+    return channel;
+  }
+
+  private spawnHelper(entry: WslEntry, hash: string): ChildProcess {
+    const home = entry.host.home;
+    if (!home || !this.wslCmd()) throw new Error('helper launch unavailable');
+    const spec = this.applyWslCmd(helperSpec(entry.host, home, entry.status.shell ?? '/bin/bash', hash));
+    log('host', 'host-exec', { detail: { host: entry.host.id, kind: 'helper' } });
+    // Windows process cwd: wsl.exe rejects a UNC cwd (--cd carries the linux one).
+    return spawn(spec.file, spec.args, { cwd: homedir(), windowsHide: true, stdio: 'pipe' });
+  }
+
+  private onChannelState(entry: WslEntry, channel: HostChannel, status: HelperStatus): void {
+    if (entry.channel !== channel || this.quitting) return;
+    entry.status = { ...entry.status, helper: status };
+    if (status.state === 'ready') void this.fetchChannelEnv(entry);
+    else entry.channelEnv = null;
+    this.publish();
+  }
+
+  /** `env.get` over a ready channel → the spawn env (WSL_ENV_DENYLIST applied); null on failure. */
+  private fetchChannelEnv(entry: WslEntry): Promise<Record<string, string> | null> {
+    const channel = entry.channel;
+    if (!channel || channel.state !== 'ready') return Promise.resolve(null);
+    // The escape hatch means the plain WSL environment — from env.get too.
+    if (this.overrides(entry.host.id).envCaptureDisabled === true) return Promise.resolve(null);
+    if (entry.channelEnv) return Promise.resolve(entry.channelEnv);
+    entry.channelEnvInFlight ??= (async () => {
+      const t0 = Date.now();
+      try {
+        const res = await channel.request<{ env?: unknown; watchMode?: unknown }>('env.get');
+        if (entry.channel !== channel || channel.state !== 'ready') return null;
+        const env = sanitizeEnv(res?.env);
+        const count = Object.keys(env).length;
+        entry.channelEnv = env;
+        entry.status = { ...entry.status, shellEnv: { ok: true, count, ms: Date.now() - t0 } };
+        this.setPart(entry.host.id, 'env', null);
+        if (res?.watchMode === 'watch' || res?.watchMode === 'poll') channel.noteWatchMode(res.watchMode);
+        log('host', 'host-env', { detail: { host: entry.host.id, ok: true, ms: Date.now() - t0, count, source: 'channel' } });
+        this.publish();
+        return env;
+      } catch {
+        log('host', 'host-env', { detail: { host: entry.host.id, ok: false, ms: Date.now() - t0, count: 0, source: 'channel' } });
+        return null;
+      } finally {
+        entry.channelEnvInFlight = null;
+      }
+    })();
+    return entry.channelEnvInFlight;
+  }
+
+  /** App quit: stdin EOF to every helper (each exits on it), kill after the grace. */
+  async stopChannels(): Promise<void> {
+    // Consumers are already disposed: the stop's state change must not
+    // republish into them.
+    this.quitting = true;
+    const live = [...this.entries.values()].filter((e) => e.channel?.running);
+    for (const entry of live) entry.channel!.stop();
+    // Give the EOFs a moment to land, then kill what is left: stop()'s grace
+    // timer is unref'd and would not fire before the process exits.
+    if (live.length) await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+    // Every channel — one halted moments earlier still has its child in the grace.
+    for (const entry of this.entries.values()) entry.channel?.killStopped();
+  }
+
+  /**
+   * Hooks opt-out for a host whose channel is down — a distro disabled in the
+   * app but still running (syncChannel stops its helper). One `wsl.exe` run of
+   * the deployed bundle in `--apply-hooks-off` mode (same core/hooksApply.ts as
+   * `hooks.apply`); re-reads the distro table first and never runs on a
+   * Stopped distro. Exit 86 (bundle gone) → deploy once and retry.
+   */
+  async hooksOffOnce(host: ExecHost): Promise<{ ok: boolean; error: string | null }> {
+    if (!isWslHost(host) || this.quitting) return { ok: false, error: 'not a wsl host' };
+    const entry = this.entries.get(host.id);
+    const bundle = helperBundle();
+    const home = entry?.host.home;
+    if (!entry || !bundle || !home) return { ok: false, error: 'helper unavailable' };
+    const helperState = entry.status.helper?.state;
+    if (helperState === 'node-missing' || helperState === 'unsupported-node') {
+      return { ok: false, error: 'node unavailable' };
+    }
+    await this.distros.refreshFresh();
+    if (this.quitting || this.distros.failed || !this.fsSafe(host)) return { ok: false, error: 'distro unavailable' };
+    const spec = helperSpec(entry.host, home, entry.status.shell ?? '/bin/bash', bundle.hash, '--apply-hooks-off');
+    const run = () =>
+      this.runWsl(spec.args, { kind: 'exec', host: host.id, timeout: 30_000, requireSuccess: false });
+    try {
+      let result = await run();
+      if (result.code === HELPER_MISSING_EXIT && (await this.deployHelper(entry))) result = await run();
+      const ok = result.code === 0;
+      log('host', 'host-hooks-off', { detail: { host: host.id, ok, code: result.code } });
+      return { ok, error: ok ? null : `hooks removal failed (exit ${result.code ?? 'unknown'})` };
+    } catch (error) {
+      log('host', 'host-hooks-off', { detail: { host: host.id, ok: false, code: null } });
+      return { ok: false, error: hooksOffSpawnError(error) };
+    }
+  }
+
+  /** Test hooks: kill the live helper / read the channel state. */
+  killHelper(id: string): boolean {
+    return this.entries.get(id as HostId)?.channel?.kill() ?? false;
+  }
+
+  channelInfo(id: string): ReturnType<HostChannel['info']> | null {
+    return this.entries.get(id as HostId)?.channel?.info() ?? null;
   }
 
   /** §1.4 capture: `<shell> -ilc 'printf "\0__DW_ENV__\0"; env -0'`. */
@@ -729,6 +1050,12 @@ export class HostsRegistry {
     if (!entry) return null;
     const stopped = this.enumStopped(host.id);
     if (!opts?.explicit && stopped) return entry.env;
+    // A ready channel's env.get is the login env for the channel's lifetime —
+    // never a new -ilc capture spawn; the cached capture stays the fallback.
+    if (!stopped && entry.channel?.state === 'ready') {
+      if (this.overrides(host.id).envCaptureDisabled === true) return null;
+      return (await this.fetchChannelEnv(entry)) ?? entry.env;
+    }
     try {
       if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
       if (!entry.probed && !entry.probing) await this.probe(entry);
@@ -748,13 +1075,20 @@ export class HostsRegistry {
   /** Synchronous cached env for the spawn path (shellEnv() refreshes first). */
   private cachedEnv(host: ExecHost): Record<string, string> | null {
     if (!isWslHost(host)) return null;
-    return this.entries.get(host.id)?.env ?? null;
+    const entry = this.entries.get(host.id);
+    return entry?.channelEnv ?? entry?.env ?? null;
   }
 
-  /** env refresh for `claude:recheckEnv` — forces a capture for the host. */
+  /** env refresh for `claude:recheckEnv` — re-reads env.get over a ready
+   * channel, else forces a capture for the host. */
   async recheckEnv(id: string): Promise<void> {
     const entry = this.entries.get(id as HostId);
     if (!entry) return;
+    if (entry.channel?.state === 'ready') {
+      entry.channelEnv = null;
+      await this.fetchChannelEnv(entry);
+      return;
+    }
     await this.captureEnv(entry, entry.status.shell ?? '/bin/bash');
   }
 
@@ -917,6 +1251,9 @@ export class HostsRegistry {
       ? [...new Set([...base, distro])]
       : base.filter((name) => name !== distro);
     state.settings?.merge({ hosts: { wslDistros: next } });
+    // A disabled distro's helper stops; a re-enabled one restarts (or its
+    // lazy probe starts it).
+    for (const entry of this.entries.values()) this.syncChannel(entry);
     this.publish();
   }
 
@@ -924,8 +1261,8 @@ export class HostsRegistry {
   async refresh(id?: string): Promise<void> {
     // Explicit only — enumerations and probes never call this.
     this.onExplicitRefresh?.(id as HostId | undefined);
-    this.distros = null;
-    await this.enumerateAsync();
+    this.distros.invalidate();
+    await this.distros.refreshFresh();
     const targets = id
       ? [...this.entries.values()].filter((e) => e.host.id === id)
       : this.enabledDistros().map((d) => this.entryFor(d.name, d.stopped));
@@ -933,12 +1270,14 @@ export class HostsRegistry {
     for (const entry of targets) {
       entry.probed = false;
       await this.probe(entry);
+      // hosts:refresh closes the breaker (a degraded helper gets a fresh start).
+      this.syncChannel(entry, { reset: true });
     }
     // The explicit probe started a Stopped distro — re-read its state so the
     // cached row stops gating it.
     if (booted) {
-      this.distros = null;
-      await this.enumerateAsync();
+      this.distros.invalidate();
+      await this.distros.refreshFresh();
     }
     // An explicit refresh always republishes, even when nothing changed, so
     // consumers retry work that failed earlier (e.g. the hooks write).
@@ -977,7 +1316,8 @@ export class HostsRegistry {
   }
 
   shellEnvKeys(id: string): string[] {
-    return Object.keys(this.entries.get(id as HostId)?.env ?? {}).sort();
+    const entry = this.entries.get(id as HostId);
+    return Object.keys(entry?.channelEnv ?? entry?.env ?? {}).sort();
   }
 }
 

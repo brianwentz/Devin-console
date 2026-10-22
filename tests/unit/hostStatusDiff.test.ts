@@ -16,7 +16,6 @@ const row = (over: Partial<HostStatus> = {}): HostStatus => ({
   devin: { path: null },
   shellEnv: { ok: true, count: 3, ms: 40 },
   hooks: 'ok',
-  inotify: false,
   gh: false,
   ...over,
 });

@@ -1,6 +1,19 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { loadHelperBundleInfo } from '../../src/main/helperBundle';
 import {
+  deriveHelperState,
   displayPath,
+  helperDeploySpec,
+  helperSpec,
+  parseHelperHash,
+  parseHelperPresent,
+  parseProbeOutput,
+  probeLine,
+  posixQuote,
+  sanitizeEnv,
   hostIdForPath,
   isFsReady,
   isWslHost,
@@ -265,5 +278,116 @@ describe('resolveLocalConfigDir', () => {
     const captured = resolveLocalConfigDir(env, '/home/u', j);
     env.CLAUDE_CONFIG_DIR = '//wsl.localhost/D/home/u/.claude';
     expect(captured).toBe('C:/one');
+  });
+});
+
+describe('helperSpec', () => {
+  const H = 'abcdef012345';
+  const file = '/home/brian/.agent-workspace/helper-abcdef012345.mjs';
+  it.each(['/bin/bash', '/usr/bin/zsh'])('posix shell %s is byte-exact', (shell) => {
+    expect(helperSpec(UB, '/home/brian', shell, H)).toEqual({
+      file: 'wsl.exe',
+      cwd: null,
+      args: [
+        '-d', 'Ubuntu-22.04', '--cd', '/home/brian', '-e', shell,
+        '-ilc', 'test -f "$0" || exit 86; exec node "$0" --stdio', file,
+      ],
+    });
+  });
+  it('fish uses $argv and still passes --stdio', () => {
+    const spec = helperSpec(UB, '/home/brian', '/usr/bin/fish', H);
+    expect(spec.args.slice(-2)).toEqual(['test -f $argv[1]; or exit 86; exec node $argv --stdio', file]);
+  });
+  it('the one-shot --apply-hooks-off mode reuses the launch line (exit 86 when missing)', () => {
+    const spec = helperSpec(UB, '/home/brian', '/bin/bash', H, '--apply-hooks-off');
+    expect(spec.args.slice(-2)).toEqual(['test -f "$0" || exit 86; exec node "$0" --apply-hooks-off', file]);
+    const fish = helperSpec(UB, '/home/brian', '/usr/bin/fish', H, '--apply-hooks-off');
+    expect(fish.args.slice(-2)).toEqual(['test -f $argv[1]; or exit 86; exec node $argv --apply-hooks-off', file]);
+  });
+  it('has no ~ and no UNC; a home with a space is one argv element', () => {
+    const spec = helperSpec(wslHost('U', '/home/a b'), '/home/a b', '/bin/bash', H);
+    expect(spec.args.join('')).not.toMatch(/~|\\\\/);
+    expect(spec.args).toContain('/home/a b/.agent-workspace/helper-abcdef012345.mjs');
+    expect(spec.args[3]).toBe('/home/a b');
+  });
+});
+
+describe('helperDeploySpec', () => {
+  it('passes the dir, file name and byte count as $1, $2 and $3', () => {
+    const spec = helperDeploySpec(UB, '/home/brian/', 'abcdef012345', 123456);
+    expect(spec.file).toBe('wsl.exe');
+    expect(spec.args.slice(0, 5)).toEqual(['-d', 'Ubuntu-22.04', '-e', '/bin/sh', '-c']);
+    expect(spec.args.slice(6)).toEqual(['sh', '/home/brian/.agent-workspace', 'helper-abcdef012345.mjs', '123456']);
+  });
+  it('only moves the tmp file into place when its size matches $3; a short stdin fails and leaves nothing', () => {
+    const line = helperDeploySpec(UB, '/home/brian', 'abcdef012345', 10).args[5];
+    expect(line).toBe(
+      'mkdir -p "$1" && cat > "$1/.tmp.$$" && test "$(wc -c < "$1/.tmp.$$")" -eq "$3" && mv "$1/.tmp.$$" "$1/$2" || { rm -f "$1/.tmp.$$"; exit 1; }',
+    );
+  });
+});
+
+describe('helper probe', () => {
+  it('probeLine only gains the presence check when a bundle exists', () => {
+    expect(probeLine(null)).not.toContain('HELPER_PRESENT');
+    expect(probeLine('abcdef012345')).toContain(
+      'if test -f "$HOME/.agent-workspace/helper-abcdef012345.mjs"; then echo HELPER_PRESENT; fi',
+    );
+  });
+  it('probeLine checks under the resolved (override) home — the same path deploy and launch use', () => {
+    const line = probeLine('abcdef012345', '/srv/my home');
+    expect(line).toContain(`if test -f '/srv/my home/.agent-workspace/helper-abcdef012345.mjs'; then echo HELPER_PRESENT; fi`);
+    expect(line).not.toContain('"$HOME/.agent-workspace');
+    // helperSpec / helperDeploySpec build their paths from the same home.
+    const host = wslHost('D', '/srv/my home');
+    expect(helperSpec(host, '/srv/my home', '/bin/bash', 'abcdef012345').args.at(-1)).toBe(
+      '/srv/my home/.agent-workspace/helper-abcdef012345.mjs',
+    );
+    expect(helperDeploySpec(host, '/srv/my home', 'abcdef012345', 1).args.at(-3)).toBe('/srv/my home/.agent-workspace');
+    expect(probeLine('abcdef012345', null)).toBe(probeLine('abcdef012345'));
+  });
+  it('posixQuote single-quotes and escapes embedded quotes', () => {
+    expect(posixQuote('/home/u')).toBe(`'/home/u'`);
+    expect(posixQuote(`/home/o'neil`)).toBe(`'/home/o'\\''neil'`);
+  });
+  it('sanitizeEnv keeps string values with valid keys and drops WSL-provided vars', () => {
+    expect(
+      sanitizeEnv({ PATH: '/usr/bin', WSL_INTEROP: '/run/x', 'ProgramFiles(x86)': 'C:\\', N: 1, HOME: '/home/u' }),
+    ).toEqual({ PATH: '/usr/bin', HOME: '/home/u' });
+    expect(sanitizeEnv(null)).toEqual({});
+    expect(sanitizeEnv([1, 2])).toEqual({});
+  });
+  it('the presence token never becomes the shell', () => {
+    expect(parseProbeOutput('/home/u\nu\nHELPER_PRESENT\n')).toEqual({ home: '/home/u', shell: undefined });
+    expect(parseProbeOutput('/home/u\nu\n/bin/zsh\nHELPER_PRESENT\n')).toEqual({ home: '/home/u', shell: '/bin/zsh' });
+    expect(parseHelperPresent('/home/u\nu\n/bin/zsh\nHELPER_PRESENT\n')).toBe(true);
+    expect(parseHelperPresent('/home/u\nu\n/bin/zsh\n')).toBe(false);
+  });
+  it('deriveHelperState', () => {
+    expect(deriveHelperState({ envOk: true, node: null, present: true })).toBe('node-missing');
+    expect(deriveHelperState({ envOk: true, node: '16.20.0', present: true })).toBe('unsupported-node');
+    expect(deriveHelperState({ envOk: true, node: '18.0.0', present: false })).toBe('absent');
+    expect(deriveHelperState({ envOk: true, node: '22.12.0', present: true })).toBe('starting');
+    expect(deriveHelperState({ envOk: false, node: null, present: false })).toBe('absent');
+    expect(deriveHelperState({ envOk: false, node: null, present: true })).toBe('starting');
+  });
+});
+
+describe('helper bundle info', () => {
+  it('parseHelperHash accepts only 12 hex', () => {
+    expect(parseHelperHash('{"hash":"abcdef012345"}')).toBe('abcdef012345');
+    expect(parseHelperHash('{"hash":"xyz"}')).toBeNull();
+    expect(parseHelperHash('nope')).toBeNull();
+    expect(parseHelperHash(null)).toBeNull();
+  });
+  it('is unavailable without out/helper/helper-hash.json', () => {
+    const out = mkdtempSync(join(tmpdir(), 'helper-out-'));
+    expect(loadHelperBundleInfo(out)).toBeNull();
+    mkdirSync(join(out, 'helper'));
+    writeFileSync(join(out, 'helper', 'helper-hash.json'), '{"hash":"abcdef012345"}');
+    expect(loadHelperBundleInfo(out)).toEqual({
+      hash: 'abcdef012345',
+      file: join(out, 'helper', 'agent-workspace-helper.mjs'),
+    });
   });
 });

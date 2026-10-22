@@ -17,7 +17,8 @@ const execFileAsync = promisify(execFile);
 
 const FOCUSED_MS = 15_000;
 const UNFOCUSED_MS = 60_000;
-// Each wsl poll is a wsl.exe spawn — keep it far rarer than the local one.
+// Each wsl poll is a helper round-trip that runs the CLI in the distro —
+// keep it far rarer than the local one.
 const WSL_FOCUSED_MS = 120_000;
 const WSL_UNFOCUSED_MS = 300_000;
 
@@ -36,8 +37,8 @@ export class ClaudeBackgroundAgents {
   private readonly onChange: (agents: ClaudeAgent[]) => void;
   // Host tag stamped on emitted rows; 'local' when unset.
   private readonly hostId: HostId;
-  // wsl hosts bypass the local CLI: these run `claude agents`/`claude stop`
-  // through the host bridge and return raw stdout.
+  // wsl hosts bypass the local CLI: `claude agents` runs in the helper
+  // (agents.list), `claude stop` through the host bridge; both return raw stdout.
   private readonly execList: (() => Promise<string>) | undefined;
   private readonly execStop: ((agentId: string) => Promise<void>) | undefined;
   // False → the tick spawns nothing (wsl host not ready/stopped/no claude).
@@ -100,7 +101,7 @@ export class ClaudeBackgroundAgents {
 
   onWindowFocus(): void {
     if (!this.running || this.inFlight) return;
-    // A wsl poll is a wsl.exe spawn — alt-tabbing must not fire one per focus.
+    // A wsl poll runs the CLI in the distro — alt-tabbing must not fire one per focus.
     if (!focusRefreshDue(this.hostId, this.lastStartedAt, Date.now())) return;
     void this.refresh('focus');
   }
@@ -164,13 +165,14 @@ export class ClaudeBackgroundAgents {
       }
       log('claude', 'claude-agents', {
         detail: {
+          host: this.hostId,
           count: agents.length,
           running: agents.filter((a) => a.status === 'running').length,
           ms: Date.now() - t0,
           source,
         },
       });
-      this.onChange(agents);
+      this.onChange(this.agents);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log('claude', 'claude-agents-error', {

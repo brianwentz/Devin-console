@@ -1,114 +1,112 @@
-// Claude Code SDK store wrapper: listSessions → ClaudeStoreSession rows, thin
-// mutation calls, and fs.watch-based change detection over <configDir>/projects.
-// The SDK is loaded lazily on the first list() via loadSdk() — a load failure
+// Claude Code session store per host behind one StoreBackend interface:
+//   LocalBackend   — the Agent SDK in this process + fs.watch over the local
+//                    <configDir>/projects (a change → the controller re-lists).
+//   ChannelBackend — a WSL host: every call is an RPC to the in-distro helper
+//                    (hosts().channel(host)); its `store.changed` notification
+//                    carries the changed sessions' SDK info, so the controller
+//                    patches rows instead of re-listing. The app never touches
+//                    a WSL config dir over \\wsl.localhost.
+// The SDK is loaded lazily on first use via loadSdk() — a load failure
 // surfaces as an error status on the controller, never as a thrown require.
 
 import { existsSync, watch, type FSWatcher } from 'node:fs';
-import { access, readdir, stat as statFile } from 'node:fs/promises';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { join, relative } from 'node:path';
+import { access, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
-import {
-  appendsChanged,
-  dirsChanged,
-  missFresh,
-  newestTranscripts,
-  projectDirName,
-} from '../../core/claudeWatchPolicy';
-import { isWslHost, type ExecHost } from '../../core/execHost';
+import { STORE_MAX_PAGES, STORE_MESSAGES_PAGE, pageAll } from '../../core/hostRpc';
+import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
-import { testMode } from '../state';
+import { HostRpcError, type HostChannel } from '../hostChannel';
 import { loadSdk } from './sdk';
 
 const WATCH_DEBOUNCE_MS = 250;
 const POLL_MS = 30_000;
-// WSL polling (fs.watch does not work over the wsl UNC): terminal-owned
-// transcripts every 2 s while the Claude surface is visible, project-dir
-// change check every WSL_CHANGE_CHECK_MS.
-const HOT_POLL_MS = 2_000;
-export const WSL_CHANGE_CHECK_MS = 300_000;
 
-function wslChangeCheckMs(): number {
-  const override = testMode ? Number(process.env.AGENT_WORKSPACE_TEST_WSL_CHANGE_CHECK_MS) : NaN;
-  return Number.isFinite(override) && override > 0 ? Math.max(100, override) : WSL_CHANGE_CHECK_MS;
+/** One watch report. `sessions` are fresh rows for changed transcripts (empty
+ * from the local watcher — a local change triggers a full re-list); `resync`
+ * = events may have been missed (the channel came back): list in full. */
+export type StoreChange = {
+  files: string[];
+  sessions: ClaudeStoreSession[];
+  removed: string[];
+  resync?: boolean;
+};
+
+export interface StoreBackend {
+  list(): Promise<ClaudeStoreSession[]>;
+  rename(id: string, title: string): Promise<void>;
+  fork(id: string): Promise<string>;
+  delete(id: string): Promise<void>;
+  listSubagents(id: string): Promise<string[]>;
+  messages(id: string): Promise<unknown[]>;
+  subagentMessages(id: string, agentId: string): Promise<unknown[]>;
+  /** Windows-openable transcript path (\\wsl.localhost\… for a WSL host), null when absent. */
+  transcriptPath(id: string): Promise<string | null>;
+  /** Starts change reporting; returns the stop function. */
+  watch(onChange: (ev: StoreChange) => void): () => void;
 }
-// The change check also stats this many of the most recently listed
-// transcripts so appends (which leave the project dir mtime alone) count.
-const APPEND_CHECK_COUNT = 5;
 
-type ChangeSnapshot = { dirs: Map<string, number>; files: Map<string, number> };
+type SessionInfoLike = {
+  sessionId?: unknown;
+  summary?: unknown;
+  cwd?: unknown;
+  gitBranch?: unknown;
+  tag?: unknown;
+  createdAt?: unknown;
+  lastModified?: unknown;
+  fileSize?: unknown;
+};
 
-export class ClaudeStore {
-  private configDirFn: string | (() => string);
-  private host: ExecHost;
-  private onChange: (files: string[]) => void;
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** SDK session info → a store row (the SDK already resolves title precedence:
+ * custom title → auto-generated summary → first prompt). Rows without an id
+ * (a malformed RPC answer) are dropped. */
+export function storeRows(infos: unknown, host: HostId): ClaudeStoreSession[] {
+  if (!Array.isArray(infos)) return [];
+  const rows: ClaudeStoreSession[] = [];
+  for (const raw of infos as SessionInfoLike[]) {
+    if (!raw || typeof raw.sessionId !== 'string' || raw.sessionId === '') continue;
+    rows.push({
+      id: raw.sessionId,
+      host,
+      title: typeof raw.summary === 'string' ? raw.summary : '',
+      cwd: strOrNull(raw.cwd),
+      gitBranch: strOrNull(raw.gitBranch),
+      tag: strOrNull(raw.tag),
+      createdAt: numOrNull(raw.createdAt),
+      lastModified: numOrNull(raw.lastModified) ?? 0,
+      fileSize: numOrNull(raw.fileSize),
+    });
+  }
+  return rows;
+}
+
+// --- local ----------------------------------------------------------------------
+
+export class LocalBackend implements StoreBackend {
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
-  private hotTimer: NodeJS.Timeout | null = null;
-  private hotIds: () => { id: string; cwd: string | null }[] = () => [];
-  private visible: () => boolean = () => false;
-  private inotify: ChildProcess | null = null;
-  // hot session id -> resolved transcript path + last known mtime
-  private hotPaths = new Map<string, { path: string; mtime: number }>();
-  // hot id -> time its transcript lookup last missed; skipped for one change-check period
-  private hotMisses = new Map<string, number>();
-  private changeSnapshot: ChangeSnapshot | null = null;
-  private lastRows: ClaudeStoreSession[] = [];
-  private hotTickInFlight = false;
-  private started = false;
   private watchRestarts = 0;
   private watchFailed = false;
+  private onChange: ((ev: StoreChange) => void) | null = null;
 
-  constructor(opts: {
-    host: ExecHost;
-    configDir: string | (() => string);
-    onChange: (files: string[]) => void;
-  }) {
-    this.host = opts.host;
-    this.configDirFn = opts.configDir;
-    this.onChange = opts.onChange;
-  }
-
-  /** This host's sessions whose transcripts get the 2 s hot-stat tier; visible() gates it. */
-  hot(ids: () => { id: string; cwd: string | null }[], visible: () => boolean): void {
-    this.hotIds = ids;
-    this.visible = visible;
-  }
-
-  // A wsl host's home is unknown until the probe lands — resolve lazily so
-  // early-created stores pick up the probed home on the next access.
-  private get configDir(): string {
-    return typeof this.configDirFn === 'function' ? this.configDirFn() : this.configDirFn;
-  }
+  constructor(private readonly configDir: string) {}
 
   private get projectsDir(): string {
     return join(this.configDir, 'projects');
   }
 
   private run<T>(fn: () => Promise<T>): Promise<T> {
-    return hosts().withConfigDir(this.host, fn);
+    return hosts().withConfigDir(LOCAL_HOST, fn);
   }
 
   async list(): Promise<ClaudeStoreSession[]> {
     const sdk = await loadSdk();
-    const infos = await this.run(() => sdk.listSessions({ includeProgrammatic: true }));
-    const rows = infos.map((info) => ({
-      id: info.sessionId,
-      host: this.host.id,
-      // The SDK already resolves title precedence: custom title →
-      // auto-generated summary → first prompt.
-      title: info.summary,
-      cwd: info.cwd ?? null,
-      gitBranch: info.gitBranch ?? null,
-      tag: info.tag ?? null,
-      createdAt: info.createdAt ?? null,
-      lastModified: info.lastModified,
-      fileSize: info.fileSize ?? null,
-    }));
-    this.lastRows = rows;
-    return rows;
+    return storeRows(await this.run(() => sdk.listSessions({ includeProgrammatic: true })), 'local');
   }
 
   async rename(id: string, title: string): Promise<void> {
@@ -116,13 +114,12 @@ export class ClaudeStore {
     await this.run(() => sdk.renameSession(id, title));
   }
 
-  async fork(id: string): Promise<{ sessionId: string }> {
+  async fork(id: string): Promise<string> {
     const sdk = await loadSdk();
-    const result = await this.run(() => sdk.forkSession(id));
-    return { sessionId: result.sessionId };
+    return (await this.run(() => sdk.forkSession(id))).sessionId;
   }
 
-  async deleteTranscript(id: string): Promise<void> {
+  async delete(id: string): Promise<void> {
     const sdk = await loadSdk();
     await this.run(() => sdk.deleteSession(id));
   }
@@ -132,9 +129,14 @@ export class ClaudeStore {
     return this.run(() => sdk.listSubagents(id));
   }
 
+  async messages(id: string): Promise<unknown[]> {
+    const sdk = await loadSdk();
+    return (await this.run(() => sdk.getSessionMessages(id))) as unknown[];
+  }
+
   async subagentMessages(id: string, agentId: string): Promise<unknown[]> {
     const sdk = await loadSdk();
-    return this.run(() => sdk.getSubagentMessages(id, agentId)) as Promise<unknown[]>;
+    return (await this.run(() => sdk.getSubagentMessages(id, agentId))) as unknown[];
   }
 
   // The SDK exposes no transcript-path API: <configDir>/projects/<encoded cwd>/
@@ -156,260 +158,18 @@ export class ClaudeStore {
     return null;
   }
 
-  start(): void {
-    if (this.started) return;
-    if (isWslHost(this.host)) {
-      // Probe not ready: touching the UNC root could block — refuse without
-      // marking started so refresh() retries once the probe lands.
-      if (!hosts().fsReady(this.host)) return;
-      this.started = true;
-      // fs.watch fails over the wsl UNC (EISDIR) — inotifywait inside the
-      // distro when the probe found it, else tiered polling.
-      const status = hosts().status(this.host.id);
-      if (status?.inotify) this.startInotify();
-      else this.startTieredPoll();
-      return;
-    }
-    this.started = true;
+  watch(onChange: (ev: StoreChange) => void): () => void {
+    this.onChange = onChange;
     this.startWatch();
+    return () => this.stopAll();
   }
 
-  // `wsl.exe -d D -e inotifywait -m -r -q -e <ev> --format %w%f <projects>` —
-  // each stdout line is a changed file; same debounce as fs.watch. A dead
-  // child falls back to tiered polling.
-  private startInotify(): void {
-    const wsl = hosts().wslCmd();
-    if (!wsl || !isWslHost(this.host)) {
-      this.startTieredPoll();
-      return;
-    }
-    const [file, ...prefix] = wsl;
-    const projects = this.projectsDirLinux();
-    log('host', 'host-exec', { detail: { host: this.host.id, kind: 'spawn' } });
-    const child = spawn(
-      file!,
-      [
-        ...prefix,
-        '-d',
-        this.host.distro,
-        '-e',
-        '/usr/bin/inotifywait',
-        '-m',
-        '-r',
-        '-q',
-        '-e',
-        'modify,create,delete,moved_to',
-        '--format',
-        '%w%f',
-        projects,
-      ],
-      { windowsHide: true },
-    );
-    this.inotify = child;
-    const changed = new Set<string>();
-    let rest = '';
-    child.stdout?.on('data', (data: Buffer) => {
-      rest += data.toString('utf8');
-      const lines = rest.split('\n');
-      rest = lines.pop() ?? '';
-      for (const line of lines) {
-        const rel = line.trim().slice(projects.length).replace(/^\/+/, '');
-        if (rel) changed.add(rel);
-      }
-      if (this.watchTimer) return;
-      this.watchTimer = setTimeout(() => {
-        this.watchTimer = null;
-        const files = [...changed];
-        changed.clear();
-        log('claude', 'claude-watch', {
-          detail: { mode: 'inotify', host: this.host.id, events: files.length },
-        });
-        this.onChange(files);
-      }, WATCH_DEBOUNCE_MS);
-    });
-    // File-bearing events are history-only (see watchAction), so sessions
-    // created outside the app still surface through the dir-mtime check.
-    this.startChangeCheck();
-    const fallback = () => {
-      if (this.inotify !== child) return;
-      this.inotify = null;
-      if (this.started) this.startTieredPoll();
-    };
-    child.once('exit', fallback);
-    child.once('error', fallback);
-    log('claude', 'claude-watch', { detail: { mode: 'inotify', host: this.host.id, events: 0 } });
-  }
-
-  // Windows-side <configDir>/projects → the linux path inside the distro.
-  private projectsDirLinux(): string {
-    // hostPath also honours the test UNC-root seam.
-    return hosts().hostPath(this.host, this.projectsDir);
-  }
-
-  // wsl without inotify. fs.watch fails over the UNC and a full SDK list there
-  // costs seconds, so: a cheap project-dir mtime check every WSL_CHANGE_CHECK_MS
-  // (onChange([]) -> full refresh only when a dir changed), plus a 2 s stat of
-  // the terminal-owned (hot) transcripts only, reported as <encoded-cwd>/<id>.jsonl
-  // relative paths - the shape fs.watch emits, so onTranscriptFiles parses them.
-  private startTieredPoll(): void {
-    if (this.hotTimer) return;
-    log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 0 } });
-    this.startChangeCheck();
-    this.hotTimer = setInterval(() => {
-      void this.hotTick();
-    }, HOT_POLL_MS);
-    this.hotTimer.unref?.();
-  }
-
-  // Shared by inotify and poll-only wsl modes; a no-op when already running.
-  private startChangeCheck(): void {
-    if (this.pollTimer) return;
-    void this.changeMtimes().then((m) => {
-      this.changeSnapshot ??= m;
-    });
-    this.pollTimer = setInterval(() => {
-      void this.changeCheck();
-    }, wslChangeCheckMs());
-    this.pollTimer.unref?.();
-  }
-
-  // projectDir -> mtimeMs, plus <projectDir>/<id>.jsonl -> mtimeMs for the
-  // newest APPEND_CHECK_COUNT listed transcripts (≤5 extra stats per check;
-  // a project dir not in the readdir result is skipped, never searched).
-  // null when the projects dir can't be read.
-  private async changeMtimes(): Promise<ChangeSnapshot | null> {
-    try {
-      const dirs = new Map<string, number>();
-      for (const project of await readdir(this.projectsDir)) {
-        try {
-          dirs.set(project, (await statFile(join(this.projectsDir, project))).mtimeMs);
-        } catch {
-          /* removed between readdir and stat */
-        }
-      }
-      const files = new Map<string, number>();
-      for (const { id, cwd } of newestTranscripts(this.lastRows, APPEND_CHECK_COUNT)) {
-        const project = projectDirName(cwd);
-        if (!dirs.has(project)) continue;
-        const key = `${project}/${id}.jsonl`;
-        try {
-          files.set(key, (await statFile(join(this.projectsDir, project, `${id}.jsonl`))).mtimeMs);
-        } catch {
-          /* removed since the last list */
-        }
-      }
-      return { dirs, files };
-    } catch {
-      return null;
-    }
-  }
-
-  // A wsl host that left the enabled list or stopped is never touched over
-  // UNC (that boots the distro); the controller disposes the store as well.
-  private hostUsable(): boolean {
-    return !isWslHost(this.host) || hosts().fsReady(this.host);
-  }
-
-  private async changeCheck(): Promise<void> {
-    // Re-reads a stale enumeration first: a distro stopped since the last
-    // pass is never readdir-ed over UNC (that boots it).
-    if (isWslHost(this.host) && !(await hosts().backgroundReady(this.host))) return;
-    const next = await this.changeMtimes();
-    if (!next) return;
-    const prev = this.changeSnapshot;
-    const changed =
-      dirsChanged(prev?.dirs ?? null, next.dirs) || appendsChanged(prev?.files ?? null, next.files);
-    this.changeSnapshot = next;
-    if (!changed) return;
-    // A dir/file change may be the transcript a missed hot id was waiting for.
-    this.hotMisses.clear();
-    log('claude', 'claude-watch', { detail: { mode: 'poll-wsl', host: this.host.id, events: 1 } });
-    this.onChange([]);
-  }
-
-  // The 2 s hot tick is async (UNC stats don't block the loop); a slow tick
-  // never overlaps the next one.
-  private async hotTick(): Promise<void> {
-    if (this.hotTickInFlight || !this.visible() || !this.hostUsable()) return;
-    this.hotTickInFlight = true;
-    try {
-      const hot = this.hotIds();
-      const ids = hot.map((h) => h.id);
-      for (const id of [...this.hotPaths.keys()]) {
-        if (!ids.includes(id)) this.hotPaths.delete(id);
-      }
-      for (const id of [...this.hotMisses.keys()]) {
-        if (!ids.includes(id)) this.hotMisses.delete(id);
-      }
-      const changed: string[] = [];
-      for (const { id, cwd } of hot) {
-        let entry = this.hotPaths.get(id);
-        if (!entry) {
-          // Resolved once per id; a new file counts as changed immediately.
-          // The cwd-derived path is one access; the full scan is a readdir +
-          // one access per project dir over UNC, so an id whose scan missed
-          // waits one change-check period (or a reported dir change).
-          let path = cwd ? await this.directTranscript(id, cwd) : null;
-          if (!path && !missFresh(this.hotMisses.get(id), Date.now(), WSL_CHANGE_CHECK_MS)) {
-            path = await this.transcriptFor(id);
-            if (!path) this.hotMisses.set(id, Date.now());
-          }
-          if (!path) continue;
-          this.hotMisses.delete(id);
-          entry = { path, mtime: -1 };
-          this.hotPaths.set(id, entry);
-        }
-        let mtime: number | null = null;
-        try {
-          mtime = (await statFile(entry.path)).mtimeMs;
-        } catch {
-          /* gone between ticks */
-        }
-        if (mtime === null || mtime === entry.mtime) continue;
-        entry.mtime = mtime;
-        changed.push(relative(this.projectsDir, entry.path));
-      }
-      if (changed.length > 0) {
-        log('claude', 'claude-watch', {
-          detail: { mode: 'poll-wsl', host: this.host.id, events: changed.length },
-        });
-        this.onChange(changed);
-      }
-    } catch {
-      /* transient stat failures - next tick retries */
-    } finally {
-      this.hotTickInFlight = false;
-    }
-  }
-
-  private async directTranscript(id: string, cwd: string): Promise<string | null> {
-    const candidate = join(this.projectsDir, projectDirName(cwd), `${id}.jsonl`);
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      return null;
-    }
-  }
-
-  private async transcriptFor(id: string): Promise<string | null> {
-    try {
-      for (const project of await readdir(this.projectsDir)) {
-        const candidate = join(this.projectsDir, project, `${id}.jsonl`);
-        try {
-          await access(candidate);
-          return candidate;
-        } catch {
-          /* not in this project dir */
-        }
-      }
-    } catch {
-      /* no projects dir */
-    }
-    return null;
+  private emit(files: string[]): void {
+    this.onChange?.({ files, sessions: [], removed: [] });
   }
 
   private startWatch(): void {
+    if (!this.onChange) return;
     if (!existsSync(this.projectsDir)) {
       // Fresh machines have no projects dir yet; poll until it appears.
       log('claude', 'claude-watch', { detail: { mode: 'waiting', events: 0 } });
@@ -426,7 +186,7 @@ export class ClaudeStore {
           this.watchTimer = null;
           const files = [...changed];
           changed.clear();
-          this.onChange(files);
+          this.emit(files);
         }, WATCH_DEBOUNCE_MS);
       });
       this.watcher.on('error', () => {
@@ -459,36 +219,181 @@ export class ClaudeStore {
         );
         if (!this.watcher && !this.watchFailed && dirExists) {
           // The dir appeared after the waiting phase — try watching again.
-          clearInterval(this.pollTimer!);
-          this.pollTimer = null;
+          this.stopPoll();
           this.startWatch();
           return;
         }
-        if (dirExists) {
-          this.onChange([]);
-        }
+        if (dirExists) this.emit([]);
       })();
     }, POLL_MS);
     this.pollTimer.unref?.();
   }
 
   private stopPoll(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  private stopAll(): void {
+    this.onChange = null;
+    this.watcher?.close();
+    this.watcher = null;
+    if (this.watchTimer) clearTimeout(this.watchTimer);
+    this.watchTimer = null;
+    this.stopPoll();
+  }
+}
+
+// --- WSL: the helper channel ------------------------------------------------------
+
+type StoreChangedParams = { files?: unknown; sessions?: unknown; removed?: unknown };
+
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+
+export class ChannelBackend implements StoreBackend {
+  constructor(private readonly host: ExecHost) {}
+
+  private channel(): HostChannel {
+    const channel = hosts().channel(this.host);
+    if (!channel) throw new HostRpcError('not-ready', 'helper channel is not ready');
+    return channel;
+  }
+
+  private request<T>(method: string, params?: unknown): Promise<T> {
+    try {
+      return this.channel().request<T>(method, params);
+    } catch (error) {
+      return Promise.reject(error);
     }
   }
 
+  async list(): Promise<ClaudeStoreSession[]> {
+    const t0 = Date.now();
+    const rows = storeRows(await this.request<unknown>('store.list'), this.host.id);
+    log('claude', 'claude-store-list', { detail: { host: this.host.id, count: rows.length, ms: Date.now() - t0 } });
+    return rows;
+  }
+
+  async rename(id: string, title: string): Promise<void> {
+    await this.request('store.rename', { sessionId: id, title });
+  }
+
+  async fork(id: string): Promise<string> {
+    const result = await this.request<{ sessionId?: unknown } | null>('store.fork', { sessionId: id });
+    if (typeof result?.sessionId !== 'string') throw new HostRpcError('internal', 'store.fork returned no session id');
+    return result.sessionId;
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.request('store.delete', { sessionId: id });
+  }
+
+  async listSubagents(id: string): Promise<string[]> {
+    return strings(await this.request<unknown>('store.listSubagents', { sessionId: id }));
+  }
+
+  messages(id: string): Promise<unknown[]> {
+    return this.pages('store.messages', { sessionId: id });
+  }
+
+  subagentMessages(id: string, agentId: string): Promise<unknown[]> {
+    return this.pages('store.subagentMessages', { sessionId: id, agentId });
+  }
+
+  // A history can outgrow one 32 MB frame: page until a short page
+  // (core/hostRpc pageAll — a helper that ignores `offset` or never sends a
+  // short page rejects with a PagingError, never loops).
+  private pages(method: string, params: Record<string, unknown>): Promise<unknown[]> {
+    return pageAll(
+      (offset, limit) => this.request<unknown[]>(method, { ...params, offset, limit }),
+      STORE_MESSAGES_PAGE,
+      STORE_MAX_PAGES,
+    );
+  }
+
+  async transcriptPath(id: string): Promise<string | null> {
+    const result = await this.request<{ path?: unknown; rel?: unknown } | null>('store.transcriptPath', {
+      sessionId: id,
+    });
+    const path = typeof result?.path === 'string' ? result.path : null;
+    if (path === null || !isWslHost(this.host)) return null;
+    if (path.startsWith('/')) return hosts().windowsPath(this.host, path);
+    // A helper on a non-POSIX node (the e2e fake runs it on Windows) reports a
+    // native path; rebuild it under the host's config dir from `rel`.
+    const rel = typeof result?.rel === 'string' ? result.rel : null;
+    return rel ? join(hosts().configDir(this.host), 'projects', ...rel.split('/')) : null;
+  }
+
+  watch(onChange: (ev: StoreChange) => void): () => void {
+    const channel = hosts().channel(this.host);
+    if (!channel) return () => undefined;
+    const host = this.host.id;
+    const subscribe = (): void => {
+      // The helper forgets its subscription when it respawns: re-send on every ready.
+      channel
+        .request('watch.subscribe')
+        .then(() => log('claude', 'claude-watch', { detail: { mode: 'channel', host, events: 0 } }))
+        .catch(() => undefined);
+    };
+    const offNotify = channel.onNotification('store.changed', (params) => {
+      const p = (params ?? {}) as StoreChangedParams;
+      const ev: StoreChange = {
+        files: strings(p.files),
+        sessions: storeRows(p.sessions, host),
+        removed: strings(p.removed),
+      };
+      log('claude', 'claude-watch', { detail: { mode: 'channel', host, events: ev.files.length } });
+      onChange(ev);
+    });
+    let wasReady = channel.state === 'ready';
+    if (wasReady) subscribe();
+    const offState = channel.onState((status) => {
+      const ready = status.state === 'ready';
+      if (ready && !wasReady) {
+        subscribe();
+        onChange({ files: [], sessions: [], removed: [], resync: true });
+      }
+      wasReady = ready;
+    });
+    return () => {
+      offNotify();
+      offState();
+    };
+  }
+}
+
+/** The backend for a host: the local SDK, or the helper channel for WSL. */
+export function createStoreBackend(host: ExecHost, localConfigDir: string): StoreBackend {
+  return isWslHost(host) ? new ChannelBackend(host) : new LocalBackend(localConfigDir);
+}
+
+/** Per-host store handle owned by the controller: the backend plus its watch. */
+export class ClaudeStore {
+  readonly backend: StoreBackend;
+  private unwatch: (() => void) | null = null;
+
+  constructor(
+    readonly host: ExecHost,
+    localConfigDir: string,
+    private readonly onChange: (ev: StoreChange) => void,
+  ) {
+    this.backend = createStoreBackend(host, localConfigDir);
+  }
+
+  get started(): boolean {
+    return this.unwatch !== null;
+  }
+
+  start(): void {
+    if (this.unwatch) return;
+    // A WSL store is only created/started while its channel is ready.
+    if (isWslHost(this.host) && !hosts().fsReady(this.host)) return;
+    this.unwatch = this.backend.watch(this.onChange);
+  }
+
   dispose(): void {
-    this.started = false;
-    this.watcher?.close();
-    this.watcher = null;
-    this.inotify?.kill();
-    this.inotify = null;
-    if (this.watchTimer) clearTimeout(this.watchTimer);
-    this.watchTimer = null;
-    if (this.hotTimer) clearInterval(this.hotTimer);
-    this.hotTimer = null;
-    this.stopPoll();
+    this.unwatch?.();
+    this.unwatch = null;
   }
 }

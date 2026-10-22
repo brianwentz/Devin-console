@@ -124,6 +124,10 @@ export class ClaudeHost {
   private readonly cliPath: () => string | null;
   private readonly isOnDisk: (id: string) => boolean;
   private readonly hostFor: (id: string) => ExecHost;
+  // Transcript readers — the session's store backend (local SDK, or the
+  // helper channel for a WSL host); never the SDK over a \\wsl.localhost path.
+  private readonly readMessages: (id: string) => Promise<unknown[]>;
+  private readonly readSubagentMessages: (id: string, agentId: string) => Promise<unknown[]>;
   private readonly onPullRequestUrl: (sessionId: string, url: string) => void;
   private readonly onEvent: (
     sessionId: string,
@@ -151,6 +155,8 @@ export class ClaudeHost {
     configDir: string;
     isOnDisk: (id: string) => boolean;
     hostFor?: (id: string) => ExecHost;
+    messages?: (id: string) => Promise<unknown[]>;
+    subagentMessages?: (id: string, agentId: string) => Promise<unknown[]>;
     onPullRequestUrl: (sessionId: string, url: string) => void;
     onEvent?: (
       sessionId: string,
@@ -162,6 +168,18 @@ export class ClaudeHost {
     this.configDir = opts.configDir;
     this.isOnDisk = opts.isOnDisk;
     this.hostFor = opts.hostFor ?? (() => LOCAL_HOST);
+    this.readMessages =
+      opts.messages ??
+      (async (id) => {
+        const sdk = await loadSdk();
+        return (await hosts().withConfigDir(LOCAL_HOST, () => sdk.getSessionMessages(id))) as unknown[];
+      });
+    this.readSubagentMessages =
+      opts.subagentMessages ??
+      (async (id, agentId) => {
+        const sdk = await loadSdk();
+        return (await hosts().withConfigDir(LOCAL_HOST, () => sdk.getSubagentMessages(id, agentId))) as unknown[];
+      });
     this.onPullRequestUrl = opts.onPullRequestUrl;
     this.onEvent = opts.onEvent ?? (() => undefined);
   }
@@ -272,10 +290,7 @@ export class ClaudeHost {
     agentId: string,
   ): Promise<void> {
     const t0 = Date.now();
-    const sdk = await loadSdk();
-    const messages = (await hosts().withConfigDir(this.hostFor(parentSessionId), () =>
-      sdk.getSubagentMessages(parentSessionId, agentId),
-    )) as unknown[];
+    const messages = await this.readSubagentMessages(parentSessionId, agentId);
     let count = 0;
     // The generic reducers address `sessions[id]` — run them against a
     // sub-state keyed by the composite id, then merge back.
@@ -320,10 +335,7 @@ export class ClaudeHost {
 
   async loadHistory(id: string): Promise<void> {
     const t0 = Date.now();
-    const sdk = await loadSdk();
-    const messages = (await hosts().withConfigDir(this.hostFor(id), () =>
-      sdk.getSessionMessages(id),
-    )) as unknown[];
+    const messages = await this.readMessages(id);
     let count = 0;
     // resetHistory wipes the tool calls — the LinkScanner must reset with it.
     this.scanners.delete(id);

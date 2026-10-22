@@ -13,7 +13,7 @@ import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
 import type { ClaudeState } from '../../shared/ipc';
-import type { HostId } from '../../core/execHost';
+import { isWslHost, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { fixtureOrigins, state } from '../state';
 import { notificationStore } from '../notifications';
@@ -22,6 +22,8 @@ import { ClaudeHookServer } from './hookServer';
 import { claudeUsage } from './usage';
 import { applyGlobalHooks } from './hooksInstall';
 import { hosts } from '../hosts';
+import { terminalHost } from '../local/terminalHost';
+import { hooksOffChannelDown, hooksOffDue, hooksOffFailed, type HooksOffBackoff } from '../../core/hooksOffBackoff';
 import type { ClaudeSessions } from './sessions';
 
 export class ClaudeHooks {
@@ -41,7 +43,12 @@ export class ClaudeHooks {
   private applyDirty = false;
   // Per host: the key of the last successful settings.json write.
   private readonly lastApplied = new Map<HostId, string>();
+  // Per host: failed `--apply-hooks-off` runs (60 s doubling to 1 h) and the
+  // error they reported — status changes inside the window spawn nothing.
+  private readonly offBackoff = new Map<HostId, HooksOffBackoff & { error: string | null }>();
   private skipLogged = false;
+  // Hosts showing the hooks-off "helper unavailable" error (cleared once moot).
+  private readonly offUnavailable = new Set<HostId>();
 
   constructor(
     private readonly owner: ClaudeSessions,
@@ -83,7 +90,7 @@ export class ClaudeHooks {
   // Global opt-in: (re)write our hook block into <configDir>/settings.json so
   // external terminals report activity too; off removes exactly our entries.
   // Fire-and-forget and coalesced: one run in flight plus one dirty follow-up,
-  // so a burst of host-status changes never stacks UNC round-trips.
+  // so a burst of host-status changes never stacks helper round-trips.
   applyHooks(): void {
     const enabled = state.settings?.current.claude.hooksEnabled ?? false;
     this.hooks = { ...this.hooks, enabled };
@@ -117,6 +124,11 @@ export class ClaudeHooks {
     });
   }
 
+  /** The hooks setting changed: a failing one-shot may run again at once. */
+  resetOffBackoff(): void {
+    this.offBackoff.clear();
+  }
+
   /** Drop the lastApplied gate (explicit hosts refresh) so the next apply re-writes. */
   forgetApplied(id?: HostId): void {
     if (id) this.lastApplied.delete(id);
@@ -137,18 +149,39 @@ export class ClaudeHooks {
       this.owner.emit();
       return;
     }
-    // The opt-in applies to every enabled host's settings.json — for a wsl
-    // host the file lives under \wsl.localhost\<D>\<home>\.claude and the
-    // URLs point at that host's reachable address (loopback in mirrored
-    // mode, the vEthernet IPv4 in NAT mode).
+    // The opt-in applies to every enabled host's settings.json — a wsl host's
+    // file is written by its helper (hooks.apply, the same core/hooksApply.ts)
+    // inside the distro, and the URLs point at that host's reachable address
+    // (loopback in mirrored mode, the vEthernet IPv4 in NAT mode).
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
-      // A wsl host whose probe isn't ready (or that is Stopped) gets skipped —
-      // touching its settings.json over UNC could block the loop for the SMB
-      // timeout or boot it. Installs target enabled hosts only; the opt-out
-      // also cleans a disabled-but-running one (our block carries the token).
+      // Hooks back on: a pending-removal error no longer applies (a host that
+      // is applied below overwrites hooksInstall anyway).
+      if (enabled && this.offUnavailable.delete(host.id)) hosts().setError(host.id, 'hooksInstall', null);
+      // Installs target enabled hosts only (their channel must be ready). The
+      // opt-out also cleans a disabled-but-running one (our block carries the
+      // token): over the channel when it is up, else one `--apply-hooks-off`
+      // run of the deployed helper — never a Stopped distro, never UNC.
       if (enabled ? !hosts().fsReady(host) : !hosts().fsSafe(host)) continue;
+      const channelReady = !isWslHost(host) || hosts().channel(host)?.state === 'ready';
+      // An enabled host's channel is (re)starting: its ready transition
+      // re-runs this apply — no one-shot spawn for it.
+      const listed = hosts().list().some((h) => h.id === host.id);
+      if (!channelReady && !enabled && listed) {
+        // A degraded helper never turns ready on its own: say so instead of a
+        // clean opt-out while our block stays. The key stays unrecorded, so
+        // the ready transition (reset / Re-check) re-runs the removal.
+        const down = hooksOffChannelDown(hosts().channel(host)?.state);
+        if (down) {
+          this.lastApplied.delete(host.id);
+          this.offUnavailable.add(host.id);
+          hosts().setError(host.id, 'hooksInstall', down);
+          firstError ??= down;
+        }
+        continue;
+      }
+      if (!channelReady && enabled) continue;
       const addr = hosts().hookAddrFor(host.id) ?? undefined;
       const key = hooksApplyKey(
         host.id,
@@ -160,7 +193,11 @@ export class ClaudeHooks {
         // Already written in this state; lastApplied is only recorded on success.
         result = { installed: enabled, error: null };
       } else {
-        result = await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr);
+        result = !isWslHost(host)
+          ? await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr)
+          : channelReady
+            ? await this.applyOverChannel(host, enabled, info, addr)
+            : await this.removeOnce(host);
         if (result.error === null) this.lastApplied.set(host.id, key);
         else this.lastApplied.delete(host.id);
       }
@@ -168,6 +205,7 @@ export class ClaudeHooks {
         installed = result.installed;
         firstError = result.error;
       }
+      this.offUnavailable.delete(host.id);
       hosts().setError(host.id, 'hooksInstall', result.error);
       if (result.error && !firstError) firstError = result.error;
     }
@@ -175,12 +213,72 @@ export class ClaudeHooks {
     this.owner.emit();
   }
 
+  /** Opt-out with the channel down (a disabled, running distro). */
+  private async removeOnce(host: ExecHost): Promise<{ installed: boolean; error: string | null }> {
+    const backoff = this.offBackoff.get(host.id);
+    if (!hooksOffDue(backoff, Date.now())) return { installed: false, error: backoff?.error ?? null };
+    const r = await hosts().hooksOffOnce(host);
+    if (r.ok) this.offBackoff.delete(host.id);
+    else this.offBackoff.set(host.id, { ...hooksOffFailed(backoff, Date.now()), error: r.error });
+    log('claude', 'claude-hooks-install', {
+      detail: { enabled: false, changed: r.ok, ok: r.ok, host: host.id, via: 'one-shot' },
+    });
+    return { installed: false, error: r.error };
+  }
+
+  /** hooks.apply in the distro; an RPC failure is reported like a write error. */
+  private async applyOverChannel(
+    host: ExecHost,
+    enabled: boolean,
+    info: { port: number; token: string },
+    addr: string | undefined,
+  ): Promise<{ installed: boolean; error: string | null }> {
+    let changed = false;
+    let result: { installed: boolean; error: string | null };
+    try {
+      const channel = hosts().channel(host);
+      if (!channel) throw new Error('helper channel is not ready');
+      const r = await channel.request<{ installed?: unknown; changed?: unknown; error?: unknown } | null>(
+        'hooks.apply',
+        { enabled, port: info.port, token: info.token, ...(addr ? { addr } : {}) },
+      );
+      changed = r?.changed === true;
+      result = {
+        installed: r?.installed === true,
+        error: typeof r?.error === 'string' ? r.error : null,
+      };
+    } catch (error) {
+      result = { installed: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    log('claude', 'claude-hooks-install', {
+      detail: { enabled, changed, ok: result.error === null, host: host.id },
+    });
+    return result;
+  }
+
   /** Expose the listener on a non-loopback address (NAT-mode WSL reachability). */
   listenOn(addr: string): void {
     this.hookServer?.listenOn(addr);
   }
 
+  /**
+   * Defence in depth for the opt-out: with `claude.hooksEnabled` off only the
+   * app's own claude ptys (their `--settings` block + token env) may report.
+   * The listener cannot tell the two block kinds apart (same URL and token),
+   * so the gate is by session: an open claude-kind pty for `session_id`.
+   */
+  private accepts(e: ClaudeHookEvent): boolean {
+    if (state.settings?.current.claude.hooksEnabled ?? false) return true;
+    return terminalHost
+      .list()
+      .some((t) => t.kind === 'claude' && t.sessionId === e.session_id && t.exitCode === null);
+  }
+
   private onEvent(e: ClaudeHookEvent): void {
+    if (!this.accepts(e)) {
+      log('claude', 'claude-hook-ignored', { detail: { event: e.event, reason: 'hooks-off' } });
+      return;
+    }
     // A turn just ended — utilization moved (Q4: terminal sessions too).
     if (e.event === 'Stop') claudeUsage().poke('hook');
     const next = applyHookEvent(this.activity, e);

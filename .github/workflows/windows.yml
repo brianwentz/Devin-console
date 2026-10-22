@@ -30,6 +30,7 @@ jobs:
       - run: npm run lint
       - run: npm run test:unit
       - run: npm run build
+      - run: npm run helper:check
 
       # Runner display is 1024x768; the 1400x900 test window needs more room.
       # Best-effort raise — the launchApp width check is the real gate.

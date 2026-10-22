@@ -83,8 +83,8 @@ export type PublicState = {
     devin: { path: string | null };
     shellEnv: { ok: boolean; count: number; ms: number } | null;
     hooks: 'ok' | 'unreachable' | 'untested';
-    inotify: boolean;
     gh: boolean;
+    helper?: import('../../src/shared/ipc').HostStatus['helper'];
   }>;
   // P5
   notifications: {
@@ -164,6 +164,11 @@ export async function launchApp(
       AGENT_WORKSPACE_TEST_WSL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeWsl.cjs')}`,
       FAKE_WSL_DISTROS: '',
       FAKE_WSL_ROOT: join(profileWslRoot, 'root'),
+      // One failed helper start or distro list on a loaded CI runner must not
+      // park a spec behind the production 60 s backoff (its waits are 15-30 s);
+      // specs that test the backoff itself pass their own values.
+      AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '500',
+      AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
       ...extraEnv,
     },
   });

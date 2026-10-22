@@ -33,6 +33,12 @@ const waitHostReady = async (app: ElectronApplication, id: string) => {
       timeout: 30_000,
     })
     .toBe('ready');
+  // WSL work is gated on the helper channel (fsReady), which lands after the probe.
+  await expect
+    .poll(async () => (await appState(app)).hosts.find((h) => h.id === id)?.helper?.state, {
+      timeout: 30_000,
+    })
+    .toBe('ready');
 };
 
 function hooks(app: ElectronApplication) {

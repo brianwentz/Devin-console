@@ -127,6 +127,7 @@ test('a session created under the UNC root runs on the wsl host', async () => {
   const { app } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_TEST_TERMINAL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakePty.cjs')}`,
   });
   try {
@@ -223,6 +224,7 @@ test('a local workspace under the UNC root spawns the agent inside the distro', 
   const { app } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
     FAKE_WSL_SPAWN_LOG: spawnLog,
     AGENT_WORKSPACE_LOCAL_AGENT_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeAcpAgent.cjs')}`,
     FAKE_WSL_DEVIN_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeAcpAgent.cjs')}`,
@@ -262,6 +264,7 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
   const { app } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_TEST_TERMINAL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakePty.cjs')}`,
   });
   const shell = await shellPage(app);
@@ -288,8 +291,9 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
       id,
     );
 
-    // Write the transcript under the mapped UNC root — the tiered poller must
-    // pick it up and reload the terminal-owned chat within ~5 s.
+    // Write the transcript inside the distro — the helper watch reports it
+    // (projects/ did not exist yet: its 5 s root retry) and the terminal-owned
+    // chat reloads over store.messages.
     const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
     mkdirSync(projectDir, { recursive: true });
     writeFileSync(
@@ -310,7 +314,68 @@ test('terminal-owned wsl session reloads history on transcript change', async ()
       }) + '\n',
     );
     await expect(shell.locator('#messageList')).toContainText('wsl transcript line', {
-      timeout: 8_000,
+      timeout: 15_000,
+    });
+  } finally {
+    await closeApp(app);
+  }
+});
+
+// R27: a terminal turn written while the helper was down (or not yet
+// subscribed) has no watch event — the returning helper baselines the file.
+// The resync list must reload the terminal-owned chat.
+test('a terminal-owned wsl session catches up on a transcript written while the helper was down', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
+  mkdirSync(projectDir, { recursive: true });
+  const { app } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: `node ${join(process.cwd(), 'out/fixtures/fakePty.cjs')}`,
+    // The killed helper stays down long enough for the write to land first.
+    AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '3000',
+  });
+  const shell = await shellPage(app);
+  const helperState = async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.helper?.state;
+  try {
+    await expect.poll(helperState, { timeout: 30_000 }).toBe('ready');
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    const id = (await app.evaluate(
+      (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
+      `${uncRoot}\\home\\u\\proj`,
+    )) as string;
+    const opened = (await app.evaluate(
+      (_e, sessionId: string) => (globalThis as any).__agentworkspace.claudeTerminalOpen(sessionId),
+      id,
+    )) as { ok: boolean };
+    expect(opened.ok).toBe(true);
+    await app.evaluate(
+      (_e, sessionId: string) => (globalThis as any).__agentworkspace.claudeSelect(sessionId),
+      id,
+    );
+    await app.evaluate((_e, hostId: string) => (globalThis as any).__agentworkspace.hostHelperKill(hostId), 'wsl:Fake');
+    await expect.poll(helperState, { timeout: 5_000 }).not.toBe('ready');
+    writeFileSync(
+      join(projectDir, `${id}.jsonl`),
+      JSON.stringify({
+        parentUuid: null,
+        isSidechain: false,
+        type: 'user',
+        message: { role: 'user', content: 'written while the helper was down' },
+        uuid: 'f6f6f6f6-0000-4000-8000-000000000002',
+        timestamp: new Date().toISOString(),
+        userType: 'external',
+        entrypoint: 'cli',
+        cwd: '/home/u/proj',
+        sessionId: id,
+        version: '2.1.302',
+        gitBranch: 'main',
+      }) + '\n',
+    );
+    await expect.poll(helperState, { timeout: 30_000 }).toBe('ready');
+    await expect(shell.locator('#messageList')).toContainText('written while the helper was down', {
+      timeout: 15_000,
     });
   } finally {
     await closeApp(app);
@@ -322,6 +387,7 @@ test('a local transcript change re-lists only the local host', async () => {
   const { app, profile, claudeHome } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
   });
   const logFile = join(profile, 'events.jsonl');
   const lists = async (source: string) =>
@@ -335,6 +401,12 @@ test('a local transcript change re-lists only the local host', async () => {
   try {
     await expect
       .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    // WSL work is gated on the helper channel (fsReady), which lands after the probe.
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.helper?.state, {
         timeout: 30_000,
       })
       .toBe('ready');
@@ -365,77 +437,6 @@ test('a local transcript change re-lists only the local host', async () => {
   }
 });
 
-test('a WSL transcript change does not trigger a full claude-list', async () => {
-  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
-  // inotify mode: events carry file names; the projects dir must exist before
-  // the watch (rooted at projects/) starts.
-  const projectDir = join(uncRoot, 'home', 'u', '.claude', 'projects', '-home-u-proj');
-  mkdirSync(projectDir, { recursive: true });
-  const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    FAKE_WSL_DISTROS: 'Fake:Running:default',
-    FAKE_WSL_INOTIFY: '1',
-    FAKE_WSL_ROOT: uncRoot,
-    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
-  });
-  const logFile = join(profile, 'events.jsonl');
-  const inotifyEvents = async () =>
-    (await readEvents(logFile)).filter(
-      (e) =>
-        e.event === 'claude-watch' &&
-        (e.detail as { mode?: string; events?: number } | undefined)?.mode === 'inotify' &&
-        ((e.detail as { events?: number }).events ?? 0) > 0,
-    ).length;
-  const watchLists = async () =>
-    (await readEvents(logFile)).filter(
-      (e) =>
-        e.event === 'claude-list' &&
-        (e.detail as { source?: string } | undefined)?.source === 'watch',
-    ).length;
-  try {
-    await expect
-      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
-        timeout: 30_000,
-      })
-      .toBe('ready');
-    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
-    const id = (await app.evaluate(
-      (_e, cwd: string) => (globalThis as any).__agentworkspace.claudeNewSession(cwd),
-      `${uncRoot}\\home\\u\\proj`,
-    )) as string;
-    // The fake inotifywait is a node child: wait for the watcher, then give
-    // its fs.watch time to arm before writing (else the event is missed).
-    await expect
-      .poll(
-        async () =>
-          (await readEvents(logFile)).some(
-            (e) =>
-              e.event === 'claude-watch' &&
-              (e.detail as { mode?: string } | undefined)?.mode === 'inotify',
-          ),
-        { timeout: 10_000 },
-      )
-      .toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    // Not terminal-owned: a transcript append must not re-list over the UNC.
-    const before = await watchLists();
-    const seen = await inotifyEvents();
-    writeFileSync(join(projectDir, `${id}.jsonl`), '{"type":"user"}\n');
-    // Positive control: the change reached the store watcher...
-    await expect.poll(inotifyEvents, { timeout: 10_000 }).toBeGreaterThan(seen);
-    // The inotify watcher is a wsl.exe spawn and is counted too.
-    expect(
-      (await readEvents(logFile)).some(
-        (e) => e.event === 'host-exec' && (e.detail as { kind?: string })?.kind === 'spawn',
-      ),
-    ).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
-    // ...but did not trigger a full list.
-    expect(await watchLists()).toBe(before);
-  } finally {
-    await closeApp(app);
-  }
-});
-
 // --- background work must stop when a distro is not usable ---------------------
 
 const hostExecs = async (logFile: string, host: string, kind?: string) =>
@@ -443,6 +444,61 @@ const hostExecs = async (logFile: string, host: string, kind?: string) =>
     if (e.event !== 'host-exec') return false;
     const detail = e.detail as { host?: string; kind?: string } | undefined;
     return detail?.host === host && (kind === undefined || detail.kind === kind);
+  }).length;
+
+// `claude-agents` passes for one host (agents run inside the helper now, so
+// they no longer show up as host-exec).
+const agentPolls = async (logFile: string, host: string) =>
+  (await readEvents(logFile)).filter(
+    (e) => e.event === 'claude-agents' && (e.detail as { host?: string } | undefined)?.host === host,
+  ).length;
+// What a missing agents poll hangs on: the helper channel must be ready and the
+// probe must have found claude. Shown when the wait times out so a CI-only
+// failure explains itself (state, helper, claude path, and the log lines about them).
+const agentDiagnostics = async (app: ElectronApplication, logFile: string, host: string) => {
+  const row = (await state(app)).hosts.find((h) => h.id === host);
+  const lines = (await readEvents(logFile))
+    .filter((e) => {
+      const detail = e.detail as { host?: string } | undefined;
+      if (e.event === 'host-list' || e.event === 'claude-agents-error') return true;
+      return /^(host-helper|host-probe|host-env|claude-agents)/.test(String(e.event)) && detail?.host === host;
+    })
+    .slice(-14)
+    .map((e) => `${String(e.ts ?? '').slice(11, 23)} ${e.event} ${JSON.stringify(e.detail ?? {})}`);
+  return [
+    `host ${host}: ${JSON.stringify({
+      state: row?.state,
+      error: row?.error,
+      helper: row?.helper,
+      claude: row?.claude,
+    })}`,
+    ...lines,
+  ].join('\n');
+};
+// At least `min` agents polls for the host, or a failure that says why not.
+const waitForAgentPolls = async (
+  app: ElectronApplication,
+  logFile: string,
+  host: string,
+  min = 2,
+) => {
+  try {
+    await expect
+      .poll(() => agentPolls(logFile, host), { timeout: 30_000 })
+      .toBeGreaterThanOrEqual(min);
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n${await agentDiagnostics(app, logFile, host)}`,
+      { cause: error },
+    );
+  }
+};
+const channelEvents = async (logFile: string, host: string) =>
+  (await readEvents(logFile)).filter((e) => {
+    const detail = e.detail as { host?: string; mode?: string; events?: number } | undefined;
+    if (detail?.host !== host) return false;
+    if (e.event === 'claude-patch') return true;
+    return e.event === 'claude-watch' && detail.mode === 'channel' && (detail.events ?? 0) > 0;
   }).length;
 
 let lineSeq = 0;
@@ -462,38 +518,26 @@ const transcriptLine = (id: string, cwd: string, text: string): string =>
     gitBranch: 'main',
   }) + '\n';
 
-test('disabling a distro stops its agents poll and change check', async () => {
+test('disabling a distro stops its agents poll and store watch', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const projects = join(uncRoot, 'home', 'u', '.claude', 'projects');
   mkdirSync(join(projects, '-home-u-proj'), { recursive: true });
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
-    AGENT_WORKSPACE_TEST_WSL_CHANGE_CHECK_MS: '300',
   });
   const logFile = join(profile, 'events.jsonl');
   const shell = await shellPage(app);
-  const wslWatch = async () =>
-    (await readEvents(logFile)).filter((e) => {
-      const detail = e.detail as { mode?: string; host?: string; events?: number } | undefined;
-      return (
-        e.event === 'claude-watch' &&
-        detail?.mode === 'poll-wsl' &&
-        detail.host === 'wsl:Fake' &&
-        (detail.events ?? 0) > 0
-      );
-    }).length;
   try {
     await expect
       .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
         timeout: 30_000,
       })
       .toBe('ready');
-    // Positive control: the agents poller runs `claude agents` through wsl.exe.
-    await expect
-      .poll(() => hostExecs(logFile, 'wsl:Fake', 'exec'), { timeout: 10_000 })
-      .toBeGreaterThan(1);
+    // Positive control: the agents poller runs `claude agents` in the helper.
+    await waitForAgentPolls(app, logFile, 'wsl:Fake');
 
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     const row = shell.locator('[data-host-id="wsl:Fake"]');
@@ -505,8 +549,9 @@ test('disabling a distro stops its agents poll and change check', async () => {
     // Let an in-flight poll finish before taking the baseline.
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const execs = await hostExecs(logFile, 'wsl:Fake');
-    const watches = await wslWatch();
-    // A live change check would notice this new external session.
+    const polls = await agentPolls(logFile, 'wsl:Fake');
+    const watches = await channelEvents(logFile, 'wsl:Fake');
+    // A live helper watch would report this new external session.
     const id = '33333333-0000-4000-8000-0000000000aa';
     mkdirSync(join(projects, '-home-u-other'), { recursive: true });
     writeFileSync(
@@ -515,7 +560,8 @@ test('disabling a distro stops its agents poll and change check', async () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     expect(await hostExecs(logFile, 'wsl:Fake')).toBe(execs);
-    expect(await wslWatch()).toBe(watches);
+    expect(await agentPolls(logFile, 'wsl:Fake')).toBe(polls);
+    expect(await channelEvents(logFile, 'wsl:Fake')).toBe(watches);
   } finally {
     await closeApp(app);
   }
@@ -567,72 +613,64 @@ test('the agents poller skips a distro without claude', async () => {
       .toBe('ready');
     expect((await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.claude.path).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 3_000));
-    expect(await hostExecs(logFile, 'wsl:Fake', 'exec')).toBe(0);
+    // The one `exec` is the helper deploy; no poll ran `claude agents`.
+    const deploys = (await readEvents(logFile)).filter((e) => e.event === 'host-helper-deploy').length;
+    expect(await hostExecs(logFile, 'wsl:Fake', 'exec')).toBe(deploys);
+    expect(await agentPolls(logFile, 'wsl:Fake')).toBe(0);
   } finally {
     await closeApp(app);
   }
 });
 
-test('the WSL change check surfaces a new external session and a transcript append', async () => {
+test('the helper watch surfaces a new external session and a transcript append as patches', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const projects = join(uncRoot, 'home', 'u', '.claude', 'projects');
   const existing = '44444444-0000-4000-8000-0000000000aa';
   mkdirSync(join(projects, '-home-u-proj'), { recursive: true });
   const existingFile = join(projects, '-home-u-proj', `${existing}.jsonl`);
   writeFileSync(existingFile, transcriptLine(existing, '/home/u/proj', 'first'));
-  // inotify stays off (FAKE_WSL_INOTIFY unset) → tiered poll + change check.
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
-    AGENT_WORKSPACE_TEST_WSL_CHANGE_CHECK_MS: '500',
+    FAKE_WSL_ROOT: uncRoot,
   });
   const logFile = join(profile, 'events.jsonl');
-  const watchLists = async () =>
-    (await readEvents(logFile))
-      .filter(
-        (e) =>
-          e.event === 'claude-list' &&
-          (e.detail as { source?: string } | undefined)?.source === 'watch',
-      )
-      .map((e) => e.detail as { listedHosts?: number });
-  const sessionIds = async () =>
+  const lists = async () => (await readEvents(logFile)).filter((e) => e.event === 'claude-list').length;
+  const patches = async () =>
+    (await readEvents(logFile)).filter(
+      (e) => e.event === 'claude-patch' && (e.detail as { host?: string }).host === 'wsl:Fake',
+    ).length;
+  const sessions = async () =>
     (
       (await app.evaluate(() => (globalThis as any).__agentworkspace.claudeState())) as {
-        sessions: { id: string }[];
+        sessions: { id: string; title: string }[];
       }
-    ).sessions.map((s) => s.id);
+    ).sessions;
   try {
-    await expect
-      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state, {
-        timeout: 30_000,
-      })
-      .toBe('ready');
-    await expect.poll(sessionIds, { timeout: 15_000 }).toContain(existing);
-    // Let the first snapshots (taken while the initial rows land) settle.
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(async () => (await sessions()).map((s) => s.id), { timeout: 30_000 }).toContain(existing);
+    // Let the start-up lists settle.
     await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const listsBefore = await lists();
 
-    // (1) a new session in a new project dir → a project-dir change.
-    const before = (await watchLists()).length;
+    // (1) a new session in a new project dir.
+    const before = await patches();
     const fresh = '44444444-0000-4000-8000-0000000000bb';
     mkdirSync(join(projects, '-home-u-other'), { recursive: true });
-    writeFileSync(
-      join(projects, '-home-u-other', `${fresh}.jsonl`),
-      transcriptLine(fresh, '/home/u/other', 'new'),
+    writeFileSync(join(projects, '-home-u-other', `${fresh}.jsonl`), transcriptLine(fresh, '/home/u/other', 'new'));
+    await expect.poll(async () => (await sessions()).map((s) => s.id), { timeout: 15_000 }).toContain(fresh);
+    expect(await patches()).toBeGreaterThan(before);
+
+    // (2) an append to an existing transcript (a rename line changes its title).
+    appendFileSync(
+      existingFile,
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'Appended title', sessionId: existing })}\n`,
     );
     await expect
-      .poll(async () => (await watchLists()).length, { timeout: 10_000 })
-      .toBeGreaterThan(before);
-    expect((await watchLists()).at(-1)?.listedHosts).toBe(1);
-    await expect.poll(sessionIds, { timeout: 10_000 }).toContain(fresh);
-
-    // (2) an append to an existing (newest-5) transcript — dir mtimes unchanged.
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    const beforeAppend = (await watchLists()).length;
-    appendFileSync(existingFile, transcriptLine(existing, '/home/u/proj', 'second'));
-    await expect
-      .poll(async () => (await watchLists()).length, { timeout: 10_000 })
-      .toBeGreaterThan(beforeAppend);
-    expect((await watchLists()).at(-1)?.listedHosts).toBe(1);
+      .poll(async () => (await sessions()).find((s) => s.id === existing)?.title, { timeout: 15_000 })
+      .toBe('Appended title');
+    // Neither change re-listed any host.
+    expect(await lists()).toBe(listsBefore);
   } finally {
     await closeApp(app);
   }
@@ -673,21 +711,33 @@ test('a distro that stops mid-run gets no background work after the next tick', 
     FAKE_WSL_DISTROS_FILE: distros,
     AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
     AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '500',
+    AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
   });
   const logFile = join(profile, 'events.jsonl');
   const work = async () =>
     (await hostExecs(logFile, 'wsl:Fake', 'probe')) +
     (await hostExecs(logFile, 'wsl:Fake', 'env')) +
-    (await hostExecs(logFile, 'wsl:Fake', 'exec'));
+    (await hostExecs(logFile, 'wsl:Fake', 'exec')) +
+    (await hostExecs(logFile, 'wsl:Fake', 'helper')) +
+    (await agentPolls(logFile, 'wsl:Fake'));
   try {
     await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
-    await expect
-      .poll(() => hostExecs(logFile, 'wsl:Fake', 'exec'), { timeout: 10_000 })
-      .toBeGreaterThan(1);
-    // `wsl --terminate Fake` / a VM crash: nothing else in the app changes.
+    await waitForAgentPolls(app, logFile, 'wsl:Fake');
+    // `wsl --terminate Fake` / a VM crash: the helper dies with the distro.
     writeFileSync(distros, 'Fake:Stopped:default');
-    // The next background tick re-reads the (stale) enumeration first.
-    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('stopped');
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), 'wsl:Fake');
+    // The agents tick itself never re-lists (it rides the channel); the
+    // periodic / focus re-list notices the stop.
+    // Re-triggered per attempt: one list may land inside a failure backoff.
+    await expect
+      .poll(
+        async () => {
+          await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
+          return hostState(app);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe('stopped');
     await new Promise((resolve) => setTimeout(resolve, 500));
     const baseline = await work();
     await new Promise((resolve) => setTimeout(resolve, 3_000));
@@ -713,10 +763,9 @@ test('the gh PR-state fallback never runs in a stopped distro', async () => {
     FAKE_WSL_DISTROS_FILE: distros,
     FAKE_WSL_SPAWN_LOG: spawnLog,
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_TEST_ENUM_FRESH_MS: '300',
-    // The agents tick also re-reads the table, so the stop is noticed even
-    // when the gh path itself doesn't re-enumerate.
-    AGENT_WORKSPACE_TEST_CLAUDE_AGENTS_POLL_MS: '300',
+    AGENT_WORKSPACE_TEST_ENUM_BACKOFF_MS: '300',
   });
   const logFile = join(profile, 'events.jsonl');
   const ghRuns = () =>
@@ -749,8 +798,18 @@ test('the gh PR-state fallback never runs in a stopped distro', async () => {
 
     writeFileSync(distros, 'Fake:Stopped:default');
     // A background PR-state refresh re-reads the enumeration; it never probes.
+    // (The periodic re-list stands in when the refresh itself reaches no gh.)
     await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefreshPrStates());
-    await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('stopped');
+    // Re-triggered per attempt: one list may land inside a failure backoff.
+    await expect
+      .poll(
+        async () => {
+          await app.evaluate(() => (globalThis as any).__agentworkspace.hostEnumerateIfStale());
+          return hostState(app);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe('stopped');
     const gh = ghRuns();
     const execs = await hostExecs(logFile, 'wsl:Fake');
     const titles = await prTitleEvents();
@@ -769,14 +828,20 @@ test('turning hooks off removes our block from a disabled, running distro', asyn
   mkdirSync(claudeDir, { recursive: true });
   const settingsFile = join(claudeDir, 'settings.json');
   writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
-  const { app } = await launchWithClaudeFixture(fixtures, {
+  // The UNC root is a different dir: a Windows-side write would land there.
+  const otherUnc = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS: 'Fake:Running:default',
-    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: otherUnc,
+    FAKE_WSL_ROOT: uncRoot,
   });
+  const logFile = join(profile, 'events.jsonl');
   const shell = await shellPage(app);
   const ours = () => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/');
+  const helper = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.hostChannelState('wsl:Fake')?.state ?? null);
   try {
-    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    await expect.poll(helper, { timeout: 30_000 }).toBe('ready');
     await evaluateInShell(
       app,
       `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`,
@@ -788,14 +853,75 @@ test('turning hooks off removes our block from a disabled, running distro', asyn
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.locator('[data-host-enabled]').click();
     await expect.poll(() => hostState(app)).toBe('disabled');
+    // The disabled distro's helper channel is stopped...
+    await expect.poll(helper, { timeout: 10_000 }).not.toBe('ready');
 
     await evaluateInShell(
       app,
       `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`,
     );
-    // Our block embeds the bearer token: opting out must remove it everywhere.
+    // ...so the opt-out runs the deployed helper once in --apply-hooks-off mode:
+    // our block embeds the bearer token and must go everywhere.
     await expect.poll(ours, { timeout: 15_000 }).toBe(false);
     expect(readFileSync(settingsFile, 'utf8')).toContain('keepMe');
+    const offs = (await readEvents(logFile)).filter((e) => e.event === 'host-hooks-off');
+    expect(offs.map((e) => e.detail)).toEqual([{ host: 'wsl:Fake', ok: true, code: 0 }]);
+    expect(existsSync(join(otherUnc, 'home', 'u', '.claude', 'settings.json'))).toBe(false);
+    // Still disabled, and the one-shot run did not restart the channel.
+    expect(await hostState(app)).toBe('disabled');
+    expect(await helper()).not.toBe('ready');
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('a failing hooks-off one-shot backs off: repeated status changes do not re-run it', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const claudeDir = join(uncRoot, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const shell = await shellPage(app);
+  const offs = async () =>
+    (await readEvents(logFile))
+      .filter((e) => e.event === 'host-hooks-off')
+      .map((e) => (e.detail as { ok: boolean }).ok);
+  const helper = () =>
+    app.evaluate(() => (globalThis as any).__agentworkspace.hostChannelState('wsl:Fake')?.state ?? null);
+  try {
+    await expect.poll(helper, { timeout: 30_000 }).toBe('ready');
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+    await expect
+      .poll(() => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/'), { timeout: 15_000 })
+      .toBe(true);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    const row = shell.locator('[data-host-id="wsl:Fake"]');
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await row.locator('[data-host-enabled]').click();
+    await expect.poll(() => hostState(app)).toBe('disabled');
+    // Hand-broken file: every removal run exits 1.
+    writeFileSync(settingsFile, '{ not json');
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`);
+    await expect.poll(offs, { timeout: 15_000 }).toEqual([false]);
+    // Status-driven applies (what every host status change runs) inside the
+    // 60 s backoff spawn nothing more.
+    for (let i = 0; i < 5; i++) {
+      await app.evaluate(() => (globalThis as any).__agentworkspace.claudeApplyHooks());
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await offs()).toEqual([false]);
+    // A hooks setting change resets the backoff: the next opt-out runs again.
+    writeFileSync(settingsFile, JSON.stringify({ keepMe: true }, null, 2));
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: true } })`);
+    await evaluateInShell(app, `window.agentworkspace.setSettings({ claude: { hooksEnabled: false } })`);
+    await expect.poll(offs, { timeout: 15_000 }).toEqual([false, true]);
   } finally {
     await closeApp(app);
   }
@@ -812,6 +938,7 @@ test('Devin Local autostart skips a workspace on a stopped distro', async () => 
       FAKE_WSL_DISTROS: 'Fake:Stopped:default',
       FAKE_WSL_SPAWN_LOG: spawnLog,
       AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+      FAKE_WSL_ROOT: uncRoot,
       AGENT_WORKSPACE_LOCAL_AGENT_CMD: fakeAgent,
       FAKE_WSL_DEVIN_CMD: fakeAgent,
     },
@@ -865,6 +992,7 @@ test('an explicit start on a stopped distro re-reads its state promptly', async 
   const { app } = await launchWithClaudeFixture(fixtures, {
     FAKE_WSL_DISTROS_FILE: distros,
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: uncRoot,
     AGENT_WORKSPACE_LOCAL_AGENT_CMD: fakeAgent,
     FAKE_WSL_DEVIN_CMD: fakeAgent,
   });

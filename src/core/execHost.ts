@@ -191,6 +191,17 @@ export function mergeShellEnv(
   return out;
 }
 
+/** The helper's `env.get` result → a spawnable env: string values under valid
+ * keys only, minus WSL_ENV_DENYLIST. */
+export function sanitizeEnv(raw: unknown): Record<string, string> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && ENV_KEY.test(key)) env[key] = value;
+  }
+  return mergeShellEnv(env, {});
+}
+
 const kvPairs = (env: Record<string, string>): string[] =>
   Object.keys(env)
     .sort()
@@ -305,10 +316,139 @@ const SEMVER_LINE = /^\d+\.\d+\.\d+/;
 /** Second marker the env-capture command prints after `env -0`, followed by the node version or `NONODE`. */
 export const NODE_MARKER = '__DW_NODE__';
 
-/** Probe line output: `$HOME`, user, login shell. */
+/** Token the probe line prints when the helper bundle is already deployed. */
+export const HELPER_PRESENT = 'HELPER_PRESENT';
+
+/** Exit code of the helper launch line when the bundle file is missing (→ redeploy). */
+export const HELPER_MISSING_EXIT = 86;
+
+export const HELPER_DIR = '.agent-workspace';
+
+const HELPER_HASH_RE = /^[0-9a-f]{12}$/;
+
+/** `helper-hash.json` → the 12-hex bundle hash; null when absent or malformed. */
+export function parseHelperHash(json: string | null): string | null {
+  if (!json) return null;
+  try {
+    const hash = (JSON.parse(json) as { hash?: unknown } | null)?.hash;
+    return typeof hash === 'string' && HELPER_HASH_RE.test(hash) ? hash : null;
+  } catch {
+    return null;
+  }
+}
+
+export function helperFileName(hash: string): string {
+  return `helper-${hash}.mjs`;
+}
+
+/** Absolute helper path under the probed home — neither `wsl.exe -e` nor `"$0"` expands `~`. */
+export function helperPath(home: string, hash: string): string {
+  return `${home.replace(/\/+$/, '')}/${HELPER_DIR}/${helperFileName(hash)}`;
+}
+
+/** POSIX single-quoting: the string stays one shell word, no expansion. */
+export function posixQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The existing probe line (home / user / login shell) plus, when a bundle
+ * exists, the presence check — no extra spawn. `home` is the resolved home
+ * (a `hosts.overrides[id].home`) when known before the probe; deploy and launch
+ * build their paths from the same value, so all three agree. Null = `$HOME`.
+ */
+export function probeLine(hash: string | null, home: string | null = null): string {
+  const base = 'echo "$HOME"; id -un; getent passwd "$(id -un)" | cut -d: -f7';
+  if (hash === null) return base;
+  const file = home ? posixQuote(helperPath(home, hash)) : `"$HOME/${HELPER_DIR}/${helperFileName(hash)}"`;
+  return `${base}; if test -f ${file}; then echo ${HELPER_PRESENT}; fi`;
+}
+
+/** Probe line output: `$HOME`, user, login shell. The presence token is not a shell. */
 export function parseProbeOutput(out: string): { home: string | undefined; shell: string | undefined } {
-  const lines = out.trim().split('\n').map((l) => l.trim());
+  const lines = out
+    .trim()
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== HELPER_PRESENT);
   return { home: lines[0] || undefined, shell: lines[2] || undefined };
+}
+
+export function parseHelperPresent(out: string): boolean {
+  return out.split('\n').some((l) => l.trim() === HELPER_PRESENT);
+}
+
+export type HelperState = NonNullable<HostStatus['helper']>['state'];
+
+/**
+ * Initial helper state after the probe. `envOk` = the interactive-login env
+ * capture succeeded; with it failed/disabled the node version is unknown and
+ * the host stays eligible (a failed channel start surfaces the problem).
+ */
+export function deriveHelperState(input: {
+  envOk: boolean;
+  node: string | null;
+  present: boolean;
+}): HelperState {
+  if (input.envOk) {
+    if (input.node === null) return 'node-missing';
+    const major = Number(input.node.split('.')[0]);
+    if (Number.isFinite(major) && major < 18) return 'unsupported-node';
+  }
+  return input.present ? 'starting' : 'absent';
+}
+
+/**
+ * Helper launch: interactive login shell (full PATH/nvm/SSH_AUTH_SOCK) running
+ * the deployed bundle on stdio. `$0` (fish: `$argv[1]`) is the bundle path, so
+ * paths with spaces stay one argv element. Exit 86 = bundle missing.
+ * `--apply-hooks-off` is the one-shot opt-out run (no stdio protocol).
+ */
+export type HelperMode = '--stdio' | '--apply-hooks-off';
+
+export function helperSpec(
+  host: ExecHost,
+  home: string,
+  shell: string,
+  hash: string,
+  mode: HelperMode = '--stdio',
+): HostSpawnSpec {
+  if (host.kind !== 'wsl') throw new Error('helperSpec: not a wsl host');
+  const line =
+    shellFamily(shell) === 'fish'
+      ? `test -f $argv[1]; or exit ${HELPER_MISSING_EXIT}; exec node $argv ${mode}`
+      : `test -f "$0" || exit ${HELPER_MISSING_EXIT}; exec node "$0" ${mode}`;
+  return {
+    file: 'wsl.exe',
+    args: ['-d', host.distro, '--cd', home, '-e', shell, '-ilc', line, helperPath(home, hash)],
+    cwd: null,
+  };
+}
+
+/**
+ * Deploy: bundle on stdin, written atomically (tmp + mv) to `$1/$2`. `cat`
+ * exits 0 on a short stdin (the writer was killed mid-pipe), so the tmp file
+ * only moves into place when its size equals `$3` (the bundle's byte count);
+ * otherwise it is removed and the run exits 1.
+ */
+export function helperDeploySpec(host: ExecHost, home: string, hash: string, bytes: number): HostSpawnSpec {
+  if (host.kind !== 'wsl') throw new Error('helperDeploySpec: not a wsl host');
+  return {
+    file: 'wsl.exe',
+    args: [
+      '-d',
+      host.distro,
+      '-e',
+      '/bin/sh',
+      '-c',
+      'mkdir -p "$1" && cat > "$1/.tmp.$$" && test "$(wc -c < "$1/.tmp.$$")" -eq "$3" && mv "$1/.tmp.$$" "$1/$2" || { rm -f "$1/.tmp.$$"; exit 1; }',
+      'sh',
+      `${home.replace(/\/+$/, '')}/${HELPER_DIR}`,
+      helperFileName(hash),
+      String(bytes),
+    ],
+    cwd: null,
+  };
 }
 
 /**

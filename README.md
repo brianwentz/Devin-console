@@ -38,6 +38,8 @@ Because the build is not notarized, the Mac app does not auto-update: check the 
 
 Everything works out of the box except: the **Devin Local** surface and the terminal's `devin` tab need the [Devin CLI](https://devin.ai) (`devin` on PATH); the **Claude** surface needs the Claude Code CLI; and running sessions *inside* WSL distros is optional — without WSL everything stays on the Windows host.
 
+Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro** — see [Running sessions in WSL](#running-sessions-in-wsl).
+
 ## Getting started
 
 - The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin Cloud → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.
@@ -46,6 +48,16 @@ Everything works out of the box except: the **Devin Local** surface and the term
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Notifications**.
 - The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals cover this PC only for now — totals for WSL distros are paused.
+
+## Running sessions in WSL
+
+Add a workspace under `\\wsl.localhost\<distro>\…` on the **Local** or **Claude** surface and its sessions run inside that distro. Enable or disable distros under **Settings → General → Hosts**.
+
+- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings and lists background agents — all inside the distro rather than through the `\\wsl.localhost` network share. (Claude usage totals for WSL sessions are paused for now; the Analytics page still reads the distro's Claude sign-in details through that share. Both move inside the distro in a later update.)
+- The helper is copied to `~/.agent-workspace/` in the distro on first use (one file per app version; copies unused for a week are cleaned up). Deleting the folder is safe — it is copied again on the next start.
+- Without Node.js (or with a version older than 18) the distro's row says **Node 18 or newer is required** and that distro's sessions don't load. Install Node in the distro, then press **Re-check**.
+- The app never starts a stopped distro. While a distro is stopped its helper shows as **paused** and its sessions keep their last state; they refresh once the distro runs again. If the helper keeps failing the row shows it stopped — **Re-check** tries again.
+- Turning off *Report Claude Code sessions started from other terminals* removes the hook block from every running, enabled distro that has Node.js 18 or newer (the helper does the removal — in a distro without it, remove the block from `~/.claude/settings.json` yourself), and also from a running distro you disabled since the app started. A distro that was already disabled when the app started is cleaned up when you enable it again; until then the app ignores the reports it sends. A stopped distro is never started for this. While the toggle is off, the app ignores reports from terminals it did not open itself.
 
 ## Where things live
 
