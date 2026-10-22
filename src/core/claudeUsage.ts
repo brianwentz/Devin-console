@@ -179,10 +179,30 @@ export function isValidTimeZone(timeZone: string): boolean {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
+// formatToParts costs ~3 µs and a first scan reads ~1M lines, so the zone
+// date is memoized per (zone, 15-minute bucket): every UTC offset is a
+// multiple of 15 min, so a local date never changes inside a bucket.
+const ZONE_BUCKET_MS = 900_000;
+const ZONE_MEMO_MAX = 10_000;
+const zoneMemo = new Map<string, { y: number; m: number; d: number }>();
+
+/** Test seam: forget memoized zone dates. */
+export function clearZoneKeyMemo(): void {
+  zoneMemo.clear();
+}
+
 function ymd(date: Date, timeZone?: string): { y: number; m: number; d: number } {
   if (!timeZone) return { y: date.getFullYear(), m: date.getMonth() + 1, d: date.getDate() };
-  const p = zoneParts(date.getTime(), timeZone);
-  return { y: p.y, m: p.m, d: p.d };
+  const bucket = Math.floor(date.getTime() / ZONE_BUCKET_MS);
+  const key = `${timeZone}|${bucket}`;
+  let hit = zoneMemo.get(key);
+  if (!hit) {
+    const p = zoneParts(bucket * ZONE_BUCKET_MS, timeZone);
+    hit = { y: p.y, m: p.m, d: p.d };
+    if (zoneMemo.size >= ZONE_MEMO_MAX) zoneMemo.clear();
+    zoneMemo.set(key, hit);
+  }
+  return hit;
 }
 
 export function monthKey(date: Date, timeZone?: string): string {

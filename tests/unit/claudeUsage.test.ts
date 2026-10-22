@@ -10,9 +10,11 @@
 //                                   total    {in 1600 out 450 cr 6500 cw 350 msg 3}
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   aggregateUsageLines,
+  clearZoneKeyMemo,
+  dayKey,
   fileMayContainMonths,
   fileScanPlan,
   emptyClaudeUsageState,
@@ -395,5 +397,72 @@ describe('usage keys in an explicit time zone', () => {
     const d = new Date(2026, 9, 31, 23, 30);
     expect(monthKey(d)).toBe('2026-10');
     expect(monthKey(d, undefined)).toBe('2026-10');
+  });
+});
+
+// R29: zone keys are memoized per 15-minute bucket (every zone offset is a
+// multiple of 15 min, so a bucket never straddles a local date change).
+describe('zone key memo', () => {
+  const reference = (ms: number, timeZone: string) => {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(ms)
+      .reduce<Record<string, string>>((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+    return { month: `${parts.year}-${parts.month}`, day: `${parts.year}-${parts.month}-${parts.day}` };
+  };
+
+  it('matches an unmemoized Intl computation across a DST change and a :30 zone', () => {
+    clearZoneKeyMemo();
+    const cases: [string, number, number][] = [
+      // LA: DST ends 2026-11-01 09:00Z (02:00 PDT → 01:00 PST); sweep the day around it.
+      ['America/Los_Angeles', Date.parse('2026-10-31T00:00:00Z'), Date.parse('2026-11-02T12:00:00Z')],
+      // LA: DST starts 2026-03-08 10:00Z.
+      ['America/Los_Angeles', Date.parse('2026-03-07T00:00:00Z'), Date.parse('2026-03-09T12:00:00Z')],
+      // Kolkata +05:30: midnight is at :30 UTC; also the Oct→Nov boundary.
+      ['Asia/Kolkata', Date.parse('2026-10-31T12:00:00Z'), Date.parse('2026-11-01T12:00:00Z')],
+    ];
+    for (const [zone, from, to] of cases) {
+      // 7-minute steps plus the bucket edges ±1 ms.
+      for (let ms = from; ms <= to; ms += 7 * 60_000) {
+        for (const t of [ms, Math.floor(ms / 900_000) * 900_000, Math.floor(ms / 900_000) * 900_000 - 1]) {
+          const want = reference(t, zone);
+          // Twice: the second read is served by the memo.
+          for (let i = 0; i < 2; i++) {
+            expect(monthKey(new Date(t), zone)).toBe(want.month);
+            expect(dayKey(new Date(t), zone)).toBe(want.day);
+          }
+        }
+      }
+    }
+  });
+
+  it('formats once per (zone, 15-minute bucket)', () => {
+    clearZoneKeyMemo();
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts');
+    try {
+      const base = Date.parse('2026-10-15T10:00:00Z');
+      // 30 timestamps inside one bucket, read as month and day.
+      for (let i = 0; i < 30; i++) {
+        monthKey(new Date(base + i * 20_000), 'Asia/Tokyo');
+        dayKey(new Date(base + i * 20_000), 'Asia/Tokyo');
+      }
+      expect(spy).toHaveBeenCalledTimes(1);
+      // A second bucket and a second zone each add one call.
+      dayKey(new Date(base + 900_000), 'Asia/Tokyo');
+      dayKey(new Date(base), 'America/Los_Angeles');
+      expect(spy).toHaveBeenCalledTimes(3);
+      // aggregateUsageLines reuses it: many lines in one bucket, no new calls.
+      const lines = Array.from({ length: 50 }, (_, i) =>
+        JSON.stringify({
+          type: 'assistant',
+          requestId: `r${i}`,
+          timestamp: new Date(base + i * 1_000).toISOString(),
+          message: { model: 'm', usage: { input_tokens: 1 } },
+        }),
+      );
+      aggregateUsageLines(lines, { timeZone: 'Asia/Tokyo' });
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
