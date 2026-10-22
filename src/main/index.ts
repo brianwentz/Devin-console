@@ -26,7 +26,7 @@ import { log, logFile } from './log';
 import { setPermissions } from './permissions';
 import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
-import { cloudKeepAliveMs, cloudViews } from './cloudViews';
+import { cloudViews } from './cloudViews';
 import { SettingsStore } from './settings';
 import { providerBySurface } from '../core/providers';
 import { fixtureOrigins, quiet, state, testMode } from './state';
@@ -412,10 +412,7 @@ async function createWindow(): Promise<void> {
   // Pooled Cloud views replace the single devinView — init creates the 'home'
   // view (keyed by the session URL it currently shows) and loads the tenant.
   cloudViews().init(state.tenantUrl);
-  cloudViews().setLimits({
-    maxLiveViews: saved.sessions.maxLiveViews,
-    keepAliveMs: cloudKeepAliveMs(saved.sessions.keepAliveHours),
-  });
+  cloudViews().applyLimits(); // sessions.maxLiveViews / keepAliveHours
   // Stays named: it runs pre-loadURL, before TabManager creation, so it can't
   // join the post-loadURL runtime start loop without reordering.
   cloudSessions().start();

@@ -254,7 +254,13 @@ variable that selects it.
 - `state.devinView` is a getter for `cloudViews().activeView()` (`src/main/cloudViews.ts`) — views are keyed by the session they display (`keyForUrl`,
   `'home'` for tenant root); switching just reattaches. Only the active pooled view is laid out/attached; `rekey` follows in-app navigations (background
   view navigating onto another pooled session destroys the duplicate). Discard honours beforeunload (same 3 s/50 ms race as TabManager; cancelled →
-  `protected`). Log events `cloud-view-show|create|rekey|duplicate|discard|discard-cancelled|crashed` — kinds/counts/ids only.
+  `protected`). Log events `cloud-view-show|create|rekey|duplicate|discard|discard-cancelled|crashed` — kinds/counts/ids only, plus
+  `provider` (the pool's providerId).
+- Cloud kit (A2): the pool body is the provider-agnostic `ViewPool` in `src/main/cloudKit/viewPool.ts` built by `createViewPool(config)` —
+  `ViewPoolConfig {providerId, partition, homeUrl(), keyForUrl(url) (null = not ours → treated as 'home'), ownsUrl(url), limits() (settings hours;
+  `applyLimits()` converts via `cloudKeepAliveMs`, test override included), viewName, hooks {attach, onActiveSession, onHomeToSession}}`.
+  `src/main/cloudKit/pools.ts` = `registerPool`/`pools`/`poolFor(providerId)`/`poolForSurface(surface)`; `cloudViews()` is `poolFor('devin-cloud')`
+  (created + registered on first call). Devin's pure keying/ownership: `devinViewKey`/`devinOwnsUrl` in `src/core/cloudKit/devinViews.ts`.
 
 ### Pane toggle & splitter
 - The rail button `#paneToggle` is user-labelled "Linked Context" (Chromium icon `src/shell/components/icons/ChromiumIcon.tsx`); ids stay stable across label renames.

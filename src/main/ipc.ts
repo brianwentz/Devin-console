@@ -51,7 +51,7 @@ import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
 import { runtimes } from './providers';
-import { cloudKeepAliveMs, cloudViews } from './cloudViews';
+import { cloudViews } from './cloudViews';
 import {
   applyLayout,
   beginDrag,
@@ -98,10 +98,7 @@ export function applySettingsPatch(patch: SettingsPatch): Settings {
   state.surface = next.surface;
   state.tabManager?.setKeepAliveMs(keepAliveMs(next.tabs.keepAliveHours));
   state.tabManager?.setMaxLiveTabs(next.tabs.maxLiveTabs);
-  cloudViews().setLimits({
-    maxLiveViews: next.sessions.maxLiveViews,
-    keepAliveMs: cloudKeepAliveMs(next.sessions.keepAliveHours),
-  });
+  cloudViews().applyLimits(); // sessions.maxLiveViews / keepAliveHours
   if (next.tenantUrl !== previousTenant) {
     state.tenantUrl = next.tenantUrl;
     log('shell', 'tenant-changed', { url: next.tenantUrl });
