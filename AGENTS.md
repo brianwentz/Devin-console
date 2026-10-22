@@ -124,7 +124,7 @@ variable that selects it.
   the `v26` npm dist-tag (its `latest` tag lags behind).
 - Dependabot (`.github/dependabot.yml`) opens weekly PRs with a 7-day cooldown; CI runs `npm audit --audit-level=high` after `npm ci`. Dependabot ignores
   `typescript` majors (see Lint below).
-- `@anthropic-ai/claude-agent-sdk@0.3.296` is pinned — its `manifest.json` targets Claude CLI 2.1.296, so check `claude --version` against it when
+- `@anthropic-ai/claude-agent-sdk@0.3.299` is pinned — its `manifest.json` targets Claude CLI 2.1.299, so check `claude --version` against it when
   bumping; the `@anthropic-ai/claude-agent-sdk-<platform>` optional deps are install-only (they bundle claude.exe) and must never ship in the installer.
 - The SDK is ESM-only, so it stays `external` in `scripts/build.mjs` and is packaged unpacked: `build.files`/`build.asarUnpack` carry it plus its runtime
   deps (ajv, ajv-formats, fast-deep-equal, fast-uri, json-schema-traverse, require-from-string, zod) with `!`-negations excluding the platform packages,
