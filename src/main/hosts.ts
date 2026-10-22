@@ -75,6 +75,8 @@ function enumFreshMs(): number {
   return Number.isFinite(override) && override > 0 ? override : ENUM_FRESH_MS;
 }
 const PROBE_TIMEOUT_MS = 10_000;
+/** After a timeout kill, how long 'exit' waits for 'close' before settling. */
+const CLOSE_GRACE_MS = 2_000;
 const ENV_MARKER = '__DW_ENV__';
 const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
 
@@ -244,25 +246,50 @@ export class HostsRegistry {
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
         let timedOut = false;
+        let exited = false;
+        let exitCode: number | null = null;
+        let settled = false;
+        let grace: ReturnType<typeof setTimeout> | null = null;
+        const finish = (code: number | null): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (grace) clearTimeout(grace);
+          if (requireSuccess && code !== 0) {
+            reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
+            return;
+          }
+          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, timedOut });
+        };
+        // A killed wsl.exe whose pipes are still held may never emit 'close':
+        // after a timeout, 'exit' + a short grace is enough (as sshHosts.ts).
+        const armGrace = (): void => {
+          if (!timedOut || !exited || grace) return;
+          grace = setTimeout(() => finish(exitCode), CLOSE_GRACE_MS);
+          grace.unref?.();
+        };
         const timer = setTimeout(() => {
           timedOut = true;
           child.kill('SIGKILL');
+          armGrace();
         }, timeout);
         timer.unref?.();
         child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
         child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
         child.once('error', (error) => {
           clearTimeout(timer);
+          if (grace) clearTimeout(grace);
+          settled = true;
           reject(error);
         });
         child.once('exit', (code) => {
-          clearTimeout(timer);
-          if (requireSuccess && code !== 0) {
-            reject(new Error(`wsl.exe exited ${code ?? 'unknown'}`));
-            return;
-          }
-          resolvePromise({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code, timedOut });
+          exited = true;
+          exitCode = code;
+          armGrace();
         });
+        // 'close', not 'exit': stdout is fully drained by then — 'exit' can fire
+        // with the output still buffered (a probe read as an empty home).
+        child.once('close', (code) => finish(code));
       });
     });
   }
