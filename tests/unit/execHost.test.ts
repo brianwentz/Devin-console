@@ -568,6 +568,10 @@ describe('ssh host kind', () => {
   // The remote half of the scripts, run by a real POSIX sh when one is on PATH
   // (Git Bash on Windows runners/dev boxes; skipped otherwise).
   const hasSh = spawnSync('sh', ['-c', 'command -v base64 >/dev/null'], { windowsHide: true }).status === 0;
+  // A failed run on a platform we can't reproduce on (macOS CI: bash 3.2 as sh,
+  // BSD base64) must say what the shell did, not just that the output differed.
+  const runReport = (r: { status: number | null; stdout: string; stderr: string }): string =>
+    `sh exited ${r.status}; stdout ${JSON.stringify(r.stdout)}; stderr ${JSON.stringify(r.stderr)}`;
   it.skipIf(!hasSh)('SSH_RUN_STDIN_SCRIPT: real sh reads the env line, leaves the rest of stdin to the CLI', () => {
     const env = { TOKEN: 's3cr3t', B: "it's $(x) \\ \"q\"" };
     const r = spawnSync(
@@ -575,7 +579,7 @@ describe('ssh host kind', () => {
       ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&3 3<&-', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
       { input: `${sshEnvLine(env)}rest-of-stdin\n`, encoding: 'utf8', windowsHide: true },
     );
-    expect(r.stdout.endsWith(`s3cr3t|it's $(x) \\ "q"|rest-of-stdin\n`)).toBe(true);
+    expect(r.stdout.endsWith(`s3cr3t|it's $(x) \\ "q"|rest-of-stdin\n`), runReport(r)).toBe(true);
   });
   it.skipIf(!hasSh)('R36 #3: a corrupt env line fails closed (exit 97 + a stderr line), never runs the CLI without its env', () => {
     const r = spawnSync(
@@ -596,7 +600,7 @@ describe('ssh host kind', () => {
       encoding: 'utf8',
       windowsHide: true,
     });
-    expect(r.stdout).toBe('line1\nline2\n');
+    expect(r.stdout, runReport(r)).toBe('line1\nline2\n');
   });
   it.skipIf(!hasSh)('SSH_RUN_FILE_SCRIPT: real sh sources then deletes the staged file', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ssh-run-file-'));

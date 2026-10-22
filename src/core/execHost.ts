@@ -679,7 +679,9 @@ export function sshEnvLine(env: Record<string, string>): string {
  */
 export const SSH_RUN_STDIN_SCRIPT =
   'exec 3<&0 </dev/null; IFS= read -r e <&3 || exit 97; ' +
-  'if [ -n "$e" ]; then v=$(printf \'%s\\n\' "$e" | base64 -d) || { echo "agent-workspace: env decode failed" >&2; exit 97; }; eval "$v"; fi; ' +
+  // `-d` is GNU/busybox, `--decode` is BSD/macOS (whose documented short form is -D);
+  // each attempt gets its own printf, so a failed one never eats the next one's input.
+  'if [ -n "$e" ]; then v=$(printf \'%s\\n\' "$e" | base64 -d 2>/dev/null) || v=$(printf \'%s\\n\' "$e" | base64 --decode 2>/dev/null) || { echo "agent-workspace: env decode failed" >&2; exit 97; }; eval "$v"; fi; ' +
   'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
 
 /** `sh -c` script of sshPtySpec — $0 body, $1 staged env file ('' = none, removed after sourcing), $2 cwd, $3 shell, rest = argv. */
