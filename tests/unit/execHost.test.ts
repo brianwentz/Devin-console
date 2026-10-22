@@ -551,9 +551,9 @@ describe('ssh host kind', () => {
     const words = splitWords(spec.args[N + 3]!.slice(5));
     expect(words.slice(0, 2)).toEqual(['/bin/sh', '-c']);
     expect(words[2]).toBe(SSH_RUN_STDIN_SCRIPT);
-    // R36 #5: the login body gets the real stdin back from fd 3 (rc files read /dev/null).
-    expect(words.slice(3)).toEqual(['exec "$0" "$@" <&3 3<&-', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
-    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[N + 3]!.slice(5))[3]).toBe('exec $argv <&3 3<&-');
+    // R36 #5: the login body gets the real stdin back from fd 9 (rc files read /dev/null).
+    expect(words.slice(3)).toEqual(['exec "$0" "$@" <&9 9<&-', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
+    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[N + 3]!.slice(5))[3]).toBe('exec $argv <&9 9<&-');
   });
   it('sshEnvLine: base64 of `export K=V` lines; values never appear in clear', () => {
     const env = { TOKEN: 's3cr3t-value', B: "it's $(x)" };
@@ -570,29 +570,13 @@ describe('ssh host kind', () => {
   const hasSh = spawnSync('sh', ['-c', 'command -v base64 >/dev/null'], { windowsHide: true }).status === 0;
   // A failed run on a platform we can't reproduce on (macOS CI: bash 3.2 as sh,
   // BSD base64) must say what the shell did, not just that the output differed.
-  // Whether fd 3 (the script's saved stdin) survives `exec sh <flags>` — the
-  // login shell is where macOS CI lost it (`3: Bad file descriptor`).
-  const fdProbe = (): string =>
-    ['-c', '-ic', '-lc', '-ilc']
-      .map((flags) => {
-        const p = spawnSync(
-          'sh',
-          ['-c', `exec 3<&0 </dev/null; exec sh ${flags} 'if true <&3; then echo open; else echo closed; fi' 2>&1`],
-          { input: 'x\n', encoding: 'utf8', windowsHide: true, timeout: 5000 },
-        );
-        return `${flags}=${p.stdout.trim().replace(/\n/g, ' / ')}`;
-      })
-      .join(' ');
-  const shVersion = (): string =>
-    spawnSync('sh', ['-c', 'echo "${BASH_VERSION:-not-bash} $(command -v sh)"'], { encoding: 'utf8', windowsHide: true }).stdout.trim();
   const runReport = (r: { status: number | null; stdout: string; stderr: string }): string =>
-    `sh exited ${r.status}; stdout ${JSON.stringify(r.stdout)}; stderr ${JSON.stringify(r.stderr)}; ` +
-    `sh=${shVersion()}; fd3 after exec sh: ${fdProbe()}`;
+    `sh exited ${r.status}; stdout ${JSON.stringify(r.stdout)}; stderr ${JSON.stringify(r.stderr)}`;
   it.skipIf(!hasSh)('SSH_RUN_STDIN_SCRIPT: real sh reads the env line, leaves the rest of stdin to the CLI', () => {
     const env = { TOKEN: 's3cr3t', B: "it's $(x) \\ \"q\"" };
     const r = spawnSync(
       'sh',
-      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&3 3<&-', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&9 9<&-', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
       { input: `${sshEnvLine(env)}rest-of-stdin\n`, encoding: 'utf8', windowsHide: true },
     );
     expect(r.stdout.endsWith(`s3cr3t|it's $(x) \\ "q"|rest-of-stdin\n`), runReport(r)).toBe(true);
@@ -600,7 +584,7 @@ describe('ssh host kind', () => {
   it.skipIf(!hasSh)('R36 #3: a corrupt env line fails closed (exit 97 + a stderr line), never runs the CLI without its env', () => {
     const r = spawnSync(
       'sh',
-      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&3 3<&-', '/', 'sh', 'sh', '-c', 'echo RAN'],
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&9 9<&-', '/', 'sh', 'sh', '-c', 'echo RAN'],
       { input: '!!!not-base64!!!\nrest\n', encoding: 'utf8', windowsHide: true },
     );
     expect(r.status).toBe(97);
@@ -610,7 +594,7 @@ describe('ssh host kind', () => {
   it.skipIf(!hasSh)('R36 #5: an rc-style stdin reader in the login shell sees /dev/null; the CLI gets every byte', () => {
     // The "login shell" here is sh with a -c body that first reads a line from
     // ITS stdin (what a .bash_profile `read` does), then execs per the body.
-    const body = 'IFS= read -r stolen; exec "$0" "$@" <&3 3<&-';
+    const body = 'IFS= read -r stolen; exec "$0" "$@" <&9 9<&-';
     const r = spawnSync('sh', ['-c', SSH_RUN_STDIN_SCRIPT, body, '/', 'sh', 'sh', '-c', 'cat'], {
       input: `${sshEnvLine({ K: 'v' })}line1\nline2\n`,
       encoding: 'utf8',

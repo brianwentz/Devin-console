@@ -653,11 +653,11 @@ variable that selects it.
     (`SshHosts.hooksOffOnce`) is deleted: unreachable since ssh removal only runs over a ready channel.
   - Secrets off argv (fix round 1 #4): the captured login env is never replayed. A piped spawn is `sshSpawnSpec` = `exec /bin/sh -c
     SSH_RUN_STDIN_SCRIPT <body> <cwd> <shell> <cmd> <args…>`; `spawnOn` writes `sshEnvLine(cmd.env)` (base64 of `export K='v'` lines) as the
-    first stdin line. The script first moves the real stdin to fd 3 and gives itself (and so the login shell's rc files) `/dev/null`
-    (R36 #5 — an rc that reads stdin would eat the CLI's first stream-json line), reads the line from fd 3 (`IFS= read -r`, byte-wise on a pipe),
+    first stdin line. The script first moves the real stdin to fd 9 and gives itself (and so the login shell's rc files) `/dev/null`
+    (R36 #5 — an rc that reads stdin would eat the CLI's first stream-json line), reads the line from fd 9 (`IFS= read -r`, byte-wise on a pipe),
     decodes it with a checked `v=$(printf '%s\n' "$e" | base64 -d) || { echo "agent-workspace: env decode failed" >&2; exit 97; }` (fail
     closed, R36 #3), `eval`s it, `cd`s and execs the CLI through the login shell `-ilc` (PATH/nvm from rc files) with the body
-    `exec "$0" "$@" <&3 3<&-` (fish: `exec $argv <&3 3<&-`), which hands fd 3 back as the CLI's stdin. `execOn` over ssh resolves on `close`
+    `exec "$0" "$@" <&9 9<&-` (fish: `exec $argv <&9 9<&-`), which hands fd 9 back as the CLI's stdin. `execOn` over ssh resolves on `close`
     (stdout drained, R36 #2), and so does `SshHosts.run` (probe / env / deploy / challenge — R39 #2). A pty is `sshPtySpec` (`-t`, `SSH_RUN_FILE_SCRIPT`): its env (the hook token) is staged first through the
     helper's `env.stage {vars}` → `<home>/.agent-workspace/run/<32 hex>` (dir 0700, file 0600, `O_EXCL`, ≤64 vars / 64 KB, files older than 1 h
     swept; `src/helper/envStage.ts`); only that path is in argv and the script sources then deletes it. Without a ready channel an ssh pty that

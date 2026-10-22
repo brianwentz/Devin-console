@@ -670,15 +670,18 @@ export function sshEnvLine(env: Record<string, string>): string {
 
 /**
  * `sh -c` script of sshSpawnSpec — $0 = login-shell body, $1 cwd, $2 shell,
- * rest = argv. The real stdin moves to fd 3 and the shell (and so the login
+ * rest = argv. The real stdin moves to fd 9 and the shell (and so the login
  * shell's rc files) gets /dev/null — an rc that reads stdin can't eat the
- * CLI's first stream-json line (R36 #5); the env line is read from fd 3 (one
+ * CLI's first stream-json line (R36 #5); the env line is read from fd 9 (one
  * byte at a time on a pipe, so the CLI keeps the rest) and the login body
- * hands fd 3 back as the CLI's stdin. A line that does not decode fails closed
+ * hands fd 9 back as the CLI's stdin. A line that does not decode fails closed
  * (exit 97 + one stderr line) instead of running the CLI without its env (R36 #3).
+ * fd 9, not 3: startup files that only run for an interactive login shell may
+ * close low fds (macOS sh = bash 3.2 lost fd 3 under `-ilc` only), and 9 is the
+ * highest fd a single-digit `sh` (dash) can redirect.
  */
 export const SSH_RUN_STDIN_SCRIPT =
-  'exec 3<&0 </dev/null; IFS= read -r e <&3 || exit 97; ' +
+  'exec 9<&0 </dev/null; IFS= read -r e <&9 || exit 97; ' +
   // `-d` is GNU/busybox, `--decode` is BSD/macOS (whose documented short form is -D);
   // each attempt gets its own printf, so a failed one never eats the next one's input.
   'if [ -n "$e" ]; then v=$(printf \'%s\\n\' "$e" | base64 -d 2>/dev/null) || v=$(printf \'%s\\n\' "$e" | base64 --decode 2>/dev/null) || { echo "agent-workspace: env decode failed" >&2; exit 97; }; eval "$v"; fi; ' +
@@ -690,9 +693,9 @@ export const SSH_RUN_FILE_SCRIPT =
   'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
 
 const loginBody = (shell: string): string => (shellFamily(shell) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"');
-/** The piped-spawn body: the CLI's stdin is fd 3 again (SSH_RUN_STDIN_SCRIPT moved it there). */
+/** The piped-spawn body: the CLI's stdin is fd 9 again (SSH_RUN_STDIN_SCRIPT moved it there). */
 const loginBodyFd3 = (shell: string): string =>
-  shellFamily(shell) === 'fish' ? 'exec $argv <&3 3<&-' : 'exec "$0" "$@" <&3 3<&-';
+  shellFamily(shell) === 'fish' ? 'exec $argv <&9 9<&-' : 'exec "$0" "$@" <&9 9<&-';
 
 /**
  * ssh counterpart of spawnSpec: `/bin/sh` (any login shell may be fish) reads
