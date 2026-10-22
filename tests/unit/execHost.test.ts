@@ -66,7 +66,9 @@ describe('extended-length UNC (\\\\?\\UNC\\) forms (R33)', () => {
     expect(toHostPath(UB, '\\\\?\\UNC\\wsl.localhost\\Ubuntu-22.04\\home\\b\\x')).toBe('/home/b/x');
     expect(toHostPath(UB, '\\\\?\\unc\\wsl$\\Ubuntu-22.04\\home')).toBe('/home');
   });
-  it('the remote-fs guard already matches the extended forms', () => {
+  // The guard folds case/slashes only on Windows (UNC paths exist nowhere else),
+  // same as the win32-only case test in remoteFsGuard.test.ts.
+  it.runIf(process.platform === 'win32')('the remote-fs guard already matches the extended forms', () => {
     expect(isRemoteFsPath('\\\\?\\UNC\\wsl.localhost\\D\\x', [])).toBe(true);
     expect(isRemoteFsPath('\\\\?\\UNC\\wsl$\\D\\x', [])).toBe(true);
   });
