@@ -7,12 +7,16 @@
 // into `(0, import_fs.readFile)(…)` — a property read at call time — so every
 // bundled caller sees the wrapper regardless of when it was imported.
 // `syncBuiltinESMExports()` pushes the patch into ESM named-import bindings
-// (the externally loaded Agent SDK, vitest). Not covered: native addons and
-// Node/Electron internals that call the C++ bindings directly.
+// (the externally loaded Agent SDK, vitest).
 //
-// Explicitly out of scope: `shell.showItemInFolder` and the native folder
-// dialog opening a `\\wsl.localhost` path on the user's click — Explorer
-// does that access, not the app.
+// What the guard cannot see:
+// - relative paths resolved against a UNC cwd (the app's cwd is never UNC);
+// - the `\\.\UNC\wsl.localhost` device-namespace form;
+// - native addons (node-pty's cwd) and Node/Electron internals calling the
+//   C++ fs bindings directly;
+// - child processes (`wsl.exe`, the in-distro helper);
+// - Explorer: `shell.showItemInFolder` and the native folder dialog opening a
+//   `\\wsl.localhost` path on the user's click — the documented exception.
 //
 // Both modes log `remote-fs-violation {op}` once per op. Test mode then throws
 // RemoteFsViolation (promise forms reject); production lets the call through.
@@ -87,14 +91,24 @@ function pathOf(arg: unknown): string | null {
   return null;
 }
 
-/** True when `path` is under a WSL UNC root or one of `extraPrefixes`. */
-export function isRemoteFsPath(path: string, extraPrefixes: string[]): boolean {
+function normaliseRoots(extraPrefixes: string[]): string[] {
+  return extraPrefixes.map(normalisePrefix).filter((root) => root.length > 0);
+}
+
+/** `isRemoteFsPath` with the extra roots already normalised (the hot path). */
+function matchesRemote(path: string, extraRoots: string[]): boolean {
+  // Every builtin root starts with a separator, so with no extra roots a path
+  // that doesn't start with one can't match.
+  const first = path.charCodeAt(0);
+  if (extraRoots.length === 0 && first !== 0x5c && first !== 0x2f) return false;
   const p = normalise(path);
   if (BUILTIN_PREFIXES.some((root) => startsWithRoot(p, root))) return true;
-  return extraPrefixes.some((prefix) => {
-    const root = normalisePrefix(prefix);
-    return root.length > 0 && startsWithRoot(p, root);
-  });
+  return extraRoots.some((root) => startsWithRoot(p, root));
+}
+
+/** True when `path` is under a WSL UNC root or one of `extraPrefixes`. */
+export function isRemoteFsPath(path: string, extraPrefixes: string[]): boolean {
+  return matchesRemote(path, normaliseRoots(extraPrefixes));
 }
 
 type Fn = (...args: unknown[]) => unknown;
@@ -110,7 +124,7 @@ export function remoteFsViolationCount(): number {
 
 export function installRemoteFsGuard(opts: RemoteFsGuardOptions): void {
   if (installed) uninstallRemoteFsGuard();
-  const extra = opts.extraPrefixes.filter((p) => p.trim().length > 0);
+  const extra = normaliseRoots(opts.extraPrefixes.filter((p) => p.trim().length > 0));
   const originals: Array<[Record<string, unknown>, string, Fn]> = [];
   violations = 0;
   loggedOps.clear();
@@ -123,7 +137,7 @@ export function installRemoteFsGuard(opts: RemoteFsGuardOptions): void {
     const wrapped = function (this: unknown, ...args: unknown[]): unknown {
       for (let i = 0; i < argCount; i++) {
         const path = pathOf(args[i]);
-        if (path === null || !isRemoteFsPath(path, extra)) continue;
+        if (path === null || !matchesRemote(path, extra)) continue;
         violations += 1;
         // Logged in both modes: a test-mode throw a caller swallows still
         // leaves the event for the e2e teardown to find.

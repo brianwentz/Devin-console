@@ -222,6 +222,13 @@ export async function launchApp(
 
 const remoteFsChecked = new WeakSet<ElectronApplication>();
 const launchedLogs = new WeakMap<ElectronApplication, string>();
+const expectedViolations = new WeakMap<ElectronApplication, number>();
+
+/** For the guard's own positive-control spec only: the teardown check expects
+ * exactly `count` violations instead of 0 (and skips the log fallback). */
+export function expectRemoteFsViolations(app: ElectronApplication, count: number): void {
+  expectedViolations.set(app, count);
+}
 
 /** Soft-asserts `remoteFsViolations() === 0` (soft, so a teardown in a
  * `finally` never masks the test's own failure). When the app is already gone
@@ -239,10 +246,12 @@ async function assertNoRemoteFsViolations(app: ElectronApplication, logFile: str
   } catch {
     count = null;
   }
+  const expected = expectedViolations.get(app) ?? 0;
   if (count !== null) {
-    expect.soft(count, 'remoteFsViolations() at teardown').toBe(0);
+    expect.soft(count, 'remoteFsViolations() at teardown').toBe(expected);
     return;
   }
+  if (expected !== 0) return;
   try {
     const ops = readFileSync(logFile, 'utf8')
       .split('\n')

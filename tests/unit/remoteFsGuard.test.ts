@@ -108,6 +108,14 @@ describe('remoteFsGuard', () => {
     expect(isRemoteFsPath('C:\\Users\\u\\wsl.localhost', [])).toBe(false);
   });
 
+  it('a path without a leading separator only matches an extra root', () => {
+    expect(isRemoteFsPath('wsl.localhost\\D\\x', [])).toBe(false);
+    expect(isRemoteFsPath('C:\\wsl.localhost\\D', [])).toBe(false);
+    const extra = join(tmp, 'unc-root');
+    expect(isRemoteFsPath(join(extra, 'x'), [extra])).toBe(true);
+    expect(isRemoteFsPath(join(extra, 'x'), [])).toBe(false);
+  });
+
   it('uninstall restores the originals', () => {
     installRemoteFsGuard({ throwOnViolation: true, extraPrefixes: [] });
     uninstallRemoteFsGuard();
