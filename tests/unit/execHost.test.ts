@@ -570,8 +570,24 @@ describe('ssh host kind', () => {
   const hasSh = spawnSync('sh', ['-c', 'command -v base64 >/dev/null'], { windowsHide: true }).status === 0;
   // A failed run on a platform we can't reproduce on (macOS CI: bash 3.2 as sh,
   // BSD base64) must say what the shell did, not just that the output differed.
+  // Whether fd 3 (the script's saved stdin) survives `exec sh <flags>` — the
+  // login shell is where macOS CI lost it (`3: Bad file descriptor`).
+  const fdProbe = (): string =>
+    ['-c', '-ic', '-lc', '-ilc']
+      .map((flags) => {
+        const p = spawnSync(
+          'sh',
+          ['-c', `exec 3<&0 </dev/null; exec sh ${flags} 'if true <&3; then echo open; else echo closed; fi' 2>&1`],
+          { input: 'x\n', encoding: 'utf8', windowsHide: true, timeout: 5000 },
+        );
+        return `${flags}=${p.stdout.trim().replace(/\n/g, ' / ')}`;
+      })
+      .join(' ');
+  const shVersion = (): string =>
+    spawnSync('sh', ['-c', 'echo "${BASH_VERSION:-not-bash} $(command -v sh)"'], { encoding: 'utf8', windowsHide: true }).stdout.trim();
   const runReport = (r: { status: number | null; stdout: string; stderr: string }): string =>
-    `sh exited ${r.status}; stdout ${JSON.stringify(r.stdout)}; stderr ${JSON.stringify(r.stderr)}`;
+    `sh exited ${r.status}; stdout ${JSON.stringify(r.stdout)}; stderr ${JSON.stringify(r.stderr)}; ` +
+    `sh=${shVersion()}; fd3 after exec sh: ${fdProbe()}`;
   it.skipIf(!hasSh)('SSH_RUN_STDIN_SCRIPT: real sh reads the env line, leaves the rest of stdin to the CLI', () => {
     const env = { TOKEN: 's3cr3t', B: "it's $(x) \\ \"q\"" };
     const r = spawnSync(
