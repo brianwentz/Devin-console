@@ -262,8 +262,9 @@ export class ClaudeUsageService {
     }
   }
 
+  /** Local host only — WSL credentials arrive over the helper (`wslAccount`). */
   private async credsForHost(host: ExecHost): Promise<Omit<HostCreds, 'email' | 'organization'> | null> {
-    const file = join(hosts().configDir(host), '.credentials.json');
+    const file = join(hosts().localConfigDir(), '.credentials.json');
     try {
       const parsed = JSON.parse(await readFile(file, 'utf8')) as {
         claudeAiOauth?: { accessToken?: string; expiresAt?: number; subscriptionType?: string };
@@ -286,7 +287,7 @@ export class ClaudeUsageService {
    * through the helper). */
   private accountFileFor(host: ExecHost): string {
     const env = testMode ? (process.env.AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE?.trim() ?? '') : '';
-    if (!testMode || !env) return join(dirname(hosts().configDir(host)), '.claude.json');
+    if (!testMode || !env) return join(dirname(hosts().localConfigDir()), '.claude.json');
     let fallback: string | null = null;
     for (const entry of env.split(';')) {
       const part = entry.trim();
@@ -298,7 +299,7 @@ export class ClaudeUsageService {
         fallback = part;
       }
     }
-    return fallback ?? join(dirname(hosts().configDir(host)), '.claude.json');
+    return fallback ?? join(dirname(hosts().localConfigDir()), '.claude.json');
   }
 
   private async accountForHost(host: ExecHost): Promise<{ email: string | null; organization: string | null }> {
@@ -419,7 +420,9 @@ export class ClaudeUsageService {
         }
         continue;
       }
-      const file = join(hosts().configDir(member.host), '.usage-cache');
+      // A remote member's cache only ever arrives over its helper (above).
+      if (isWslHost(member.host)) continue;
+      const file = join(hosts().localConfigDir(), '.usage-cache');
       try {
         const stat = await statFile(file);
         if (!best || stat.mtimeMs > best.at) {
@@ -686,9 +689,7 @@ export class ClaudeUsageService {
     let files = 0;
     let skipped = 0;
     try {
-      // configDir() answers from the captured local value, so a concurrent
-      // withConfigDir swap (SDK store call) can't be observed. The local
-      // walk is raced against HOST_FS_BUDGET_MS and lands in skippedHosts on
+      // The local walk is raced against HOST_FS_BUDGET_MS and lands in skippedHosts on
       // timeout. WSL hosts are scanned inside the distro (`usage.scan` over
       // the helper channel, 60 s timeout); its per-file cache lives in the
       // helper, so nothing of theirs enters this.cache.files.
@@ -707,7 +708,7 @@ export class ClaudeUsageService {
         }),
       );
       const collect = async (host: ExecHost): Promise<{ host: ExecHost; path: string; key: string }[]> => {
-        const dir = join(hosts().configDir(host), 'projects');
+        const dir = join(hosts().localConfigDir(), 'projects');
         const found: { host: ExecHost; path: string; key: string }[] = [];
         for await (const path of this.walkJsonl(dir)) {
           found.push({ host, path, key: `${host.id}:${path.slice(dir.length)}` });

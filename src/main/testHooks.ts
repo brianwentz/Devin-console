@@ -44,6 +44,7 @@ import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 import { hosts } from './hosts';
+import { remoteFsViolationCount } from './remoteFsGuard';
 
 export function registerTestHooks(): void {
   if (!testMode) return;
@@ -131,18 +132,9 @@ export function registerTestHooks(): void {
       // Helper channel: kill the live child (reconnect path) / lifecycle snapshot.
       hostHelperKill: (id: string) => hosts().killHelper(id),
       hostChannelState: (id: string) => hosts().channelInfo(id),
-      // Holds a `withConfigDir` swap open for `ms` so a spec can race it
-      // against readers of `configDir()` (the usage scanner); resolves to the
-      // env value seen mid-swap vs the registry's answer for the local host.
-      withConfigDirHold: async (id: string, ms: number) => {
-        const host = hosts().hostById(id);
-        if (!host) throw new Error(`unknown host ${id}`);
-        return hosts().withConfigDir(host, async () => {
-          const envDuring = process.env.CLAUDE_CONFIG_DIR ?? null;
-          await new Promise((resolve) => setTimeout(resolve, ms));
-          return { envDuring, localDuring: hosts().localConfigDir() };
-        });
-      },
+      // App-originated fs calls on a WSL path seen by the guard (launchApp
+      // teardown asserts 0).
+      remoteFsViolations: () => remoteFsViolationCount(),
       saveCredential: (credential: { origin: string; username: string; password: string }) =>
         state.credentials?.add(credential) ?? null,
       listCredentials: () => state.credentials?.list() ?? [],

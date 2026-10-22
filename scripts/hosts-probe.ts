@@ -16,9 +16,10 @@
 // (usage-scan `wslFiles` max; null on builds that do not emit it) and, per distro,
 // `helpers[<host>]`: helper deploy ms (host-helper-deploy), spawn→hello ms
 // (host-helper starting→ready timestamps), store.list ms (claude-store-list) and
-// the claude-patch count — all read from the events the app logs.
+// the claude-patch count, plus `remoteFsViolations` / `remoteFsViolationOps` (remote-fs-violation
+// events; must be 0) — all read from the events the app logs.
 // `--label <name>` (default 'run') writes soak[label] and keeps other labels; the
-// reduced log (host-exec/claude-list/usage-scan/host-helper*/claude-store-list/claude-patch; counts, enums, ms only) is
+// reduced log (host-exec/claude-list/usage-scan/host-helper*/claude-store-list/claude-patch/remote-fs-violation; counts, enums, ms only) is
 // docs/evidence/hosts-probe-soak-<label>.jsonl. The app runs with
 // AGENT_WORKSPACE_SKIP_HOOKS_INSTALL=1 so the real settings.json files are never written.
 // Copying a live leveldb WAL (*.log) while the installed app runs can capture a torn tail, which leveldb tolerates.

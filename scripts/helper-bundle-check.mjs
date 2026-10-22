@@ -2,6 +2,8 @@
 // that runs under plain Node 18/20/24 against a temp copy of tests/fixtures/claude-home.
 // Each runner that passes also drives the real built helper (out/helper, so `npm run build` first) over NDJSON stdio.
 // Node majors other than the running one are fetched with `npx -y node@<major>`; a failed download is reported as skipped.
+// HELPER_CHECK_NODE18 / HELPER_CHECK_NODE20 (paths to node executables, e.g. from actions/setup-node in CI) replace the
+// npx download for that major; a runtime whose major doesn't match its variable fails the check.
 import { build } from 'esbuild'
 import { spawnSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -112,7 +114,18 @@ try {
   }
 
   const runners = [{ label: `node${process.versions.node.split('.')[0]}(local)`, cmd: process.execPath, pre: [] }]
-  for (const m of NODE_MAJORS) runners.push({ label: `node${m}`, cmd: 'npx', pre: ['-y', `node@${m}`] })
+  for (const m of NODE_MAJORS) {
+    const preinstalled = process.env[`HELPER_CHECK_NODE${m}`]?.trim()
+    if (!preinstalled) { runners.push({ label: `node${m}`, cmd: 'npx', pre: ['-y', `node@${m}`] }); continue }
+    const v = run(preinstalled, ['-p', 'process.versions.node'])
+    const major = Number(v.stdout.trim().split('.')[0])
+    if (v.code !== 0 || major !== m) {
+      failed = true
+      console.error(`HELPER_CHECK_NODE${m}: expected a Node ${m} executable, got exit ${v.code} version '${v.stdout.trim()}'`)
+      continue
+    }
+    runners.push({ label: `node${m}(${v.stdout.trim()})`, cmd: preinstalled, pre: [] })
+  }
   for (const r of runners) {
     const home = join(work, `home-${r.label.replace(/\W/g, '')}`)
     mkdirSync(home)

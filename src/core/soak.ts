@@ -28,6 +28,9 @@ export type SoakSummary = {
   wslUsageScanFiles: number | null;
   /** Per WSL host: the helper channel's start-up and store timings. */
   helpers: Record<string, HelperTimings>;
+  /** `remote-fs-violation` events (the guard logs once per op per run) — must be 0. */
+  remoteFsViolations: number;
+  remoteFsViolationOps: Record<string, number>;
 };
 
 export type HelperTimings = {
@@ -84,10 +87,11 @@ const REDUCED_EVENTS = [
   'host-helper-deploy',
   'claude-store-list',
   'claude-patch',
+  'remote-fs-violation',
 ];
 
 export function reduceEventLog(text: string): string {
-  const keep = ['kind', 'source', 'host', 'count', 'files', 'wslFiles', 'ms', 'state', 'reason', 'ok', 'updated', 'removed'];
+  const keep = ['kind', 'source', 'host', 'count', 'files', 'wslFiles', 'ms', 'state', 'reason', 'ok', 'updated', 'removed', 'op'];
   const out: string[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (!line.startsWith('{')) continue;
@@ -125,6 +129,8 @@ export function summarizeSoak(
   let scanFilesMax = 0;
   let wslFilesMax: number | null = null;
   const helpers: Record<string, HelperTimings> = {};
+  const violationOps: Record<string, number> = {};
+  let violations = 0;
   const spawnAt = new Map<string, number>();
   const timingsFor = (host: unknown): HelperTimings | null => {
     if (typeof host !== 'string') return null;
@@ -133,6 +139,12 @@ export function summarizeSoak(
   };
   for (const e of events) {
     const post = e.ts >= graceEnd;
+    if (e.event === 'remote-fs-violation') {
+      const op = typeof e.detail.op === 'string' ? e.detail.op : 'unknown';
+      violationOps[op] = (violationOps[op] ?? 0) + 1;
+      violations += 1;
+      continue;
+    }
     if (e.event === 'host-helper') {
       const t = timingsFor(e.detail.host);
       if (!t) continue;
@@ -203,5 +215,7 @@ export function summarizeSoak(
     usageScanFilesMax: scanFilesMax,
     wslUsageScanFiles: wslFilesMax,
     helpers,
+    remoteFsViolations: violations,
+    remoteFsViolationOps: violationOps,
   };
 }

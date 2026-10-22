@@ -44,8 +44,7 @@ import { publicChatState } from './chatState';
 import { hosts } from '../hosts';
 
 export function setupClaude(): ClaudeSessions {
-  // Captured-at-startup local Claude home — never the live env var, which
-  // `withConfigDir` swaps while a WSL store call runs.
+  // Captured-at-startup local Claude home (app code never reads the env var).
   const configDir = hosts().localConfigDir();
   const sessions = setupClaudeSessions({ configDir, userData: app.getPath('userData') });
   sessions.start();

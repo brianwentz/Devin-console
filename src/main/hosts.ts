@@ -1,7 +1,7 @@
 // Execution host registry (main): enumerates `wsl.exe` distros into ExecHost
 // records, probes each enabled host once per app run (home/shell/env capture/
 // CLIs/hook reachability), and hands out spawn/pty/exec specs shaped by
-// core/execHost. `withConfigDir` serialises SDK store calls across hosts.
+// core/execHost. Remote hosts' files are reached only over the helper channel.
 // Never logs env values or resolved paths.
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -71,7 +71,6 @@ function enumFreshMs(): number {
   const override = testMode ? Number(process.env.AGENT_WORKSPACE_TEST_ENUM_FRESH_MS) : NaN;
   return Number.isFinite(override) && override > 0 ? override : ENUM_FRESH_MS;
 }
-const ENV_CACHE_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_MARKER = '__DW_ENV__';
 const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
@@ -164,12 +163,9 @@ export class HostsRegistry {
   private lastPublished: HostStatus[] | null = null;
   private enumWaiters: Array<() => void> = [];
   private entries = new Map<HostId, WslEntry>();
-  private configMutex: Promise<unknown> = Promise.resolve();
   private errorParts = new Map<string, Partial<Record<HostErrorPart, string>>>();
-  /** The local Claude home, captured once at construction. `withConfigDir`
-   * rewrites `process.env.CLAUDE_CONFIG_DIR` for the SDK while a store call
-   * runs, so reading the env var live would hand a WSL store to any caller
-   * that asks for the local host mid-swap (the usage scanner did). */
+  /** The local Claude home, captured once at construction (ux3 S7: app code
+   * never reads `process.env.CLAUDE_CONFIG_DIR` live). */
   private readonly localConfigDirValue: string;
 
   constructor() {
@@ -1065,7 +1061,7 @@ export class HostsRegistry {
 
   // --- env + spawn -------------------------------------------------------------
 
-  /** The cached §1.4 environment; re-captures when stale (call before spawns).
+  /** The cached §1.4 environment (call before spawns).
    * `explicit` = a user action (chat prompt, agent start) that may boot a
    * Stopped distro; otherwise a Stopped distro gets its cached env only. */
   async shellEnv(
@@ -1084,13 +1080,15 @@ export class HostsRegistry {
       return (await this.fetchChannelEnv(entry)) ?? entry.env;
     }
     try {
-      if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
+      // Without a ready channel the probe's one -ilc capture is the env for
+      // the run; it is never re-captured on a timer (`recheckEnv` is the
+      // explicit user refresh). envAt > 0 also keeps the probe's own execOn
+      // from waiting on itself.
+      if (entry.envAt > 0) return entry.env;
       if (!entry.probed && !entry.probing) await this.probe(entry);
       else if (entry.probing) await entry.probing;
-      // The escape hatch: plain WSL environment, never a re-capture.
+      // The escape hatch: plain WSL environment, never a capture.
       if (this.overrides(host.id).envCaptureDisabled === true) return null;
-      if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
-      await this.captureEnv(entry, entry.status.shell ?? '/bin/bash');
       return entry.env;
     } finally {
       // An explicit start just booted a Stopped distro: re-read the table so
@@ -1253,35 +1251,10 @@ export class HostsRegistry {
     }
   }
 
-  /** The local host's Claude home as captured at startup — never the value a
-   * `withConfigDir` swap has temporarily placed in `process.env`. */
+  /** The local host's Claude home, captured at construction. A remote host's
+   * Claude home is only ever reached through its helper channel. */
   localConfigDir(): string {
     return this.localConfigDirValue;
-  }
-
-  configDir(host: ExecHost): string {
-    if (!isWslHost(host)) return this.localConfigDirValue;
-    const home = this.entries.get(host.id)?.host.home ?? this.overrides(host.id).home ?? null;
-    return this.windowsPath(host, `${home ?? ''}/.claude`);
-  }
-
-  /** Serialised `CLAUDE_CONFIG_DIR` swap around an SDK store call (§1.2). The
-   * swap is only ever observable through `process.env` (the SDK reads it);
-   * `configDir()` keeps answering from the captured local value. */
-  withConfigDir<T>(host: ExecHost, fn: () => Promise<T>): Promise<T> {
-    const dir = this.configDir(host);
-    const run = this.configMutex.then(async () => {
-      const previous = process.env.CLAUDE_CONFIG_DIR;
-      process.env.CLAUDE_CONFIG_DIR = dir;
-      try {
-        return await fn();
-      } finally {
-        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-        else process.env.CLAUDE_CONFIG_DIR = previous;
-      }
-    });
-    this.configMutex = run.catch(() => undefined);
-    return run;
   }
 
   // --- membership --------------------------------------------------------------

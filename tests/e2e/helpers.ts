@@ -209,7 +209,48 @@ export async function launchApp(
         `see scripts/ci-display.ps1`,
     );
   }
+  // Teardown guard (spec §3.3): every close path — closeApp or a spec's own
+  // app.close() — asserts the app made no fs call on a WSL path.
+  launchedLogs.set(app, logFile);
+  const close = app.close.bind(app);
+  app.close = async () => {
+    await assertNoRemoteFsViolations(app, logFile);
+    await close();
+  };
   return app;
+}
+
+const remoteFsChecked = new WeakSet<ElectronApplication>();
+const launchedLogs = new WeakMap<ElectronApplication, string>();
+
+/** Soft-asserts `remoteFsViolations() === 0` (soft, so a teardown in a
+ * `finally` never masks the test's own failure). When the app is already gone
+ * the hook is unreachable and the event log is checked instead — the guard
+ * logs `remote-fs-violation` in test mode too. Runs once per app. */
+async function assertNoRemoteFsViolations(app: ElectronApplication, logFile: string): Promise<void> {
+  if (remoteFsChecked.has(app)) return;
+  remoteFsChecked.add(app);
+  let count: number | null = null;
+  try {
+    count = await Promise.race([
+      app.evaluate(() => (globalThis as any).__agentworkspace.remoteFsViolations() as number),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+    ]);
+  } catch {
+    count = null;
+  }
+  if (count !== null) {
+    expect.soft(count, 'remoteFsViolations() at teardown').toBe(0);
+    return;
+  }
+  try {
+    const ops = readFileSync(logFile, 'utf8')
+      .split('\n')
+      .filter((line) => line.includes('"remote-fs-violation"'));
+    expect.soft(ops, 'remote-fs-violation events at teardown').toEqual([]);
+  } catch {
+    // no log yet — nothing to check
+  }
 }
 
 export async function state(app: ElectronApplication): Promise<PublicState> {
@@ -400,6 +441,9 @@ export async function openTab(app: ElectronApplication, url: string): Promise<st
 // throw synchronously when the connection is already half-closed, so each is
 // individually wrapped.
 export async function closeApp(app: ElectronApplication): Promise<void> {
+  // Before quit: the hook is unreachable once the app starts shutting down.
+  const logFile = launchedLogs.get(app);
+  if (logFile) await assertNoRemoteFsViolations(app, logFile);
   try {
     await Promise.race([
       app.evaluate(({ app: electronApp }) => electronApp.quit()),

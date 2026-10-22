@@ -11,10 +11,10 @@
 
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import type { ClaudeStoreSession } from '../../core/claudeRegistry';
 import { STORE_MAX_PAGES, STORE_MESSAGES_PAGE, pageAll } from '../../core/hostRpc';
-import { isWslHost, LOCAL_HOST, type ExecHost, type HostId } from '../../core/execHost';
+import { isWslHost, type ExecHost, type HostId } from '../../core/execHost';
 import { log } from '../log';
 import { hosts } from '../hosts';
 import { HostRpcError, type HostChannel } from '../hostChannel';
@@ -100,43 +100,41 @@ export class LocalBackend implements StoreBackend {
     return join(this.configDir, 'projects');
   }
 
-  private run<T>(fn: () => Promise<T>): Promise<T> {
-    return hosts().withConfigDir(LOCAL_HOST, fn);
-  }
-
+  // SDK calls read the local Claude home from the process env, which the app
+  // never rewrites — remote stores are reached only over the helper channel.
   async list(): Promise<ClaudeStoreSession[]> {
     const sdk = await loadSdk();
-    return storeRows(await this.run(() => sdk.listSessions({ includeProgrammatic: true })), 'local');
+    return storeRows(await sdk.listSessions({ includeProgrammatic: true }), 'local');
   }
 
   async rename(id: string, title: string): Promise<void> {
     const sdk = await loadSdk();
-    await this.run(() => sdk.renameSession(id, title));
+    await sdk.renameSession(id, title);
   }
 
   async fork(id: string): Promise<string> {
     const sdk = await loadSdk();
-    return (await this.run(() => sdk.forkSession(id))).sessionId;
+    return (await sdk.forkSession(id)).sessionId;
   }
 
   async delete(id: string): Promise<void> {
     const sdk = await loadSdk();
-    await this.run(() => sdk.deleteSession(id));
+    await sdk.deleteSession(id);
   }
 
   async listSubagents(id: string): Promise<string[]> {
     const sdk = await loadSdk();
-    return this.run(() => sdk.listSubagents(id));
+    return sdk.listSubagents(id);
   }
 
   async messages(id: string): Promise<unknown[]> {
     const sdk = await loadSdk();
-    return (await this.run(() => sdk.getSessionMessages(id))) as unknown[];
+    return (await sdk.getSessionMessages(id)) as unknown[];
   }
 
   async subagentMessages(id: string, agentId: string): Promise<unknown[]> {
     const sdk = await loadSdk();
-    return (await this.run(() => sdk.getSubagentMessages(id, agentId))) as unknown[];
+    return (await sdk.getSubagentMessages(id, agentId)) as unknown[];
   }
 
   // The SDK exposes no transcript-path API: <configDir>/projects/<encoded cwd>/
@@ -320,9 +318,12 @@ export class ChannelBackend implements StoreBackend {
     if (path === null || !isWslHost(this.host)) return null;
     if (path.startsWith('/')) return hosts().windowsPath(this.host, path);
     // A helper on a non-POSIX node (the e2e fake runs it on Windows) reports a
-    // native path; rebuild it under the host's config dir from `rel`.
+    // native path; rebuild the distro path from `rel` under the probed home.
+    // The result is only handed to Explorer (reveal), never read by the app.
     const rel = typeof result?.rel === 'string' ? result.rel : null;
-    return rel ? join(hosts().configDir(this.host), 'projects', ...rel.split('/')) : null;
+    const host = hosts().hostById(this.host.id) ?? this.host;
+    const home = isWslHost(host) ? host.home : null;
+    return rel && home ? hosts().windowsPath(host, posix.join(home, '.claude', 'projects', rel)) : null;
   }
 
   watch(onChange: (ev: StoreChange) => void): () => void {

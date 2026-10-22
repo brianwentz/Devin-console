@@ -30,6 +30,25 @@ jobs:
       - run: npm run lint
       - run: npm run test:unit
       - run: npm run build
+
+      # helper:check runs the in-distro helper under the Node 18 floor and Node 20.
+      # Install both from the toolcache (npx -y node@<major> downloads are flaky),
+      # hand their paths over via HELPER_CHECK_NODE18/20, then put Node 24 back
+      # first on PATH for every remaining step.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 18
+      - run: '"HELPER_CHECK_NODE18=$((Get-Command node).Source)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8'
+        shell: pwsh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+      - run: '"HELPER_CHECK_NODE20=$((Get-Command node).Source)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8'
+        shell: pwsh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node -e "if (process.versions.node.split('.')[0] !== '24') process.exit(1)"
       - run: npm run helper:check
 
       # Runner display is 1024x768; the 1400x900 test window needs more room.

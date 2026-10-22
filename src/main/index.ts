@@ -2,6 +2,8 @@
 // the legacy `devin-workspaces` profile into it, before ./log (imported
 // transitively below) resolves and mkdirs the dir.
 import { migration } from './bootstrap';
+// Second on purpose: the remote-fs guard is live before any other module loads.
+import './remoteFsGuardInstall';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
