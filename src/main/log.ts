@@ -61,12 +61,17 @@ export function sshAliasHash(alias: string): string {
   return createHash('sha256').update(alias.toLowerCase()).digest('hex').slice(0, 8);
 }
 
+// Every alias configured at any point this run: a removed host's in-flight
+// errors are still scrubbed (R40 / cb:review L2).
+const seenAliases = new Set<string>();
+
 function configuredAliases(): string[] {
   try {
-    return (state.settings?.current.hosts.ssh ?? []).map((h) => h.alias);
+    for (const h of state.settings?.current.hosts.ssh ?? []) seenAliases.add(h.alias);
   } catch {
-    return [];
+    // settings not loaded yet
   }
+  return [...seenAliases];
 }
 
 export function log(

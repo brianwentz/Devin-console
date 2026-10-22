@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeSettings, migrateSettingsRaw, parseSettingsFile } from '../../src/core/settings';
+import { mergeSettings, migrateSettingsRaw, parseSettingsFile, serializeSettingsFile } from '../../src/core/settings';
 import { SettingsPatchSchema, SettingsSchema, type Settings } from '../../src/shared/ipc';
 
 describe('parseSettingsFile', () => {
@@ -691,5 +691,45 @@ describe('ux3 S0 — sessionOrder + pickerFolder contracts', () => {
     expect(bad.dropped).toEqual(['local.defaultMode']);
     expect(bad.settings.local.defaultMode).toBeNull();
     expect(bad.settings.local.devinPath).toBe('D:\\devin.exe');
+  });
+});
+
+describe('R40 L1: hosts.ssh raw entries keep their form and unknown fields (ux3 S6)', () => {
+  it('a mixed-case entry keeps its raw alias + unknown fields; memory (enabled) wins; a later duplicate is kept raw', () => {
+    const raw = {
+      hosts: {
+        ssh: [
+          { alias: 'MyBox', enabled: true, future: 1 },
+          { alias: 'other', enabled: true },
+          { alias: 'MYBOX', enabled: false, dup: true },
+        ],
+      },
+    };
+    const { settings } = parseSettingsFile(raw);
+    expect(settings.hosts.ssh).toEqual([
+      { alias: 'mybox', enabled: true },
+      { alias: 'other', enabled: true },
+    ]);
+    const value = mergeSettings(settings, {
+      hosts: { ssh: [{ alias: 'mybox', enabled: false }, { alias: 'other', enabled: true }] },
+    });
+    const out = serializeSettingsFile(raw, value, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
+    expect(out.hosts.ssh).toEqual([
+      { alias: 'MyBox', enabled: false, future: 1 },
+      { alias: 'other', enabled: true },
+      { alias: 'MYBOX', enabled: false, dup: true },
+    ]);
+    // Reloading the written file gives the same in-memory list.
+    expect(parseSettingsFile(out).settings.hosts.ssh).toEqual([
+      { alias: 'mybox', enabled: false },
+      { alias: 'other', enabled: true },
+    ]);
+  });
+  it('removing a host drops its raw entry and its raw duplicates', () => {
+    const raw = { hosts: { ssh: [{ alias: 'Box', enabled: true, x: 1 }, { alias: 'BOX', enabled: true }, { alias: '-bad', enabled: true }] } };
+    const { settings } = parseSettingsFile(raw);
+    const value = { ...settings, hosts: { ...settings.hosts, ssh: [] } };
+    const out = serializeSettingsFile(raw, value, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
+    expect(out.hosts.ssh).toEqual([{ alias: '-bad', enabled: true }]);
   });
 });

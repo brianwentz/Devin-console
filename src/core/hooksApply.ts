@@ -135,7 +135,10 @@ export async function applyHooksToSettings(
   }
   try {
     const mode = secureFileMode((await io.mode?.(file).catch(() => null)) ?? null);
-    if ((await io.exists(file)) && !(await io.exists(backup))) await io.copy(file, backup, mode);
+    // The one-time backup preserves the user's file before we ADD our block.
+    // A removal never takes it (R40 b): the file it would copy carries our
+    // bearer token, and a backup is the one place it would then outlive us.
+    if (opts.enabled && (await io.exists(file)) && !(await io.exists(backup))) await io.copy(file, backup, mode);
     const tmp = `${file}.tmp`;
     await io.write(tmp, result.json, mode);
     await io.rename(tmp, file);

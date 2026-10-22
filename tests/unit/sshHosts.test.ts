@@ -194,3 +194,76 @@ describe('SshHosts hook forward', () => {
     expect(entry.forward.timer).not.toBeNull();
   });
 });
+
+describe('R40 self-review iteration 1', () => {
+  it('a: recheckEnv never probes a disabled host', async () => {
+    settings.current.hosts.ssh = [{ alias: 'box', enabled: false }];
+    const { hosts, priv } = make();
+    priv.entryFor('box');
+    void hosts.recheckEnv('ssh:box');
+    await flush();
+    expect(spawned).toHaveLength(0);
+  });
+
+  it('d: a timed-out run whose child never closes (ProxyJump holding stderr) resolves 2 s after exit', async () => {
+    const { priv } = make();
+    const entry = priv.entryFor('box');
+    let settled: { timedOut: boolean } | null = null;
+    void (priv.run(entry, sshProbeSpec('box', null, null), 'probe', { timeout: 1_000 }) as Promise<{ timedOut: boolean }>).then(
+      (r) => {
+        settled = r;
+      },
+    );
+    await flush();
+    const child = spawned[0]!.child;
+    vi.advanceTimersByTime(1_000);
+    expect(child.killed).toBe(true);
+    child.emit('exit', null, 'SIGKILL');
+    await flush();
+    expect(settled).toBeNull();
+    vi.advanceTimersByTime(2_000);
+    await flush();
+    expect(settled).toMatchObject({ timedOut: true });
+  });
+
+  it('L7: the challenge curl never goes through a remote proxy', async () => {
+    await withForward('ready');
+    vi.advanceTimersByTime(500);
+    await flush();
+    const curl = spawned.find((s) => s.args.some((a) => a.includes("'curl'")));
+    expect(curl).toBeDefined();
+    expect(curl!.args[curl!.args.length - 1]).toContain(`'--noproxy' '*'`);
+  });
+
+  it('L4: a probe in flight when the host is disabled stops — no env run, no host error parts', async () => {
+    const { priv, parts } = make();
+    const entry = priv.entryFor('box');
+    await priv.sshReady;
+    void priv.probe(entry);
+    await flush();
+    expect(spawned).toHaveLength(1);
+    settings.current.hosts.ssh = [{ alias: 'box', enabled: false }];
+    const child = spawned[0]!.child;
+    child.stdout.emit('data', Buffer.from('/home/u\n1000\n/bin/bash\n'));
+    child.emit('close', 0, null);
+    for (let i = 0; i < 5; i++) await flush();
+    expect(spawned).toHaveLength(1);
+    expect(parts.filter((p) => p.id === 'ssh:box')).toEqual([]);
+    expect(entry.status.state).not.toBe('error');
+  });
+
+  it('M2: refresh probes hosts concurrently (capped at 3)', async () => {
+    settings.current.hosts.ssh = [
+      { alias: 'box', enabled: true },
+      { alias: 'box2', enabled: true },
+      { alias: 'box3', enabled: true },
+      { alias: 'box4', enabled: true },
+    ];
+    const { hosts, priv } = make();
+    for (const alias of ['box', 'box2', 'box3', 'box4']) priv.entryFor(alias);
+    await priv.sshReady;
+    void hosts.refresh();
+    await flush();
+    expect(spawned).toHaveLength(3);
+  });
+});

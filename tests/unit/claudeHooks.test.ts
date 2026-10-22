@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHooksBlock,
   globalHooksEnabledFor,
+  claudePtyInjection,
   HOOK_EVENTS,
   HOOK_PATH_PREFIX,
   LEGACY_HOOK_PATH_PREFIXES,
@@ -270,5 +271,26 @@ describe('globalHooksEnabledFor (R39 #1)', () => {
     expect(globalHooksEnabledFor(true, 'wsl')).toBe(true);
     expect(globalHooksEnabledFor(false, 'local')).toBe(false);
     expect(globalHooksEnabledFor(false, 'wsl')).toBe(false);
+  });
+});
+
+describe('claudePtyInjection (R40 M1)', () => {
+  const hooks = { port: 51234, envVar: 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN', token: 'tok' };
+  it('attach gets nothing', () => {
+    expect(claudePtyInjection({ mode: 'attach', permissionMode: 'plan', hooks })).toBeNull();
+  });
+  it('with hooks: --settings (env-var auth) + the token env + --permission-mode', () => {
+    const r = claudePtyInjection({ mode: 'resume', permissionMode: 'plan', hooks })!;
+    expect(r.extraArgs).toEqual(['--settings', settingsFlagJson(51234, hooks.envVar), '--permission-mode', 'plan']);
+    expect(r.extraEnv).toEqual({ AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN: 'tok' });
+    expect(r.extraArgs.join(' ')).not.toContain('tok');
+  });
+  it('without hooks (unverified ssh forward / no listener): still --permission-mode, no --settings, no token', () => {
+    const r = claudePtyInjection({ mode: 'new', permissionMode: 'acceptEdits', hooks: null })!;
+    expect(r).toEqual({ extraArgs: ['--permission-mode', 'acceptEdits'], extraEnv: {} });
+  });
+  it('threads the hook addr into --settings', () => {
+    const r = claudePtyInjection({ mode: 'new', permissionMode: 'default', hooks: { ...hooks, addr: '172.20.0.1' } })!;
+    expect(r.extraArgs[1]).toContain('172.20.0.1:51234');
   });
 });

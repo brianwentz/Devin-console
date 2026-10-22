@@ -8,7 +8,7 @@ import {
   type ActivityState,
   type ClaudeHookEvent,
 } from '../../core/claudeActivity';
-import { buildHooksBlock, globalHooksEnabledFor, hooksApplyKey, settingsFlagJson } from '../../core/claudeHooks';
+import { buildHooksBlock, claudePtyInjection, globalHooksEnabledFor, hooksApplyKey } from '../../core/claudeHooks';
 import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
@@ -246,7 +246,8 @@ export class ClaudeHooks {
       if (!channel) throw new Error('helper channel is not ready');
       const r = await channel.request<{ installed?: unknown; changed?: unknown; error?: unknown } | null>(
         'hooks.apply',
-        { enabled, port: info.port, token: info.token, ...(addr ? { addr } : {}) },
+        // A removal never needs the token — don't send it (R40 f).
+        { enabled, port: info.port, token: enabled ? info.token : '', ...(addr ? { addr } : {}) },
       );
       changed = r?.changed === true;
       result = {
@@ -353,26 +354,21 @@ export class ClaudeHooks {
     });
   }
 
-  // Pty spawn injection for claude-kind terminals: `--settings` hook block +
-  // the bearer token env var. Mode `attach` gets none (the background agent
-  // already runs) and a failed listener means no injection at all.
+  // Pty spawn injection for claude-kind terminals (core claudePtyInjection):
+  // `--permission-mode` always (except attach); the `--settings` hook block +
+  // the bearer token env var only with a listener and `withHooks` (false for
+  // an ssh host whose forward is not verified — R40 M1).
   injection(
     mode: 'resume' | 'new' | 'attach',
     addr?: string,
+    withHooks = true,
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
-    if (mode === 'attach') return null;
-    const info = this.hookServer?.info();
-    if (!info) return null;
-    const envVar = 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN';
-    return {
-      extraArgs: [
-        '--settings',
-        settingsFlagJson(info.port, envVar, addr),
-        '--permission-mode',
-        state.settings?.current.claude.defaultPermissionMode ?? 'default',
-      ],
-      extraEnv: { [envVar]: info.token },
-    };
+    const info = withHooks ? this.hookServer?.info() : null;
+    return claudePtyInjection({
+      mode,
+      permissionMode: state.settings?.current.claude.defaultPermissionMode ?? 'default',
+      hooks: info ? { port: info.port, envVar: 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN', token: info.token, addr } : null,
+    });
   }
 
   info(): { port: number; token: string } | null {

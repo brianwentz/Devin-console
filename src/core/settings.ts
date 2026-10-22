@@ -248,12 +248,32 @@ export function serializeSettingsFile(
 // M4: hosts.ssh entries the schema dropped as malformed (sanitizeSshHostList)
 // are not in memory, so the identity overlay would delete them — append them
 // back raw (ux3 S6: a build never deletes data it does not understand).
+// R40 L1: memory holds canonical (lower-case) aliases, so a hand-edited
+// `MyBox` never matches the overlay's identity — each kept entry is laid over
+// its first raw entry with the same canonical alias (raw alias form and
+// unknown fields survive; memory's `enabled` wins), and a later raw duplicate
+// of a host that is still configured is appended back raw. A removed host's
+// raw entries (duplicates included) go with it.
 function keepMalformedSshEntries(raw: Record<string, unknown>, out: Record<string, unknown>): void {
   const rawSsh = isPlainObject(raw.hosts) ? raw.hosts.ssh : undefined;
   if (!Array.isArray(rawSsh) || !isPlainObject(out.hosts) || !Array.isArray(out.hosts.ssh)) return;
   const kept = out.hosts.ssh as unknown[];
-  const malformed = rawSsh.filter((entry) => canonicalSshHostEntry(entry) === null && !kept.includes(entry));
-  if (malformed.length) out.hosts = { ...out.hosts, ssh: [...kept, ...malformed] };
+  const canonical = rawSsh.map((entry) => canonicalSshHostEntry(entry)?.alias ?? null);
+  const used = new Set<number>();
+  const merged = kept.map((entry) => {
+    const alias = isPlainObject(entry) && typeof entry.alias === 'string' ? entry.alias : null;
+    const index = alias === null ? -1 : canonical.findIndex((c, i) => c === alias && !used.has(i));
+    if (index < 0) return entry;
+    used.add(index);
+    const rawEntry = rawSsh[index] as Record<string, unknown>;
+    return { ...rawEntry, ...(entry as Record<string, unknown>), alias: rawEntry.alias };
+  });
+  const keptAliases = new Set(kept.map((e) => (isPlainObject(e) ? e.alias : undefined)));
+  const extra = rawSsh.filter(
+    (entry, i) => !used.has(i) && !kept.includes(entry) && (canonical[i] === null || keptAliases.has(canonical[i])),
+  );
+  const changed = extra.length > 0 || merged.some((e, i) => JSON.stringify(e) !== JSON.stringify(kept[i]));
+  if (changed) out.hosts = { ...out.hosts, ssh: [...merged, ...extra] };
 }
 
 // exactOptionalPropertyTypes: spreading a Partial can write explicit

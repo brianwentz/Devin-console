@@ -99,3 +99,19 @@ describe('hooks settings file mode', () => {
     }
   });
 });
+
+describe('R40 b: the removal pass never copies a token-bearing settings.json into the backup', () => {
+  it('enabled:false strips our block without taking the one-time backup', async () => {
+    const seeded = memIo({});
+    await applyHooksToSettings(seeded.io, '/c/settings.json', { enabled: true, port: 50001, token: 'secret-token' });
+    const data = await seeded.io.read('/c/settings.json');
+    expect(data).toContain('secret-token');
+    const { io, copies, writes } = memIo({ '/c/settings.json': { data, mode: 0o600 } });
+    const r = await applyHooksToSettings(io, '/c/settings.json', { enabled: false, port: 1, token: '' });
+    expect(r).toMatchObject({ changed: true, error: null, installed: false });
+    expect(copies).toEqual([]);
+    expect(writes.map((w) => w.path)).toEqual(['/c/settings.json.tmp']);
+    expect(await io.exists('/c/settings.json.agent-workspace.bak')).toBe(false);
+    expect(await io.read('/c/settings.json')).not.toContain('secret-token');
+  });
+});

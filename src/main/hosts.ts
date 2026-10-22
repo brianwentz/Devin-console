@@ -940,7 +940,9 @@ export class HostsRegistry {
    * Stopped distro. Exit 86 (bundle gone) → deploy once and retry.
    */
   async hooksOffOnce(host: ExecHost): Promise<{ ok: boolean; error: string | null }> {
-    if (isSshHost(host)) return this.ssh.hooksOffOnce(host.id);
+    // ssh: never — the global block is never installed there and its removal
+    // only runs over a ready channel (R39 #1 / R40 f; the ssh one-shot was deleted).
+    if (isSshHost(host)) return { ok: false, error: 'not a wsl host' };
     if (!isWslHost(host) || this.quitting) return { ok: false, error: 'not a wsl host' };
     const entry = this.entries.get(host.id);
     const bundle = helperBundle();
@@ -1397,7 +1399,21 @@ export class HostsRegistry {
       this.publish();
       return;
     }
-    if (id === undefined) await this.ssh.refresh();
+    // ssh probes (10–60 s per unreachable host) run beside the WSL re-check,
+    // never ahead of it (R40 M2).
+    const sshDone = id === undefined ? this.ssh.refresh() : Promise.resolve();
+    try {
+      await this.refreshWsl(id);
+    } finally {
+      await Promise.allSettled([sshDone]);
+      // An explicit refresh always republishes, even when nothing changed, so
+      // consumers retry work that failed earlier (e.g. the hooks write).
+      this.lastPublished = null;
+      this.publish();
+    }
+  }
+
+  private async refreshWsl(id: string | undefined): Promise<void> {
     this.distros.invalidate();
     await this.distros.refreshFresh();
     const targets = id

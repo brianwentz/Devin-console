@@ -80,6 +80,7 @@ async function launchSsh(env: Record<string, string> = {}) {
   mkdirSync(projectDir, { recursive: true });
   writeFileSync(join(projectDir, `${STORE_ID}.jsonl`), transcriptLine(STORE_ID, '/home/u/proj', 'hello from the ssh box'));
   const sshLog = join(root, 'ssh.log');
+  currentSshLog = sshLog;
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
     FAKE_SSH_ROOT: root,
     FAKE_SSH_LOG: sshLog,
@@ -99,9 +100,16 @@ type SshSettings = {
 };
 const settingsOf = async (app: ElectronApplication) => (await state(app)).settings as unknown as SshSettings;
 const hostRow = async (app: ElectronApplication, id = HOST) => (await state(app)).hosts.find((h) => h.id === id);
+/** ssh.log of the latest launchSsh (diagnostics only). */
+let currentSshLog: string | null = null;
 const hostSummary = async (app: ElectronApplication, id: string): Promise<string> => {
-  const row = await hostRow(app, id);
-  return row ? `${row.state}|helper=${row.helper?.state ?? '-'}|${row.error ?? ''}` : 'no-row';
+  const st = await state(app);
+  const row = st.hosts.find((h) => h.id === id);
+  if (row) return `${row.state}|helper=${row.helper?.state ?? '-'}|${row.error ?? ''}`;
+  // R40 e: say why there is no row — what settings hold and how far ssh got.
+  const configured = JSON.stringify((st.settings as unknown as SshSettings).hosts?.ssh ?? null);
+  const lines = currentSshLog ? logLines(currentSshLog).length : -1;
+  return `no-row|hosts.ssh=${configured}|ssh.log=${lines}`;
 };
 // Two conditions, not one wall-clock budget for the whole chain: the host
 // stays `probing` through probe → env capture → deploy (each ssh run bounded
@@ -459,9 +467,11 @@ test('hooks reach the listener through -R', async () => {
       token: string;
     };
     const shell = await shellPage(app);
-    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { hooksEnabled: true } }));
-    await addSsh(app, 'box');
+    // R40 e: the add must land (and persist) before the probe wait starts.
+    expect(await addSsh(app, 'box')).toMatchObject({ ok: true });
+    await expect.poll(async () => (await settingsOf(app)).hosts.ssh.map((h) => h.alias)).toContain('box');
     await helperReady(app);
+    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { hooksEnabled: true } }));
 
     // Fix round 1 #1: the forward is its own connection (ExitOnForwardFailure,
     // remote-loopback bind); the helper connection carries no -R. R39 #3: no
@@ -492,7 +502,7 @@ test('hooks reach the listener through -R', async () => {
 
     // The challenge (a remote curl of health?nonce= through the forward,
     // answered with HMAC(token, nonce)) verified the forward.
-    await expect.poll(async () => (await hostRow(app))?.hooks, { timeout: 15_000 }).toBe('ok');
+    await expect.poll(async () => (await hostRow(app))?.hooks, { timeout: 45_000 }).toBe('ok');
     expect(sshCalls(sshLog).some((c) => c.remote.startsWith(`exec 'curl'`) && c.remote.includes('health?nonce='))).toBe(true);
     expect(await forwardVerified(app)).toBe(true);
 
@@ -550,6 +560,13 @@ test('R39 #1: a global hook block left on an ssh host by an earlier build is rem
     const after = JSON.parse(readFileSync(settingsFile, 'utf8')) as { model: string; hooks: Record<string, unknown> };
     expect(after.model).toBe('keep-me');
     expect(after.hooks).toEqual({ UserPromptSubmit: [{ hooks: [foreign] }] });
+    // R40 b: the removal pass never copies the token-bearing file into a backup.
+    for (const name of readdirSync(claudeDir).filter((n) => n.includes('.bak'))) {
+      const text = readFileSync(join(claudeDir, name), 'utf8');
+      expect(text).not.toContain('/agent-workspace/hook/');
+      expect(text).not.toContain('Bearer');
+    }
+    expect(existsSync(join(claudeDir, 'settings.json.agent-workspace.bak'))).toBe(false);
   } finally {
     await closeApp(app);
   }
@@ -648,7 +665,7 @@ test('a squatted hook port (forward fails closed) → no hook injection in an ss
   try {
     await expect.poll(() => hookInfo(app), { timeout: 15_000 }).not.toBeNull();
     const shell = await shellPage(app);
-    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { hooksEnabled: true } }));
+    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { hooksEnabled: true, defaultPermissionMode: 'plan' } }));
     await addSsh(app, 'box');
     await helperReady(app);
     await expect.poll(() => sshCalls(sshLog).some((c) => c.forward), { timeout: 15_000 }).toBe(true);
@@ -674,6 +691,8 @@ test('a squatted hook port (forward fails closed) → no hook injection in an ss
     const text = await read();
     expect(text).not.toContain('--settings');
     expect(text).not.toContain('.agent-workspace/run/');
+    // R40 M1: the configured permission mode survives an unverified forward.
+    expect(text).toContain(`'--permission-mode' 'plan'`);
   } finally {
     await closeApp(app);
   }

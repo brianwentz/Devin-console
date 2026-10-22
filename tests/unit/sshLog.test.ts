@@ -54,6 +54,38 @@ describe('scrubKnownAliases (R39 #6)', () => {
       'host ssh:#h-dev.example-1 down; devXexample-1 ok',
     );
   });
+  it('R40 c: never rewrites structural values (host ids, state/kind/op/source/reason enums)', () => {
+    const detail = {
+      host: 'wsl:Ubuntu',
+      hosts: ['local', 'wsl:Ubuntu'],
+      state: 'ready',
+      kind: 'probe',
+      op: 'local',
+      source: 'ready',
+      reason: 'local',
+      nested: { host: 'local' },
+    };
+    expect(scrubKnownAliases(detail, ['ubuntu', 'local', 'ready', 'probe'], hash)).toBe(detail);
+  });
+  it('R40 c: a structural key whose value is free text is still not rewritten; other keys are', () => {
+    expect(scrubKnownAliases({ reason: 'ready', message: 'ready to go' }, ['ready'], hash)).toEqual({
+      reason: 'ready',
+      message: 'ssh:#h-ready to go',
+    });
+  });
+  it('R40 c: wsl:Ubuntu inside free text survives an alias "ubuntu"; a bare Ubuntu word does not', () => {
+    expect(scrubKnownAliases('helper on wsl:Ubuntu; ssh to ubuntu failed', ['ubuntu'], hash)).toBe(
+      'helper on wsl:Ubuntu; ssh to ssh:#h-ubuntu failed',
+    );
+  });
+  it('R40 c: ssh:<alias> inside free text becomes ssh:#<hash> (no ssh:ssh:)', () => {
+    expect(scrubKnownAliases('channel ssh:box died', ['box'], hash)).toBe('channel ssh:#h-box died');
+  });
+  it('R40 c: an alias as the first label of a hostname is hashed', () => {
+    expect(scrubKnownAliases('connect to box.example.com port 22: refused', ['box'], hash)).toBe(
+      'connect to ssh:#h-box.example.com port 22: refused',
+    );
+  });
   it('is a no-op without configured aliases', () => {
     const detail = { m: 'box' };
     expect(scrubKnownAliases(detail, [], hash)).toBe(detail);

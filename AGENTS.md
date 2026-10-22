@@ -586,9 +586,11 @@ variable that selects it.
   non-cancelled finish → blocked, body = error ≤200) — never `cancelled`, and entries respect `notifications.collect` + the same `notifications.kinds`
   toggles. Claude entries are `source:'claude'`/`ownerUserId:null` keyed `session:claude:<id>` (`pruneForeign` keeps them); `openNotification` on a
   claude entry → `surface='claude'` + `claudeSessions().open(id)`, prUrl → tab in `claude:<id>` scope.
-- Pty injection: `sessions.hookInjection(id,mode)` → `hooks.ts#injection` (null on attach or when the listener failed) → `TerminalOpenOptions` claude variant
-  `extraArgs=['--settings', settingsFlagJson(port,'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN')]` + `extraEnv` token, filled in `terminalIpc.ts` (fake pty echoes
-  `env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set`); it also adds `--permission-mode <claude.defaultPermissionMode>` (resume/new).
+- Pty injection: `sessions.hookInjection(id,mode)` → `hooks.ts#injection` → pure `claudePtyInjection` (`core/claudeHooks.ts`; null only on attach) →
+  `TerminalOpenOptions` claude variant `extraArgs=['--settings', settingsFlagJson(port,'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN'), '--permission-mode',
+  <claude.defaultPermissionMode>]` + `extraEnv` token, filled in `terminalIpc.ts` (fake pty echoes `env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set`).
+  `--permission-mode` is always passed (resume/new); `--settings` + the token env are dropped when the listener failed or an ssh host's forward is
+  not verified (R40 M1).
 - Settings `claude.hooksEnabled` (default false; Settings → Notifications `#claudeHooksToggle`/`#claudeHooksStatus`/`#claudeHooksError`). Test hooks:
   `claudeHookInfo` ({port,token}), `claudeActivity`, `claudePostHook(event,body)`/`claudePostHookRaw(...,auth)`, `claudeHooksSettingsPath`.
 
@@ -637,12 +639,16 @@ variable that selects it.
     `curl -s -m 2 http://127.0.0.1:<p>/agent-workspace/hook/health?nonce=<n>` through the forward, and the body must equal
     HMAC-SHA256(token, "aw-forward-v1:" + nonce) (domain-separated, R36 #7; `src/main/claude/hookChallenge.ts`; the listener answers that route, the plain `health` route stays `{}` for the
     WSL probe). Until verified: `HostStatus.hooks` `unreachable` + the `hooks` host-error part (`FORWARD_FAILED_MESSAGE` /
-    `FORWARD_UNVERIFIED_MESSAGE`, shown in Settings `[data-host-errors]` and the Claude sidebar), `sessions.hookInjection` returns null for that
-    host's ptys (no `--settings`, no token) — `hosts().hookForwardVerified(id)`.
+    `FORWARD_UNVERIFIED_MESSAGE`, shown in Settings `[data-host-errors]` and the Claude sidebar), `sessions.hookInjection` drops `--settings` and the
+    token for that host's ptys (`--permission-mode` stays, R40 M1) — `hosts().hookForwardVerified(id)`. The challenge curl runs with
+    `--noproxy '*'` (R40 L7: a remote `http_proxy` must never see the loopback request).
   - Global hooks never go to an ssh host (R39 #1): `globalHooksEnabledFor(hooksEnabled, kind)` (`core/claudeHooks.ts`) is false for `ssh`, so
     `hooks.ts` only ever runs the removal (`hooks.apply {enabled:false}`) there, once per run (`lastApplied`) when the channel is ready — a block
     an earlier build wrote (literal token, deterministic loopback port any co-tenant could bind, outliving the app/forward/host) is stripped. ssh
-    sessions report only through app-launched ptys (`--settings` + env-var token, gated on the verified forward).
+    sessions report only through app-launched ptys (`--settings` + env-var token, gated on the verified forward). The removal sends
+    `token: ''` (R40 f) and never takes the one-time backup (`core/hooksApply.ts`: the backup is only taken when installing — R40 b; a
+    removal would otherwise copy the token-bearing file into `settings.json.agent-workspace.bak`). The ssh `--apply-hooks-off` one-shot
+    (`SshHosts.hooksOffOnce`) is deleted: unreachable since ssh removal only runs over a ready channel.
   - Secrets off argv (fix round 1 #4): the captured login env is never replayed. A piped spawn is `sshSpawnSpec` = `exec /bin/sh -c
     SSH_RUN_STDIN_SCRIPT <body> <cwd> <shell> <cmd> <args…>`; `spawnOn` writes `sshEnvLine(cmd.env)` (base64 of `export K='v'` lines) as the
     first stdin line. The script first moves the real stdin to fd 3 and gives itself (and so the login shell's rc files) `/dev/null`
@@ -659,13 +665,21 @@ variable that selects it.
     restarts a backing-off forward; triggers: powerMonitor `resume` / `unlock-screen` (`hosts().recoverSsh`), window focus
     (`hosts().onWindowFocus`) — throttled to 1/min (`sshRecoveryDue`) — and an unthrottled 5-min timer
     (`AGENT_WORKSPACE_TEST_SSH_RECOVERY_MS`). Shell/node/helper failures stay until Re-check. A configured-but-disabled host is never
-  connected to (R39 #5): `SshHosts.spawnSpec`/`ptySpec` (`entryOrThrow`) and `hosts().execOn` throw `SshHostDisabledError`, `shellEnv` returns
-  null without probing. csh/tcsh login shells are refused (`UNSUPPORTED_SHELL_MESSAGE`, `#sshShellHint-<id>`; Overrides → Shell fixes it). Claude only: Devin Local
+  connected to (R39 #5): `SshHosts.spawnSpec`/`ptySpec` (`entryOrThrow`) and `hosts().execOn` throw `SshHostDisabledError`, `shellEnv` and
+  `recheckEnv` (R40 a) do nothing; a probe whose host is disabled/removed mid-flight stops after the current step without further runs or
+  host-error parts (`host-probe {reason:'abandoned'}`, `probed` stays false — R40 L4), and `deploy` refuses a disabled host. A timed-out
+  `SshHosts.run` resolves 2 s after `exit` when `close` never comes (a ProxyJump child holding stderr — R40 d). `hosts:refresh` runs the ssh
+  re-probes beside the WSL re-check (never ahead of it) and probes ssh hosts 3 at a time (R40 M2). csh/tcsh login shells are refused (`UNSUPPORTED_SHELL_MESSAGE`, `#sshShellHint-<id>`; Overrides → Shell fixes it). Claude only: Devin Local
   refuses `ssh://` workspaces; Reveal transcript / Reveal in Explorer / Open terminal here are hidden for ssh. Every ssh.exe run logs
   `host-ssh {aliasHash, op}` + `host-exec`; `log()` (`src/main/log.ts`, pure `core/sshLog.ts scrubSshAliases`) rewrites any `ssh:<alias>` /
   `ssh://<alias>` in a record to `ssh:#<sha256-8>`, and (R39 #6, `scrubKnownAliases`) every configured alias appearing as a whole word
-  (case-insensitive) in a string value at any depth — e.g. `ssh: Could not resolve hostname box` — the alias never reaches the event log. `hosts.ssh` (M4): `sanitizeSshHostList` lower-cases
-  aliases and drops only malformed entries / later duplicates; `serializeSettingsFile` appends the dropped raw entries back (ux3 S6). Claude's
+  (case-insensitive) in a string value at any depth — e.g. `ssh: Could not resolve hostname box`, `ssh:box`, the first label of
+  `box.example.com` — the alias never reaches the event log. R40 c: values of `host`/`state`/`kind`/`op`/`source`/`reason` (unless they start
+  with `ssh:`) and exact `local` / `wsl:<distro>` ids are never rewritten, and nothing preceded by `:`/`#` is (so `wsl:Ubuntu` survives an alias
+  `ubuntu`); aliases configured at any point this run stay in the scrub list after removal. `hosts.ssh` (M4): `sanitizeSshHostList` lower-cases
+  aliases and drops only malformed entries / later duplicates; `serializeSettingsFile` writes each kept entry over its first raw entry with the
+  same canonical alias (raw alias form + unknown fields survive, memory's `enabled` wins) and appends malformed raw entries and later raw
+  duplicates of a still-configured host back raw (ux3 S6, R40 L1); a removed host's raw entries go with it. Claude's
   `settings.json` (local `hooksInstall.ts` and the helper's `hooks.apply`, one io: `createSettingsFileIo` in `core/hooksApply.ts`) is written
   0600 — or a stricter existing mode (`secureFileMode`) — with no looser window (R36 #4): the tmp file and the one-time backup are created
   `O_EXCL` with that mode after removing a stale one, and an unchanged file that already carries our block is `chmod`ed once when group/other
@@ -903,7 +917,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `claude-store-list` | `{ host, count, ms }` — one full `store.list` over a WSL host's helper channel (the soak's per-distro list timing). |
 | `claude-patch` | `{ host, updated, removed }` — a `store.changed` delta applied to that host's rows without a list. |
 | `host-exec` | `{ host, kind: 'enum'\|'probe'\|'env'\|'exec'\|'spawn'\|'helper'\|'forward'\|'challenge' }` — one per `wsl.exe` / ssh.exe invocation (ssh: `forward` = the hook forward, `challenge` = its HMAC curl, R39 #10) (enumeration incl. the WSL-disabled lazy `-l -q` for Windows Terminal profiles, probe/CLI resolution/hook curl, env capture, `execOn`, `spawnOn`, pty spawn, each `ghSpec` use, each helper channel launch = `helper`; `claude agents` on a WSL host runs inside the helper and is not counted) so a soak can count them; ids and enums only. |
-| `host-ssh` | `{ aliasHash, op }` (P3) — `aliasHash` = sha256-8 of the canonical alias (the alias is never logged); `op` = `probe\|env\|deploy\|helper\|forward\|challenge\|hooks-off\|exec\|spawn\|pty` per ssh.exe invocation (plus `add`/`remove` from Settings). Every other record's `ssh:<alias>` / `ssh://<alias>` (e.g. `host-exec`/`host-helper` `host`) is written as `ssh:#<aliasHash>`. |
+| `host-ssh` | `{ aliasHash, op }` (P3) — `aliasHash` = sha256-8 of the canonical alias (the alias is never logged); `op` = `probe\|env\|deploy\|helper\|forward\|challenge\|exec\|spawn\|pty` per ssh.exe invocation (plus `add`/`remove` from Settings). Every other record's `ssh:<alias>` / `ssh://<alias>` (e.g. `host-exec`/`host-helper` `host`) is written as `ssh:#<aliasHash>`. |
 | `host-ssh-forward` | `{ host, state: 'starting'\|'verified'\|'unverified'\|'down', code?, failures?, attempts? }` — the ssh hook-forward connection (host id scrubbed to `ssh:#<hash>`). |
 | `host-probe` | `{ host, ok, ms, claude?, devin?, hooks?, reason?, failure? }` — one host probe; a failed ssh probe adds `failure: 'connection'\|'other'` (the recovery input), a refused csh/tcsh shell `reason: 'shell'`. |
 | `host-ssh-recover` | `{ trigger: 'resume'\|'unlock'\|'focus'\|'timer', count }` — ssh hosts retried after a connection-class failure (only logged when count > 0). |

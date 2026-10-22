@@ -38,36 +38,55 @@ export function scrubSshAliases<T>(value: T, hash: (alias: string) => string, de
   return (changed ? out : value) as T;
 }
 
-const regexCache = new Map<string, RegExp>();
+const regexCache = new Map<string, { prefixed: RegExp; bare: RegExp }>();
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 
-/** One case-insensitive whole-word matcher for the configured aliases (an alias
- * char on either side, or a `.` followed by one, is not a word boundary). */
-function knownAliasRe(aliases: readonly string[]): RegExp {
+/** Matchers for the configured aliases, case-insensitive: `ssh:<alias>` in
+ * free text, then the bare alias as a whole word. An alias char (or `:` / `#`)
+ * before it, or an alias char after it, is not a boundary; a following `.`
+ * is (the first label of `box.example.com` is the alias). */
+function knownAliasRes(aliases: readonly string[]): { prefixed: RegExp; bare: RegExp } {
   const key = aliases.join(' ');
-  let re = regexCache.get(key);
-  if (!re) {
+  let res = regexCache.get(key);
+  if (!res) {
     const alt = [...aliases].sort((a, b) => b.length - a.length).map(escapeRe).join('|');
-    re = new RegExp(`(?<![A-Za-z0-9._-])(${alt})(?![A-Za-z0-9_-])(?!\\.[A-Za-z0-9_-])`, 'gi');
+    res = {
+      prefixed: new RegExp(`(?<![A-Za-z0-9._-])ssh:(${alt})(?![A-Za-z0-9_-])`, 'gi'),
+      bare: new RegExp(`(?<![A-Za-z0-9._:#-])(${alt})(?![A-Za-z0-9_-])`, 'gi'),
+    };
     if (regexCache.size > 16) regexCache.clear();
-    regexCache.set(key, re);
+    regexCache.set(key, res);
   }
-  re.lastIndex = 0;
-  return re;
+  res.prefixed.lastIndex = 0;
+  res.bare.lastIndex = 0;
+  return res;
+}
+
+/** Detail keys whose values are enums / host ids the soak and tests key on —
+ * never rewritten unless they are an ssh id (R40 c). */
+const STRUCTURAL_KEYS = new Set(['host', 'state', 'kind', 'op', 'source', 'reason']);
+/** Exact host ids other than ssh: never rewritten anywhere. */
+const NON_SSH_HOST_ID = /^(local|wsl:\S+)$/;
+
+function scrubFreeText(value: string, aliases: readonly string[], hash: (alias: string) => string): string {
+  if (NON_SSH_HOST_ID.test(value)) return value;
+  const { prefixed, bare } = knownAliasRes(aliases);
+  const to = (alias: string): string => `ssh:#${hash(alias.toLowerCase())}`;
+  return value.replace(prefixed, (_m, alias: string) => to(alias)).replace(bare, (m: string) => to(m));
 }
 
 /**
- * Free-text leak guard (R39 #6): every configured alias appearing as a whole
- * word in a string VALUE at any depth (e.g. `ssh: Could not resolve hostname
- * box`) becomes `ssh:#<hash>`. Keys are left alone (host-id keys are handled
- * by scrubSshAliases). Returns `value` itself when nothing changed.
+ * Free-text leak guard (R39 #6, R40 c): every configured alias appearing as
+ * a whole word in a string VALUE at any depth (e.g. `ssh: Could not resolve
+ * hostname box`, `box.example.com`, `ssh:box`) becomes `ssh:#<hash>`. Keys,
+ * exact non-ssh host ids and the values of STRUCTURAL_KEYS are left alone.
+ * Returns `value` itself when nothing changed.
  */
 export function scrubKnownAliases<T>(value: T, aliases: readonly string[], hash: (alias: string) => string, depth = 0): T {
   if (aliases.length === 0) return value;
   if (typeof value === 'string') {
-    const re = knownAliasRe(aliases);
-    if (!re.test(value)) return value;
-    return value.replace(knownAliasRe(aliases), (m: string) => `ssh:#${hash(m.toLowerCase())}`) as T;
+    const next = scrubFreeText(value, aliases, hash);
+    return (next === value ? value : next) as T;
   }
   if (depth >= MAX_DEPTH || value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) {
@@ -82,7 +101,8 @@ export function scrubKnownAliases<T>(value: T, aliases: readonly string[], hash:
   let changed = false;
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    const next = scrubKnownAliases(item, aliases, hash, depth + 1);
+    const structural = STRUCTURAL_KEYS.has(key) && typeof item === 'string' && !item.startsWith('ssh:');
+    const next = structural ? item : scrubKnownAliases(item, aliases, hash, depth + 1);
     if (next !== item) changed = true;
     out[key] = next;
   }

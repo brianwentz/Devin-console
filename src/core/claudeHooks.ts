@@ -96,6 +96,28 @@ export function settingsFlagJson(port: number, envVar: string, addr?: string): s
   );
 }
 
+/**
+ * Spawn additions for a claude-kind pty. `attach` gets none (the background
+ * agent already runs). `--permission-mode` is always passed otherwise; the
+ * `--settings` hook block and the token env only with `hooks` — null when
+ * there is no listener or an ssh host's forward is not verified (R40 M1: an
+ * unverified forward must not cost the user their configured permission mode).
+ */
+export function claudePtyInjection(opts: {
+  mode: 'resume' | 'new' | 'attach';
+  permissionMode: string;
+  hooks: { port: number; envVar: string; token: string; addr?: string | undefined } | null;
+}): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
+  if (opts.mode === 'attach') return null;
+  const permission = ['--permission-mode', opts.permissionMode];
+  if (!opts.hooks) return { extraArgs: permission, extraEnv: {} };
+  const { port, envVar, token, addr } = opts.hooks;
+  return {
+    extraArgs: ['--settings', settingsFlagJson(port, envVar, addr), ...permission],
+    extraEnv: { [envVar]: token },
+  };
+}
+
 /** Identity of one host's hooks write: an unchanged key means settings.json is already in the desired state, so the UNC round-trip is skipped. */
 export function hooksApplyKey(hostId: string, enabled: boolean, block: unknown): string {
   return JSON.stringify([hostId, enabled, block]);

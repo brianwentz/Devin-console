@@ -31,7 +31,6 @@ import { homedir } from 'node:os';
 import {
   deriveHelperState,
   HELPER_DIR,
-  HELPER_MISSING_EXIT,
   parseHelperPresent,
   parseProbeOutput,
   parseSshEnvProbe,
@@ -72,7 +71,6 @@ export type SshOp =
   | 'env'
   | 'deploy'
   | 'helper'
-  | 'hooks-off'
   | 'forward'
   | 'challenge'
   | 'exec'
@@ -86,6 +84,10 @@ const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
 /** Hook-forward restart delays after consecutive failures. */
 const FORWARD_BACKOFF_MS = [10_000, 60_000, 300_000];
 const RECOVERY_INTERVAL_MS = 5 * 60_000;
+/** After a timeout kill: how long to wait for 'close' once the child exited. */
+const CLOSE_GRACE_MS = 2_000;
+/** Hosts probed at once by a refresh (each probe is its own handshakes). */
+const REFRESH_CONCURRENCY = 3;
 
 /** ssh.exe is resolved once per run, so a client installed later needs a restart. */
 export const SSH_NOT_FOUND_MESSAGE =
@@ -115,7 +117,7 @@ export class SshHostDisabledError extends Error {
 
 /** `host-exec` kind of a one-shot ssh run. */
 function runKind(op: SshOp): string {
-  if (op === 'deploy' || op === 'hooks-off') return 'exec';
+  if (op === 'deploy') return 'exec';
   if (op === 'env' || op === 'challenge') return op;
   return 'probe';
 }
@@ -235,9 +237,29 @@ export class SshHosts {
           }
           const out: Buffer[] = [];
           let timedOut = false;
+          let exited = false;
+          let exitCode: number | null = null;
+          let settled = false;
+          let grace: ReturnType<typeof setTimeout> | null = null;
+          const finish = (code: number | null): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (grace) clearTimeout(grace);
+            resolveRun({ stdout: Buffer.concat(out), code, timedOut });
+          };
+          // A killed ssh whose pipes are still held (a ProxyJump child keeping
+          // stderr open) may never emit 'close': after a timeout, 'exit' + a
+          // short grace is enough (R40 d).
+          const armGrace = (): void => {
+            if (!timedOut || !exited || grace) return;
+            grace = setTimeout(() => finish(exitCode), CLOSE_GRACE_MS);
+            grace.unref?.();
+          };
           const timer = setTimeout(() => {
             timedOut = true;
             child.kill('SIGKILL');
+            armGrace();
           }, opts.timeout ?? PROBE_TIMEOUT_MS);
           timer.unref?.();
           child.stdout!.on('data', (chunk: Buffer) => out.push(chunk));
@@ -245,14 +267,18 @@ export class SshHosts {
           child.stderr!.resume();
           child.once('error', (error) => {
             clearTimeout(timer);
+            if (grace) clearTimeout(grace);
+            settled = true;
             reject(error);
+          });
+          child.once('exit', (code) => {
+            exited = true;
+            exitCode = code;
+            armGrace();
           });
           // 'close', not 'exit' (R39 #2): stdout is fully drained by then —
           // `exit` can fire with the env / CLI-marker tail still buffered.
-          child.once('close', (code) => {
-            clearTimeout(timer);
-            resolveRun({ stdout: Buffer.concat(out), code, timedOut });
-          });
+          child.once('close', (code) => finish(code));
         }),
     );
   }
@@ -357,6 +383,14 @@ export class SshHosts {
     entry.status = { ...entry.status, state: 'probing' };
     const t0 = Date.now();
     const id = entry.host.id;
+    // Disabled / removed while a step was in flight (R40 L4): stop without
+    // further connections and without writing host error parts — an
+    // abandoned probe leaves `probed` false so re-enabling probes afresh.
+    const abandoned = (): boolean => this.entries.get(id) !== entry || !this.isEnabled(id);
+    const abandon = (): void => {
+      entry.probed = false;
+      log('host', 'host-probe', { detail: { host: id, ok: false, ms: Date.now() - t0, reason: 'abandoned' } });
+    };
     entry.probing = (async () => {
       const overrides = this.ctx.overrides(id);
       const bundle = this.ctx.bundle();
@@ -368,6 +402,10 @@ export class SshHosts {
         } catch (error) {
           entry.probeFailure = 'other';
           throw error;
+        }
+        if (abandoned()) {
+          abandon();
+          return;
         }
         entry.probeFailure = r.code === 0 && !r.timedOut ? null : sshFailureClass(r);
         if (r.timedOut) throw new Error('ssh probe timed out');
@@ -388,6 +426,10 @@ export class SshHosts {
           shell: overrides.shell ?? parsed.shell ?? '/bin/sh',
         };
       } catch (error) {
+        if (abandoned()) {
+          abandon();
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         entry.status = { ...entry.status, state: 'error', error: message.slice(0, 200), probedAt: new Date().toISOString() };
         entry.probed = true;
@@ -416,8 +458,18 @@ export class SshHosts {
         entry.status = { ...entry.status, shellEnv: null, node: null };
       } else {
         const tEnv = Date.now();
+        let r: SshRun | null = null;
         try {
-          const r = await this.run(entry, sshEnvSpec(entry.host.alias, shell), 'env');
+          r = await this.run(entry, sshEnvSpec(entry.host.alias, shell), 'env');
+        } catch {
+          r = null;
+        }
+        if (abandoned()) {
+          abandon();
+          return;
+        }
+        try {
+          if (!r) throw new Error('env run failed');
           const probe = parseSshEnvProbe(r.stdout);
           entry.env = probe.env;
           entry.status = {
@@ -446,6 +498,10 @@ export class SshHosts {
         this.ctx.setPart(id, 'cli', `claude ${version} (SDK targets ${sdkTarget})`);
       } else this.ctx.setPart(id, 'cli', null);
       const helper = entry.channel?.running ? null : await this.prepareHelper(entry, present);
+      if (abandoned()) {
+        abandon();
+        return;
+      }
       entry.status = {
         ...entry.status,
         state: 'ready',
@@ -479,7 +535,7 @@ export class SshHosts {
   private async deploy(entry: SshEntry): Promise<boolean> {
     const bundle = this.ctx.bundle();
     const home = entry.host.home;
-    if (!bundle || !home || this.ctx.quitting()) return false;
+    if (!bundle || !home || this.ctx.quitting() || !this.isEnabled(entry.host.id)) return false;
     const t0 = Date.now();
     let ok = false;
     let bytes = 0;
@@ -714,7 +770,16 @@ export class SshHosts {
       try {
         const r = await this.run(
           entry,
-          sshCommandSpec(entry.host.alias, ['curl', '-s', '-m', '2', `http://127.0.0.1:${fwd.port}${HOOK_HEALTH_PATH}?nonce=${nonce}`]),
+          // --noproxy: 127.0.0.1 must never go through a remote http_proxy (R40 L7).
+          sshCommandSpec(entry.host.alias, [
+            'curl',
+            '-s',
+            '--noproxy',
+            '*',
+            '-m',
+            '2',
+            `http://127.0.0.1:${fwd.port}${HOOK_HEALTH_PATH}?nonce=${nonce}`,
+          ]),
           'challenge',
         );
         if (stale()) return;
@@ -802,28 +867,6 @@ export class SshHosts {
     return this.entries.get(id)?.channel?.state === 'ready';
   }
 
-  /** Hooks opt-out with the channel down: one `--apply-hooks-off` run of the
-   * deployed helper over ssh; exit 86 → deploy once and retry. */
-  async hooksOffOnce(id: HostId): Promise<{ ok: boolean; error: string | null }> {
-    const entry = this.entries.get(id);
-    const bundle = this.ctx.bundle();
-    const home = entry?.host.home;
-    if (!entry || !bundle || !home || this.ctx.quitting()) return { ok: false, error: 'helper unavailable' };
-    const helperState = entry.status.helper?.state;
-    if (helperState === 'node-missing' || helperState === 'unsupported-node') return { ok: false, error: 'node unavailable' };
-    const spec = sshHelperSpec(entry.host.alias, home, entry.status.shell ?? '/bin/sh', bundle.hash, '--apply-hooks-off');
-    try {
-      let r = await this.run(entry, spec, 'hooks-off', { timeout: 30_000 });
-      if (r.code === HELPER_MISSING_EXIT && (await this.deploy(entry))) r = await this.run(entry, spec, 'hooks-off', { timeout: 30_000 });
-      const ok = r.code === 0;
-      log('host', 'host-hooks-off', { detail: { host: id, ok, code: r.code } });
-      return { ok, error: ok ? null : `hooks removal failed (exit ${r.code ?? 'unknown'})` };
-    } catch {
-      log('host', 'host-hooks-off', { detail: { host: id, ok: false, code: null } });
-      return { ok: false, error: 'ssh unavailable' };
-    }
-  }
-
   // --- env + spawn ----------------------------------------------------------------
 
   async shellEnv(id: HostId): Promise<Record<string, string> | null> {
@@ -881,7 +924,8 @@ export class SshHosts {
 
   async recheckEnv(id: HostId): Promise<void> {
     const entry = this.entries.get(id);
-    if (!entry) return;
+    // A disabled / removed host is never connected to (R40 a).
+    if (!entry || !this.isEnabled(id)) return;
     if (entry.channel?.state === 'ready') {
       entry.channelEnv = null;
       await this.fetchChannelEnv(entry);
@@ -895,16 +939,22 @@ export class SshHosts {
     const targets = [...this.entries.values()].filter(
       (e) => (id === undefined || e.host.id === id) && this.isEnabled(e.host.id),
     );
-    for (const entry of targets) {
-      entry.probed = false;
-      await this.probe(entry);
-      this.syncChannel(entry, { reset: true });
-      if (entry.forward && !entry.forward.child) {
-        entry.forward.failures = 0;
-        this.stopForward(entry);
-        if (entry.channel?.state === 'ready') this.ensureForward(entry);
+    // Concurrent, capped (R40 M2): one unreachable host (10–60 s) must not
+    // hold up the others.
+    const queue = [...targets];
+    const worker = async (): Promise<void> => {
+      for (let entry = queue.shift(); entry; entry = queue.shift()) {
+        entry.probed = false;
+        await this.probe(entry);
+        this.syncChannel(entry, { reset: true });
+        if (entry.forward && !entry.forward.child) {
+          entry.forward.failures = 0;
+          this.stopForward(entry);
+          if (entry.channel?.state === 'ready') this.ensureForward(entry);
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(REFRESH_CONCURRENCY, queue.length) }, worker));
   }
 
   /** Settings membership changed (add/remove/enable): stop what left, start what came. */
