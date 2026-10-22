@@ -5,16 +5,14 @@ import { buttonClass, inputClass } from './styles';
 
 // P5: Devin API token (stored encrypted in main; never read back). Save/Clear
 // and identity Reset are explicit actions, not part of the settings draft.
-// The input renders before the notifications state arrives; the identity rows
-// need it.
 export function DevinTokenField() {
   const shell = useShellState();
+  const notifications = shell?.notifications;
   const [token, setToken] = useState('');
-  const [hasToken, setHasToken] = useState(false);
+  const [hasToken, setHasToken] = useState(notifications?.hasToken ?? false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
-  const notifications = shell?.notifications;
   const notificationsHasToken = notifications?.hasToken ?? false;
   const identityState = notifications?.identity;
 
@@ -93,17 +91,15 @@ export function DevinTokenField() {
 
   const status = !hasToken
     ? 'No token stored.'
-    : !notifications
-      ? 'Token stored (encrypted).'
-      : notifications.noUserIdentity
-        ? 'Token has no user identity (service user) — sessions and notifications are disabled'
-        : notifications.authError
-          ? `Token rejected by the API (${notifications.lastError ?? 'unauthorized'}).`
-          : notifications.lastPollAt
-            ? `Token stored (encrypted). Last poll ${new Date(notifications.lastPollAt).toLocaleTimeString()}${
-                notifications.lastError ? ` — ${notifications.lastError}` : ''
-              }.`
-            : 'Token stored (encrypted). Waiting for first poll…';
+    : notifications?.noUserIdentity
+      ? 'Token has no user identity (service user) — sessions and notifications are disabled'
+      : notifications?.authError
+        ? `Token rejected by the API (${notifications.lastError ?? 'unauthorized'}).`
+        : notifications?.lastPollAt
+          ? `Token stored (encrypted). Last poll ${new Date(notifications.lastPollAt).toLocaleTimeString()}${
+              notifications.lastError ? ` — ${notifications.lastError}` : ''
+            }.`
+          : 'Token stored (encrypted). Waiting for first poll…';
 
   return (
     <form onSubmit={saveToken} className="flex flex-col gap-1 text-sm">

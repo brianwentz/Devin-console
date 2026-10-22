@@ -4,7 +4,7 @@ import { compileLinkRules, matchLinkRule, validateLinkRule } from '../../../core
 import type { LinkRule } from '../../../shared/ipc';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
-import { fieldInputClass } from './fields';
+import { FieldError, fieldInputClass } from './fields';
 import {
   errorTextClass,
   inputClass,
@@ -12,15 +12,6 @@ import {
   sectionHeadingClass,
   sectionSeparatorClass,
 } from './styles';
-
-function FieldError({ inputId, message }: { inputId: string; message: string | undefined }) {
-  if (!message) return null;
-  return (
-    <span id={`${inputId}Error`} className={errorTextClass}>
-      {message}
-    </span>
-  );
-}
 
 const PATTERN_PLACEHOLDER: Record<LinkRule['kind'], string> = {
   prefix: 'https://jira.example.com/browse/',

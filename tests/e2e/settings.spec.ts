@@ -124,7 +124,7 @@ test('settings has seven tabs and switches panels', async () => {
 test('moved fields sit in their Devin and Link Handling sections', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
-  const app = await launch(profile, logFile);
+  const app = await launch(profile, logFile, { FAKE_WSL_DISTROS: 'Fake:Running:default' });
   const inSection = (section: string, id: string) =>
     shell(
       app,
@@ -188,6 +188,16 @@ test('moved fields sit in their Devin and Link Handling sections', async () => {
     }
     await clickTab(app, 'devin');
     await expect.poll(async () => selectedTab(app)).toBe('devin');
+    await expect
+      .poll(async () => inSection('devin-local', 'localDefaultWslDistroSelect'))
+      .toBe(true);
+    // HostsPointer has no id; assert on its text inside the section.
+    expect(
+      await shell(
+        app,
+        `[...document.querySelectorAll('[data-settings-section="devin-local"] p')].some((el) => el.textContent.includes('Per-host CLI paths and shell overrides are under General'))`,
+      ),
+    ).toBe(true);
     expect(
       await shell(
         app,
