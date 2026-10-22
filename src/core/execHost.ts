@@ -62,9 +62,14 @@ export interface HostSpawnSpec {
 
 const WSL_UNC_SERVERS = ['wsl.localhost', 'wsl$'];
 
-// '\\\\wsl.localhost\<distro>\…', '\\wsl$\<distro>\…' and the forward-slash
-// spellings '//wsl.localhost/<d>/…'. Server part is case-insensitive.
-export function hostIdForPath(p: string): HostId {
+/** Extended-length `\\?\UNC\server\share` → `\\server\share`. */
+const plainUnc = (p: string): string => p.replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, '\\\\');
+
+// '\\\\wsl.localhost\<distro>\…', '\\wsl$\<distro>\…', the forward-slash
+// spellings '//wsl.localhost/<d>/…' and the `\\?\UNC\` extended-length forms.
+// Server part is case-insensitive.
+export function hostIdForPath(rawPath: string): HostId {
+  const p = plainUnc(rawPath);
   const m = /^[\\/]{2}([^\\/]+)[\\/]([^\\/]+)/.exec(p);
   if (m && m[1] && m[2] && WSL_UNC_SERVERS.includes(m[1].toLowerCase())) {
     return `wsl:${m[2]}`;
@@ -78,7 +83,7 @@ const stripTrailing = (s: string): string => (s.length > 1 ? s.replace(/\/+$/g, 
 /** Windows-side path → the path as the host sees it. */
 export function toHostPath(host: ExecHost, winPath: string): string {
   if (host.kind === 'local') return winPath;
-  const norm = winPath.replace(/\\/g, '/');
+  const norm = plainUnc(winPath).replace(/\\/g, '/');
   const unc = /^\/{2}([^/]+)\/([^/]+)(\/.*)?$/.exec(norm);
   if (unc && unc[1] && unc[2] && WSL_UNC_SERVERS.includes(unc[1].toLowerCase()) && unc[2] === host.distro) {
     const rest = unc[3] ?? '/';

@@ -43,12 +43,16 @@ test('a running fake distro is enumerated, probed and env-captured', async () =>
     FAKE_WSL_ENV_MARKER: '1',
   });
   try {
+    // Env capture (and the node version riding it) is async and can land after `ready`.
     await expect
       .poll(
-        async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.state,
+        async () => {
+          const h = (await state(app)).hosts.find((x) => x.id === 'wsl:Fake');
+          return h?.state === 'ready' && h.shellEnv?.ok === true && !!h.node;
+        },
         { timeout: 30_000 },
       )
-      .toBe('ready');
+      .toBe(true);
     const host = (await state(app)).hosts.find((h) => h.id === 'wsl:Fake');
     expect(host).toBeTruthy();
     expect(host?.shellEnv?.ok).toBe(true);
@@ -58,12 +62,18 @@ test('a running fake distro is enumerated, probed and env-captured', async () =>
     // Node version rides the interactive-login env-capture spawn.
     expect(host?.node).toBe('22.12.0');
     // Every wsl.exe call is counted: enumeration, probe and env capture all logged.
-    const kinds = new Set(
-      (await readEvents(join(profile, 'events.jsonl')))
-        .filter((e) => e.event === 'host-exec')
-        .map((e) => (e.detail as { kind: string }).kind),
-    );
-    expect([...kinds]).toEqual(expect.arrayContaining(['enum', 'probe', 'env']));
+    await expect
+      .poll(
+        async () => [
+          ...new Set(
+            (await readEvents(join(profile, 'events.jsonl')))
+              .filter((e) => e.event === 'host-exec')
+              .map((e) => (e.detail as { kind: string }).kind),
+          ),
+        ],
+        { timeout: 15_000 },
+      )
+      .toEqual(expect.arrayContaining(['enum', 'probe', 'env']));
     const keys = (await app.evaluate(() =>
       (globalThis as any).__agentworkspace.hostShellEnvKeys('wsl:Fake'),
     )) as string[];
