@@ -1314,7 +1314,7 @@ test('Local picker start folder: configured folder wins, missing folder is logge
 
     // Set the folder through the Settings tab; switching tabs commits.
     await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('settings'));
-    await evaluateInShell(app, `document.querySelector('[data-settings-tab="local"]').click()`);
+    await evaluateInShell(app, `document.querySelector('[data-settings-tab="devin"]').click()`);
     await expect.poll(() => shellCount(app, '#localPickerFolderInput')).toBe(1);
     expect(await shellCount(app, '#localPickerFolderBrowse')).toBe(1);
     expect(await setInputValue(app, 'localPickerFolderInput', startDir)).toBe(true);

@@ -169,10 +169,9 @@ variable that selects it.
   array order is the display order of the Local sidebar (reorder = rewrite the array via `local:workspaceReorder`). No Settings UI — managed from the
   session column.
 - `analytics.tab` (`'devin'|'claude'`, default `'devin'`) — the last-selected Analytics tab strip tab; no Settings UI.
-- `usage.devinPollMinutes` (int 5..240, default 15) — Devin usage poll cadence; Settings → General `#usageDevinPollMinutes` ("Check Devin Cloud usage every (minutes)").
+- `usage.devinPollMinutes` (int 5..240, default 15) — Devin usage poll cadence; Settings → Devin (Devin Cloud) `#usageDevinPollMinutes` ("Check Devin Cloud usage every (minutes)").
 - `notifications.kinds.usage` (default true) — usage-limit alert entries (50%/80%); Settings → Notifications "Usage limits (50% / 80%)". Usage entries never banner.
-- `local.{devinPath, defaultWslDistro, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
-- `local.{devinPath, defaultWslDistro, defaultMode, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin Local
+- `local.{devinPath, defaultWslDistro, defaultMode, workspaceLabels: Record<path,label>, collapsedWorkspaces: string[]}` — `devinPath` (Settings → Devin (Devin Local section)
   `#devinPathInput`; blank = PATH; inline not-found hint from `local.cliPath === null`; `DevinLocalHost` resolves the command once at start, so a change
   needs an app restart), `defaultWslDistro` (`#localDefaultWslDistroSelect`; read by `localWorkspacePick`), `defaultMode` (`#localDefaultModeSelect`; free
   string, null = agent default; applied by `acpHost.applyModes` on session/new and crash-rebind only — never on load, where the agent's persisted mode
@@ -327,6 +326,9 @@ variable that selects it.
 - Entries carry `ownerUserId`; `NotificationStore.reconcile(userId)` runs once per `/v3/self` resolution and prunes session-scoped entries from other
   users / legacy builds (`notifications-pruned` log event, counts only); the `identity` kind is runtime-only like `update` and is raised once for
   service-user tokens.
+- Opening an `auth`/`identity` entry from the panel or banner switches the Settings tab to Devin: shell `openNotificationEntry` (`src/shell/notificationOpen.ts`) →
+  `settingsTabForNotification` + `switchSettingsTab` (commit-then-switch); main's `openNotification` only sets the surface. The `notificationsOpen` test hook
+  bypasses the shell, so specs click the UI.
 
 ### Passwords (autofill)
 - `credentials.json` v2 is id-keyed with many accounts per origin (v1 migrates on load) in `src/main/credentials.ts`; login-form heuristics live in
@@ -356,18 +358,20 @@ variable that selects it.
   `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume`.
 
 ### Settings page
-- Seven tabs (`#settingsTabs` tablist, `[data-settings-tab=general|local|claude|links|passwords|notifications|updates]`, `#settingsPanel-<id>` tabpanel)
-  — active tab is shell-only state in `src/shell/store.ts` (`useSettingsTab`/`setSettingsTab`); `SettingsTabId` + the field → tab map `FIELD_TAB` in
+- Seven tabs (`#settingsTabs` tablist, `[data-settings-tab=general|devin|claude|links|passwords|notifications|updates]`, `#settingsPanel-<id>` tabpanel)
+  — active tab is shell-only state in `src/shell/store.ts` (`useSettingsTab`/`setSettingsTab`); `SettingsTabId`, the id list `SETTINGS_TAB_ORDER` + the field → tab map `DRAFT_TAB` in
   `src/core/settingsDraft.ts` route a validation error to the tab holding the field. The `links` "Link Handling" tab (`LinksTab.tsx`, `#linkRulesList`
   rows `[data-rule-id][data-rule-invalid]`, `#linkRuleAdd`, `#linkRuleTestInput`/`#linkRuleTestResult`) also hosts the `#allowExternalInput` "Open
-  non-GitHub links in system browser" checkbox.
+  non-GitHub links in system browser" checkbox, then a Linked Context section (`data-settings-section=links-linked-context`: tab keep-alive hours, max live
+  tabs, `prs.autoOpenTabs`). The `devin` tab has two sections — `devin-cloud` (tenant/API base, token + identity, user/org id, usage poll, Cloud pool) and, after
+  a separator, `devin-local`.
 - ux2 P3 tabs (`settings/LocalTab.tsx`, `settings/ClaudeTab.tsx`, shared bits in `settings/fields.tsx`: `CliPathHint`, `FieldError`, `WslDistroSelect`,
-  `HostsPointer`): **Devin Local** = `#devinPathInput` (+ `#devinPathInputError` not-found hint from `local.cliPath`), `#localDefaultWslDistroSelect`,
+  `HostsPointer`): the Devin tab's **Devin Local** section = `#devinPathInput` (+ `#devinPathInputError` not-found hint from `local.cliPath`), `#localDefaultWslDistroSelect`,
   read-only `#localAgentsSummary` (`[data-local-agent=<path>][data-local-agent-status]` rows from `local.agents`); **Claude Code** = `#claudePathInput`,
   `#claudeAutoArchiveInput`, `#claudePermissionModeDefault`, `#claudeModelInput`, `#claudeKeepAliveInput` (1–240), `#claudeMaxLiveAgentsInput` (1–10),
   `#claudeDefaultWslDistroSelect`, `#claudeHooksEnabledMirror` (not a draft field — commits `claude.hooksEnabled` through `setSettings` like the
-  Notifications checkbox). General keeps tenant/API base, tab + Cloud pools, `#sessionsColumnToggle`, shell command and `#hostsBlock` (minus the
-  default-distro select); the Workspaces block and `#terminalAllSurfacesInput` are gone (P0).
+  Notifications checkbox). General keeps `#sessionsColumnToggle`, the shell command and `#hostsBlock` (minus the
+  default-distro select); tenant/API base, the token, user/org id and the Cloud pool are on Devin → Devin Cloud, the tab pool on Link Handling → Linked Context; the Workspaces block and `#terminalAllSurfacesInput` are gone (P0).
 - Field edits live in a draft (`src/core/settingsDraft.ts` pure model + `src/shell/settingsDraft.ts` store); saves are implicit on tab switch, leaving
   Settings (`requestSurface` in `src/shell/surface.ts` vetoes on invalid drafts), and quit (`settings:flush` push → `commitDraft('quit')` →
   `settings:flushDone`, 1 s timeout in `src/main/settingsFlush.ts`). `settings:commit` (guardedHandle) returns

@@ -1,18 +1,19 @@
 import type { KeyboardEvent } from 'react';
-import type { SettingsTabId } from '../../../core/settingsDraft';
+import { SETTINGS_TAB_ORDER, type SettingsTabId } from '../../../core/settingsDraft';
 
-const TABS: { id: SettingsTabId; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'cloud', label: 'Devin Cloud' },
-  { id: 'local', label: 'Devin Local' },
-  { id: 'claude', label: 'Claude Code' },
-  { id: 'links', label: 'Link Handling' },
-  { id: 'passwords', label: 'Passwords' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'updates', label: 'Updates' },
-];
+const TAB_LABELS: Record<SettingsTabId, string> = {
+  general: 'General',
+  devin: 'Devin',
+  claude: 'Claude Code',
+  links: 'Link Handling',
+  passwords: 'Passwords',
+  notifications: 'Notifications',
+  updates: 'Updates',
+};
 
-export const SETTINGS_TAB_IDS = TABS.map((tab) => tab.id);
+export const SETTINGS_TAB_IDS: readonly SettingsTabId[] = SETTINGS_TAB_ORDER;
+
+const TABS = SETTINGS_TAB_IDS.map((id) => ({ id, label: TAB_LABELS[id] }));
 
 interface SettingsTabsProps {
   active: SettingsTabId;

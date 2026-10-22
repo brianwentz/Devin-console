@@ -42,11 +42,11 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 
 ## Getting started
 
-- The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin Cloud → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.
-- Click any GitHub link in a session — it opens in the tabbed **Linked Context** pane on the right (`Ctrl+Shift+G` toggles it).
+- The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.
+- Click any GitHub link in a session — it opens in the tabbed **Linked Context** pane on the right (`Ctrl+Shift+G` toggles it). **Settings → Link Handling → Linked Context** holds the tab pool (keep-alive, max live tabs) and the toggle that opens a tab when a session creates a PR.
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
-- **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Notifications**.
+- **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Devin**.
 - The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals include your WSL distros, counted inside each distro.
 
 ## Running sessions in WSL

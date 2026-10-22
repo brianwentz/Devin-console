@@ -2,15 +2,14 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import type { CredentialEntry } from '../../core/credentials';
 import type { SettingsTabId } from '../../core/settingsDraft';
 import type { Settings } from '../../shared/ipc';
-import { commitDraft, ensureDraft, useSettingsDraft } from '../settingsDraft';
-import { setSettingsTab, useSettingsTab, useShellState } from '../store';
+import { ensureDraft, switchSettingsTab, useSettingsDraft } from '../settingsDraft';
+import { useSettingsTab, useShellState } from '../store';
 import { NotificationSettings } from './NotificationSettings';
 import { PasswordsSection } from './PasswordsSection';
 import { ClaudeTab } from './settings/ClaudeTab';
-import { CloudTab } from './settings/CloudTab';
+import { DevinTab } from './settings/DevinTab';
 import { GeneralTab } from './settings/GeneralTab';
 import { LinksTab } from './settings/LinksTab';
-import { LocalTab } from './settings/LocalTab';
 import { SettingsTabs } from './settings/SettingsTabs';
 import { UpdatesTab } from './settings/UpdatesTab';
 
@@ -40,9 +39,7 @@ export function SettingsPanel({ settings, credentials, style }: SettingsPanelPro
 
   const selectTab = (next: SettingsTabId) => {
     if (next === tab) return;
-    void commitDraft('tab', settings).then((ok) => {
-      if (ok) setSettingsTab(next);
-    });
+    void switchSettingsTab(next);
   };
 
   return (
@@ -61,8 +58,7 @@ export function SettingsPanel({ settings, credentials, style }: SettingsPanelPro
       )}
       <section role="tabpanel" id={`settingsPanel-${tab}`}>
         {tab === 'general' && <GeneralTab />}
-        {tab === 'cloud' && <CloudTab />}
-        {tab === 'local' && <LocalTab />}
+        {tab === 'devin' && <DevinTab />}
         {tab === 'claude' && <ClaudeTab />}
         {tab === 'links' && <LinksTab />}
         {tab === 'passwords' && (

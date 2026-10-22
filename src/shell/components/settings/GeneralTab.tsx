@@ -251,64 +251,6 @@ export function GeneralTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <span className="text-sm text-[#aeb9c8]">Linked Context</span>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">
-          Keep hidden GitHub tabs live for (hours, 0 = discard on switch)
-        </span>
-        <input
-          id="keepAliveInput"
-          className={fieldInputClass(errors, 'keepAliveHours')}
-          type="number"
-          min={0}
-          max={168}
-          step={1}
-          value={draft.keepAliveHours}
-          aria-invalid={errors.keepAliveHours ? 'true' : undefined}
-          onChange={(event) => updateDraft({ keepAliveHours: event.target.value })}
-        />
-        <FieldError inputId="keepAliveInput" message={errors.keepAliveHours} />
-        <span className="text-xs text-[#7f8ca0]">
-          Tabs from other sessions stay live for this long; beyond it they reload on activation.
-        </span>
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">Max live tabs</span>
-        <input
-          id="maxLiveTabsInput"
-          className={fieldInputClass(errors, 'maxLiveTabs')}
-          type="number"
-          min={1}
-          max={40}
-          step={1}
-          value={draft.maxLiveTabs}
-          aria-invalid={errors.maxLiveTabs ? 'true' : undefined}
-          onChange={(event) => updateDraft({ maxLiveTabs: event.target.value })}
-        />
-        <FieldError inputId="maxLiveTabsInput" message={errors.maxLiveTabs} />
-        <span className="text-xs text-[#7f8ca0]">
-          Hard cap on live GitHub pages across all sessions (≈400 MB each); the tab you're looking
-          at is exempt.
-        </span>
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-[#aeb9c8]">Check Devin Cloud usage every (minutes)</span>
-        <input
-          id="usageDevinPollMinutes"
-          className={fieldInputClass(errors, 'usageDevinPollMinutes')}
-          type="number"
-          min={5}
-          max={240}
-          step={1}
-          value={draft.usageDevinPollMinutes}
-          aria-invalid={errors.usageDevinPollMinutes ? 'true' : undefined}
-          onChange={(event) => updateDraft({ usageDevinPollMinutes: event.target.value })}
-        />
-        <FieldError inputId="usageDevinPollMinutes" message={errors.usageDevinPollMinutes} />
-        <span className="text-xs text-[#7f8ca0]">
-          How often the app polls your monthly ACU usage for alerts (50% / 80%).
-        </span>
-      </label>
       <label className="flex items-center gap-2 text-sm">
         <input
           id="sessionsColumnToggle"

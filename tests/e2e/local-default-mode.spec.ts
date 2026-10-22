@@ -122,7 +122,7 @@ test('no local.defaultMode → no session/set_mode call', async () => {
   }
 });
 
-test('Settings → Devin Local: #localDefaultModeSelect persists local.defaultMode', async () => {
+test('Settings → Devin → Devin Local: #localDefaultModeSelect persists local.defaultMode', async () => {
   const { profile, logFile } = await newProfileWorkspace('ui');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   const clickTab = (id: string) =>
@@ -130,7 +130,7 @@ test('Settings → Devin Local: #localDefaultModeSelect persists local.defaultMo
   const hasEl = (id: string) => shell(app, `Boolean(document.getElementById('${id}'))`);
   try {
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-    await clickTab('local');
+    await clickTab('devin');
     await expect.poll(async () => hasEl('localDefaultModeSelect')).toBe(true);
     // No live agent modes → the static fallback list is offered.
     expect(

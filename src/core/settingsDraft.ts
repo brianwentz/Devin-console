@@ -65,31 +65,33 @@ export interface SettingsDraft {
 
 export type DraftField = keyof SettingsDraft;
 
-export type SettingsTabId =
-  | 'general'
-  | 'cloud'
-  | 'local'
-  | 'claude'
-  | 'links'
-  | 'passwords'
-  | 'notifications'
-  | 'updates';
+export const SETTINGS_TAB_ORDER = [
+  'general',
+  'devin',
+  'claude',
+  'links',
+  'passwords',
+  'notifications',
+  'updates',
+] as const;
+
+export type SettingsTabId = (typeof SETTINGS_TAB_ORDER)[number];
 
 export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
-  tenantUrl: 'cloud',
-  apiBase: 'cloud',
+  tenantUrl: 'devin',
+  apiBase: 'devin',
   allowExternal: 'links',
-  keepAliveHours: 'general',
-  maxLiveTabs: 'general',
-  usageDevinPollMinutes: 'general',
+  keepAliveHours: 'links',
+  maxLiveTabs: 'links',
+  usageDevinPollMinutes: 'devin',
   sessionsOpen: 'general',
-  sessionsMaxLiveViews: 'cloud',
-  sessionsKeepAliveHours: 'cloud',
+  sessionsMaxLiveViews: 'devin',
+  sessionsKeepAliveHours: 'devin',
   terminalShell: 'general',
-  devinPath: 'local',
-  localDefaultWslDistro: 'local',
-  localDefaultMode: 'local',
-  localPickerFolder: 'local',
+  devinPath: 'devin',
+  localDefaultWslDistro: 'devin',
+  localDefaultMode: 'devin',
+  localPickerFolder: 'devin',
   claudePath: 'claude',
   claudeAutoArchiveDays: 'claude',
   claudePermissionMode: 'claude',
@@ -98,10 +100,16 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   claudeMaxLiveAgents: 'claude',
   claudeDefaultWslDistro: 'claude',
   claudePickerFolder: 'claude',
-  userId: 'notifications',
-  orgId: 'notifications',
+  userId: 'devin',
+  orgId: 'devin',
   linkRules: 'links',
 };
+
+// Notifications whose fix is a Devin Cloud setting (token, user id) open
+// Settings on the Devin tab.
+export function settingsTabForNotification(kind: string): SettingsTabId | null {
+  return kind === 'auth' || kind === 'identity' ? 'devin' : null;
+}
 
 const FIELD_ORDER = Object.keys(DRAFT_TAB) as DraftField[];
 

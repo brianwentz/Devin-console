@@ -52,7 +52,7 @@ const selectedTab = (app: ElectronApplication) =>
 const hasEl = (app: ElectronApplication, id: string) =>
   shell(app, `Boolean(document.getElementById('${id}'))`);
 
-test('settings has eight tabs and switches panels', async () => {
+test('settings has seven tabs and switches panels', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
@@ -66,44 +66,49 @@ test('settings has eight tabs and switches panels', async () => {
           `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.dataset.settingsTab).join(',')`,
         ),
       )
-      .toBe('general,cloud,local,claude,links,passwords,notifications,updates');
+      .toBe('general,devin,claude,links,passwords,notifications,updates');
     expect(
       await shell(
         app,
         `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.textContent).join('|')`,
       ),
-    ).toBe(
-      'General|Devin Cloud|Devin Local|Claude Code|Link Handling|Passwords|Notifications|Updates',
-    );
+    ).toBe('General|Devin|Claude Code|Link Handling|Passwords|Notifications|Updates');
     expect(await selectedTab(app)).toBe('general');
-    // General keeps the GitHub-pane rows; the Cloud rows moved to Devin Cloud.
-    await expect
-      .poll(async () => shell(app, `Boolean(document.getElementById('keepAliveInput'))`))
-      .toBe(true);
-    expect(await shell(app, `Boolean(document.getElementById('tenantUrlInput'))`)).toBe(false);
-    expect(await shell(app, `document.getElementById('settingsPanel-general').textContent`)).toContain(
-      'Linked Context',
-    );
+    // General keeps the hosts, sessions column and shell rows; the GitHub tab
+    // pool moved to Link Handling and the Cloud rows to Devin.
+    await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
+    expect(await hasEl(app, 'keepAliveInput')).toBe(false);
+    expect(await hasEl(app, 'tenantUrlInput')).toBe(false);
+    expect(
+      await shell(app, `document.getElementById('settingsPanel-general').textContent`),
+    ).not.toContain('Linked Context');
 
-    await clickTab(app, 'cloud');
-    await expect.poll(async () => selectedTab(app)).toBe('cloud');
+    await clickTab(app, 'devin');
+    await expect.poll(async () => selectedTab(app)).toBe('devin');
     for (const id of [
       'tenantUrlInput',
       'apiBaseInput',
+      'patInput',
       'sessionsMaxLiveViews',
       'sessionsKeepAliveHours',
     ]) {
       await expect.poll(async () => hasEl(app, id), id).toBe(true);
     }
     expect(await hasEl(app, 'keepAliveInput')).toBe(false);
-    expect(await hasEl(app, 'settingsPanel-cloud')).toBe(true);
+    expect(await hasEl(app, 'settingsPanel-devin')).toBe(true);
+
+    await clickTab(app, 'links');
+    await expect.poll(async () => selectedTab(app)).toBe('links');
+    await expect.poll(async () => hasEl(app, 'keepAliveInput')).toBe(true);
+    expect(await shell(app, `document.getElementById('settingsPanel-links').textContent`)).toContain(
+      'Linked Context',
+    );
 
     await clickTab(app, 'notifications');
     await expect.poll(async () => selectedTab(app)).toBe('notifications');
-    await expect
-      .poll(async () => shell(app, `Boolean(document.getElementById('patInput'))`))
-      .toBe(true);
-    expect(await shell(app, `Boolean(document.getElementById('tenantUrlInput'))`)).toBe(false);
+    await expect.poll(async () => hasEl(app, 'notificationsCollectInput')).toBe(true);
+    expect(await hasEl(app, 'patInput')).toBe(false);
+    expect(await hasEl(app, 'tenantUrlInput')).toBe(false);
     expect(
       await shell(
         app,
@@ -115,15 +120,114 @@ test('settings has eight tabs and switches panels', async () => {
   }
 });
 
+// Each moved field lives in its section; devin-cloud renders before devin-local.
+test('moved fields sit in their Devin and Link Handling sections', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile, { FAKE_WSL_DISTROS: 'Fake:Running:default' });
+  const inSection = (section: string, id: string) =>
+    shell(
+      app,
+      `Boolean(document.querySelector('[data-settings-section="${section}"] #${id}'))`,
+    );
+  const MOVED = [
+    'patInput',
+    'patSave',
+    'patClear',
+    'patStatus',
+    'userIdInput',
+    'orgIdInput',
+    'usageDevinPollMinutes',
+    'keepAliveInput',
+    'maxLiveTabsInput',
+    'prAutoOpenTabsInput',
+  ];
+  try {
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
+    for (const id of MOVED) expect(await hasEl(app, id), `general: ${id}`).toBe(false);
+
+    const layout: Array<[tab: string, section: string, ids: string[]]> = [
+      [
+        'devin',
+        'devin-cloud',
+        [
+          'tenantUrlInput',
+          'apiBaseInput',
+          'patInput',
+          'patSave',
+          'patClear',
+          'patStatus',
+          'userIdInput',
+          'orgIdInput',
+          'usageDevinPollMinutes',
+          'sessionsMaxLiveViews',
+          'sessionsKeepAliveHours',
+        ],
+      ],
+      [
+        'devin',
+        'devin-local',
+        ['devinPathInput', 'localDefaultModeSelect', 'localPickerFolderInput', 'localAgentsSummary'],
+      ],
+      ['links', 'links-linked-context', ['keepAliveInput', 'maxLiveTabsInput', 'prAutoOpenTabsInput']],
+    ];
+    for (const [tab, section, ids] of layout) {
+      await clickTab(app, tab);
+      await expect.poll(async () => selectedTab(app)).toBe(tab);
+      for (const id of ids) {
+        await expect.poll(async () => inSection(section, id), `${section}: ${id}`).toBe(true);
+      }
+      // DOM order inside the section follows the layout list.
+      expect(
+        await shell(
+          app,
+          `[...document.querySelectorAll('[data-settings-section="${section}"] [id]')].map((el) => el.id).filter((id) => ${JSON.stringify(ids)}.includes(id)).join(',')`,
+        ),
+      ).toBe(ids.join(','));
+    }
+    await clickTab(app, 'devin');
+    await expect.poll(async () => selectedTab(app)).toBe('devin');
+    await expect
+      .poll(async () => inSection('devin-local', 'localDefaultWslDistroSelect'))
+      .toBe(true);
+    // HostsPointer has no id; assert on its text inside the section.
+    expect(
+      await shell(
+        app,
+        `[...document.querySelectorAll('[data-settings-section="devin-local"] p')].some((el) => el.textContent.includes('Per-host CLI paths and shell overrides are under General'))`,
+      ),
+    ).toBe(true);
+    expect(
+      await shell(
+        app,
+        `[...document.querySelectorAll('[data-settings-section]')].map((el) => el.dataset.settingsSection).join(',')`,
+      ),
+    ).toBe('devin-cloud,devin-local');
+    expect(
+      await shell(
+        app,
+        `[...document.querySelectorAll('[data-settings-section] h3')].map((el) => el.textContent).join('|')`,
+      ),
+    ).toBe('Devin Cloud|Devin Local');
+
+    await clickTab(app, 'notifications');
+    await expect.poll(async () => hasEl(app, 'notificationsCollectInput')).toBe(true);
+    for (const id of MOVED) expect(await hasEl(app, id), `notifications: ${id}`).toBe(false);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
 test('editing a field commits implicitly on tab switch', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-    await expect
-      .poll(async () => shell(app, `Boolean(document.getElementById('keepAliveInput'))`))
-      .toBe(true);
+    await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
+    await clickTab(app, 'links');
+    await expect.poll(async () => hasEl(app, 'keepAliveInput')).toBe(true);
 
     expect(await setInputValue(app, 'keepAliveInput', '48')).toBe(true);
     await clickTab(app, 'passwords');
@@ -147,13 +251,13 @@ test('a validation failure keeps the tab and flags the field', async () => {
   const app = await launch(profile, logFile);
   try {
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-    await clickTab(app, 'cloud');
+    await clickTab(app, 'devin');
     await expect.poll(async () => hasEl(app, 'tenantUrlInput')).toBe(true);
 
     await setInputValue(app, 'tenantUrlInput', 'ftp://bad');
     await clickTab(app, 'passwords');
     // Tab switch is refused; the field is flagged, focused, and the error banner shows.
-    await expect.poll(async () => selectedTab(app)).toBe('cloud');
+    await expect.poll(async () => selectedTab(app)).toBe('devin');
     await expect
       .poll(async () =>
         shell(app, `document.getElementById('tenantUrlInput')?.getAttribute('aria-invalid')`),
@@ -169,11 +273,11 @@ test('a validation failure keeps the tab and flags the field', async () => {
     expect((await readEvents(logFile)).some((e) => e.event === 'tenant-changed')).toBe(false);
 
     // Leaving Settings through the rail is refused the same way and the
-    // error routing lands on the Cloud tab (DRAFT_TAB.tenantUrl === 'cloud').
+    // error routing lands on the Devin tab (DRAFT_TAB.tenantUrl === 'devin').
     await shell(app, `document.getElementById('cloudButton').click()`);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect((await state(app)).surface).toBe('settings');
-    expect(await selectedTab(app)).toBe('cloud');
+    expect(await selectedTab(app)).toBe('devin');
     expect(await shell(app, `document.activeElement?.id`)).toBe('tenantUrlInput');
 
     // A valid value saves and the switch goes through. The fixture URL is a
@@ -196,9 +300,9 @@ test('a validation failure blocks leaving Settings via the rail', async () => {
   const app = await launch(profile, logFile);
   try {
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-    await expect
-      .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
-      .toBe(true);
+    await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
+    await clickTab(app, 'links');
+    await expect.poll(async () => hasEl(app, 'maxLiveTabsInput')).toBe(true);
 
     await setInputValue(app, 'maxLiveTabsInput', '0');
     await shell(app, `document.getElementById('cloudButton').click()`);
@@ -207,6 +311,62 @@ test('a validation failure blocks leaving Settings via the rail', async () => {
       .toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect((await state(app)).surface).toBe('settings');
+    // The error routes to Link Handling (DRAFT_TAB.maxLiveTabs === 'links').
+    expect(await selectedTab(app)).toBe('links');
+    expect(
+      await shell(app, `document.getElementById('maxLiveTabsInput')?.getAttribute('aria-invalid')`),
+    ).toBe('true');
+    await expect.poll(async () => shell(app, `document.activeElement?.id`)).toBe('maxLiveTabsInput');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('an invalid user id routes the error to the Devin tab', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  try {
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await clickTab(app, 'devin');
+    await expect.poll(async () => hasEl(app, 'userIdInput')).toBe(true);
+
+    // notifications.userId is capped at 128 characters by the settings schema.
+    await setInputValue(app, 'userIdInput', `user-${'x'.repeat(200)}`);
+    await clickTab(app, 'passwords');
+    await expect
+      .poll(async () =>
+        shell(app, `document.getElementById('userIdInput')?.getAttribute('aria-invalid')`),
+      )
+      .toBe('true');
+    expect(await selectedTab(app)).toBe('devin');
+    await expect.poll(async () => shell(app, `document.activeElement?.id`)).toBe('userIdInput');
+    expect(await hasEl(app, 'userIdInputError')).toBe(true);
+    expect((await settingsOf(app)).notifications.userId).toBe('');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('the PR auto-open checkbox on Link Handling saves instantly', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  try {
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await clickTab(app, 'links');
+    await expect.poll(async () => hasEl(app, 'prAutoOpenTabsInput')).toBe(true);
+    expect((await settingsOf(app)).prs.autoOpenTabs).toBe(true);
+    expect(await shell(app, `document.getElementById('prAutoOpenTabsInput').checked`)).toBe(true);
+
+    await shell(app, `document.getElementById('prAutoOpenTabsInput').click()`);
+    await expect.poll(async () => (await settingsOf(app)).prs.autoOpenTabs).toBe(false);
+    await expect
+      .poll(async () => shell(app, `document.getElementById('prAutoOpenTabsInput').checked`))
+      .toBe(false);
+    // Instant-save, not the draft: no tab switch and no draft commit happened.
+    expect(await selectedTab(app)).toBe('links');
+    expect((await readEvents(logFile)).some((e) => e.event === 'settings-commit')).toBe(false);
   } finally {
     await quit(app, profile);
   }
@@ -310,6 +470,8 @@ const settingsOf = async (app: ElectronApplication) =>
   (await state(app)).settings as unknown as {
     local: { defaultWslDistro: string | null };
     claude: { hooksEnabled: boolean; keepAliveMinutes: number; defaultWslDistro: string | null };
+    notifications: { userId: string };
+    prs: { autoOpenTabs: boolean };
   };
 const readSettings = (profile: string) =>
   JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
@@ -326,25 +488,28 @@ const setSelectValue = (app: ElectronApplication, id: string, value: string) =>
     })()`,
   );
 
-test('Devin Local tab renders the devin path and the agents summary', async () => {
+test('Devin tab renders the devin path and the agents summary', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   try {
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-    await clickTab(app, 'local');
-    await expect.poll(async () => selectedTab(app)).toBe('local');
+    await clickTab(app, 'devin');
+    await expect.poll(async () => selectedTab(app)).toBe('devin');
     await expect.poll(async () => hasEl(app, 'devinPathInput')).toBe(true);
     expect(await hasEl(app, 'localAgentsSummary')).toBe(true);
-    expect(await hasEl(app, 'settingsPanel-local')).toBe(true);
+    expect(await hasEl(app, 'settingsPanel-devin')).toBe(true);
     // No fake distros by default → the select is replaced by the muted line.
     expect(await hasEl(app, 'localDefaultWslDistroSelect')).toBe(false);
-    expect(await shell(app, `document.getElementById('settingsPanel-local').textContent`)).toContain(
+    expect(await shell(app, `document.getElementById('settingsPanel-devin').textContent`)).toContain(
       'No WSL distros detected.',
     );
+    // The Devin tab carries the Cloud rows but not the GitHub tab pool.
+    expect(await hasEl(app, 'tenantUrlInput')).toBe(true);
+    expect(await hasEl(app, 'keepAliveInput')).toBe(false);
     // Neither the Claude controls nor the Cloud rows live on General.
     await clickTab(app, 'general');
-    await expect.poll(async () => hasEl(app, 'keepAliveInput')).toBe(true);
+    await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
     expect(await hasEl(app, 'claudePathInput')).toBe(false);
     expect(await hasEl(app, 'tenantUrlInput')).toBe(false);
   } finally {
@@ -450,7 +615,7 @@ test('both distro selects list the fake distro and persist independently', async
       })
       .toBe(true);
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-    await clickTab(app, 'local');
+    await clickTab(app, 'devin');
     await expect.poll(async () => hasEl(app, 'localDefaultWslDistroSelect')).toBe(true);
     expect(await options('localDefaultWslDistroSelect')).toBe(',Fake');
     expect(await setSelectValue(app, 'localDefaultWslDistroSelect', 'Fake')).toBe(true);
@@ -480,9 +645,9 @@ test('a dirty draft is flushed on quit', async () => {
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
   await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-  await expect
-    .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
-    .toBe(true);
+  await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
+  await clickTab(app, 'links');
+  await expect.poll(async () => hasEl(app, 'maxLiveTabsInput')).toBe(true);
   await setInputValue(app, 'maxLiveTabsInput', '7');
 
   await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
@@ -517,9 +682,9 @@ test('settings.json keeps unknown keys and an invalid untouched value across a r
   );
   const app = await launch(profile, logFile);
   await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
-  await expect
-    .poll(async () => shell(app, `Boolean(document.getElementById('maxLiveTabsInput'))`))
-    .toBe(true);
+  await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
+  await clickTab(app, 'links');
+  await expect.poll(async () => hasEl(app, 'maxLiveTabsInput')).toBe(true);
   // The invalid leaf fell back to its default in memory; the rest of the block survived.
   const loaded = (await state(app)).settings;
   expect(loaded.claude).toMatchObject({ showArchived: false, model: 'opus-x' });

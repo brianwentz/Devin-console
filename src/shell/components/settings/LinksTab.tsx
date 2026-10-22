@@ -3,16 +3,15 @@ import { routeUrl } from '../../../core/linkRouter';
 import { compileLinkRules, matchLinkRule, validateLinkRule } from '../../../core/linkRules';
 import type { LinkRule } from '../../../shared/ipc';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
-import { errorTextClass, inputClass, saveClass } from './styles';
-
-function FieldError({ inputId, message }: { inputId: string; message: string | undefined }) {
-  if (!message) return null;
-  return (
-    <span id={`${inputId}Error`} className={errorTextClass}>
-      {message}
-    </span>
-  );
-}
+import { useShellState } from '../../store';
+import { FieldError, fieldInputClass } from './fields';
+import {
+  errorTextClass,
+  inputClass,
+  saveClass,
+  sectionHeadingClass,
+  sectionSeparatorClass,
+} from './styles';
 
 const PATTERN_PLACEHOLDER: Record<LinkRule['kind'], string> = {
   prefix: 'https://jira.example.com/browse/',
@@ -21,14 +20,21 @@ const PATTERN_PLACEHOLDER: Record<LinkRule['kind'], string> = {
 
 export function LinksTab() {
   const { draft, errors } = useSettingsDraft();
+  const shell = useShellState();
   const [testUrl, setTestUrl] = useState('');
   if (!draft) return null;
+  const autoOpenTabs = shell?.settings.prs.autoOpenTabs ?? true;
   const rules = draft.linkRules;
 
   const setRule = (id: string, patch: Partial<LinkRule>) => {
     updateDraft({
       linkRules: rules.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
     });
+  };
+
+  // Instant-save like the other checkboxes outside the draft.
+  const toggleAutoOpenTabs = (enabled: boolean) => {
+    void window.agentworkspace.setSettings({ prs: { autoOpenTabs: enabled } });
   };
 
   const testResult = (): string => {
@@ -154,6 +160,60 @@ export function LinksTab() {
           {testResult()}
         </span>
       </div>
+      <section
+        data-settings-section="links-linked-context"
+        className={`flex flex-col gap-5 ${sectionSeparatorClass}`}
+      >
+        <h3 className={sectionHeadingClass}>Linked Context</h3>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-[#aeb9c8]">
+            Keep hidden GitHub tabs live for (hours, 0 = discard on switch)
+          </span>
+          <input
+            id="keepAliveInput"
+            className={fieldInputClass(errors, 'keepAliveHours')}
+            type="number"
+            min={0}
+            max={168}
+            step={1}
+            value={draft.keepAliveHours}
+            aria-invalid={errors.keepAliveHours ? 'true' : undefined}
+            onChange={(event) => updateDraft({ keepAliveHours: event.target.value })}
+          />
+          <FieldError inputId="keepAliveInput" message={errors.keepAliveHours} />
+          <span className="text-xs text-[#7f8ca0]">
+            Tabs from other sessions stay live for this long; beyond it they reload on activation.
+          </span>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-[#aeb9c8]">Max live tabs</span>
+          <input
+            id="maxLiveTabsInput"
+            className={fieldInputClass(errors, 'maxLiveTabs')}
+            type="number"
+            min={1}
+            max={40}
+            step={1}
+            value={draft.maxLiveTabs}
+            aria-invalid={errors.maxLiveTabs ? 'true' : undefined}
+            onChange={(event) => updateDraft({ maxLiveTabs: event.target.value })}
+          />
+          <FieldError inputId="maxLiveTabsInput" message={errors.maxLiveTabs} />
+          <span className="text-xs text-[#7f8ca0]">
+            Hard cap on live GitHub pages across all sessions (≈400 MB each); the tab you're looking
+            at is exempt.
+          </span>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            id="prAutoOpenTabsInput"
+            type="checkbox"
+            checked={autoOpenTabs}
+            onChange={(event) => toggleAutoOpenTabs(event.target.checked)}
+          />
+          <span>Open a tab when a session creates a PR</span>
+        </label>
+      </section>
     </div>
   );
 }

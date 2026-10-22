@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { AppNotification } from '../../core/notificationModel';
+import { openNotificationEntry } from '../notificationOpen';
 import { useShellState } from '../store';
 import { ClaudeGlyph } from './NotificationPanel';
 
@@ -54,7 +55,7 @@ export function NotificationBanner() {
       role="status"
       data-source={current.source ?? 'devin'}
       onClick={() => {
-        window.agentworkspace.notificationsOpen(current.id);
+        openNotificationEntry(current);
         dismiss();
       }}
     >
