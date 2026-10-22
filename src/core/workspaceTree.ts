@@ -71,7 +71,7 @@ export function renameWorkspace(
 // of it, matching on path-segment boundaries. Nested workspaces resolve
 // deepest-wins (greatest workspaceDepth); ties keep array order.
 
-import { hostIdForPath, toHostPath, wslHost, type HostId } from './execHost';
+import { hostIdForPath, sshHost, toHostPath, wslHost, type HostId } from './execHost';
 
 const stripTrailingSep = (s: string): string =>
   s.length > 1 ? s.replace(/[\\/]+$/g, '') : s;
@@ -100,8 +100,11 @@ function workspaceHostPath(path: string, hostId: HostId, opts?: WorkspaceMatchOp
     const rest = path.slice(opts.uncRoot.length).replace(/\\/g, '/').replace(/^\/+/, '');
     return rest ? `/${rest}` : '/';
   }
-  if (hostId !== 'local' && hostId.startsWith('wsl:')) {
+  if (hostId.startsWith('wsl:')) {
     return toHostPath(wslHost(hostId.slice(4), null), path);
+  }
+  if (hostId.startsWith('ssh:')) {
+    return toHostPath(sshHost(hostId.slice(4)), path);
   }
   return path;
 }

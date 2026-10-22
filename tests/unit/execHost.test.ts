@@ -9,6 +9,15 @@ import {
   displayPath,
   helperDeploySpec,
   helperSpec,
+  isSshHost,
+  parseSshUri,
+  sshHelperDeploySpec,
+  sshHelperSpec,
+  sshHost,
+  sshPtySpec,
+  sshQuote,
+  sshSpawnSpec,
+  workspaceLabel,
   parseHelperHash,
   parseHelperPresent,
   parseProbeOutput,
@@ -409,5 +418,121 @@ describe('helper bundle info', () => {
       hash: 'abcdef012345',
       file: join(out, 'helper', 'agent-workspace-helper.mjs'),
     });
+  });
+});
+
+// Minimal POSIX-ish word splitter covering what sshQuote emits: '…' runs,
+// "…" runs where only \\ is an escape, and adjacent concatenation.
+function splitWords(line: string): string[] {
+  const words: string[] = [];
+  let cur: string | null = null;
+  let i = 0;
+  while (i < line.length) {
+    const c = line[i]!;
+    if (c === ' ') {
+      if (cur !== null) words.push(cur);
+      cur = null;
+      i++;
+    } else if (c === "'") {
+      const end = line.indexOf("'", i + 1);
+      cur = (cur ?? '') + line.slice(i + 1, end);
+      i = end + 1;
+    } else if (c === '"') {
+      let j = i + 1;
+      let s = '';
+      while (line[j] !== '"') {
+        if (line[j] === '\\') j++;
+        s += line[j++];
+      }
+      cur = (cur ?? '') + s;
+      i = j + 1;
+    } else if (c === '\\') {
+      cur = (cur ?? '') + line[i + 1];
+      i += 2;
+    } else throw new Error(`unquoted char ${c} at ${i}`);
+  }
+  if (cur !== null) words.push(cur);
+  return words;
+}
+
+const NASTY = [`a'b`, 'sp ace', '$HOME', '`id`', 'x\ny', '; rm -rf /', `'`, 'a\\b', 'trail\\', '"q"', '', '*', "\\'"];
+
+describe('ssh host kind', () => {
+  it('ssh:// path form round-trips', () => {
+    expect(hostIdForPath('ssh://box/home/u/x')).toBe('ssh:box');
+    expect(parseSshUri('ssh://box/home/u/x')).toEqual({ alias: 'box', path: '/home/u/x' });
+    expect(parseSshUri('SSH://a.b_c-1/')).toEqual({ alias: 'a.b_c-1', path: '/' });
+    const h = sshHost('box');
+    expect(isSshHost(h)).toBe(true);
+    expect(h.id).toBe('ssh:box');
+    expect(toHostPath(h, 'ssh://box/home/u//x/')).toBe('/home/u/x');
+    expect(toWindowsPath(h, '/home/u/x')).toBe('ssh://box/home/u/x');
+    expect(toHostPath(h, toWindowsPath(h, '/home/u/x'))).toBe('/home/u/x');
+    expect(displayPath(h, '/home/u/x', true)).toBe('box · /home/u/x');
+    expect(displayPath(h, '/home/u/x', false)).toBe('/home/u/x');
+    expect(workspaceLabel('ssh://box/home/u/x')).toBe('box · /home/u/x');
+  });
+  it('rejects invalid aliases', () => {
+    for (const bad of ['', '-oProxyCommand=x', '-x', 'a b', 'a;b', 'a/b', 'a$b', 'a\nb', "a'b", 'a@b']) {
+      expect(() => sshHost(bad)).toThrow();
+      expect(() => sshSpawnSpec(bad, '/h', {}, 'claude', [])).toThrow();
+      expect(() => sshHelperSpec(bad, '/h', '/bin/bash', 'abcdef012345')).toThrow();
+      expect(() => sshHelperDeploySpec(bad, '/h', 'abcdef012345', 1)).toThrow();
+      if (!bad.includes('/')) expect(hostIdForPath(`ssh://${bad}/x`)).toBe('local');
+    }
+  });
+  it('posixQuote handles quotes, spaces, $, newlines', () => {
+    expect(posixQuote(`a'b`)).toBe(`'a'\\''b'`);
+    expect(posixQuote('a b')).toBe(`'a b'`);
+    expect(posixQuote('$HOME')).toBe(`'$HOME'`);
+    expect(posixQuote('x\ny')).toBe(`'x\ny'`);
+  });
+  it('sshQuote round-trips a nasty argument set as single words', () => {
+    expect(splitWords(NASTY.map(sshQuote).join(' '))).toEqual(NASTY);
+    for (const s of ['a b', '$x', `a'b`]) expect(sshQuote(s)).toBe(posixQuote(s));
+  });
+  it('sshSpawnSpec builds one quoted remote string', () => {
+    const spec = sshSpawnSpec('box', '/home/u/my proj', { B: '2 3', A: `it's` }, 'claude', ['-p', '$(id)', 'x;y', "o'k"]);
+    expect(spec.file).toBe('ssh.exe');
+    expect(spec.cwd).toBeNull();
+    expect(spec.args.slice(0, 7)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-T', 'box', '--']);
+    expect(spec.args).toHaveLength(8);
+    expect(spec.args[7]).toBe(
+      `cd '/home/u/my proj' && exec /usr/bin/env 'A=it'\\''s' 'B=2 3' 'claude' '-p' '$(id)' 'x;y' 'o'\\''k'`,
+    );
+  });
+  it('sshSpawnSpec rejects relative cwd, bad env keys, option-like commands', () => {
+    expect(() => sshSpawnSpec('box', 'rel', {}, 'claude', [])).toThrow();
+    expect(() => sshSpawnSpec('box', '/h', { 'A;B': '1' }, 'claude', [])).toThrow();
+    expect(() => sshSpawnSpec('box', '/h', {}, '-oFoo', [])).toThrow();
+  });
+  it('sshPtySpec forces a tty and wraps in the login shell', () => {
+    const spec = sshPtySpec('box', '/home/u', { K: 'v w' }, '/usr/bin/claude', ['-r', 'id'], '/bin/zsh');
+    expect(spec.args.slice(0, 7)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-t', 'box', '--']);
+    expect(spec.args[7]).toBe(
+      `cd '/home/u' && exec '/bin/zsh' -ilc 'exec "$0" "$@"' '/usr/bin/env' 'K=v w' '/usr/bin/claude' '-r' 'id'`,
+    );
+    expect(sshPtySpec('box', '/h', {}, 'c', [], '/usr/bin/fish').args[7]).toContain(`-ilc 'exec $argv'`);
+  });
+  it('sshHelperSpec mirrors the wsl launch line (exit 86 when missing) and adds -R', () => {
+    const spec = sshHelperSpec('box', '/home/u', '/bin/bash', 'abcdef012345', 4567);
+    expect(spec.args).toEqual([
+      '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-T', '-R', '4567:127.0.0.1:4567', 'box', '--',
+      `cd '/home/u' && exec '/bin/bash' -ilc 'test -f "$0" || exit 86; exec node "$0" --stdio' '/home/u/.agent-workspace/helper-abcdef012345.mjs'`,
+    ]);
+    expect(sshHelperSpec('box', '/home/u', '/bin/bash', 'abcdef012345').args).not.toContain('-R');
+    expect(sshHelperSpec('box', '/h', '/usr/bin/fish', 'abcdef012345').args.at(-1)).toContain(
+      `'test -f $argv[1]; or exit 86; exec node $argv --stdio'`,
+    );
+    expect(() => sshHelperSpec('box', '/h', '/bin/bash', 'abcdef012345', 70000)).toThrow();
+  });
+  it('sshHelperDeploySpec runs the same byte-gated atomic script', () => {
+    const wsl = helperDeploySpec(UB, '/home/u', 'abcdef012345', 10).args[5]!;
+    const spec = sshHelperDeploySpec('box', '/home/u', 'abcdef012345', 10);
+    const remote = spec.args.at(-1)!;
+    expect(remote).toBe(
+      `exec '/bin/sh' '-c' '${wsl}' 'sh' '/home/u/.agent-workspace' 'helper-abcdef012345.mjs' '10'`,
+    );
+    expect(splitWords(remote.slice('exec '.length))[2]).toBe(wsl);
   });
 });

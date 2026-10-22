@@ -162,6 +162,18 @@ describe('workspaceMatches / workspaceFor (P4b host-aware cwd match)', () => {
     expect(workspaceMatches(ws, { host: 'local', cwd: ws })).toBe(true);
   });
 
+  it('ssh host: matches on segment boundaries, host-aware', () => {
+    const ws = 'ssh://box/home/u/proj';
+    const sess = (cwd: string, host: 'ssh:box' | 'ssh:other' = 'ssh:box') => ({ host, cwd });
+    expect(workspaceMatches(ws, sess('/home/u/proj'))).toBe(true);
+    expect(workspaceMatches(ws, sess('/home/u/proj/sub'))).toBe(true);
+    expect(workspaceMatches(ws, sess('/home/u/project'))).toBe(false);
+    expect(workspaceMatches(ws, sess('/home/u/proj', 'ssh:other'))).toBe(false);
+    expect(workspaceMatches(ws, { host: 'local', cwd: '/home/u/proj' })).toBe(false);
+    expect(workspaceFor([ws, 'ssh://box/home/u'], sess('/home/u/proj/a'))).toBe(ws);
+    expect(relativeToWorkspace(ws, sess('/home/u/proj/a/b'))).toBe('a/b');
+  });
+
   it('workspaceFor returns the deepest matching workspace, null on no match', () => {
     const sess = { host: 'local' as const, cwd: 'C:\\ws\\one' };
     expect(workspaceFor([ws2, ws1], sess)).toBe(ws1);
