@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx } from '../core/layout';
+import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx, sidebarShortcutSurface } from '../core/layout';
 import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
 import { claudeSessions } from './claude/sessions';
@@ -80,7 +80,7 @@ export function handleShortcut(
     setPaneOpen(!state.paneOpen, 'shortcut');
     focusVisibleContents(contents);
     handled = true;
-  } else if (ctrl && input.shift && key === 's' && (state.surface === 'cloud' || state.surface === 'claude')) {
+  } else if (ctrl && input.shift && key === 's' && sidebarShortcutSurface(state.surface)) {
     setSessionsOpen(!state.sessionsOpen, 'shortcut');
     focusVisibleContents(contents);
     handled = true;

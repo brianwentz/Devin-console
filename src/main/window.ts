@@ -11,6 +11,7 @@ import {
   MIN_DEVIN_WIDTH,
   paneToggleWindowWidth,
   RAIL_WIDTH,
+  sessionsColumnSurface,
   SPLITTER_WIDTH,
   type LayoutState,
   type Rect,
@@ -110,8 +111,8 @@ export function layoutState(): LayoutState {
     paneFraction: state.paneFraction,
     terminalOpen: terminalVisible(),
     terminalHeight: state.terminalHeight,
-    // The sessions column only occupies space on the Cloud surface.
-    sessionsOpen: state.sessionsOpen && (state.surface === 'cloud' || state.surface === 'claude'),
+    // The sessions column occupies space on every provider surface.
+    sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
     sessionsWidth: state.sessionsWidth,
     analyticsTabs: state.surface === 'analytics',
   };
@@ -459,7 +460,7 @@ export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
   if (axis === 's' &&
     (!state.sessionsOpen ||
       state.sessionsCollapsed ||
-      (state.surface !== 'cloud' && state.surface !== 'claude')))
+      !sessionsColumnSurface(state.surface)))
     return;
   state.dragging = true;
   state.dragAxis = axis;

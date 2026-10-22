@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { computeBounds, dockSurface, RAIL_WIDTH } from '../core/layout';
+import { computeBounds, dockSurface, RAIL_WIDTH, sessionsColumnSurface } from '../core/layout';
 import { renderBadgeDataUrl } from './badge';
 import { handleSettingsFlush } from './settingsDraft';
 import { useShellState } from './store';
@@ -83,9 +83,7 @@ export function App() {
     paneFraction: state.paneFraction,
     terminalOpen: terminalVisible,
     terminalHeight: state.terminalHeight,
-    sessionsOpen:
-      state.sessionsOpen &&
-      (state.surface === 'cloud' || state.surface === 'claude' || state.surface === 'local'),
+    sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
     sessionsWidth: state.sessionsWidth,
     analyticsTabs: state.surface === 'analytics',
   });

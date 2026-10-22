@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
+import { PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
 import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
 
@@ -221,7 +222,7 @@ export const BadgeRenderedSchema = z.object({
   dataUrl: z.string().regex(/^data:image\/png;base64,/).max(200_000).nullable(),
 });
 
-export const SurfaceSchema = z.enum(['cloud', 'local', 'claude', 'settings', 'analytics']);
+export const SurfaceSchema = z.enum([...PROVIDER_SURFACES, 'settings', 'analytics']);
 export type Surface = z.infer<typeof SurfaceSchema>;
 
 // User-configurable URL rules: matching links open as GitHub-pane tabs.

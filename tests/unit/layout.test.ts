@@ -16,6 +16,8 @@ import {
   paneAvailable,
   paneToggleWindowWidth,
   paneWidthPx,
+  sessionsColumnSurface,
+  sidebarShortcutSurface,
   RAIL_WIDTH,
   SESSIONS_MAX_WIDTH,
   SESSIONS_MIN_WIDTH,
@@ -362,6 +364,31 @@ describe('dockSurface', () => {
     expect(surfaces.filter(dockSurface)).toEqual(['cloud', 'local', 'claude']);
     expect(dockSurface('settings')).toBe(false);
     expect(dockSurface('analytics')).toBe(false);
+  });
+});
+
+describe('sessionsColumnSurface / sidebarShortcutSurface', () => {
+  it('reserves the sessions column on every provider surface only', () => {
+    const surfaces: Surface[] = ['cloud', 'local', 'claude', 'settings', 'analytics'];
+    expect(surfaces.filter(sessionsColumnSurface)).toEqual(['cloud', 'local', 'claude']);
+    expect(sessionsColumnSurface('settings')).toBe(false);
+    expect(sessionsColumnSurface('analytics')).toBe(false);
+  });
+
+  it('has no sidebar shortcut on Local', () => {
+    expect(sidebarShortcutSurface('local')).toBe(false);
+    expect(sidebarShortcutSurface('cloud')).toBe(true);
+    expect(sidebarShortcutSurface('claude')).toBe(true);
+    expect(sidebarShortcutSurface('settings')).toBe(false);
+    expect(sidebarShortcutSurface('analytics')).toBe(false);
+  });
+
+  it('computeBounds on Local with the column open reserves RAIL + sessionsWidth + SPLITTER', () => {
+    const open = computeBounds(
+      { width: 1400, height: 900 },
+      layout({ sessionsOpen: sessionsColumnSurface('local'), sessionsWidth: 260, paneOpen: false }),
+    );
+    expect(open.devin.x).toBe(RAIL_WIDTH + 260 + SPLITTER_WIDTH);
   });
 });
 

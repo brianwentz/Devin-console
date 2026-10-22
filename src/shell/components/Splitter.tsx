@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import {
   clampPaneWidth,
   leftChrome,
+  sessionsColumnSurface,
   SPLITTER_WIDTH,
   type Rect,
 } from '../../core/layout';
@@ -42,7 +43,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
           paneFraction: state.paneFraction,
           terminalOpen: state.terminalOpen,
           terminalHeight: state.terminalHeight,
-          sessionsOpen: state.sessionsOpen && state.surface === 'cloud',
+          sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
           sessionsWidth: state.sessionsWidth,
         },
         document.documentElement.clientWidth,

@@ -13,7 +13,7 @@ export type PublicState = {
   sessionsOpen: boolean;
   sessionsWidth: number;
   sessionsCollapsed: boolean;
-  surface: 'cloud' | 'local' | 'settings' | 'analytics';
+  surface: string;
   currentSessionId: string | null;
   localSessionId: string | null;
   credentials: Array<{
