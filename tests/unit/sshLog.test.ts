@@ -86,6 +86,12 @@ describe('scrubKnownAliases (R39 #6)', () => {
       'connect to ssh:#h-box.example.com port 22: refused',
     );
   });
+  it('an already-hashed ssh:#<hash> id is never rewritten again (even if "ssh" reached the alias list)', () => {
+    const text = 'helper ssh:#26f8567f down; box unreachable';
+    expect(scrubKnownAliases(text, ['box'], hash)).toBe('helper ssh:#26f8567f down; ssh:#h-box unreachable');
+    expect(scrubKnownAliases(text, ['box', 'ssh'], hash)).toBe('helper ssh:#26f8567f down; ssh:#h-box unreachable');
+    expect(scrubKnownAliases({ m: 'ssh:#26f8567f' }, ['box', 'ssh'], hash)).toEqual({ m: 'ssh:#26f8567f' });
+  });
   it('is a no-op without configured aliases', () => {
     const detail = { m: 'box' };
     expect(scrubKnownAliases(detail, [], hash)).toBe(detail);

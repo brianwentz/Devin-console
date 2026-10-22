@@ -565,6 +565,30 @@ describe('hosts.ssh (P3)', () => {
     expect(settings.hosts.ssh).toEqual([{ alias: 'ok', enabled: true }]);
     expect(settings.hosts.wslEnabled).toBe(false);
   });
+
+  it('reserved aliases (ssh/local/wsl) are invalid in memory but preserved raw in the file (S6)', () => {
+    const raw = {
+      hosts: { ssh: [{ alias: 'box', enabled: true }, { alias: 'SSH', enabled: true, x: 1 }, { alias: 'local', enabled: false }] },
+    };
+    const { settings } = parseSettingsFile(raw);
+    expect(settings.hosts.ssh).toEqual([{ alias: 'box', enabled: true }]);
+    const out = serializeSettingsFile(raw, settings, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
+    expect(out.hosts.ssh).toEqual([
+      { alias: 'box', enabled: true },
+      { alias: 'SSH', enabled: true, x: 1 },
+      { alias: 'local', enabled: false },
+    ]);
+  });
+
+  it('a settings commit adding a reserved alias fails with a user-facing error', () => {
+    for (const alias of ['ssh', 'Wsl']) {
+      const parsed = SettingsPatchSchema.safeParse({ hosts: { ssh: [{ alias, enabled: true }] } });
+      expect(parsed.success, alias).toBe(false);
+      expect(parsed.error?.issues.map((i) => i.message).join(' '), alias).toMatch(/reserved/);
+    }
+    const ok = SettingsPatchSchema.safeParse({ hosts: { ssh: [{ alias: ' Box ', enabled: true }] } });
+    expect(ok.success && ok.data.hosts?.ssh).toEqual([{ alias: 'box', enabled: true }]);
+  });
 });
 
 describe('ux2 P0 — new local/claude workspace keys and removed-key migration', () => {

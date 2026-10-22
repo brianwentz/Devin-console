@@ -16,7 +16,7 @@ import {
   isFsReady,
   isSshHost,
   isWslHost,
-  canonicalSshAlias,
+  validateSshAliasInput,
   LOCAL_HOST,
   parseShellEnv,
   parseWslList,
@@ -1463,17 +1463,12 @@ export class HostsRegistry {
 
   // --- ssh membership (P3) ------------------------------------------------------
 
-  /** hosts:sshAdd — validates + canonicalises (lower-case) the alias; an
-   * existing alias is re-enabled. The probe runs on the next status read. */
+  /** hosts:sshAdd — validates + canonicalises (lower-case) the alias (reserved
+   * names refused); an existing alias is re-enabled. The probe runs on the next status read. */
   addSshHost(input: string): { ok: true; id: HostId } | { ok: false; error: string } {
-    const alias = canonicalSshAlias(input);
-    if (!alias) {
-      return {
-        ok: false,
-        error:
-          'Invalid SSH alias — use a Host name from ~/.ssh/config (letters, digits, ".", "_", "-"; not starting with "-")',
-      };
-    }
+    const checked = validateSshAliasInput(input);
+    if (!checked.ok) return checked;
+    const { alias } = checked;
     const current = state.settings?.current.hosts.ssh ?? [];
     const known = current.some((h) => h.alias === alias);
     if (!known && current.length >= 50) return { ok: false, error: 'Too many SSH hosts (50 max)' };

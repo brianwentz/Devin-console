@@ -621,7 +621,9 @@ variable that selects it.
   `ptySpawnSpec`/`hostById`/`refresh`/`setEnabled` dispatch `ssh:` ids to it): `ssh:<alias>` for each enabled `hosts.ssh` entry; the alias is canonical
   lower case everywhere (`sshHost`/`parseSshUri`/`canonicalSshAlias` in `core/execHost.ts`). Path form `ssh://<alias>/<abs>` is the stored identity of
   ssh workspaces/cwds (`normalizeWorkspacePath` canonicalises it at every input boundary; a malformed `ssh:` path throws
-  `INVALID_SSH_PATH_MESSAGE` — never `resolve()`d). No enumeration: configured + enabled is the channel's `canSpawn`; the lazy probe is one
+  `INVALID_SSH_PATH_MESSAGE` — never `resolve()`d). Reserved aliases `ssh`/`local`/`wsl` (`isReservedSshAlias`, case-insensitive) are refused
+  at every add boundary — `hosts:sshAdd` (`validateSshAliasInput`), `normalizeWorkspacePath` (rename/remove pass `{existing:true}`), and the
+  settings patch schema — with `RESERVED_SSH_ALIAS_MESSAGE`; a stored one is invalid in memory and kept raw in the file (S6). No enumeration: configured + enabled is the channel's `canSpawn`; the lazy probe is one
   `ssh -T <alias> -- exec /bin/sh -c <probe line>` (exit 255 = connection failed → row `error`, automatic retry only for connection-class failures, below) + one login-shell run
   (`sshEnvSpec`: env, node, `claude`/`devin`/`gh` paths, `claude --version`) + the byte-gated stdin deploy; the channel launch is
   `sshHelperSpec` (no `-R`). Every ssh.exe argv starts `-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10 -o ControlMaster=no
@@ -675,8 +677,8 @@ variable that selects it.
   `ssh://<alias>` in a record to `ssh:#<sha256-8>`, and (R39 #6, `scrubKnownAliases`) every configured alias appearing as a whole word
   (case-insensitive) in a string value at any depth — e.g. `ssh: Could not resolve hostname box`, `ssh:box`, the first label of
   `box.example.com` — the alias never reaches the event log. R40 c: values of `host`/`state`/`kind`/`op`/`source`/`reason` (unless they start
-  with `ssh:`) and exact `local` / `wsl:<distro>` ids are never rewritten, and nothing preceded by `:`/`#` is (so `wsl:Ubuntu` survives an alias
-  `ubuntu`); aliases configured at any point this run stay in the scrub list after removal. `hosts.ssh` (M4): `sanitizeSshHostList` lower-cases
+  with `ssh:`) and exact `local` / `wsl:<distro>` ids are never rewritten, and nothing preceded by `:`/`#` is, nor followed by `:#` (so `wsl:Ubuntu` survives an alias
+  `ubuntu`, and an already-hashed `ssh:#<hash>` is never rewritten); aliases configured at any point this run stay in the scrub list after removal. `hosts.ssh` (M4): `sanitizeSshHostList` lower-cases
   aliases and drops only malformed entries / later duplicates; `serializeSettingsFile` writes each kept entry over its first raw entry with the
   same canonical alias (raw alias form + unknown fields survive, memory's `enabled` wins) and appends malformed raw entries and later raw
   duplicates of a still-configured host back raw (ux3 S6, R40 L1); a removed host's raw entries go with it. Claude's

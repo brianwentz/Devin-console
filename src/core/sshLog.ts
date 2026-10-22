@@ -44,7 +44,8 @@ const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'
 /** Matchers for the configured aliases, case-insensitive: `ssh:<alias>` in
  * free text, then the bare alias as a whole word. An alias char (or `:` / `#`)
  * before it, or an alias char after it, is not a boundary; a following `.`
- * is (the first label of `box.example.com` is the alias). */
+ * is (the first label of `box.example.com` is the alias). A following `:#`
+ * is not either: `ssh:#<hash>` is already scrubbed. */
 function knownAliasRes(aliases: readonly string[]): { prefixed: RegExp; bare: RegExp } {
   const key = aliases.join(' ');
   let res = regexCache.get(key);
@@ -52,7 +53,7 @@ function knownAliasRes(aliases: readonly string[]): { prefixed: RegExp; bare: Re
     const alt = [...aliases].sort((a, b) => b.length - a.length).map(escapeRe).join('|');
     res = {
       prefixed: new RegExp(`(?<![A-Za-z0-9._-])ssh:(${alt})(?![A-Za-z0-9_-])`, 'gi'),
-      bare: new RegExp(`(?<![A-Za-z0-9._:#-])(${alt})(?![A-Za-z0-9_-])`, 'gi'),
+      bare: new RegExp(`(?<![A-Za-z0-9._:#-])(${alt})(?![A-Za-z0-9_-]|:#)`, 'gi'),
     };
     if (regexCache.size > 16) regexCache.clear();
     regexCache.set(key, res);

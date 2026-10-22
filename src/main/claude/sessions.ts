@@ -29,11 +29,9 @@ import {
 } from '../../core/workspaceTree';
 import { claudeScope } from '../../core/tabModel';
 import {
-  INVALID_SSH_PATH_MESSAGE,
   LOCAL_HOST,
   isRemoteHost,
   isSshPathLike,
-  normalizeSshPath,
   normalizeWorkspacePath,
   type ExecHost,
   type HostId,
@@ -854,8 +852,8 @@ export class ClaudeSessions {
       dir = await this.pickWorkspaceDir('Choose the working directory for the new Claude session');
       if (!dir) return null;
     }
-    // A malformed ssh:// cwd is refused here, never resolved as a local path.
-    if (isSshPathLike(dir) && !normalizeSshPath(dir)) throw new Error(INVALID_SSH_PATH_MESSAGE);
+    // A malformed or reserved-alias ssh:// cwd is refused here, never resolved as a local path.
+    if (isSshPathLike(dir)) normalizeWorkspacePath(dir, resolve);
     this.recordMutation('newSession', {});
     // A UNC pick (\\wsl.localhost\<D>\…) selects the wsl host, `ssh://<alias>/…`
     // the ssh host; the stored cwd is the posix path on that host.
@@ -992,7 +990,7 @@ export class ClaudeSessions {
   workspaceRename(path: string, label: string): Promise<void> {
     this.recordMutation('workspaceRename', {});
     return this.mutate('workspaceRename', () => {
-      const normalized = normalizeWorkspacePath(path, resolve);
+      const normalized = normalizeWorkspacePath(path, resolve, { existing: true });
       const labels = state.settings?.current.claude.workspaceLabels ?? {};
       state.settings?.merge({
         claude: { workspaceLabels: renameWorkspace(labels, normalized, label) },
@@ -1013,13 +1011,13 @@ export class ClaudeSessions {
         buttons: ['Remove', 'Cancel'],
         defaultId: 0,
         cancelId: 1,
-        message: `Remove workspace "${defaultWorkspaceLabel(normalizeWorkspacePath(path, resolve))}"?`,
+        message: `Remove workspace "${defaultWorkspaceLabel(normalizeWorkspacePath(path, resolve, { existing: true }))}"?`,
         detail: 'Sessions stay — they just file under Recent.',
       });
       confirmed = response === 0;
     }
     if (!confirmed) return;
-    const normalized = normalizeWorkspacePath(path, resolve);
+    const normalized = normalizeWorkspacePath(path, resolve, { existing: true });
     const current = state.settings?.current.claude;
     const labels = { ...(current?.workspaceLabels ?? {}) };
     delete labels[normalized];

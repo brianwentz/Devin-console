@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
 import { isAllowedAppUrl } from '../core/sessions';
-import { SSH_ALIAS_CANONICAL_RE } from '../core/execHost';
+import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
 
 // Execution hosts: 'local' is this machine, 'wsl:<distro>' runs inside WSL,
 // 'ssh:<alias>' on a remote machine reached through ssh.exe (canonical,
@@ -436,8 +436,15 @@ export const DevinUsageStateSchema = z.object({
   nextPollAt: z.string().nullable(),
 });
 export type DevinUsageState = z.infer<typeof DevinUsageStateSchema>;
-// P3 ssh host entry: canonical (lower-case) alias.
-const SshHostEntrySchema = z.object({ alias: z.string().max(128).regex(SSH_ALIAS_CANONICAL_RE), enabled: z.boolean() });
+// P3 ssh host entry: canonical (lower-case) alias, never a reserved name.
+const SshHostEntrySchema = z.object({
+  alias: z
+    .string()
+    .max(128)
+    .regex(SSH_ALIAS_CANONICAL_RE)
+    .refine((alias) => !isReservedSshAlias(alias), RESERVED_SSH_ALIAS_MESSAGE),
+  enabled: z.boolean(),
+});
 
 /** Fix round 1 M4: aliases are lower-cased and only malformed entries (and
  * later duplicates) drop — one bad entry never costs the whole list. The
@@ -465,6 +472,20 @@ export function canonicalSshHostEntry(entry: unknown): { alias: string; enabled:
   });
   return parsed.success ? parsed.data : null;
 }
+
+/** Patch form (settings:set/commit): aliases are canonicalised but nothing is
+ * dropped — a malformed or reserved alias fails the patch with its message. */
+const SshHostListPatchSchema = z.preprocess(
+  (raw) =>
+    Array.isArray(raw)
+      ? raw.map((entry: unknown) =>
+          typeof entry === 'object' && entry !== null && typeof (entry as { alias?: unknown }).alias === 'string'
+            ? { ...entry, alias: (entry as { alias: string }).alias.trim().toLowerCase() }
+            : entry,
+        )
+      : raw,
+  z.array(SshHostEntrySchema).max(50),
+);
 
 // Execution hosts (WSL). wslDistros: null = auto (running + default);
 // overrides: per-host path/shell/env-capture settings keyed by HostId.
@@ -659,7 +680,7 @@ export const SettingsPatchSchema = z.object({
   usage: z.object(UsageFields).partial().optional(),
   sessions: z.object(SessionsFields).partial().optional(),
   claude: z.object(ClaudeFields).partial().optional(),
-  hosts: z.object(HostsFields).partial().optional(),
+  hosts: z.object({ ...HostsFields, ssh: SshHostListPatchSchema }).partial().optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
 

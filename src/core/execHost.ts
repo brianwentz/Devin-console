@@ -49,6 +49,30 @@ export function canonicalSshAlias(input: string): string | null {
   return alias.length > 0 && alias.length <= 128 && SSH_ALIAS_RE.test(alias) ? alias : null;
 }
 
+/** Aliases that would read as another host kind (`ssh:ssh`, `ssh:local`,
+ * `ssh:wsl`) and collide with the log scrub's host-id words. Refused when a
+ * host or ssh:// workspace is added; an existing entry is invalid in memory
+ * (kept raw in settings.json, ux3 S6). */
+const RESERVED_SSH_ALIASES: ReadonlySet<string> = new Set(['ssh', 'local', 'wsl']);
+
+export const RESERVED_SSH_ALIAS_MESSAGE = '"ssh", "local" and "wsl" are reserved — give the host a different alias in ~/.ssh/config';
+
+export const INVALID_SSH_ALIAS_MESSAGE =
+  'Invalid SSH alias — use a Host name from ~/.ssh/config (letters, digits, ".", "_", "-"; not starting with "-")';
+
+/** Case-insensitive, after trimming. */
+export function isReservedSshAlias(alias: string): boolean {
+  return RESERVED_SSH_ALIASES.has(alias.trim().toLowerCase());
+}
+
+/** hosts:sshAdd input → canonical alias, or the user-facing reason it is refused. */
+export function validateSshAliasInput(input: string): { ok: true; alias: string } | { ok: false; error: string } {
+  const alias = canonicalSshAlias(input);
+  if (!alias) return { ok: false, error: INVALID_SSH_ALIAS_MESSAGE };
+  if (isReservedSshAlias(alias)) return { ok: false, error: RESERVED_SSH_ALIAS_MESSAGE };
+  return { ok: true, alias };
+}
+
 export function isSshHost(host: ExecHost): host is Extract<ExecHost, { kind: 'ssh' }> {
   return host.kind === 'ssh';
 }
@@ -93,12 +117,19 @@ export const INVALID_SSH_PATH_MESSAGE = 'Invalid SSH path — use ssh://<alias>/
 
 /** Workspace/cwd key at the input boundary: an ssh path is canonicalised (a
  * malformed one throws INVALID_SSH_PATH_MESSAGE — never `resolve()`d into a
- * Windows path), anything else goes through `resolveLocal`. */
-export function normalizeWorkspacePath(p: string, resolveLocal: (p: string) => string): string {
+ * Windows path), anything else goes through `resolveLocal`. A reserved alias
+ * throws RESERVED_SSH_ALIAS_MESSAGE unless `existing` (rename/remove of an
+ * entry that is already stored). */
+export function normalizeWorkspacePath(
+  p: string,
+  resolveLocal: (p: string) => string,
+  opts: { existing?: boolean } = {},
+): string {
   if (!isSshPathLike(p)) return resolveLocal(p);
-  const normalized = normalizeSshPath(p);
-  if (!normalized) throw new Error(INVALID_SSH_PATH_MESSAGE);
-  return normalized;
+  const parsed = parseSshUri(p.trim());
+  if (!parsed) throw new Error(INVALID_SSH_PATH_MESSAGE);
+  if (!opts.existing && isReservedSshAlias(parsed.alias)) throw new Error(RESERVED_SSH_ALIAS_MESSAGE);
+  return normalizeSshPath(p)!;
 }
 
 /** A host that is reached over the helper channel (WSL or SSH). */

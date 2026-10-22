@@ -23,6 +23,9 @@ import {
   SSH_RUN_FILE_SCRIPT,
   normalizeWorkspacePath,
   INVALID_SSH_PATH_MESSAGE,
+  RESERVED_SSH_ALIAS_MESSAGE,
+  isReservedSshAlias,
+  validateSshAliasInput,
   deriveHelperState,
   displayPath,
   helperDeploySpec,
@@ -696,6 +699,22 @@ describe('ssh host kind — P3 canonical alias, path normalisation, probe specs'
     expect(normalizeWorkspacePath('C:\\work', resolveLocal)).toBe('R(C:\\work)');
     expect(() => normalizeWorkspacePath('ssh:box/x', resolveLocal)).toThrow(INVALID_SSH_PATH_MESSAGE);
     expect(() => normalizeWorkspacePath('ssh://-o/x', resolveLocal)).toThrow(INVALID_SSH_PATH_MESSAGE);
+  });
+  it('reserved aliases ssh/local/wsl are refused at the add boundary (case-insensitive, after canonicalisation)', () => {
+    for (const reserved of ['ssh', ' SSH ', 'Local', 'WSL']) {
+      expect(isReservedSshAlias(reserved), reserved).toBe(true);
+      expect(validateSshAliasInput(reserved), reserved).toEqual({ ok: false, error: RESERVED_SSH_ALIAS_MESSAGE });
+    }
+    for (const ok of ['box', 'sshbox', 'wsl.box', 'local-1']) {
+      expect(isReservedSshAlias(ok), ok).toBe(false);
+      expect(validateSshAliasInput(ok), ok).toEqual({ ok: true, alias: ok });
+    }
+    expect(validateSshAliasInput('-x').ok).toBe(false);
+    const resolveLocal = (p: string) => `R(${p})`;
+    expect(() => normalizeWorkspacePath('ssh://SSH/home/u', resolveLocal)).toThrow(RESERVED_SSH_ALIAS_MESSAGE);
+    expect(() => normalizeWorkspacePath('ssh://local/x', resolveLocal)).toThrow(RESERVED_SSH_ALIAS_MESSAGE);
+    // An entry that already exists can still be renamed/removed.
+    expect(normalizeWorkspacePath('ssh://Wsl/x/', resolveLocal, { existing: true })).toBe('ssh://wsl/x');
   });
   it('isRemoteHost: wsl and ssh, never local', () => {
     expect(isRemoteHost(LOCAL_HOST)).toBe(false);
