@@ -8,9 +8,17 @@ import { buildHooksBlock, mergeHooksIntoSettings, removeHooksFromSettings } from
 export interface SettingsFileIo {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<string>;
-  write(path: string, data: string): Promise<void>;
+  /** Permission bits of an existing file; null when absent / not reported (Windows). */
+  mode?(path: string): Promise<number | null>;
+  /** `mode` (POSIX permission bits) applies to the written file even when it already existed. */
+  write(path: string, data: string, mode?: number): Promise<void>;
   rename(from: string, to: string): Promise<void>;
-  copy(from: string, to: string): Promise<void>;
+  copy(from: string, to: string, mode?: number): Promise<void>;
+}
+
+/** settings.json holds the hook bearer token: 0600, or a stricter existing mode (never looser). */
+export function secureFileMode(existing: number | null): number {
+  return existing === null ? 0o600 : existing & 0o600;
 }
 
 export type HooksApplyOptions = { enabled: boolean; port: number; token: string; addr?: string };
@@ -68,9 +76,10 @@ export async function applyHooksToSettings(
   if ('error' in result) return fail(false, result.error);
   if (!result.changed) return { installed: opts.enabled, changed: false, error: null, legacyBackupMigrated };
   try {
-    if ((await io.exists(file)) && !(await io.exists(backup))) await io.copy(file, backup);
+    const mode = secureFileMode((await io.mode?.(file).catch(() => null)) ?? null);
+    if ((await io.exists(file)) && !(await io.exists(backup))) await io.copy(file, backup, mode);
     const tmp = `${file}.tmp`;
-    await io.write(tmp, result.json);
+    await io.write(tmp, result.json, mode);
     await io.rename(tmp, file);
   } catch (error) {
     return fail(true, message(error));

@@ -1,7 +1,7 @@
 // hooks.apply: the same core/hooksApply.ts the app runs for its local config
 // dir, against the distro's native <configDir>/settings.json.
 
-import { copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { applyHooksToSettings, type HooksApplyOptions, type SettingsFileIo } from '../core/hooksApply';
 import { bool, int, optStr, safeMessage, str } from './params';
@@ -13,9 +13,21 @@ const io: SettingsFileIo = {
       () => false,
     ),
   read: (path) => readFile(path, 'utf8'),
-  write: (path, data) => writeFile(path, data, 'utf8'),
+  mode: (path) =>
+    stat(path).then(
+      (s) => s.mode & 0o777,
+      () => null,
+    ),
+  // writeFile's `mode` only applies on create — chmod covers a leftover tmp.
+  write: async (path, data, mode) => {
+    await writeFile(path, data, { encoding: 'utf8', ...(mode !== undefined ? { mode } : {}) });
+    if (mode !== undefined) await chmod(path, mode);
+  },
   rename: (from, to) => rename(from, to),
-  copy: (from, to) => copyFile(from, to),
+  copy: async (from, to, mode) => {
+    await copyFile(from, to);
+    if (mode !== undefined) await chmod(to, mode);
+  },
 };
 
 // JSON.parse messages quote the offending input — keep only our own prefix.
