@@ -16,7 +16,7 @@ import { setupDownloads } from './downloads';
 import { setupIpc } from './ipc';
 import { setupLocal, localHost } from './local/ipc';
 import { setupClaude } from './claude/ipc';
-import { claudeHost } from './claude/host';
+import { disposeAll, runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
 import { hosts } from './hosts';
 import { claudeUsage } from './claude/usage';
@@ -185,19 +185,12 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     } catch {
       // best effort at shutdown
     }
-    localHost()?.dispose();
-    // Claude teardown must never block or abort the quit sequence — a slow
-    // consumer close or a failure here would skip the settings snapshot below.
-    try {
-      await Promise.race([
-        claudeHost()?.dispose(),
-        new Promise((resolve) => setTimeout(resolve, 2_000)),
-      ]);
-    } catch (error) {
-      log('shell', 'claude-dispose-error', {
-        detail: { message: error instanceof Error ? error.message : String(error) },
-      });
-    }
+    // Local host dispose then the Claude host dispose (2 s race), in
+    // registration order; each failure is logged and never aborts the quit.
+    await disposeAll();
+    // Not grouped into the runtimes' dispose(): devinUsage sits between the
+    // Claude host and claudeUsage in today's order, and these three share one
+    // try/catch.
     try {
       devinUsage().dispose();
       claudeUsage().dispose();
@@ -423,6 +416,8 @@ async function createWindow(): Promise<void> {
     maxLiveViews: saved.sessions.maxLiveViews,
     keepAliveMs: cloudKeepAliveMs(saved.sessions.keepAliveHours),
   });
+  // Stays named: it runs pre-loadURL, before TabManager creation, so it can't
+  // join the post-loadURL runtime start loop without reordering.
   cloudSessions().start();
 
   state.tabManager = new TabManager({
@@ -457,8 +452,7 @@ async function createWindow(): Promise<void> {
   state.windowRef.on('resize', applyLayout);
   // Re-poll immediately on focus while the poller is in error (backoff drop).
   state.windowRef.on('focus', () => {
-    notifier.onWindowFocus();
-    claudeSessions().onWindowFocus();
+    for (const runtime of runtimes()) runtime.onFocus?.();
     hosts().onWindowFocus();
     updateOnWindowFocus();
   });
@@ -498,12 +492,14 @@ async function createWindow(): Promise<void> {
   state.tabManager.preloadVisibleScope();
   applyLayout();
   await state.shellView.webContents.loadURL('app://shell/index.html');
-  devinUsage().start();
   // Eager start so usage alerts don't depend on visiting the Analytics tab
-  // (the hidden cadence is already 10 min).
-  claudeUsage().start();
+  // (the hidden cadence is already 10 min). devin-cloud then claude; Local
+  // agents autostart from setupLocal()/acpHost.
+  for (const runtime of runtimes()) runtime.start();
   registerTestHooks();
   startCookieAudit();
+  // Stays named after startCookieAudit: moving it into the cloud start would
+  // run it before registerTestHooks()/startCookieAudit().
   notifier.start();
   log('shell', 'window-created', {
     url: state.tenantUrl,

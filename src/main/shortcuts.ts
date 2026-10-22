@@ -2,7 +2,7 @@ import { app } from 'electron';
 import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx, sidebarShortcutSurface } from '../core/layout';
 import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
-import { claudeSessions } from './claude/sessions';
+import { runtimeFor } from './providers';
 import { cloudViews } from './cloudViews';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
@@ -112,12 +112,11 @@ export function handleShortcut(
     historyAction('reload', contents);
     handled = true;
   } else if (ctrl && !input.shift && !input.alt && key === 'n') {
-    if (state.surface === 'claude') {
-      // A new Claude chat session (cwd picker / test env var).
-      void claudeSessions().newSession(null);
-    } else {
-      openNewSession();
-    }
+    // devin-local has no newSession and Settings/Analytics have no runtime, so
+    // they fall back to the Cloud new session exactly as before.
+    const newSession =
+      runtimeFor(state.surface)?.newSession ?? runtimeFor('devin-cloud')?.newSession;
+    void newSession?.();
     handled = true;
   } else if (ctrl && !input.alt && key === '`' && dockSurface(state.surface)) {
     // Off dock surfaces (Settings/Analytics) the shortcut is a no-op, matching

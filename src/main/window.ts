@@ -26,6 +26,7 @@ import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
 import { claudeUsage } from './claude/usage';
 import { devinUsage } from './devinUsage';
+import { runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
 import { cloudViews } from './cloudViews';
 import { terminalHost } from './local/terminalHost';
@@ -540,7 +541,7 @@ export function setPrsPanel(open: boolean): void {
   if (open) raiseShell();
   // Refresh recorded Claude PR states while the panel is open (10 min cadence
   // also runs on its own timer while focused).
-  if (open) claudeSessions().refreshPrStates('panel');
+  if (open) for (const runtime of runtimes()) runtime.onPrPanelOpen?.();
   else if (!overlayOpen()) lowerShell();
   applyLayout();
   log('shell', 'prs-panel', { detail: { open } });
