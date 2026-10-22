@@ -421,6 +421,7 @@ describe('helper bundle info', () => {
   });
 });
 
+// Models POSIX word splitting only (not fish); real-shell behaviour was verified separately against bash/sh/dash.
 // Minimal POSIX-ish word splitter covering what sshQuote emits: '…' runs,
 // "…" runs where only \\ is an escape, and adjacent concatenation.
 function splitWords(line: string): string[] {
@@ -486,6 +487,26 @@ describe('ssh host kind', () => {
     expect(posixQuote('a b')).toBe(`'a b'`);
     expect(posixQuote('$HOME')).toBe(`'$HOME'`);
     expect(posixQuote('x\ny')).toBe(`'x\ny'`);
+  });
+  it('sshQuote encodes backslashes as double-quoted "\\\\" (fish-safe) and only then differs from posixQuote', () => {
+    expect(sshQuote('a\\')).toBe(`'a'"\\\\"''`);
+    expect(sshQuote('\\')).toBe(`''"\\\\"''`);
+    expect(sshQuote('a\\b')).toBe(`'a'"\\\\"'b'`);
+    for (const s of ['', 'a', 'a b', `a'b`, '$x', 'a\\', '\\', 'a\\b', 'x\ny']) {
+      expect(sshQuote(s) !== posixQuote(s)).toBe(s.includes('\\'));
+    }
+  });
+  it('sshQuote round-trips the Phase 8 argument set as single words', () => {
+    const phase8 = [
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'http://127.0.0.1:1/hook/PreToolUse' }] }] } }),
+      'two words',
+      'a"q',
+      '50%',
+      'trail\\',
+      '$HOME',
+      'unicode é',
+    ];
+    expect(splitWords(phase8.map(sshQuote).join(' '))).toEqual(phase8);
   });
   it('sshQuote round-trips a nasty argument set as single words', () => {
     expect(splitWords(NASTY.map(sshQuote).join(' '))).toEqual(NASTY);
