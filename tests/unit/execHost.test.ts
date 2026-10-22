@@ -37,6 +37,7 @@ import {
   sshHost,
   sshPtySpec,
   sshQuote,
+  sshSpawnEnv,
   sshSpawnSpec,
   workspaceLabel,
   parseHelperHash,
@@ -497,7 +498,7 @@ describe('ssh host kind', () => {
   it('rejects invalid aliases', () => {
     for (const bad of ['', '-oProxyCommand=x', '-x', 'a b', 'a;b', 'a/b', 'a$b', 'a\nb', "a'b", 'a@b']) {
       expect(() => sshHost(bad)).toThrow();
-      expect(() => sshSpawnSpec(bad, '/h', '/bin/sh', 'claude', [])).toThrow();
+      expect(() => sshSpawnSpec(bad, '/h', 'claude', [])).toThrow();
       expect(() => sshForwardSpec(bad, 4567)).toThrow();
       expect(() => sshHelperSpec(bad, '/h', '/bin/bash', 'abcdef012345')).toThrow();
       expect(() => sshHelperDeploySpec(bad, '/h', 'abcdef012345', 1)).toThrow();
@@ -541,8 +542,8 @@ describe('ssh host kind', () => {
     '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
   ];
   const N = BASE.length;
-  it('sshSpawnSpec (fix round 1 #4): login shell via /bin/sh, env only on stdin — never in argv', () => {
-    const spec = sshSpawnSpec('box', '/home/u/my proj', '/bin/zsh', 'claude', ['-p', '$(id)', 'x;y', "o'k"]);
+  it('sshSpawnSpec (fix round 1 #4): /bin/sh execs the CLI directly, env only on stdin — never in argv', () => {
+    const spec = sshSpawnSpec('box', '/home/u/my proj', 'claude', ['-p', '$(id)', 'x;y', "o'k"]);
     expect(spec.file).toBe('ssh.exe');
     expect(spec.cwd).toBeNull();
     expect(spec.args.slice(0, N + 3)).toEqual([...BASE, '-T', 'box', '--']);
@@ -551,9 +552,15 @@ describe('ssh host kind', () => {
     const words = splitWords(spec.args[N + 3]!.slice(5));
     expect(words.slice(0, 2)).toEqual(['/bin/sh', '-c']);
     expect(words[2]).toBe(SSH_RUN_STDIN_SCRIPT);
-    // R36 #5: the login body gets the real stdin back from fd 9 (rc files read /dev/null).
-    expect(words.slice(3)).toEqual(['exec "$0" "$@" <&9 9<&-', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
-    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[N + 3]!.slice(5))[3]).toBe('exec $argv <&9 9<&-');
+    expect(words.slice(3)).toEqual(['agent-workspace', '/home/u/my proj', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
+    // No login shell in the spawn: its rc files can neither read the CLI's
+    // stdin (R36 #5) nor close a descriptor it needs (macOS bash 3.2 -ilc).
+    expect(SSH_RUN_STDIN_SCRIPT).not.toMatch(/-ilc|-lc|<&[0-9]/);
+  });
+  it('sshSpawnEnv: captured login env minus per-invocation/per-connection vars, the app env wins', () => {
+    const captured = { PATH: '/home/u/.nvm/bin:/usr/bin', HOME: '/home/u', PWD: '/home/u', SHLVL: '2', SSH_AUTH_SOCK: '/tmp/agent.1', SSH_CONNECTION: '1 2 3 4', K: 'old' };
+    expect(sshSpawnEnv(captured, { K: 'new', TOKEN: 't' })).toEqual({ PATH: '/home/u/.nvm/bin:/usr/bin', HOME: '/home/u', K: 'new', TOKEN: 't' });
+    expect(sshSpawnEnv(null, { TOKEN: 't' })).toEqual({ TOKEN: 't' });
   });
   it('sshEnvLine: base64 of `export K=V` lines; values never appear in clear', () => {
     const env = { TOKEN: 's3cr3t-value', B: "it's $(x)" };
@@ -576,7 +583,7 @@ describe('ssh host kind', () => {
     const env = { TOKEN: 's3cr3t', B: "it's $(x) \\ \"q\"" };
     const r = spawnSync(
       'sh',
-      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&9 9<&-', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'agent-workspace', '/', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
       { input: `${sshEnvLine(env)}rest-of-stdin\n`, encoding: 'utf8', windowsHide: true },
     );
     expect(r.stdout.endsWith(`s3cr3t|it's $(x) \\ "q"|rest-of-stdin\n`), runReport(r)).toBe(true);
@@ -584,18 +591,15 @@ describe('ssh host kind', () => {
   it.skipIf(!hasSh)('R36 #3: a corrupt env line fails closed (exit 97 + a stderr line), never runs the CLI without its env', () => {
     const r = spawnSync(
       'sh',
-      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&9 9<&-', '/', 'sh', 'sh', '-c', 'echo RAN'],
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'agent-workspace', '/', 'sh', '-c', 'echo RAN'],
       { input: '!!!not-base64!!!\nrest\n', encoding: 'utf8', windowsHide: true },
     );
     expect(r.status).toBe(97);
     expect(r.stdout).not.toContain('RAN');
     expect(r.stderr).toContain('agent-workspace: env decode failed');
   });
-  it.skipIf(!hasSh)('R36 #5: an rc-style stdin reader in the login shell sees /dev/null; the CLI gets every byte', () => {
-    // The "login shell" here is sh with a -c body that first reads a line from
-    // ITS stdin (what a .bash_profile `read` does), then execs per the body.
-    const body = 'IFS= read -r stolen; exec "$0" "$@" <&9 9<&-';
-    const r = spawnSync('sh', ['-c', SSH_RUN_STDIN_SCRIPT, body, '/', 'sh', 'sh', '-c', 'cat'], {
+  it.skipIf(!hasSh)('R36 #5: the CLI gets every byte after the env line', () => {
+    const r = spawnSync('sh', ['-c', SSH_RUN_STDIN_SCRIPT, 'agent-workspace', '/', 'cat'], {
       input: `${sshEnvLine({ K: 'v' })}line1\nline2\n`,
       encoding: 'utf8',
       windowsHide: true,
@@ -613,10 +617,9 @@ describe('ssh host kind', () => {
     expect(r.stdout.endsWith('tok value')).toBe(true);
     expect(existsSync(join(dir, 'env'))).toBe(false);
   });
-  it('sshSpawnSpec rejects relative cwd/shell and option-like commands', () => {
-    expect(() => sshSpawnSpec('box', 'rel', '/bin/sh', 'claude', [])).toThrow();
-    expect(() => sshSpawnSpec('box', '/h', 'bash', 'claude', [])).toThrow();
-    expect(() => sshSpawnSpec('box', '/h', '/bin/sh', '-oFoo', [])).toThrow();
+  it('sshSpawnSpec rejects a relative cwd and option-like commands', () => {
+    expect(() => sshSpawnSpec('box', 'rel', 'claude', [])).toThrow();
+    expect(() => sshSpawnSpec('box', '/h', '-oFoo', [])).toThrow();
   });
   it('sshPtySpec forces a tty; the token travels in a staged file, only its path is in argv', () => {
     const file = '/home/u/.agent-workspace/run/0123456789abcdef0123456789abcdef';

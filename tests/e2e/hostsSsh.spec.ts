@@ -225,15 +225,18 @@ test('claude chat on an ssh workspace spawns via ssh -T with the quoted cwd — 
     expect(spawned.argv).toContain('-T');
     expect(spawned.tty).toBe(false);
     expect(spawned.argv.slice(spawned.argv.indexOf('box'), spawned.argv.indexOf('box') + 2)).toEqual(['box', '--']);
-    // /bin/sh → the login shell; cwd and argv are quoted words.
+    // /bin/sh execs the CLI directly (no login shell); cwd and argv are quoted words.
     expect(spawned.remote.startsWith(`exec '/bin/sh' '-c' `)).toBe(true);
-    expect(spawned.remote).toContain(`'/home/u/my proj' '/bin/bash' '/home/u/.local/bin/claude' '--fake-sdk-spawn'`);
+    expect(spawned.remote).toContain(`'agent-workspace' '/home/u/my proj' '/home/u/.local/bin/claude' '--fake-sdk-spawn'`);
+    expect(spawned.remote).not.toContain('-ilc');
     // Fix round 1 #4: no env on the command line — neither the SDK's additions
-    // nor the captured login env; they arrive on stdin (keys logged by the fake).
+    // nor the captured login env; both arrive on stdin (keys logged by the fake).
     for (const leaked of ['CLAUDE_CODE_ENTRYPOINT', 'sdk-ts', 'FAKE_WSL_HELPER', 'PATH=', 'HOME=']) {
       expect(spawned.argv.join(' ')).not.toContain(leaked);
     }
-    await expect.poll(() => stagedEnvKeys(sshLog).some((keys) => keys.includes('CLAUDE_CODE_ENTRYPOINT'))).toBe(true);
+    await expect
+      .poll(() => stagedEnvKeys(sshLog).some((keys) => keys.includes('CLAUDE_CODE_ENTRYPOINT') && keys.includes('PATH')))
+      .toBe(true);
     await expect
       .poll(async () =>
         ((await app.evaluate(() => (globalThis as any).__agentworkspace.claudeChatState())) as {

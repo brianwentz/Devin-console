@@ -651,13 +651,15 @@ variable that selects it.
     `token: ''` (R40 f) and never takes the one-time backup (`core/hooksApply.ts`: the backup is only taken when installing — R40 b; a
     removal would otherwise copy the token-bearing file into `settings.json.agent-workspace.bak`). The ssh `--apply-hooks-off` one-shot
     (`SshHosts.hooksOffOnce`) is deleted: unreachable since ssh removal only runs over a ready channel.
-  - Secrets off argv (fix round 1 #4): the captured login env is never replayed. A piped spawn is `sshSpawnSpec` = `exec /bin/sh -c
-    SSH_RUN_STDIN_SCRIPT <body> <cwd> <shell> <cmd> <args…>`; `spawnOn` writes `sshEnvLine(cmd.env)` (base64 of `export K='v'` lines) as the
-    first stdin line. The script first moves the real stdin to fd 9 and gives itself (and so the login shell's rc files) `/dev/null`
-    (R36 #5 — an rc that reads stdin would eat the CLI's first stream-json line), reads the line from fd 9 (`IFS= read -r`, byte-wise on a pipe),
-    decodes it with a checked `v=$(printf '%s\n' "$e" | base64 -d) || { echo "agent-workspace: env decode failed" >&2; exit 97; }` (fail
-    closed, R36 #3), `eval`s it, `cd`s and execs the CLI through the login shell `-ilc` (PATH/nvm from rc files) with the body
-    `exec "$0" "$@" <&9 9<&-` (fish: `exec $argv <&9 9<&-`), which hands fd 9 back as the CLI's stdin. `execOn` over ssh resolves on `close`
+  - Secrets off argv (fix round 1 #4): no env value is ever in argv. A piped spawn is `sshSpawnSpec` = `exec /bin/sh -c
+    SSH_RUN_STDIN_SCRIPT agent-workspace <cwd> <cmd> <args…>`; `spawnOn` writes `sshEnvLine(sshSpawnEnv(captured, cmd.env))` (base64 of
+    `export K='v'` lines: the captured login env — helper `env.get`, else the probe's `-ilc` capture, none with `envCaptureDisabled` — minus
+    `WSL_ENV_DENYLIST` and the per-connection `SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`/`SSH_AUTH_SOCK`/`SSH_ORIGINAL_COMMAND`, the app's env
+    overlaid) as the first stdin line. The script reads it (`IFS= read -r`, byte-wise on a pipe), decodes it with a checked `base64 -d` /
+    `--decode` (`|| { echo "agent-workspace: env decode failed" >&2; exit 97; }` — fail closed, R36 #3), `eval`s it, `cd`s and execs the CLI
+    directly with stdin untouched — no login shell in a piped spawn (the VS Code Remote / JetBrains model, same as WSL's `-e /usr/bin/env`):
+    an rc file can neither read the CLI's stdin (R36 #5) nor close an fd it needs (macOS bash 3.2's `-ilc` startup closed every inherited
+    fd > 2, so an fd hand-off through the login shell is impossible there). `execOn` over ssh resolves on `close`
     (stdout drained, R36 #2), and so does `SshHosts.run` (probe / env / deploy / challenge — R39 #2). A pty is `sshPtySpec` (`-t`, `SSH_RUN_FILE_SCRIPT`): its env (the hook token) is staged first through the
     helper's `env.stage {vars}` → `<home>/.agent-workspace/run/<32 hex>` (dir 0700, file 0600, `O_EXCL`, ≤64 vars / 64 KB, files older than 1 h
     swept; `src/helper/envStage.ts`); only that path is in argv and the script sources then deletes it. Without a ready channel an ssh pty that

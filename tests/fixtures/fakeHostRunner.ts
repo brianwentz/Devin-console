@@ -395,9 +395,10 @@ export function createRunner(cfg: RunnerConfig) {
       return 0;
     }
     // The ssh run scripts (core/execHost SSH_RUN_STDIN_SCRIPT / SSH_RUN_FILE_SCRIPT):
-    // `/bin/sh -c <script> <login body> [<envfile>] <cwd> <shell> <cmd> <args…>`.
+    // `/bin/sh -c <script> agent-workspace <cwd> <cmd> <args…>` (piped, no login shell) /
+    // `/bin/sh -c <script> <login body> <envfile> <cwd> <shell> <cmd> <args…>` (pty).
     if (file === '/bin/sh' && tail[0] === '-c' && (tail[1] ?? '').includes('IFS= read -r e')) {
-      const [, , , runCwd, , cmd, ...args] = tail;
+      const [, , , runCwd, cmd, ...args] = tail;
       const decoded = Buffer.from(readStdinLine(), 'base64').toString('utf8');
       return runStaged(parseExportLines(decoded), runCwd ?? '/', cmd ?? '', args);
     }

@@ -638,9 +638,9 @@ function sshSpec(alias: string, flags: string[], remote: string): HostSpawnSpec 
 }
 
 /**
- * Env for an ssh spawn/pty (fix round 1 #4): only the app's own additions
- * (SDK vars, the hook token) — never the captured login env — as `export
- * K='v'` lines. They never appear in any argv: a piped spawn sends them
+ * Env for an ssh spawn/pty (fix round 1 #4) as `export K='v'` lines — a pty
+ * gets only the app's own additions (the hook token; its login shell supplies
+ * the rest), a piped spawn sshSpawnEnv. They never appear in any argv: a piped spawn sends them
  * base64'd as the first stdin line (sshEnvLine), a pty sources a 0600 file the
  * helper staged (`env.stage`) and only that random path is in argv.
  */
@@ -669,23 +669,37 @@ export function sshEnvLine(env: Record<string, string>): string {
 }
 
 /**
- * `sh -c` script of sshSpawnSpec — $0 = login-shell body, $1 cwd, $2 shell,
- * rest = argv. The real stdin moves to fd 9 and the shell (and so the login
- * shell's rc files) gets /dev/null — an rc that reads stdin can't eat the
- * CLI's first stream-json line (R36 #5); the env line is read from fd 9 (one
- * byte at a time on a pipe, so the CLI keeps the rest) and the login body
- * hands fd 9 back as the CLI's stdin. A line that does not decode fails closed
+ * `sh -c` script of sshSpawnSpec — $0 = 'agent-workspace' (error prefix), $1
+ * cwd, rest = argv. The env line is read from stdin (one byte at a time on a
+ * pipe, so the CLI keeps the rest), `cd`, then the CLI is exec'd directly with
+ * stdin untouched. No login shell runs here, so no rc file can read the CLI's
+ * stdin (R36 #5) or close a descriptor it needs: macOS bash 3.2's interactive
+ * login startup closed every inherited fd above 2. The login env comes from
+ * the separate capture instead (sshSpawnEnv) — the way VS Code Remote and
+ * JetBrains resolve a shell env. A line that does not decode fails closed
  * (exit 97 + one stderr line) instead of running the CLI without its env (R36 #3).
- * fd 9, not 3: startup files that only run for an interactive login shell may
- * close low fds (macOS sh = bash 3.2 lost fd 3 under `-ilc` only), and 9 is the
- * highest fd a single-digit `sh` (dash) can redirect.
  */
 export const SSH_RUN_STDIN_SCRIPT =
-  'exec 9<&0 </dev/null; IFS= read -r e <&9 || exit 97; ' +
+  'IFS= read -r e || exit 97; ' +
   // `-d` is GNU/busybox, `--decode` is BSD/macOS (whose documented short form is -D);
   // each attempt gets its own printf, so a failed one never eats the next one's input.
   'if [ -n "$e" ]; then v=$(printf \'%s\\n\' "$e" | base64 -d 2>/dev/null) || v=$(printf \'%s\\n\' "$e" | base64 --decode 2>/dev/null) || { echo "agent-workspace: env decode failed" >&2; exit 97; }; eval "$v"; fi; ' +
-  'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
+  'cd "$1" || exit 1; shift; exec "$@"';
+
+/** Per-connection variables sshd sets — the spawn's own connection has its
+ * own; the capture connection's (a dead agent socket) are never replayed. */
+const SSH_SESSION_ENV: ReadonlySet<string> = new Set(['SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'SSH_AUTH_SOCK', 'SSH_ORIGINAL_COMMAND']);
+
+/** The env line of an ssh piped spawn: the captured login env (probe capture
+ * or helper `env.get`; null = plain sshd env, e.g. envCaptureDisabled) minus
+ * per-invocation and per-connection vars, with the app's `extra` overlaid. */
+export function sshSpawnEnv(captured: Record<string, string> | null, extra: Record<string, string>): Record<string, string> {
+  const base: Record<string, string> = {};
+  for (const [key, value] of Object.entries(captured ?? {})) {
+    if (!SSH_SESSION_ENV.has(key)) base[key] = value;
+  }
+  return mergeShellEnv(base, extra);
+}
 
 /** `sh -c` script of sshPtySpec — $0 body, $1 staged env file ('' = none, removed after sourcing), $2 cwd, $3 shell, rest = argv. */
 export const SSH_RUN_FILE_SCRIPT =
@@ -693,21 +707,17 @@ export const SSH_RUN_FILE_SCRIPT =
   'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
 
 const loginBody = (shell: string): string => (shellFamily(shell) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"');
-/** The piped-spawn body: the CLI's stdin is fd 9 again (SSH_RUN_STDIN_SCRIPT moved it there). */
-const loginBodyFd3 = (shell: string): string =>
-  shellFamily(shell) === 'fish' ? 'exec $argv <&9 9<&-' : 'exec "$0" "$@" <&9 9<&-';
 
 /**
- * ssh counterpart of spawnSpec: `/bin/sh` (any login shell may be fish) reads
- * the env line from stdin, `cd`s and execs the CLI through the user's
- * interactive login shell (PATH/nvm come from it — the captured env is never
- * replayed). The caller writes sshEnvLine(env) to the child's stdin first.
+ * ssh counterpart of spawnSpec: `/bin/sh` reads the env line from stdin, `cd`s
+ * and execs the CLI directly (like wsl.exe `-e /usr/bin/env K=V …`). The caller
+ * writes sshEnvLine(sshSpawnEnv(captured, extra)) to the child's stdin first —
+ * PATH/nvm come from that captured login env, never from argv.
  */
-export function sshSpawnSpec(alias: string, cwd: string, shell: string, cmd: string, args: string[]): HostSpawnSpec {
+export function sshSpawnSpec(alias: string, cwd: string, cmd: string, args: string[]): HostSpawnSpec {
   assertAbs(cwd, 'cwd');
-  assertAbs(shell, 'shell');
   assertCmd(cmd);
-  const words = ['/bin/sh', '-c', SSH_RUN_STDIN_SCRIPT, loginBodyFd3(shell), cwd, shell, cmd, ...args].map(sshQuote);
+  const words = ['/bin/sh', '-c', SSH_RUN_STDIN_SCRIPT, 'agent-workspace', cwd, cmd, ...args].map(sshQuote);
   return sshSpec(alias, ['-T'], `exec ${words.join(' ')}`);
 }
 

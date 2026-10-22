@@ -46,6 +46,7 @@ import {
   sshProbeSpec,
   sshPtySpec,
   sshRecoveryDue,
+  sshSpawnEnv,
   sshSpawnSpec,
   type ExecHost,
   type HostCommand,
@@ -886,13 +887,15 @@ export class SshHosts {
     return entry;
   }
 
-  /** Piped child over `ssh -T`; the caller writes `stdinPrefix` (the app's
-   * extra env as one base64 line) before anything else. No env in argv. */
+  /** Piped child over `ssh -T`; the caller writes `stdinPrefix` (the captured
+   * login env + the app's extra env as one base64 line) before anything else.
+   * No env in argv, no login shell in the spawn. */
   spawnSpec(id: HostId, cmd: HostCommand): { file: string; args: string[]; stdinPrefix: string } {
     const entry = this.entryOrThrow(id);
-    const spec = this.apply(sshSpawnSpec(entry.host.alias, cmd.cwd, entry.status.shell ?? '/bin/sh', cmd.file, cmd.args));
+    const spec = this.apply(sshSpawnSpec(entry.host.alias, cmd.cwd, cmd.file, cmd.args));
     this.note(entry, 'spawn', 'spawn');
-    return { ...spec, stdinPrefix: sshEnvLine(cmd.env ?? {}) };
+    const captured = this.ctx.overrides(id).envCaptureDisabled === true ? null : (entry.channelEnv ?? entry.env);
+    return { ...spec, stdinPrefix: sshEnvLine(sshSpawnEnv(captured, cmd.env ?? {})) };
   }
 
   /** node-pty spec over `ssh -t`. A non-empty env (the hook token) is staged
