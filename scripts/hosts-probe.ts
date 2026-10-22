@@ -6,7 +6,8 @@
 // `--host ssh:<alias>` instead probes one ssh host (helper ready, store.list
 // ms, argv round-trip — see probeSsh) into the file's `ssh` key;
 // exit 0 even when wsl.exe or distros are absent (reported in the file).
-// Uses only core/execHost.ts — never src/main/** (that pulls Electron state).
+// Uses only core/execHost.ts — never src/main/** (that pulls Electron state);
+// the one exception is src/main/sshResolve.ts (no electron import).
 //
 // `--soak <minutes> [--profile <dir>]` instead launches the BUILT app (out/main.cjs)
 // against a throwaway COPY of the profile (default %APPDATA%\agent-workspace; the
@@ -52,6 +53,7 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { reduceEventLog, summarizeSoak } from '../src/core/soak';
 import { createHash } from 'node:crypto';
+import { resolveWindowsSsh } from '../src/main/sshResolve';
 import { LineDecoder, encodeFrame } from '../src/core/hostRpc';
 import {
   isValidSshAlias,
@@ -273,12 +275,23 @@ async function soak(minutes: number): Promise<void> {
 // The alias is recorded only as its sha256-8. AGENT_WORKSPACE_TEST_SSH_CMD
 // (e.g. `node out/fixtures/fakeSsh.cjs`) runs the same steps against the fake.
 
+/** The ssh client: the test seam, else an absolute path (R36 #1 — never a bare-name / cwd search). Set by probeSsh. */
+let sshCmd: string[] = [];
+
+async function resolveSshCmd(): Promise<string[]> {
+  const override = process.env.AGENT_WORKSPACE_TEST_SSH_CMD?.trim().split(/\s+/).filter(Boolean);
+  if (override?.length) return override;
+  if (process.platform !== 'win32') return ['/usr/bin/ssh'];
+  const found = await resolveWindowsSsh();
+  if (!found) throw new Error('OpenSSH client (ssh.exe) not found');
+  return [found];
+}
+
 function runSshSpec(
   spec: { args: string[] },
   opts: { input?: Buffer; timeout?: number } = {},
 ): Promise<{ stdout: Buffer; code: number | null; ms: number }> {
-  const override = process.env.AGENT_WORKSPACE_TEST_SSH_CMD?.trim().split(/\s+/).filter(Boolean);
-  const [file, ...prefix] = override?.length ? override : [process.platform === 'win32' ? 'ssh.exe' : 'ssh'];
+  const [file, ...prefix] = sshCmd;
   const t0 = Date.now();
   return new Promise((resolveRun, reject) => {
     const child = spawn(file!, [...prefix, ...spec.args], {
@@ -304,8 +317,7 @@ function runSshSpec(
 }
 
 async function sshHelperRun(spec: { args: string[] }): Promise<Record<string, unknown>> {
-  const override = process.env.AGENT_WORKSPACE_TEST_SSH_CMD?.trim().split(/\s+/).filter(Boolean);
-  const [file, ...prefix] = override?.length ? override : [process.platform === 'win32' ? 'ssh.exe' : 'ssh'];
+  const [file, ...prefix] = sshCmd;
   const t0 = Date.now();
   const child = spawn(file!, [...prefix, ...spec.args], { stdio: 'pipe', windowsHide: true });
   child.stderr.resume();
@@ -349,6 +361,7 @@ async function probeSsh(alias: string): Promise<void> {
   };
   out.ssh = entry;
   try {
+    sshCmd = await resolveSshCmd();
     const hashJson = existsSync('out/helper/helper-hash.json') ? readFileSync('out/helper/helper-hash.json', 'utf8') : null;
     const hash = parseHelperHash(hashJson);
     const probe = await runSshSpec(sshProbeSpec(alias, hash, null));

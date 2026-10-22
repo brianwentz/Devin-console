@@ -556,8 +556,22 @@ export function helperDeploySpec(host: ExecHost, home: string, hash: string, byt
 // is quoted with sshQuote. The string parses identically under POSIX shells
 // and fish.
 
-// ConnectTimeout bounds a dead network (fix round 1 #3); BatchMode never prompts.
-const SSH_BASE_ARGS = ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10'];
+// ConnectTimeout bounds a dead network (fix round 1 #3); BatchMode never
+// prompts; no OpenSSH multiplexing (R36 #6) — a user's ControlMaster could
+// otherwise keep a hook forward alive past child.kill() or let a client
+// return at once while a mux master holds the connection.
+const SSH_BASE_ARGS = [
+  '-o',
+  'BatchMode=yes',
+  '-o',
+  'ServerAliveInterval=15',
+  '-o',
+  'ConnectTimeout=10',
+  '-o',
+  'ControlMaster=no',
+  '-o',
+  'ControlPath=none',
+];
 
 /**
  * posixQuote, plus backslash handling: fish treats `\\` and `\'` as escapes
@@ -623,9 +637,18 @@ export function sshEnvLine(env: Record<string, string>): string {
   return content ? `${base64Utf8(content)}\n` : '\n';
 }
 
-/** `sh -c` script of sshSpawnSpec — $0 = login-shell body, $1 cwd, $2 shell, rest = argv. Reads the env line from stdin (one byte at a time on a pipe, so the CLI keeps the rest of stdin). */
+/**
+ * `sh -c` script of sshSpawnSpec — $0 = login-shell body, $1 cwd, $2 shell,
+ * rest = argv. The real stdin moves to fd 3 and the shell (and so the login
+ * shell's rc files) gets /dev/null — an rc that reads stdin can't eat the
+ * CLI's first stream-json line (R36 #5); the env line is read from fd 3 (one
+ * byte at a time on a pipe, so the CLI keeps the rest) and the login body
+ * hands fd 3 back as the CLI's stdin. A line that does not decode fails closed
+ * (exit 97 + one stderr line) instead of running the CLI without its env (R36 #3).
+ */
 export const SSH_RUN_STDIN_SCRIPT =
-  'IFS= read -r e || exit 97; if [ -n "$e" ]; then eval "$(printf %s "$e" | base64 -d)" || exit 97; fi; ' +
+  'exec 3<&0 </dev/null; IFS= read -r e <&3 || exit 97; ' +
+  'if [ -n "$e" ]; then v=$(printf \'%s\\n\' "$e" | base64 -d) || { echo "agent-workspace: env decode failed" >&2; exit 97; }; eval "$v"; fi; ' +
   'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
 
 /** `sh -c` script of sshPtySpec — $0 body, $1 staged env file ('' = none, removed after sourcing), $2 cwd, $3 shell, rest = argv. */
@@ -634,6 +657,9 @@ export const SSH_RUN_FILE_SCRIPT =
   'cd "$1" || exit 1; shift; s="$1"; shift; exec "$s" -ilc "$0" "$@"';
 
 const loginBody = (shell: string): string => (shellFamily(shell) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"');
+/** The piped-spawn body: the CLI's stdin is fd 3 again (SSH_RUN_STDIN_SCRIPT moved it there). */
+const loginBodyFd3 = (shell: string): string =>
+  shellFamily(shell) === 'fish' ? 'exec $argv <&3' : 'exec "$0" "$@" <&3 3<&-';
 
 /**
  * ssh counterpart of spawnSpec: `/bin/sh` (any login shell may be fish) reads
@@ -645,7 +671,7 @@ export function sshSpawnSpec(alias: string, cwd: string, shell: string, cmd: str
   assertAbs(cwd, 'cwd');
   assertAbs(shell, 'shell');
   assertCmd(cmd);
-  const words = ['/bin/sh', '-c', SSH_RUN_STDIN_SCRIPT, loginBody(shell), cwd, shell, cmd, ...args].map(sshQuote);
+  const words = ['/bin/sh', '-c', SSH_RUN_STDIN_SCRIPT, loginBodyFd3(shell), cwd, shell, cmd, ...args].map(sshQuote);
   return sshSpec(alias, ['-T'], `exec ${words.join(' ')}`);
 }
 

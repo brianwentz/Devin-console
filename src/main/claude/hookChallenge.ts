@@ -12,8 +12,11 @@ export function newChallengeNonce(): string {
   return randomBytes(16).toString('hex');
 }
 
+/** Domain separation (R36 #7): the token's MAC over a bare nonce is never this. */
+export const CHALLENGE_DOMAIN = 'aw-forward-v1:';
+
 export function challengeMac(token: string, nonce: string): string {
-  return createHmac('sha256', token).update(nonce).digest('hex');
+  return createHmac('sha256', token).update(`${CHALLENGE_DOMAIN}${nonce}`).digest('hex');
 }
 
 export function verifyChallengeMac(token: string, nonce: string, answer: string): boolean {

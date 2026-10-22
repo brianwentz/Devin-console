@@ -137,6 +137,12 @@ export function registerTestHooks(): void {
       hostSshAdd: (alias: string) => hosts().addSshHost(alias),
       hostSshRecover: (trigger: 'resume' | 'unlock') => hosts().recoverSsh(trigger, { force: true }),
       hostHookForwardVerified: (id: string) => hosts().hookForwardVerified(id),
+      // execOn over a host (R36 #2 drain check): stdout of `file args…` run in the host home.
+      hostExecOn: (id: string, file: string, args: string[]) => {
+        const host = hosts().hostById(id);
+        if (!host) throw new Error('unknown host');
+        return hosts().execOn(host, { file, args, cwd: host.kind === 'local' ? process.cwd() : (host.home ?? '/') }, 30_000);
+      },
       lastFolderPrompt: () => lastFolderPrompt(),
       // App-originated fs calls on a WSL path seen by the guard (launchApp
       // teardown asserts 0).

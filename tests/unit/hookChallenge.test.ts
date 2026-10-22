@@ -20,9 +20,10 @@ describe('hook health challenge', () => {
     expect(a).not.toBe(b);
   });
 
-  it('challengeMac is HMAC-SHA256(token, nonce) hex', () => {
+  it('challengeMac is HMAC-SHA256(token, "aw-forward-v1:" + nonce) hex (R36 #7: domain-separated)', () => {
     const nonce = '0123456789abcdef0123456789abcdef';
-    expect(challengeMac('tok', nonce)).toBe(createHmac('sha256', 'tok').update(nonce).digest('hex'));
+    expect(challengeMac('tok', nonce)).toBe(createHmac('sha256', 'tok').update(`aw-forward-v1:${nonce}`).digest('hex'));
+    expect(challengeMac('tok', nonce)).not.toBe(createHmac('sha256', 'tok').update(nonce).digest('hex'));
   });
 
   it('verify accepts only the right MAC (whitespace tolerated), rejects squatter answers', () => {

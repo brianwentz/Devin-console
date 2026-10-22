@@ -1258,7 +1258,8 @@ export class HostsRegistry {
         clearTimeout(timer);
         reject(error);
       });
-      child.once('exit', (code) => {
+      // 'close', not 'exit': stdout is fully drained by then (claude --version / stop output).
+      child.once('close', (code) => {
         clearTimeout(timer);
         if (code === 0) resolveRun(Buffer.concat(out).toString('utf8'));
         else reject(new Error(`ssh command exited ${code ?? 'unknown'}`));

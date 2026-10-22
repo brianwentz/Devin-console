@@ -531,19 +531,26 @@ describe('ssh host kind', () => {
     expect(splitWords(NASTY.map(sshQuote).join(' '))).toEqual(NASTY);
     for (const s of ['a b', '$x', `a'b`]) expect(sshQuote(s)).toBe(posixQuote(s));
   });
-  const BASE = ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10'];
+  // R36 #6: no OpenSSH multiplexing for any app connection (a mux master could
+  // outlive child.kill() or make the client return at once).
+  const BASE = [
+    '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10',
+    '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+  ];
+  const N = BASE.length;
   it('sshSpawnSpec (fix round 1 #4): login shell via /bin/sh, env only on stdin — never in argv', () => {
     const spec = sshSpawnSpec('box', '/home/u/my proj', '/bin/zsh', 'claude', ['-p', '$(id)', 'x;y', "o'k"]);
     expect(spec.file).toBe('ssh.exe');
     expect(spec.cwd).toBeNull();
-    expect(spec.args.slice(0, 9)).toEqual([...BASE, '-T', 'box', '--']);
-    expect(spec.args).toHaveLength(10);
-    expect(spec.args[9]!.startsWith('exec ')).toBe(true);
-    const words = splitWords(spec.args[9]!.slice(5));
+    expect(spec.args.slice(0, N + 3)).toEqual([...BASE, '-T', 'box', '--']);
+    expect(spec.args).toHaveLength(N + 4);
+    expect(spec.args[N + 3]!.startsWith('exec ')).toBe(true);
+    const words = splitWords(spec.args[N + 3]!.slice(5));
     expect(words.slice(0, 2)).toEqual(['/bin/sh', '-c']);
     expect(words[2]).toBe(SSH_RUN_STDIN_SCRIPT);
-    expect(words.slice(3)).toEqual(['exec "$0" "$@"', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
-    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[9]!.slice(5))[3]).toBe('exec $argv');
+    // R36 #5: the login body gets the real stdin back from fd 3 (rc files read /dev/null).
+    expect(words.slice(3)).toEqual(['exec "$0" "$@" <&3 3<&-', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
+    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[N + 3]!.slice(5))[3]).toBe('exec $argv <&3');
   });
   it('sshEnvLine: base64 of `export K=V` lines; values never appear in clear', () => {
     const env = { TOKEN: 's3cr3t-value', B: "it's $(x)" };
@@ -562,10 +569,31 @@ describe('ssh host kind', () => {
     const env = { TOKEN: 's3cr3t', B: "it's $(x) \\ \"q\"" };
     const r = spawnSync(
       'sh',
-      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@"', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&3 3<&-', '/', 'sh', 'sh', '-c', 'printf "%s|%s|" "$TOKEN" "$B"; cat'],
       { input: `${sshEnvLine(env)}rest-of-stdin\n`, encoding: 'utf8', windowsHide: true },
     );
     expect(r.stdout.endsWith(`s3cr3t|it's $(x) \\ "q"|rest-of-stdin\n`)).toBe(true);
+  });
+  it.skipIf(!hasSh)('R36 #3: a corrupt env line fails closed (exit 97 + a stderr line), never runs the CLI without its env', () => {
+    const r = spawnSync(
+      'sh',
+      ['-c', SSH_RUN_STDIN_SCRIPT, 'exec "$0" "$@" <&3 3<&-', '/', 'sh', 'sh', '-c', 'echo RAN'],
+      { input: '!!!not-base64!!!\nrest\n', encoding: 'utf8', windowsHide: true },
+    );
+    expect(r.status).toBe(97);
+    expect(r.stdout).not.toContain('RAN');
+    expect(r.stderr).toContain('agent-workspace: env decode failed');
+  });
+  it.skipIf(!hasSh)('R36 #5: an rc-style stdin reader in the login shell sees /dev/null; the CLI gets every byte', () => {
+    // The "login shell" here is sh with a -c body that first reads a line from
+    // ITS stdin (what a .bash_profile `read` does), then execs per the body.
+    const body = 'IFS= read -r stolen; exec "$0" "$@" <&3 3<&-';
+    const r = spawnSync('sh', ['-c', SSH_RUN_STDIN_SCRIPT, body, '/', 'sh', 'sh', '-c', 'cat'], {
+      input: `${sshEnvLine({ K: 'v' })}line1\nline2\n`,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(r.stdout).toBe('line1\nline2\n');
   });
   it.skipIf(!hasSh)('SSH_RUN_FILE_SCRIPT: real sh sources then deletes the staged file', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ssh-run-file-'));
@@ -586,12 +614,12 @@ describe('ssh host kind', () => {
   it('sshPtySpec forces a tty; the token travels in a staged file, only its path is in argv', () => {
     const file = '/home/u/.agent-workspace/run/0123456789abcdef0123456789abcdef';
     const spec = sshPtySpec('box', '/home/u', file, '/usr/bin/claude', ['-r', 'id'], '/bin/zsh');
-    expect(spec.args.slice(0, 9)).toEqual([...BASE, '-t', 'box', '--']);
-    const words = splitWords(spec.args[9]!.slice(5));
+    expect(spec.args.slice(0, N + 3)).toEqual([...BASE, '-t', 'box', '--']);
+    const words = splitWords(spec.args[N + 3]!.slice(5));
     expect(words.slice(0, 2)).toEqual(['/bin/sh', '-c']);
     expect(words[2]).toBe(SSH_RUN_FILE_SCRIPT);
     expect(words.slice(3)).toEqual(['exec "$0" "$@"', file, '/home/u', '/bin/zsh', '/usr/bin/claude', '-r', 'id']);
-    expect(splitWords(sshPtySpec('box', '/h', null, 'c', [], '/usr/bin/fish').args[9]!.slice(5)).slice(3, 5)).toEqual([
+    expect(splitWords(sshPtySpec('box', '/h', null, 'c', [], '/usr/bin/fish').args[N + 3]!.slice(5)).slice(3, 5)).toEqual([
       'exec $argv',
       '',
     ]);
@@ -674,9 +702,9 @@ describe('ssh host kind — P3 canonical alias, path normalisation, probe specs'
   it('sshCommandSpec quotes every argv word behind exec', () => {
     const spec = sshCommandSpec('box', ['curl', '-w', '%{http_code}', 'http://127.0.0.1:1/x y']);
     expect(spec.file).toBe('ssh.exe');
-    expect(spec.args.slice(0, 9)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10', '-T', 'box', '--']);
-    expect(spec.args[9]).toBe(`exec 'curl' '-w' '%{http_code}' 'http://127.0.0.1:1/x y'`);
-    expect(splitWords(spec.args[9]!.slice('exec '.length))).toEqual([
+    expect(spec.args.slice(0, 13)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-T', 'box', '--']);
+    expect(spec.args[13]).toBe(`exec 'curl' '-w' '%{http_code}' 'http://127.0.0.1:1/x y'`);
+    expect(splitWords(spec.args[13]!.slice('exec '.length))).toEqual([
       'curl',
       '-w',
       '%{http_code}',

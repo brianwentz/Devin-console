@@ -1,34 +1,12 @@
 // hooks.apply: the same core/hooksApply.ts the app runs for its local config
 // dir, against the distro's native <configDir>/settings.json.
 
-import { chmod, copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
-import { applyHooksToSettings, type HooksApplyOptions, type SettingsFileIo } from '../core/hooksApply';
+import { applyHooksToSettings, createSettingsFileIo, type HooksApplyOptions, type SettingsFileIo } from '../core/hooksApply';
 import { bool, int, optStr, safeMessage, str } from './params';
 
-const io: SettingsFileIo = {
-  exists: (path) =>
-    stat(path).then(
-      () => true,
-      () => false,
-    ),
-  read: (path) => readFile(path, 'utf8'),
-  mode: (path) =>
-    stat(path).then(
-      (s) => s.mode & 0o777,
-      () => null,
-    ),
-  // writeFile's `mode` only applies on create — chmod covers a leftover tmp.
-  write: async (path, data, mode) => {
-    await writeFile(path, data, { encoding: 'utf8', ...(mode !== undefined ? { mode } : {}) });
-    if (mode !== undefined) await chmod(path, mode);
-  },
-  rename: (from, to) => rename(from, to),
-  copy: async (from, to, mode) => {
-    await copyFile(from, to);
-    if (mode !== undefined) await chmod(to, mode);
-  },
-};
+const io: SettingsFileIo = createSettingsFileIo(fsPromises);
 
 // JSON.parse messages quote the offending input — keep only our own prefix.
 const PARSE_PREFIX = 'settings.json is not valid JSON';

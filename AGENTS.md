@@ -620,21 +620,27 @@ variable that selects it.
   `INVALID_SSH_PATH_MESSAGE` — never `resolve()`d). No enumeration: configured + enabled is the channel's `canSpawn`; the lazy probe is one
   `ssh -T <alias> -- exec /bin/sh -c <probe line>` (exit 255 = connection failed → row `error`, automatic retry only for connection-class failures, below) + one login-shell run
   (`sshEnvSpec`: env, node, `claude`/`devin`/`gh` paths, `claude --version`) + the byte-gated stdin deploy; the channel launch is
-  `sshHelperSpec` (no `-R`). Every ssh.exe argv starts `-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10`; ssh.exe is spawned by
-  absolute path (first `where.exe` line via `%SystemRoot%\System32\where.exe`, else `%SystemRoot%\System32\OpenSSH\ssh.exe`; `/usr/bin/ssh`
-  elsewhere) — never a bare-name search.
+  `sshHelperSpec` (no `-R`). Every ssh.exe argv starts `-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10 -o ControlMaster=no
+  -o ControlPath=none` (R36 #6: a user's OpenSSH mux master must never hold a forward past `child.kill()` or let a client return at once).
+  ssh.exe is spawned by absolute path (`src/main/sshResolve.ts`, also used by `hosts:probe`): `%SystemRoot%\System32\where.exe $PATH:ssh.exe`
+  run with cwd = System32 — `$PATH:` searches PATH only, because plain `where.exe ssh.exe` checks the CURRENT DIRECTORY first (a planted
+  ssh.exe would win; R36 #1) — first absolute line, else `%SystemRoot%\System32\OpenSSH\ssh.exe`; `/usr/bin/ssh` elsewhere.
   - Hook forward (fix round 1 #1): its own connection per host, `sshForwardSpec` = `-o ExitOnForwardFailure=yes -N -T -R
     127.0.0.1:<p>:127.0.0.1:<p> <alias>`, started when the channel is ready; a squatted remote port ends it (exit 255) — fail closed — and it
     restarts after 10 s → 60 s → 300 s (`AGENT_WORKSPACE_TEST_SSH_FORWARD_BACKOFF_MS`). Trust needs the challenge: a fresh 128-bit nonce, a remote
     `curl -s -m 2 http://127.0.0.1:<p>/agent-workspace/hook/health?nonce=<n>` through the forward, and the body must equal
-    HMAC-SHA256(token, nonce) (`src/main/claude/hookChallenge.ts`; the listener answers that route, the plain `health` route stays `{}` for the
+    HMAC-SHA256(token, "aw-forward-v1:" + nonce) (domain-separated, R36 #7; `src/main/claude/hookChallenge.ts`; the listener answers that route, the plain `health` route stays `{}` for the
     WSL probe). Until verified: `HostStatus.hooks` `unreachable` + the `hooks` host-error part (`FORWARD_FAILED_MESSAGE` /
     `FORWARD_UNVERIFIED_MESSAGE`, shown in Settings `[data-host-errors]` and the Claude sidebar), `sessions.hookInjection` returns null for that
     host's ptys (no `--settings`, no token), and `hooks.ts` applies the block with `enabled:false` there (removal) — `hosts().hookForwardVerified(id)`.
   - Secrets off argv (fix round 1 #4): the captured login env is never replayed. A piped spawn is `sshSpawnSpec` = `exec /bin/sh -c
     SSH_RUN_STDIN_SCRIPT <body> <cwd> <shell> <cmd> <args…>`; `spawnOn` writes `sshEnvLine(cmd.env)` (base64 of `export K='v'` lines) as the
-    first stdin line, which the script reads (`IFS= read -r`, byte-wise on a pipe), `eval`s, then `cd`s and execs the CLI through the login
-    shell `-ilc` (PATH/nvm from rc files). A pty is `sshPtySpec` (`-t`, `SSH_RUN_FILE_SCRIPT`): its env (the hook token) is staged first through the
+    first stdin line. The script first moves the real stdin to fd 3 and gives itself (and so the login shell's rc files) `/dev/null`
+    (R36 #5 — an rc that reads stdin would eat the CLI's first stream-json line), reads the line from fd 3 (`IFS= read -r`, byte-wise on a pipe),
+    decodes it with a checked `v=$(printf '%s\n' "$e" | base64 -d) || { echo "agent-workspace: env decode failed" >&2; exit 97; }` (fail
+    closed, R36 #3), `eval`s it, `cd`s and execs the CLI through the login shell `-ilc` (PATH/nvm from rc files) with the body
+    `exec "$0" "$@" <&3 3<&-` (fish: `exec $argv <&3`), which hands fd 3 back as the CLI's stdin. `execOn` over ssh resolves on `close`
+    (stdout drained, R36 #2). A pty is `sshPtySpec` (`-t`, `SSH_RUN_FILE_SCRIPT`): its env (the hook token) is staged first through the
     helper's `env.stage {vars}` → `<home>/.agent-workspace/run/<32 hex>` (dir 0700, file 0600, `O_EXCL`, ≤64 vars / 64 KB, files older than 1 h
     swept; `src/helper/envStage.ts`); only that path is in argv and the script sources then deletes it. Without a ready channel an ssh pty that
     needs env is refused (`hosts().remotePtySpawnSpec` is async; `ptySpawnSpec` throws for ssh).
@@ -647,8 +653,10 @@ variable that selects it.
   `host-ssh {aliasHash, op}` + `host-exec`; `log()` (`src/main/log.ts`, pure `core/sshLog.ts scrubSshAliases`) rewrites any `ssh:<alias>` /
   `ssh://<alias>` in a record to `ssh:#<sha256-8>` — the alias never reaches the event log. `hosts.ssh` (M4): `sanitizeSshHostList` lower-cases
   aliases and drops only malformed entries / later duplicates; `serializeSettingsFile` appends the dropped raw entries back (ux3 S6). Claude's
-  `settings.json` (local `hooksInstall.ts` and the helper's `hooks.apply`) is written 0600 — tmp file and one-time backup — or a stricter existing
-  mode (`secureFileMode` in `core/hooksApply.ts`). IPC: `hosts:sshAdd {alias}` (validated + lower-cased →
+  `settings.json` (local `hooksInstall.ts` and the helper's `hooks.apply`, one io: `createSettingsFileIo` in `core/hooksApply.ts`) is written
+  0600 — or a stricter existing mode (`secureFileMode`) — with no looser window (R36 #4): the tmp file and the one-time backup are created
+  `O_EXCL` with that mode after removing a stale one, and an unchanged file that already carries our block is `chmod`ed once when group/other
+  can read it. IPC: `hosts:sshAdd {alias}` (validated + lower-cased →
   `LocalResult<HostId>`), `hosts:sshRemove {id}`, `hosts:readdir` (`HostReaddirSchema {hostId, path}` → helper `fs.readdir`: directories only,
   sorted, ≤500 + `truncated`), `hosts:folderPromptResolve` (send; `FolderPromptResolveArg`; M6: main `fs.stat`s the folder over the channel — missing / not a directory
   keeps the prompt open with `ShellState.folderPrompt.error` → `#remoteFolderPromptError`). Settings → General `#hostsBlock`: `#sshHostAdd` →
@@ -794,6 +802,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `lastFolderPrompt()` | `{title, hostId, start, hosts}` of the most recent in-app remote folder prompt (P3; null before one opened). |
 | `hostSshAdd(alias)` | `hosts().addSshHost(alias)` — the `hosts:sshAdd` path (validation + lower-casing) without the Settings UI. |
 | `hostSshRecover(trigger)` / `hostHookForwardVerified(id)` | Run the ssh connection-failure recovery now (unthrottled) / whether that ssh host's hook forward passed the challenge. |
+| `hostExecOn(id, file, args)` | `hosts().execOn` on a host (cwd = its home) — returns stdout (R36 #2: the ssh path resolves on `close`). |
 | `hostHelperKill(id)` / `hostChannelState(id)` | Kill the host's live helper child (reconnect path) / the channel snapshot `{state, watchMode, failures, open, pending, running}` (null before a channel exists). |
 | `hostEnumerateIfStale()` | The background-check re-list: runs `wsl -l -v` only when the cached table is older than `ENUM_FRESH_MS` (inside a failure backoff it is a no-op). |
 | `remoteFsViolations()` | App `fs` calls on a WSL path the remote-fs guard saw since start (both modes); `launchApp` teardown asserts 0. |

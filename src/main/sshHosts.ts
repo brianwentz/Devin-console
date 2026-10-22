@@ -23,12 +23,9 @@
 // `host-ssh {aliasHash, op}` + `host-exec {host, kind}` with the id scrubbed to
 // `ssh:#<aliasHash>` by log() (core/sshLog.ts), as is every other detail.
 
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
 import {
   deriveHelperState,
   HELPER_DIR,
@@ -58,12 +55,12 @@ import type { HostStatus, Settings } from '../shared/ipc';
 import { HostChannel, type HelperStatus } from './hostChannel';
 import type { HelperBundleInfo } from './helperBundle';
 import { log, sshAliasHash } from './log';
+import { resolveWindowsSsh } from './sshResolve';
 import { sdkTargetCliVersion } from './claude/sdk';
 import { newChallengeNonce, verifyChallengeMac } from './claude/hookChallenge';
 import { state, testMode } from './state';
 import { HOOK_PATH_PREFIX } from '../core/claudeHooks';
 
-const execFileAsync = promisify(execFile);
 
 type SshHost = Extract<ExecHost, { kind: 'ssh' }>;
 type ErrorPart = 'env' | 'cli' | 'hooksInstall' | 'store' | 'hooks';
@@ -153,23 +150,6 @@ interface SshRun {
 }
 
 const configured = (): Settings['hosts']['ssh'] => state.settings?.current.hosts.ssh ?? [];
-
-/** Windows: the first absolute `where.exe ssh.exe` line, else %SystemRoot%\System32\OpenSSH\ssh.exe — never a bare name (cwd search hijack). */
-async function resolveWindowsSsh(): Promise<string | null> {
-  const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows';
-  try {
-    const { stdout } = await execFileAsync(join(systemRoot, 'System32', 'where.exe'), ['ssh.exe'], { windowsHide: true });
-    const first = stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => /^[A-Za-z]:\\/.test(l));
-    if (first) return first;
-  } catch {
-    // fall through to the inbox client
-  }
-  const inbox = join(systemRoot, 'System32', 'OpenSSH', 'ssh.exe');
-  return existsSync(inbox) ? inbox : null;
-}
 
 export class SshHosts {
   private entries = new Map<HostId, SshEntry>();

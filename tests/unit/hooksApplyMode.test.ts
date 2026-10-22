@@ -53,6 +53,39 @@ describe('hooks settings file mode', () => {
     expect(writes[0]?.mode).toBe(0o600);
   });
 
+  it('R36 #4: an unchanged settings.json that already carries our block is tightened once when group/other can read it', async () => {
+    const first = memIo({});
+    await applyHooksToSettings(first.io, '/c/settings.json', { enabled: true, port: 50001, token: 't' });
+    const data = (await first.io.read('/c/settings.json.tmp').catch(() => null)) ?? null;
+    expect(data).toBeNull(); // renamed into place
+    const chmods: { path: string; mode: number }[] = [];
+    const files = { '/c/settings.json': { data: await first.io.read('/c/settings.json'), mode: 0o644 } };
+    const { io, writes } = memIo(files);
+    io.chmod = async (p, mode) => {
+      chmods.push({ path: p, mode });
+      files[p as '/c/settings.json'].mode = mode;
+    };
+    const r = await applyHooksToSettings(io, '/c/settings.json', { enabled: true, port: 50001, token: 't' });
+    expect(r).toMatchObject({ changed: false, error: null });
+    expect(writes).toEqual([]);
+    expect(chmods).toEqual([{ path: '/c/settings.json', mode: 0o600 }]);
+    // Already private → no further chmod.
+    await applyHooksToSettings(io, '/c/settings.json', { enabled: true, port: 50001, token: 't' });
+    expect(chmods).toHaveLength(1);
+  });
+
+  it.skipIf(process.platform === 'win32')('R36 #4: a stale 0644 tmp is replaced, never reused — the written tmp is 0600 from creation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hooks-mode-'));
+    try {
+      writeFileSync(join(dir, 'settings.json.tmp'), 'stale');
+      chmodSync(join(dir, 'settings.json.tmp'), 0o644);
+      await applyHooks(dir, { enabled: true, port: 50001, token: 'tok' });
+      expect(statSync(join(dir, 'settings.json')).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('helper hooks.apply leaves settings.json and the backup 0600 on POSIX', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hooks-mode-'));
     try {

@@ -151,7 +151,11 @@ test('add ssh host → helper ready → sessions listed with host chip', async (
     expect(calls.some((c) => c.remote.includes('mkdir -p "$1"'))).toBe(true);
     expect(calls.some((c) => c.remote.includes('exit 86;'))).toBe(true);
     // Every invocation bounds the connect (fix round 1 #3).
-    for (const call of calls) expect(call.argv.slice(0, 6)).toEqual(['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10']);
+    for (const call of calls) {
+      expect(call.argv.slice(0, 10)).toEqual([
+        '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=10', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+      ]);
+    }
     await expect(shell.locator(`[data-host-id="${HOST}"] [data-host-helper]`)).toHaveAttribute('data-host-helper', 'ready');
 
     // The remote transcript lists over the channel as an ssh-host row.
@@ -244,7 +248,9 @@ test('terminal uses ssh -t; the hook token is staged, never in argv', async () =
         (_e, tid: string) => (globalThis as any).__agentworkspace.terminalRead(tid),
         opened.id!,
       ) as Promise<string>;
-    await expect.poll(read).toContain('-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10 -t box --');
+    await expect.poll(read).toContain(
+      '-o BatchMode=yes -o ServerAliveInterval=15 -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -t box --',
+    );
     await expect.poll(read).toContain(`exec '/bin/sh' '-c' `);
     await expect.poll(read).toContain(`'/home/u/proj' '/bin/bash' '/home/u/.local/bin/claude'`);
     // Verified forward → hooks injected: the --settings flag names only the
@@ -409,7 +415,7 @@ test('hooks reach the listener through -R', async () => {
     await expect.poll(() => sshCalls(sshLog).find((c) => c.forward) ?? null).not.toBeNull();
     const forward = sshCalls(sshLog).find((c) => c.forward)!;
     expect(forward.reverse).toBe(`127.0.0.1:${port}:127.0.0.1:${port}`);
-    expect(forward.argv).toEqual(expect.arrayContaining(['-N', '-o', 'ExitOnForwardFailure=yes']));
+    expect(forward.argv).toEqual(expect.arrayContaining(['-N', '-o', 'ExitOnForwardFailure=yes', 'ControlMaster=no', 'ControlPath=none']));
     expect(forward.remote).toBe('');
 
     // hooks.apply wrote the remote settings.json with loopback URLs.
@@ -505,6 +511,24 @@ test('an ssh host whose connection failed recovers on resume once the network is
     await helperReady(app);
     const recovered = (await readEvents(logFile)).filter((e) => e.event === 'host-ssh-recover');
     expect(recovered.map((e) => e.detail)).toContainEqual({ trigger: 'resume', count: 1 });
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('R36 #2: execOn over ssh returns the whole stdout (resolved on close, not exit)', async () => {
+  const { app } = await launchSsh();
+  try {
+    await addSsh(app, 'box');
+    await helperReady(app);
+    for (let i = 0; i < 3; i++) {
+      const out = (await app.evaluate(
+        (_e, a: { id: string }) =>
+          (globalThis as any).__agentworkspace.hostExecOn(a.id, 'node', ['-e', 'process.stdout.write("x".repeat(400000))']),
+        { id: HOST },
+      )) as string;
+      expect(out.length).toBe(400000);
+    }
   } finally {
     await closeApp(app);
   }
