@@ -550,7 +550,7 @@ describe('ssh host kind', () => {
     expect(words[2]).toBe(SSH_RUN_STDIN_SCRIPT);
     // R36 #5: the login body gets the real stdin back from fd 3 (rc files read /dev/null).
     expect(words.slice(3)).toEqual(['exec "$0" "$@" <&3 3<&-', '/home/u/my proj', '/bin/zsh', 'claude', '-p', '$(id)', 'x;y', "o'k"]);
-    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[N + 3]!.slice(5))[3]).toBe('exec $argv <&3');
+    expect(splitWords(sshSpawnSpec('box', '/h', '/usr/bin/fish', 'c', []).args[N + 3]!.slice(5))[3]).toBe('exec $argv <&3 3<&-');
   });
   it('sshEnvLine: base64 of `export K=V` lines; values never appear in clear', () => {
     const env = { TOKEN: 's3cr3t-value', B: "it's $(x)" };
@@ -635,12 +635,15 @@ describe('ssh host kind', () => {
       `'test -f $argv[1]; or exit 86; exec node $argv --stdio'`,
     );
   });
-  it('sshForwardSpec: its own -N connection, loopback-bound -R, fails closed', () => {
+  it('sshForwardSpec: its own connection, loopback-bound -R, fails closed, ends on stdin EOF (R39 #3)', () => {
+    // No -N: the remote `cat` exits when the app's stdin pipe closes (crash /
+    // kill included), so a dead app never leaves an orphan holding the port.
     expect(sshForwardSpec('box', 4567)).toEqual({
       file: 'ssh.exe',
-      args: [...BASE, '-o', 'ExitOnForwardFailure=yes', '-N', '-T', '-R', '127.0.0.1:4567:127.0.0.1:4567', 'box'],
+      args: [...BASE, '-o', 'ExitOnForwardFailure=yes', '-T', '-R', '127.0.0.1:4567:127.0.0.1:4567', 'box', '--', 'exec cat >/dev/null'],
       cwd: null,
     });
+    expect(sshForwardSpec('box', 4567).args).not.toContain('-N');
     expect(() => sshForwardSpec('box', 0)).toThrow();
     expect(() => sshForwardSpec('box', 70000)).toThrow();
   });

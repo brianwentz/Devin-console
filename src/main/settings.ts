@@ -125,6 +125,21 @@ export class SettingsStore {
     return this.value;
   }
 
+  /**
+   * Named removal (ux3 S6 — merge() can't delete): drops `hosts.overrides[id]`
+   * when its host is removed (an ssh host the app owns). `hosts.overrides` is a
+   * replace-spec record, so only that key leaves the file.
+   */
+  removeHostOverride(id: string): Settings {
+    if (!(id in this.value.hosts.overrides)) return this.value;
+    const overrides = { ...this.value.hosts.overrides };
+    delete overrides[id];
+    this.value = { ...this.value, hosts: { ...this.value.hosts, overrides } };
+    this.touched.add('hosts.overrides');
+    this.save();
+    return this.value;
+  }
+
   save(): void {
     const temporary = `${this.file}.tmp`;
     const out = serializeSettingsFile(this.raw, this.value, this.invalid, this.touched);

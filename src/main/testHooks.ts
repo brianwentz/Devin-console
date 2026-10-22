@@ -137,6 +137,8 @@ export function registerTestHooks(): void {
       hostSshAdd: (alias: string) => hosts().addSshHost(alias),
       hostSshRecover: (trigger: 'resume' | 'unlock') => hosts().recoverSsh(trigger, { force: true }),
       hostHookForwardVerified: (id: string) => hosts().hookForwardVerified(id),
+      // R39 #3: close the hook forward's stdin (what the app's death does) → the remote `cat` ends it.
+      hostSshForwardEndStdin: (id: string) => hosts().sshForwardEndStdin(id),
       // execOn over a host (R36 #2 drain check): stdout of `file args…` run in the host home.
       hostExecOn: (id: string, file: string, args: string[]) => {
         const host = hosts().hostById(id);

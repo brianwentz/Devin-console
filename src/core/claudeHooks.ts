@@ -77,6 +77,18 @@ export function buildHooksBlock(opts: { port: number; auth: HookAuth; addr?: str
   return { hooks };
 }
 
+/**
+ * Whether the global (literal-token) block goes into a host's settings.json
+ * (R39 #1). Never on an ssh host: the file outlives the app, the forward and
+ * the host's membership, and on a shared machine any co-tenant can bind the
+ * deterministic loopback port it points at — every `claude` run there would
+ * then post prompts, Bash output and the token to them. ssh sessions report
+ * only through app-launched ptys (`--settings`, env-var auth, verified forward).
+ */
+export function globalHooksEnabledFor(hooksEnabled: boolean, hostKind: 'local' | 'wsl' | 'ssh'): boolean {
+  return hooksEnabled && hostKind !== 'ssh';
+}
+
 /** Compact JSON for `claude --settings <json>` with env-var auth. */
 export function settingsFlagJson(port: number, envVar: string, addr?: string): string {
   return JSON.stringify(

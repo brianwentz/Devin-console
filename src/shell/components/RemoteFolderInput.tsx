@@ -139,6 +139,9 @@ export function RemoteFolderInput({
 const previewOf = (hostId: string, path: string): string =>
   hostId.startsWith('ssh:') ? `ssh://${hostId.slice(4)}${path}` : `${hostId.replace(/^wsl:/, '')} · ${path}`;
 
+/** The host select's "This PC (browse…)" value — main continues in the native dialog. */
+const LOCAL_CHOICE = 'local';
+
 // The prompt main opens for a remote folder pick (ShellState.folderPrompt):
 // host select + RemoteFolderInput; main raises the shell while it is open.
 export function RemoteFolderPrompt() {
@@ -197,6 +200,10 @@ export function RemoteFolderPrompt() {
             value={hostId}
             onChange={(event) => {
               const next = event.target.value;
+              if (next === LOCAL_CHOICE) {
+                window.agentworkspace.folderPromptBrowse(prompt.id);
+                return;
+              }
               setHostId(next);
               const home = prompt.hosts.find((h) => h.id === next)?.home;
               setPath(home ? `${home.replace(/\/+$/, '')}/` : '/');
@@ -207,6 +214,7 @@ export function RemoteFolderPrompt() {
                 {host.id.startsWith('ssh:') ? `SSH: ${host.label}` : `WSL: ${host.label}`}
               </option>
             ))}
+            {prompt.browse ? <option value={LOCAL_CHOICE}>This PC (browse…)</option> : null}
           </select>
         </label>
         <RemoteFolderInput hostId={hostId} value={path} onChange={setPath} onSubmit={submit} autoFocus />

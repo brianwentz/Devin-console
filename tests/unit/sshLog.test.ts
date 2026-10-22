@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scrubSshAliases } from '../../src/core/sshLog';
+import { scrubKnownAliases, scrubSshAliases } from '../../src/core/sshLog';
 
 const hash = (alias: string): string => `h-${alias}`;
 
@@ -34,5 +34,28 @@ describe('scrubSshAliases', () => {
   });
   it('hashes the canonical (lower-case) alias', () => {
     expect(scrubSshAliases('ssh:Box', hash)).toBe('ssh:#h-box');
+  });
+});
+
+describe('scrubKnownAliases (R39 #6)', () => {
+  it('replaces a configured alias as a whole word in free text at any depth', () => {
+    const detail = { message: 'ssh: Could not resolve hostname box: Name or service not known', nested: { list: ['to BOX.', 'x'] } };
+    expect(scrubKnownAliases(detail, ['box'], hash)).toEqual({
+      message: 'ssh: Could not resolve hostname ssh:#h-box: Name or service not known',
+      nested: { list: ['to ssh:#h-box.', 'x'] },
+    });
+  });
+  it('leaves partial-word matches, keys and non-strings alone', () => {
+    const detail = { boxes: 'inbox sandbox box-2 box_x mybox', n: 3, box: true };
+    expect(scrubKnownAliases(detail, ['box'], hash)).toBe(detail);
+  });
+  it('handles aliases with dots and hyphens literally', () => {
+    expect(scrubKnownAliases('host dev.example-1 down; devXexample-1 ok', ['dev.example-1'], hash)).toBe(
+      'host ssh:#h-dev.example-1 down; devXexample-1 ok',
+    );
+  });
+  it('is a no-op without configured aliases', () => {
+    const detail = { m: 'box' };
+    expect(scrubKnownAliases(detail, [], hash)).toBe(detail);
   });
 });

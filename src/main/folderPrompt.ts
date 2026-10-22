@@ -18,15 +18,21 @@ import { applyLayout, lowerShell, overlayOpen, raiseShell } from './window';
 
 type PromptHost = NonNullable<ShellState['folderPrompt']>['hosts'][number];
 
+/** The prompt's "This PC (browse…)" answer: hand over to the native dialog. */
+export const BROWSE_THIS_PC = Symbol('browse-this-pc');
+type PromptAnswer = string | null | typeof BROWSE_THIS_PC;
+
 interface OpenPrompt {
   id: string;
   title: string;
   hostId: string;
   start: string | null;
   hosts: PromptHost[];
+  /** Offer "This PC (browse…)" (R39 #4) — the caller has a native dialog to fall back to. */
+  browse: boolean;
   /** User-visible rejection of the last answer (missing / not a folder). */
   error: string | null;
-  resolve: (path: string | null) => void;
+  resolve: (answer: PromptAnswer) => void;
 }
 
 let open: OpenPrompt | null = null;
@@ -39,7 +45,15 @@ export function folderPromptOpen(): boolean {
 /** ShellState.folderPrompt. */
 export function folderPromptPublic(): ShellState['folderPrompt'] {
   return open
-    ? { id: open.id, title: open.title, hostId: open.hostId, start: open.start, hosts: open.hosts, error: open.error }
+    ? {
+        id: open.id,
+        title: open.title,
+        hostId: open.hostId,
+        start: open.start,
+        hosts: open.hosts,
+        browse: open.browse,
+        error: open.error,
+      }
     : null;
 }
 
@@ -65,13 +79,19 @@ export function remoteFolderHosts(surface: 'local' | 'claude'): PromptHost[] {
     });
 }
 
-function close(path: string | null): void {
+function close(answer: PromptAnswer): void {
   const current = open;
   if (!current) return;
   open = null;
   if (!overlayOpen()) lowerShell();
   applyLayout();
-  current.resolve(path);
+  current.resolve(answer);
+}
+
+/** Shell reload / navigation / window close (R39 #12): the renderer that
+ * would answer is gone, so a pending prompt resolves as cancelled. */
+export function cancelFolderPrompt(): void {
+  close(null);
 }
 
 /**
@@ -85,12 +105,13 @@ export function promptRemoteFolder(
   hostId: string,
   start: string | null,
   choices: PromptHost[],
-): Promise<string | null> {
+  opts: { browse?: boolean } = {},
+): Promise<PromptAnswer> {
   if (testMode) lastPrompt = { title, hostId, start, hosts: choices.map((h) => h.id) };
   if (testMode && process.env.AGENT_WORKSPACE_TEST_PICKER_CANCEL === '1') return Promise.resolve(null);
   close(null);
   return new Promise((resolve) => {
-    open = { id: randomUUID(), title, hostId, start, hosts: choices, error: null, resolve };
+    open = { id: randomUUID(), title, hostId, start, hosts: choices, browse: opts.browse === true, error: null, resolve };
     raiseShell();
     applyLayout();
   });
@@ -100,9 +121,18 @@ export function promptRemoteFolder(
  * absolute posix path that is an existing directory on that host (the
  * helper's `fs.stat`; M6). A missing / non-directory path keeps the prompt
  * open with a message. */
-export async function resolveFolderPrompt(arg: { id: string; hostId?: string | undefined; path: string | null }): Promise<void> {
+export async function resolveFolderPrompt(arg: {
+  id: string;
+  hostId?: string | undefined;
+  path: string | null;
+  browse?: true | undefined;
+}): Promise<void> {
   const current = open;
   if (!current || arg.id !== current.id) return;
+  if (arg.browse === true) {
+    close(current.browse ? BROWSE_THIS_PC : null);
+    return;
+  }
   if (arg.path === null) {
     close(null);
     return;
@@ -146,6 +176,8 @@ export async function resolveFolderPrompt(arg: { id: string; hostId?: string | u
  * (the helper's `fs.stat`), else the host's home; this PC opens the native
  * dialog, which never starts on a remote path. `onMissing` fires when the
  * configured folder is on the target host but gone (it is never cleared).
+ * Unless `remote`, the prompt also offers "This PC (browse…)" (after the
+ * remote hosts), which continues in the native dialog (R39 #4).
  */
 export async function pickFolder(opts: {
   surface: 'local' | 'claude';
@@ -181,7 +213,8 @@ export async function pickFolder(opts: {
       opts.onMissing,
     );
     const start = startWin ? hosts().hostPath(host, startWin) : target.home;
-    return promptRemoteFolder(opts.title, target.id, start, choices);
+    const answer = await promptRemoteFolder(opts.title, target.id, start, choices, { browse: opts.remote !== true });
+    if (answer !== BROWSE_THIS_PC) return answer;
   }
   const win = state.windowRef;
   if (!win) return null;

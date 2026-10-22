@@ -19,7 +19,10 @@
 //   FAKE_SSH_FAIL=1 every connection fails: exit 255 (no output)
 //   FAKE_SSH_FAIL_FILE  same while that file exists (network down, then back)
 //   FAKE_SSH_HOSTS  comma list of known aliases (default: any) — others exit 255
-//   FAKE_SSH_FORWARD_FAIL=1  the `-N -R` hook forward exits 255 (port squatted)
+//   FAKE_SSH_FORWARD_FAIL=1  the `-R` hook forward exits 255 (port squatted)
+// The hook forward (any `-R` invocation) stays up until its stdin reaches EOF
+// — what the real `exec cat >/dev/null` remote does — then logs
+// {forwardEnded: true} and exits 0 (the app dying closes that pipe).
 // The ssh run scripts' staged env (stdin line / env file) is decoded and only
 // its KEYS are appended to FAKE_SSH_LOG as {stagedEnvKeys}.
 // The shared FAKE_WSL_* knobs (NO_NODE, NODE_VERSION, NO_CLAUDE, CLAUDE_CMD,
@@ -105,14 +108,25 @@ const main = (): number => {
   i++;
   if (args[i] === '--') i++;
   const remote = args.slice(i).join(' ');
-  logLine({ argv: args, alias, tty, reverse, forward: noCommand, remote });
+  const forward = reverse !== null || noCommand;
+  logLine({ argv: args, alias, tty, reverse, forward, remote, pid: process.pid });
   const known = process.env.FAKE_SSH_HOSTS?.split(',').filter(Boolean);
   const failFile = process.env.FAKE_SSH_FAIL_FILE;
   if ((failFile && existsSync(failFile)) || process.env.FAKE_SSH_FAIL === '1' || !alias || (known && !known.includes(alias))) return 255;
-  // `-N -R …` hook forward: the listener is on this machine's loopback already,
-  // so the forward is a no-op that stays up; FAKE_SSH_FORWARD_FAIL=1 is
-  // ExitOnForwardFailure on a squatted remote port (exit 255 at once).
-  if (noCommand) return process.env.FAKE_SSH_FORWARD_FAIL === '1' ? 255 : STAY_ALIVE;
+  // `-R …` hook forward: the listener is on this machine's loopback already,
+  // so the forward is a no-op that stays up until stdin EOF;
+  // FAKE_SSH_FORWARD_FAIL=1 is ExitOnForwardFailure on a squatted remote port
+  // (exit 255 at once).
+  if (forward) {
+    if (process.env.FAKE_SSH_FORWARD_FAIL === '1') return 255;
+    process.stdin.on('data', () => undefined);
+    process.stdin.once('end', () => {
+      logLine({ forwardEnded: true, alias });
+      process.exit(0);
+    });
+    process.stdin.once('error', () => process.exit(0));
+    return STAY_ALIVE;
+  }
   let words = splitRemote(remote);
   let cwd = process.cwd();
   if (words[0] === 'cd' && words[2] === '&&') {

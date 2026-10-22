@@ -385,7 +385,7 @@ test('WSL workspace add uses RemoteFolderInput — no native dialog', async () =
     // Devin Local offers WSL distros only — never the ssh host.
     expect(
       await shell.locator('#remoteFolderHost option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value)),
-    ).toEqual(['wsl:Fake']);
+    ).toEqual(['wsl:Fake', 'local']);
     await shell.locator('#remoteFolderInput').fill('/home/u/w');
     await expect(shell.locator('[data-remote-folder-option="/home/u/ws"]')).toHaveCount(1);
     await shell.locator('#remoteFolderInput').press('Tab');
@@ -408,6 +408,46 @@ test('WSL workspace add uses RemoteFolderInput — no native dialog', async () =
   }
 });
 
+test('R39 #4: with a default distro, "This PC (browse…)" in the prompt opens the native dialog (Claude: createDirectory)', async () => {
+  const wslRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wslfs-'));
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  mkdirSync(join(wslRoot, 'home', 'u'), { recursive: true });
+  const { app } = await launchSsh({
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_ROOT: wslRoot,
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+  });
+  try {
+    await addSsh(app, 'box');
+    await helperReady(app, 'wsl:Fake');
+    await helperReady(app);
+    const shell = await shellPage(app);
+    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { defaultWslDistro: 'Fake' } }));
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    const added = shell.evaluate(() => (window as any).agentworkspace.claudeWorkspaceAdd());
+    await expect(shell.locator('#remoteFolderPrompt')).toBeVisible();
+    // Remote hosts first (the default distro selected), this PC last.
+    await expect(shell.locator('#remoteFolderHost')).toHaveValue('wsl:Fake');
+    expect(
+      await shell.locator('#remoteFolderHost option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value)),
+    ).toEqual(['wsl:Fake', HOST, 'local']);
+    await expect(shell.locator('#remoteFolderHost option[value="local"]')).toHaveText('This PC (browse…)');
+    expect(await app.evaluate(() => (globalThis as any).__agentworkspace.lastOpenDialogOptions())).toBeNull();
+    // The native dialog must not really open: cancel it from here on.
+    await app.evaluate(() => {
+      process.env.AGENT_WORKSPACE_TEST_PICKER_CANCEL = '1';
+    });
+    await shell.locator('#remoteFolderHost').selectOption('local');
+    await expect(shell.locator('#remoteFolderPrompt')).toHaveCount(0);
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__agentworkspace.lastOpenDialogOptions()))
+      .toMatchObject({ title: 'Add Claude workspace folder', properties: ['openDirectory', 'createDirectory'] });
+    expect(await added).toMatchObject({ ok: true });
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('hooks reach the listener through -R', async () => {
   const { app, root, sshLog, logFile } = await launchSsh();
   try {
@@ -423,25 +463,32 @@ test('hooks reach the listener through -R', async () => {
     await addSsh(app, 'box');
     await helperReady(app);
 
-    // Fix round 1 #1: the forward is its own -N connection (ExitOnForwardFailure,
-    // remote-loopback bind); the helper connection carries no -R.
+    // Fix round 1 #1: the forward is its own connection (ExitOnForwardFailure,
+    // remote-loopback bind); the helper connection carries no -R. R39 #3: no
+    // -N — the remote `cat` ends the forward when the app's stdin pipe closes.
     const launch = sshCalls(sshLog).find((c) => c.remote.includes('exit 86;'))!;
     expect(launch.reverse).toBeNull();
     await expect.poll(() => sshCalls(sshLog).find((c) => c.forward) ?? null).not.toBeNull();
     const forward = sshCalls(sshLog).find((c) => c.forward)!;
     expect(forward.reverse).toBe(`127.0.0.1:${port}:127.0.0.1:${port}`);
-    expect(forward.argv).toEqual(expect.arrayContaining(['-N', '-o', 'ExitOnForwardFailure=yes', 'ControlMaster=no', 'ControlPath=none']));
-    expect(forward.remote).toBe('');
+    expect(forward.argv).toEqual(expect.arrayContaining(['-o', 'ExitOnForwardFailure=yes', 'ControlMaster=no', 'ControlPath=none']));
+    expect(forward.argv).not.toContain('-N');
+    expect(forward.remote).toBe('exec cat >/dev/null');
 
-    // hooks.apply wrote the remote settings.json with loopback URLs.
+    // R39 #1: even with the opt-in on, the global (literal-token) block is
+    // never written to an ssh host's settings.json — the opt-in's apply pass
+    // ran for the host (as a removal) and left no block behind.
     const settingsFile = join(root, 'home', 'u', '.claude', 'settings.json');
-    await expect.poll(() => existsSync(settingsFile), { timeout: 15_000 }).toBe(true);
-    const settings = JSON.parse(readFileSync(settingsFile, 'utf8')) as {
-      hooks: Record<string, { hooks: { url: string; headers: Record<string, string> }[] }[]>;
-    };
-    const stop = settings.hooks.Stop![0]!.hooks[0]!;
-    expect(stop.url).toBe(`http://127.0.0.1:${port}/agent-workspace/hook/Stop`);
-    expect(stop.headers.Authorization).toBe(`Bearer ${token}`);
+    const sshInstalls = async (enabled: boolean) =>
+      (await readEvents(logFile)).filter(
+        (e) =>
+          e.event === 'claude-hooks-install' &&
+          (e.detail as { host?: string }).host === `ssh:#${ALIAS_HASH}` &&
+          (e.detail as { enabled?: boolean }).enabled === enabled,
+      ).length;
+    await expect.poll(() => sshInstalls(false), { timeout: 15_000 }).toBeGreaterThan(0);
+    if (existsSync(settingsFile)) expect(readFileSync(settingsFile, 'utf8')).not.toContain('/agent-workspace/hook/');
+    const stop = { url: `http://127.0.0.1:${port}/agent-workspace/hook/Stop`, headers: { Authorization: `Bearer ${token}` } };
 
     // The challenge (a remote curl of health?nonce= through the forward,
     // answered with HMAC(token, nonce)) verified the forward.
@@ -467,7 +514,126 @@ test('hooks reach the listener through -R', async () => {
     await expect
       .poll(async () => (await readEvents(logFile)).some((e) => e.event === 'claude-hook' && (e.detail as { event?: string }).event === 'Stop'))
       .toBe(true);
+    // Verified forward or not, the global block never went in.
+    expect(await sshInstalls(true)).toBe(0);
+    if (existsSync(settingsFile)) expect(readFileSync(settingsFile, 'utf8')).not.toContain('/agent-workspace/hook/');
     await expectAliasNeverLogged(logFile);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('R39 #1: a global hook block left on an ssh host by an earlier build is removed once the channel is ready', async () => {
+  const { app, root } = await launchSsh();
+  const claudeDir = join(root, 'home', 'u', '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsFile = join(claudeDir, 'settings.json');
+  const foreign = { type: 'command', command: 'echo mine' };
+  writeFileSync(
+    settingsFile,
+    JSON.stringify({
+      model: 'keep-me',
+      hooks: {
+        Stop: [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:50123/agent-workspace/hook/Stop', headers: { Authorization: 'Bearer old' } }] }],
+        UserPromptSubmit: [{ hooks: [foreign] }],
+      },
+    }),
+  );
+  try {
+    const shell = await shellPage(app);
+    await shell.evaluate(() => (window as any).agentworkspace.setSettings({ claude: { hooksEnabled: true } }));
+    await addSsh(app, 'box');
+    await helperReady(app);
+    await expect
+      .poll(() => readFileSync(settingsFile, 'utf8').includes('/agent-workspace/hook/'), { timeout: 20_000 })
+      .toBe(false);
+    const after = JSON.parse(readFileSync(settingsFile, 'utf8')) as { model: string; hooks: Record<string, unknown> };
+    expect(after.model).toBe('keep-me');
+    expect(after.hooks).toEqual({ UserPromptSubmit: [{ hooks: [foreign] }] });
+  } finally {
+    await closeApp(app);
+  }
+});
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+test('R39 #3: closing the hook forward stdin ends it; it never outlives a killed app', async () => {
+  const { app, sshLog, logFile } = await launchSsh({ AGENT_WORKSPACE_TEST_SSH_FORWARD_BACKOFF_MS: '500' });
+  let killed = false;
+  try {
+    await expect.poll(() => hookInfo(app), { timeout: 15_000 }).not.toBeNull();
+    await addSsh(app, 'box');
+    await helperReady(app);
+    await expect.poll(() => forwardVerified(app), { timeout: 20_000 }).toBe(true);
+    expect(logLines(sshLog).some((l) => l.forwardEnded === true)).toBe(false);
+    // stdin EOF (what the app's death does to the pipe on any OS) → the remote
+    // `cat` returns → the forward connection ends; the app sees it go down.
+    expect(await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostSshForwardEndStdin(id), HOST)).toBe(true);
+    await expect.poll(() => logLines(sshLog).some((l) => l.forwardEnded === true), { timeout: 15_000 }).toBe(true);
+    await expect
+      .poll(async () => (await readEvents(logFile)).some((e) => e.event === 'host-ssh-forward' && (e.detail as { state?: string }).state === 'down'))
+      .toBe(true);
+    // The restarted forward does not survive a hard kill of the app (no stopChannels).
+    await expect.poll(() => forwardVerified(app), { timeout: 30_000 }).toBe(true);
+    const forwards = sshCalls(sshLog).filter((c) => c.forward) as (SshCall & { pid: number })[];
+    const live = forwards[forwards.length - 1]!;
+    expect(alive(live.pid)).toBe(true);
+    // A crash of the Electron main process itself (app.process() is a launcher
+    // on Windows): no stopChannels, no child.kill() — only the OS closing pipes.
+    const mainPid = (await app.evaluate(() => process.pid)) as number;
+    process.kill(mainPid, 'SIGKILL');
+    app.process().kill();
+    killed = true;
+    await expect.poll(() => alive(live.pid), { timeout: 15_000 }).toBe(false);
+  } finally {
+    if (!killed) await closeApp(app);
+  }
+});
+
+test('R39 #11: removing an ssh host drops its overrides; ssh rows have no devin path override', async () => {
+  const { app } = await launchSsh();
+  type WithOverrides = { hosts: { overrides: Record<string, unknown> } };
+  const overrides = async () => ((await state(app)).settings as unknown as WithOverrides).hosts.overrides;
+  try {
+    await addSsh(app, 'box');
+    const shell = await shellPage(app);
+    await shell.evaluate(() =>
+      (window as any).agentworkspace.commitSettings({ hosts: { overrides: { 'ssh:box': { shell: '/bin/zsh' } } } }),
+    );
+    await expect.poll(async () => Object.keys(await overrides())).toContain(HOST);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await evaluateInShell(app, `document.querySelector('[data-settings-tab="general"]').click()`);
+    await shell.locator(`[data-host-id="${HOST}"] [data-host-overrides-toggle]`).click();
+    await expect(shell.locator(`[data-host-id="${HOST}"] [data-host-override="shell"]`)).toBeVisible();
+    await expect(shell.locator(`[data-host-id="${HOST}"] [data-host-override="devinPath"]`)).toHaveCount(0);
+    await shell.locator(`[data-host-id="${HOST}"] [data-host-remove]`).click();
+    await expect.poll(async () => Object.keys(await overrides())).not.toContain(HOST);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('R39 #12: an open remote folder prompt is closed (null) when the shell reloads', async () => {
+  const { app } = await launchSsh();
+  try {
+    await addSsh(app, 'box');
+    await helperReady(app);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('claude'));
+    const shell = await shellPage(app);
+    void shell.evaluate(() => (window as any).agentworkspace.claudeWorkspaceAdd(undefined, { remote: true })).catch(() => undefined);
+    await expect(shell.locator('#remoteFolderPrompt')).toBeVisible();
+    await app.evaluate(() => (globalThis as any).__agentworkspace.getShellWebContents().reload());
+    await expect
+      .poll(async () => ((await state(app)) as unknown as { folderPrompt: unknown }).folderPrompt ?? null, { timeout: 15_000 })
+      .toBeNull();
+    await expect(shell.locator('#remoteFolderPrompt')).toHaveCount(0);
   } finally {
     await closeApp(app);
   }

@@ -37,3 +37,54 @@ export function scrubSshAliases<T>(value: T, hash: (alias: string) => string, de
   }
   return (changed ? out : value) as T;
 }
+
+const regexCache = new Map<string, RegExp>();
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+
+/** One case-insensitive whole-word matcher for the configured aliases (an alias
+ * char on either side, or a `.` followed by one, is not a word boundary). */
+function knownAliasRe(aliases: readonly string[]): RegExp {
+  const key = aliases.join(' ');
+  let re = regexCache.get(key);
+  if (!re) {
+    const alt = [...aliases].sort((a, b) => b.length - a.length).map(escapeRe).join('|');
+    re = new RegExp(`(?<![A-Za-z0-9._-])(${alt})(?![A-Za-z0-9_-])(?!\\.[A-Za-z0-9_-])`, 'gi');
+    if (regexCache.size > 16) regexCache.clear();
+    regexCache.set(key, re);
+  }
+  re.lastIndex = 0;
+  return re;
+}
+
+/**
+ * Free-text leak guard (R39 #6): every configured alias appearing as a whole
+ * word in a string VALUE at any depth (e.g. `ssh: Could not resolve hostname
+ * box`) becomes `ssh:#<hash>`. Keys are left alone (host-id keys are handled
+ * by scrubSshAliases). Returns `value` itself when nothing changed.
+ */
+export function scrubKnownAliases<T>(value: T, aliases: readonly string[], hash: (alias: string) => string, depth = 0): T {
+  if (aliases.length === 0) return value;
+  if (typeof value === 'string') {
+    const re = knownAliasRe(aliases);
+    if (!re.test(value)) return value;
+    return value.replace(knownAliasRe(aliases), (m: string) => `ssh:#${hash(m.toLowerCase())}`) as T;
+  }
+  if (depth >= MAX_DEPTH || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map((item) => {
+      const next = scrubKnownAliases(item, aliases, hash, depth + 1);
+      if (next !== item) changed = true;
+      return next;
+    });
+    return (changed ? out : value) as T;
+  }
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const next = scrubKnownAliases(item, aliases, hash, depth + 1);
+    if (next !== item) changed = true;
+    out[key] = next;
+  }
+  return (changed ? out : value) as T;
+}

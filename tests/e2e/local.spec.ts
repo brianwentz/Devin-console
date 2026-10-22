@@ -1347,6 +1347,10 @@ test('Local picker start folder: configured folder wins, missing folder is logge
     // Default distro → the in-app RemoteFolderInput on that distro, starting in
     // its probed home; the native dialog does not open again (P3).
     const dialogBefore = await lastDialog();
+    // The prompt starts in the probed home: wait for the probe (slow under full-suite load).
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.home ?? null, { timeout: 60_000 })
+      .toBe('/home/u');
     await shell.evaluate(() =>
       (window as any).agentworkspace.setSettings({ local: { defaultWslDistro: 'Fake' } }),
     );

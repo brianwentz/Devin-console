@@ -1009,6 +1009,8 @@ export const ShellStateSchema = z.object({
       /** Host-side folder the input starts in (picker folder on that host, else its home). */
       start: z.string().nullable(),
       hosts: z.array(z.object({ id: HostIdSchema, label: z.string(), home: z.string().nullable() })),
+      /** Offer "This PC (browse…)" — answered with `browse: true`, continues in the native dialog. */
+      browse: z.boolean(),
       /** Why the last answer was refused (missing / not a folder on the host). */
       error: z.string().nullable(),
     })
@@ -1207,11 +1209,13 @@ export const HostReaddirSchema = z.object({
 export type HostReaddirArg = z.infer<typeof HostReaddirSchema>;
 export type HostReaddirResult = { entries: { name: string; dir: boolean }[]; truncated: boolean };
 // hosts:folderPromptResolve — the open in-app folder prompt's answer: a
-// host-side absolute path on one of the offered hosts, or null (cancel).
+// host-side absolute path on one of the offered hosts, or null (cancel);
+// `browse: true` = "This PC (browse…)" (native dialog instead).
 export const FolderPromptResolveArg = z.object({
   id: z.string().min(1).max(64),
   hostId: HostIdSchema.optional(),
   path: z.string().min(1).max(4096).startsWith('/').nullable(),
+  browse: z.literal(true).optional(),
 });
 export const ClaudeContextMenuArg = z.object({
   kind: z.enum(['session', 'workspace', 'header', 'agent']),

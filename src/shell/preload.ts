@@ -163,6 +163,8 @@ const hostsApi = {
     ipcRenderer.invoke(IpcChannels.hostsReaddir, { hostId, path }) as Promise<LocalResult<HostReaddirResult>>,
   folderPromptResolve: (id: string, hostId: HostId, path: string | null) =>
     ipcRenderer.send(IpcChannels.hostsFolderPromptResolve, { id, hostId, path }),
+  folderPromptBrowse: (id: string) =>
+    ipcRenderer.send(IpcChannels.hostsFolderPromptResolve, { id, path: null, browse: true }),
 };
 
 // P4b embedded terminal + F5 dock.

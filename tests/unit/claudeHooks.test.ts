@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildHooksBlock,
+  globalHooksEnabledFor,
   HOOK_EVENTS,
   HOOK_PATH_PREFIX,
   LEGACY_HOOK_PATH_PREFIXES,
@@ -256,5 +257,18 @@ describe('legacy hook prefix (pre-rename)', () => {
     if ('error' in removed) throw new Error(removed.error);
     expect(removed.json).not.toContain('/devin-workspaces/hook/');
     expect(removed.json).not.toContain('"hooks"');
+  });
+});
+
+describe('globalHooksEnabledFor (R39 #1)', () => {
+  it('never installs the global (literal-token) block on an ssh host', () => {
+    expect(globalHooksEnabledFor(true, 'ssh')).toBe(false);
+    expect(globalHooksEnabledFor(false, 'ssh')).toBe(false);
+  });
+  it('follows the opt-in on this PC and WSL', () => {
+    expect(globalHooksEnabledFor(true, 'local')).toBe(true);
+    expect(globalHooksEnabledFor(true, 'wsl')).toBe(true);
+    expect(globalHooksEnabledFor(false, 'local')).toBe(false);
+    expect(globalHooksEnabledFor(false, 'wsl')).toBe(false);
   });
 });

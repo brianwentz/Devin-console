@@ -52,7 +52,7 @@ import { HostChannel, type HelperStatus } from './hostChannel';
 import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
 import { hooksOffSpawnError } from '../core/hooksOffBackoff';
 import { wtDistroList } from '../core/windowsTerminal';
-import { SshHosts, aliasHash as aliasHashOf } from './sshHosts';
+import { SshHostDisabledError, SshHosts, aliasHash as aliasHashOf } from './sshHosts';
 
 const execFileAsync = promisify(execFile);
 
@@ -344,6 +344,11 @@ export class HostsRegistry {
 
   /** ssh: the hook forward is up and its listener proved the token (hook
    * injection / the remote hooks block are allowed only then). */
+  /** Test seam (R39 #3): EOF the hook forward's stdin; true when there was one. */
+  sshForwardEndStdin(id: string): boolean {
+    return id.startsWith('ssh:') && this.ssh.forwardEndStdin(id as HostId);
+  }
+
   hookForwardVerified(id: string): boolean {
     return id.startsWith('ssh:') && this.ssh.forwardVerified(id as HostId);
   }
@@ -1229,6 +1234,8 @@ export class HostsRegistry {
     if (isWslHost(host) && !opts?.explicit && this.enumStopped(host.id)) {
       throw new Error('distro is stopped');
     }
+    // A disabled ssh host is never connected to (R39 #5).
+    if (isSshHost(host) && !this.ssh.enabled(host.id)) throw new SshHostDisabledError();
     await this.shellEnv(host, opts);
     if (isSshHost(host)) return this.execSsh(host, cmd, timeout);
     const spec = spawnSpec(host, cmd, this.cachedEnv(host));
@@ -1471,6 +1478,9 @@ export class HostsRegistry {
     const next = current.filter((h) => `ssh:${h.alias}` !== id);
     if (next.length === current.length) return;
     state.settings?.merge({ hosts: { ssh: next } });
+    // The host's overrides go with it (R39 #11) — a named removal of the one
+    // key this host owns (ux3 S6: merge() never deletes).
+    state.settings?.removeHostOverride(id);
     log('host', 'host-ssh', { detail: { aliasHash: aliasHashOf(id.slice(4)), op: 'remove' } });
     this.ssh.sync();
     this.lastPublished = null;

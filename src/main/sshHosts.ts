@@ -8,11 +8,13 @@
 //
 // Fix round 1 (R35):
 // - Hooks: the listener's reverse forward is its OWN connection
-//   (`ssh -N -o ExitOnForwardFailure=yes -R 127.0.0.1:<p>:127.0.0.1:<p>`), with
-//   its own backoff, and is trusted only after a challenge: a remote `curl`
-//   fetches `<prefix>health?nonce=<n>` and the answer must be
-//   HMAC-SHA256(token, nonce). Unverified → no hook injection into ssh ptys, no
-//   hooks block in the remote settings.json, HostStatus.hooks 'unreachable'.
+//   (`ssh -o ExitOnForwardFailure=yes -T -R 127.0.0.1:<p>:127.0.0.1:<p> <alias>
+//   -- exec cat >/dev/null`, stdin piped so it dies with the app — R39 #3),
+//   with its own backoff (only while the channel is up — R39 #8), and is
+//   trusted only after a challenge: a remote `curl` fetches
+//   `<prefix>health?nonce=<n>` and the answer must be HMAC-SHA256(token,
+//   nonce). Unverified → no hook injection into ssh ptys, HostStatus.hooks
+//   'unreachable'. The global hooks block is never written on ssh (R39 #1).
 // - Secrets never ride an argv: spawns get the app's extra env as the first
 //   stdin line, ptys from a 0600 file the helper staged (`env.stage`).
 // - Recovery: connection-class failures (exit 255 / timeout) re-probe / reset
@@ -85,6 +87,10 @@ const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
 const FORWARD_BACKOFF_MS = [10_000, 60_000, 300_000];
 const RECOVERY_INTERVAL_MS = 5 * 60_000;
 
+/** ssh.exe is resolved once per run, so a client installed later needs a restart. */
+export const SSH_NOT_FOUND_MESSAGE =
+  'OpenSSH client (ssh.exe) not found — install the Windows OpenSSH Client, then restart the app';
+
 export const FORWARD_FAILED_MESSAGE =
   'Hooks unavailable: the hook port could not be forwarded to this host (taken on the remote, or the connection failed)';
 export const FORWARD_UNVERIFIED_MESSAGE =
@@ -97,6 +103,21 @@ export const aliasHash = sshAliasHash;
 export function unsupportedSshShell(shell: string | null): boolean {
   const base = (shell ?? '').split('/').pop() ?? '';
   return base === 'csh' || base === 'tcsh';
+}
+
+/** A configured-but-disabled ssh host is never connected to (R39 #5). */
+export class SshHostDisabledError extends Error {
+  constructor() {
+    super('This SSH host is disabled — enable it under Settings → General → Hosts');
+    this.name = 'SshHostDisabledError';
+  }
+}
+
+/** `host-exec` kind of a one-shot ssh run. */
+function runKind(op: SshOp): string {
+  if (op === 'deploy' || op === 'hooks-off') return 'exec';
+  if (op === 'env' || op === 'challenge') return op;
+  return 'probe';
 }
 
 export const UNSUPPORTED_SHELL_MESSAGE =
@@ -178,7 +199,7 @@ export class SshHosts {
 
   /** core spec (`ssh.exe …`) → the resolved command (test seam prefix included). */
   private apply(spec: HostSpawnSpec): { file: string; args: string[] } {
-    if (!this.sshCmd) throw new Error('OpenSSH client (ssh.exe) not found');
+    if (!this.sshCmd) throw new Error(SSH_NOT_FOUND_MESSAGE);
     return { file: this.sshCmd[0]!, args: [...this.sshCmd.slice(1), ...spec.args] };
   }
 
@@ -203,7 +224,7 @@ export class SshHosts {
             reject(error);
             return;
           }
-          this.note(entry, op, op === 'deploy' || op === 'hooks-off' ? 'exec' : op === 'env' ? 'env' : 'probe');
+          this.note(entry, op, runKind(op));
           const child = spawn(cmd.file, cmd.args, {
             stdio: [opts.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             windowsHide: true,
@@ -226,7 +247,9 @@ export class SshHosts {
             clearTimeout(timer);
             reject(error);
           });
-          child.once('exit', (code) => {
+          // 'close', not 'exit' (R39 #2): stdout is fully drained by then —
+          // `exit` can fire with the env / CLI-marker tail still buffered.
+          child.once('close', (code) => {
             clearTimeout(timer);
             resolveRun({ stdout: Buffer.concat(out), code, timedOut });
           });
@@ -274,6 +297,11 @@ export class SshHosts {
       this.entries.set(host.id, entry);
     }
     return entry;
+  }
+
+  /** Configured and enabled — the only ssh hosts the app connects to. */
+  enabled(id: HostId): boolean {
+    return this.isEnabled(id);
   }
 
   private isEnabled(id: HostId): boolean {
@@ -547,7 +575,12 @@ export class SshHosts {
       entry.helperFailure = null;
       void this.fetchChannelEnv(entry);
       this.ensureForward(entry);
-    } else entry.channelEnv = null;
+    } else {
+      entry.channelEnv = null;
+      // A helper that is down for good (degraded / stopped / node) takes the
+      // forward with it (R39 #8); reconnecting/starting keep a live one.
+      if (status.state !== 'starting' && status.state !== 'reconnecting') this.stopForward(entry);
+    }
     this.ctx.publish();
   }
 
@@ -589,6 +622,14 @@ export class SshHosts {
     return Boolean(entry?.forward?.verified && entry.forward.child && this.isEnabled(id));
   }
 
+  /** Test seam: EOF the forward's stdin (the app dying does the same). */
+  forwardEndStdin(id: HostId): boolean {
+    const stdin = this.entries.get(id)?.forward?.child?.stdin;
+    if (!stdin) return false;
+    stdin.end();
+    return true;
+  }
+
   private setHooks(entry: SshEntry, hooks: HostStatus['hooks'], message: string | null): void {
     this.ctx.setPart(entry.host.id, 'hooks', message);
     if (entry.status.hooks === hooks) {
@@ -622,11 +663,18 @@ export class SshHosts {
       return;
     }
     this.note(entry, 'forward', 'forward');
-    const child = spawn(cmd.file, cmd.args, { cwd: homedir(), windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    // stdin stays an open pipe (R39 #3): the remote `cat` exits on its EOF, so
+    // the forward ends with this process however it dies.
+    const child = spawn(cmd.file, cmd.args, { cwd: homedir(), windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    child.stdin?.on('error', () => undefined);
     child.stderr!.resume();
     fwd.child = child;
     fwd.verified = false;
+    // 'error' and 'exit' can both fire for one child (R39 #7): count it once.
+    let done = false;
     const ended = (code: number | null): void => {
+      if (done) return;
+      done = true;
       if (fwd.seq !== seq || entry.forward !== fwd) return;
       fwd.child = null;
       fwd.verified = false;
@@ -641,9 +689,13 @@ export class SshHosts {
     void this.verifyForward(entry, fwd, seq);
   }
 
+  /** Restart only while the helper channel is up or coming up (R39 #8): a
+   * degraded host gets its forward back on the next ready transition. */
   private scheduleForward(entry: SshEntry): void {
     const fwd = entry.forward;
     if (!fwd || fwd.timer || this.ctx.quitting() || !this.isEnabled(entry.host.id)) return;
+    const channelState = entry.channel?.state;
+    if (channelState !== 'ready' && channelState !== 'starting') return;
     const override = testNumber('AGENT_WORKSPACE_TEST_SSH_FORWARD_BACKOFF_MS');
     const delay = override ?? FORWARD_BACKOFF_MS[Math.min(fwd.failures, FORWARD_BACKOFF_MS.length) - 1] ?? FORWARD_BACKOFF_MS[0]!;
     fwd.timer = setTimeout(() => this.startForward(entry), delay);
@@ -776,7 +828,7 @@ export class SshHosts {
 
   async shellEnv(id: HostId): Promise<Record<string, string> | null> {
     const entry = this.entries.get(id);
-    if (!entry) return null;
+    if (!entry || !this.isEnabled(id)) return null;
     if (!entry.probed) await (entry.probing ?? this.probe(entry));
     if (entry.channel?.state === 'ready' && this.ctx.overrides(id).envCaptureDisabled !== true) {
       return (await this.fetchChannelEnv(entry)) ?? entry.env;
@@ -787,6 +839,7 @@ export class SshHosts {
   private entryOrThrow(id: HostId): SshEntry {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('unknown ssh host');
+    if (!this.isEnabled(id)) throw new SshHostDisabledError();
     return entry;
   }
 

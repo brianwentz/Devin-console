@@ -659,7 +659,7 @@ export const SSH_RUN_FILE_SCRIPT =
 const loginBody = (shell: string): string => (shellFamily(shell) === 'fish' ? 'exec $argv' : 'exec "$0" "$@"');
 /** The piped-spawn body: the CLI's stdin is fd 3 again (SSH_RUN_STDIN_SCRIPT moved it there). */
 const loginBodyFd3 = (shell: string): string =>
-  shellFamily(shell) === 'fish' ? 'exec $argv <&3' : 'exec "$0" "$@" <&3 3<&-';
+  shellFamily(shell) === 'fish' ? 'exec $argv <&3 3<&-' : 'exec "$0" "$@" <&3 3<&-';
 
 /**
  * ssh counterpart of spawnSpec: `/bin/sh` (any login shell may be fish) reads
@@ -713,16 +713,30 @@ export function sshHelperSpec(
 
 /**
  * The hook listener's reverse forward on its own connection (fix round 1 #1):
- * no remote command (`-N`), bound to the remote loopback only, and
- * `ExitOnForwardFailure` — a port already taken on the remote (squatted)
- * ends the connection instead of leaving hooks pointed at someone else.
+ * bound to the remote loopback only, and `ExitOnForwardFailure` — a port
+ * already taken on the remote (squatted) ends the connection instead of
+ * leaving hooks pointed at someone else. Not `-N` (R39 #3): the remote command
+ * reads the app's stdin pipe and exits on EOF, so the forward dies with the
+ * app (crash / kill included) instead of orphaning the remote port.
  */
+export const SSH_FORWARD_REMOTE = 'exec cat >/dev/null';
+
 export function sshForwardSpec(alias: string, port: number): HostSpawnSpec {
   assertAlias(alias);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ssh: invalid forward port');
   return {
     file: 'ssh.exe',
-    args: [...SSH_BASE_ARGS, '-o', 'ExitOnForwardFailure=yes', '-N', '-T', '-R', `127.0.0.1:${port}:127.0.0.1:${port}`, alias],
+    args: [
+      ...SSH_BASE_ARGS,
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-T',
+      '-R',
+      `127.0.0.1:${port}:127.0.0.1:${port}`,
+      alias,
+      '--',
+      SSH_FORWARD_REMOTE,
+    ],
     cwd: null,
   };
 }

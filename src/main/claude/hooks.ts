@@ -8,7 +8,7 @@ import {
   type ActivityState,
   type ClaudeHookEvent,
 } from '../../core/claudeActivity';
-import { buildHooksBlock, hooksApplyKey, settingsFlagJson } from '../../core/claudeHooks';
+import { buildHooksBlock, globalHooksEnabledFor, hooksApplyKey, settingsFlagJson } from '../../core/claudeHooks';
 import { notificationsForHookEvent } from '../../core/claudeNotify';
 import type { NotificationKind } from '../../core/notificationModel';
 import { claudeScope } from '../../core/tabModel';
@@ -156,10 +156,12 @@ export class ClaudeHooks {
     let installed = false;
     let firstError: string | null = null;
     for (const host of hosts().allHosts()) {
-      // ssh (fix round 1 #1): the block's 127.0.0.1:<port> URLs only go in
-      // while that host's forward is verified (the listener proved the token);
-      // otherwise the block is removed — never left pointing at a squatter.
-      const hostEnabled = enabled && (host.kind !== 'ssh' || hosts().hookForwardVerified(host.id));
+      // ssh (R39 #1): the global block is never installed — it would outlive
+      // the app, the forward and the host's membership on a possibly shared
+      // machine. The removal still runs (once per run, gated by lastApplied)
+      // whenever the channel is ready, so a block an earlier build wrote goes.
+      // ssh sessions report only through app-launched ptys (`--settings`).
+      const hostEnabled = globalHooksEnabledFor(enabled, host.kind);
       // Hooks back on: a pending-removal error no longer applies (a host that
       // is applied below overwrites hooksInstall anyway).
       if (enabled && this.offUnavailable.delete(host.id)) hosts().setError(host.id, 'hooksInstall', null);

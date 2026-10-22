@@ -221,7 +221,8 @@ function HostsBlock() {
           {openOverrides === host.id ? (
             <div data-host-overrides className="flex flex-col gap-2 border-l border-[#2c3949] pl-3">
               {overrideField(host, 'claudePath', 'Claude path')}
-              {overrideField(host, 'devinPath', 'devin path')}
+              {/* Devin Local never runs over SSH — no devin path to override there. */}
+              {host.kind !== 'ssh' && overrideField(host, 'devinPath', 'devin path')}
               {overrideField(host, 'home', 'Home directory')}
               {overrideField(host, 'shell', 'Shell')}
               <label className="flex items-center gap-2 text-xs">
