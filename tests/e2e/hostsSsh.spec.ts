@@ -235,7 +235,12 @@ test('claude chat on an ssh workspace spawns via ssh -T with the quoted cwd — 
       expect(spawned.argv.join(' ')).not.toContain(leaked);
     }
     await expect
-      .poll(() => stagedEnvKeys(sshLog).some((keys) => keys.includes('CLAUDE_CODE_ENTRYPOINT') && keys.includes('PATH')))
+      // The fake helper's env carries the Windows runner's `Path` (case-preserved), not `PATH`.
+      .poll(() =>
+        stagedEnvKeys(sshLog).some(
+          (keys) => keys.includes('CLAUDE_CODE_ENTRYPOINT') && keys.some((k) => k.toUpperCase() === 'PATH'),
+        ),
+      )
       .toBe(true);
     await expect
       .poll(async () =>

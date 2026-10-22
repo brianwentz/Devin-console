@@ -401,12 +401,12 @@ test('a local transcript change re-lists only the local host', async () => {
     FAKE_WSL_ROOT: uncRoot,
   });
   const logFile = join(profile, 'events.jsonl');
-  const lists = async (source: string) =>
+  const lists = async (source?: string) =>
     (await readEvents(logFile))
       .filter(
         (e) =>
           e.event === 'claude-list' &&
-          (e.detail as { source?: string } | undefined)?.source === source,
+          (source === undefined || (e.detail as { source?: string } | undefined)?.source === source),
       )
       .map((e) => e.detail as { listedHosts?: number; skippedHosts?: string[] });
   try {
@@ -421,11 +421,13 @@ test('a local transcript change re-lists only the local host', async () => {
         timeout: 30_000,
       })
       .toBe('ready');
-    // Positive control: a full refresh lists both hosts.
+    // Positive control: a full refresh lists both hosts. A refresh that lands while
+    // another is in flight is coalesced and keeps only the latest dirty source, so
+    // the full pass may carry any source, not just 'test'.
     await app.evaluate(() => (globalThis as any).__agentworkspace.claudeRefresh());
     await expect
-      .poll(async () => (await lists('test')).at(-1)?.listedHosts, { timeout: 10_000 })
-      .toBe(2);
+      .poll(async () => (await lists()).some((l) => l.listedHosts === 2), { timeout: 10_000 })
+      .toBe(true);
     const before = (await lists('watch')).length;
     const id = '22222222-0000-4000-8000-0000000000aa';
     writeFileSync(
