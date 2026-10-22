@@ -35,6 +35,10 @@ test('a slow-probing distro never blocks window creation or the first passes', a
     FAKE_WSL_DISTROS: 'Slow:Running:default',
     FAKE_WSL_PROBE_DELAY_MS: '8000',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    // The helper reads the distro's own fs — the same tree here.
+    FAKE_WSL_ROOT: uncRoot,
+    // usage-a.jsonl is October 2026 data.
+    AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
   });
   const logFile = join(profile, 'events.jsonl');
   const slowState = async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Slow')?.state;
@@ -98,12 +102,18 @@ test('a slow-probing distro never blocks window creation or the first passes', a
         { timeout: 30_000 },
       )
       .not.toContain('wsl:Slow');
-    // The seeded distro transcript is never read over UNC: totals are paused.
-    const usage = (await app.evaluate(() =>
-      (globalThis as any).__agentworkspace.claudeUsageState(),
-    )) as { wslTotalsPaused: boolean; tokens: { byHost: Record<string, unknown> } };
-    expect(usage.tokens.byHost['wsl:Slow']).toBeUndefined();
-    expect(usage.wslTotalsPaused).toBe(true);
+    // The seeded distro transcript is scanned inside the distro (helper channel).
+    await expect
+      .poll(
+        async () => {
+          const usage = (await app.evaluate(() =>
+            (globalThis as any).__agentworkspace.claudeUsageState(),
+          )) as { tokens: { byHost: Record<string, { messages: number }> } };
+          return usage.tokens.byHost['wsl:Slow']?.messages ?? 0;
+        },
+        { timeout: 30_000 },
+      )
+      .toBeGreaterThan(0);
   } finally {
     await closeApp(app);
   }

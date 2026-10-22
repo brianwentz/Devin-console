@@ -58,7 +58,6 @@ function hooks(app: ElectronApplication) {
         }[];
         perToken: boolean;
         month: string;
-        wslTotalsPaused: boolean;
         tokens: {
           total: { input: number; output: number; cacheRead: number; cacheWrite: number; messages: number };
           byModel: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; messages: number }>;
@@ -247,17 +246,23 @@ test('usage: TEST_NOW in November → empty month, previousMonthTotal = October'
   }
 });
 
-test('usage: WSL totals are paused — no wsl byHost bucket, the account still joins', async () => {
+// Task 10: a WSL host's credentials, account file and transcripts are read
+// inside the distro over the helper channel. The UNC root the app maps
+// \\wsl.localhost to is a separate EMPTY dir — the data exists only in the
+// helper's fs (FAKE_WSL_ROOT), so any Windows-side UNC read would find nothing.
+test('WSL usage totals return via the channel', async () => {
   const fixtures = await startFixtureServers();
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-usage-'));
   const claudeHome = join(profile, 'claude-home');
   cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
-  // Fake distro home: <uncRoot>\home\u — its claude dir gets credentials + a
-  // transcript with usage so byHost['wsl:Fake'] is populated.
-  const wslClaude = join(uncRoot, 'home', 'u', '.claude');
+  const wslRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wslfs-'));
+  const wslHome = join(wslRoot, 'home', 'u');
+  const wslClaude = join(wslHome, '.claude');
   mkdirSync(join(wslClaude, 'projects', '-home-u-ws'), { recursive: true });
   cpSync(join(CLAUDE_FIXTURE_HOME, '.credentials.json'), join(wslClaude, '.credentials.json'));
+  // Same account as the local host → one joined account.
+  cpSync(join(process.cwd(), 'tests', 'fixtures', 'claude-account.json'), join(wslHome, '.claude.json'));
   const WSL_ID = '33333333-0000-4000-8000-0000000000w1';
   writeFileSync(
     join(wslClaude, 'projects', '-home-u-ws', `${WSL_ID}.jsonl`),
@@ -284,6 +289,7 @@ test('usage: WSL totals are paused — no wsl byHost bucket, the account still j
     AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: wslRoot,
   });
   const h = hooks(app);
   try {
@@ -292,19 +298,27 @@ test('usage: WSL totals are paused — no wsl byHost bucket, the account still j
     const state = await h.usage();
     expect(state.accounts).toHaveLength(1);
     expect(state.accounts[0]!.hosts.sort()).toEqual(['local', 'wsl:Fake']);
-    // The distro's transcripts are never read over UNC any more.
-    expect(state.tokens.byHost['wsl:Fake']).toBeUndefined();
-    expect(state.tokens.total.input).toBe(OCT_TOTAL.input);
-    expect(state.wslTotalsPaused).toBe(true);
+    expect(state.tokens.byHost['wsl:Fake']).toMatchObject({ input: 7, messages: 1 });
+    expect(state.tokens.byHost.local).toMatchObject({ input: OCT_TOTAL.input });
+    expect(state.tokens.total.input).toBe(OCT_TOTAL.input + 7);
+    expect(state).not.toHaveProperty('wslTotalsPaused');
+    // The distro's files never entered the app's own per-file cache.
+    const cache = JSON.parse(readFileSync(join(profile, 'claude-usage-cache.json'), 'utf8')) as {
+      files: Record<string, unknown>;
+    };
+    expect(Object.keys(cache.files).filter((k) => k.startsWith('wsl:'))).toEqual([]);
+    const scans = (await readEvents(logFile)).filter((e) => e.event === 'usage-scan');
+    expect((scans.at(-1)?.detail as { wslFiles?: number } | undefined)?.wslFiles).toBe(1);
     const shell = await shellPage(app);
     await shell.locator('#analyticsButton').click();
     await shell.locator('#analyticsTab-claude').click();
-    await expect(shell.locator('#claudeWslTotalsPaused')).toBeVisible();
-    await expect(shell.locator('#claudeWslTotalsPaused')).toContainText('paused');
+    await expect(shell.locator('[data-usage-account]')).toHaveCount(1);
+    await expect(shell.locator('#claudeWslTotalsPaused')).toHaveCount(0);
   } finally {
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(uncRoot, { recursive: true, force: true });
+    rmSync(wslRoot, { recursive: true, force: true });
     await fixtures.close();
   }
 });
@@ -323,6 +337,7 @@ test('usage: scan racing a withConfigDir swap does not pollute the local bucket'
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const wslClaude = join(uncRoot, 'home', 'u', '.claude');
   const WSL_PROJECT = '-home-u-race';
+  const helperRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wslfs-'));
   mkdirSync(join(wslClaude, 'projects', WSL_PROJECT), { recursive: true });
   cpSync(join(CLAUDE_FIXTURE_HOME, '.credentials.json'), join(wslClaude, '.credentials.json'));
   const WSL_ID = '44444444-0000-4000-8000-0000000000w2';
@@ -351,6 +366,8 @@ test('usage: scan racing a withConfigDir swap does not pollute the local bucket'
     AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    // The helper's own fs is empty: only a UNC-side read could see the store.
+    FAKE_WSL_ROOT: helperRoot,
   });
   const h = hooks(app);
   try {
@@ -374,7 +391,7 @@ test('usage: scan racing a withConfigDir swap does not pollute the local bucket'
 
     // The local bucket equals the totals of the local seeded files only
     // (pre-fix: it carried the distro's store while the swap was held). The
-    // distro itself is not scanned — its totals are paused.
+    // distro is scanned by its helper, whose fs here is empty.
     expect(state.tokens.byHost.local).toMatchObject({
       input: OCT_TOTAL.input,
       messages: OCT_TOTAL.messages,
@@ -400,6 +417,7 @@ test('usage: scan racing a withConfigDir swap does not pollute the local bucket'
     await closeApp(app);
     rmSync(profile, { recursive: true, force: true });
     rmSync(uncRoot, { recursive: true, force: true });
+    rmSync(helperRoot, { recursive: true, force: true });
     await fixtures.close();
   }
 });
@@ -453,10 +471,10 @@ test('usage: two accounts render as two gauge blocks (per-host account files)', 
   const wslClaude = join(uncRoot, 'home', 'u', '.claude');
   mkdirSync(join(wslClaude, 'projects'), { recursive: true });
   cpSync(join(CLAUDE_FIXTURE_HOME, '.credentials.json'), join(wslClaude, '.credentials.json'));
-  // The fake distro is signed into a different account (per-host seam).
-  const wslAccountFile = join(profile, 'wsl-account.json');
+  // The fake distro is signed into a different account: its own
+  // ~/.claude.json, read by the helper inside the distro.
   writeFileSync(
-    wslAccountFile,
+    join(uncRoot, 'home', 'u', '.claude.json'),
     JSON.stringify({
       oauthAccount: { emailAddress: 'personal@outlook.com', organizationName: 'Personal Org' },
     }),
@@ -467,7 +485,7 @@ test('usage: two accounts render as two gauge blocks (per-host account files)', 
     AGENT_WORKSPACE_TEST_NOW: '2026-10-15T12:00:00.000Z',
     FAKE_WSL_DISTROS: 'Fake:Running:default',
     AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
-    AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE: `tests/fixtures/claude-account.json;wsl:Fake=${wslAccountFile}`,
+    FAKE_WSL_ROOT: uncRoot,
   });
   const h = hooks(app);
   try {

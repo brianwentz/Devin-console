@@ -4,11 +4,10 @@
 // names, ids, counts and durations only — never titles or transcript text.
 
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { app, clipboard, dialog, shell } from 'electron';
 import { openFolderDialog } from '../dialogs';
-import { pickerFolderMissing, pickerStartPath } from '../../core/pickerFolder';
+import { pickerStartPath } from '../../core/pickerFolder';
 import { basename, resolve } from 'node:path';
 import type {
   ClaudeRegistry,
@@ -846,7 +845,7 @@ export class ClaudeSessions {
       else {
         const win = state.windowRef;
         if (!win) return null;
-        const defaultPath = this.pickerDefaultPath();
+        const defaultPath = await this.pickerDefaultPath();
         const result = await openFolderDialog(win, {
           title: 'Choose the working directory for the new Claude session',
           properties: ['openDirectory', 'createDirectory'],
@@ -919,7 +918,7 @@ export class ClaudeSessions {
   // claude.pickerFolder when it exists, else the configured default WSL
   // distro's home, else undefined (the OS decides). A missing configured
   // folder is logged and skipped, never cleared.
-  private pickerDefaultPath(): string | undefined {
+  private pickerDefaultPath(): Promise<string | undefined> {
     const claude = state.settings?.current.claude;
     const defaultDistro = claude?.defaultWslDistro;
     const defaultHost = defaultDistro ? hosts().hostById(`wsl:${defaultDistro}`) : null;
@@ -927,11 +926,9 @@ export class ClaudeSessions {
       defaultHost && isWslHost(defaultHost)
         ? hosts().windowsPath(defaultHost, defaultHost.home ?? '/')
         : undefined;
-    const configured = claude?.pickerFolder ?? null;
-    if (pickerFolderMissing(configured, existsSync)) {
-      log('claude', 'picker-folder-missing', { detail: { surface: 'claude' } });
-    }
-    return pickerStartPath(configured, distroHome, existsSync);
+    return pickerStartPath(claude?.pickerFolder ?? null, distroHome, (p) => hosts().pathExists(p), () =>
+      log('claude', 'picker-folder-missing', { detail: { surface: 'claude' } }),
+    );
   }
 
   // Picks a directory (same seam as newSession(null): test mode reads
@@ -942,7 +939,7 @@ export class ClaudeSessions {
     if (envCwd) return envCwd;
     const win = state.windowRef;
     if (!win) return null;
-    const defaultPath = this.pickerDefaultPath();
+    const defaultPath = await this.pickerDefaultPath();
     const result = await openFolderDialog(win, {
       title,
       properties: ['openDirectory', 'createDirectory'],

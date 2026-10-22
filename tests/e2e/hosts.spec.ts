@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -1006,6 +1007,72 @@ test('an explicit start on a stopped distro re-reads its state promptly', async 
       `${uncRoot}\\home\\u\\ws`,
     );
     await expect.poll(() => hostState(app), { timeout: 10_000 }).toBe('ready');
+  } finally {
+    await closeApp(app);
+  }
+});
+
+// Task 10: the picker start folder is checked inside the distro (helper
+// `fs.stat`) and the probed distro home is used unchecked. The app's UNC
+// stand-in (AGENT_WORKSPACE_TEST_WSL_UNC_ROOT) stays an EMPTY dir — the folder
+// exists only in the helper's fs (FAKE_WSL_ROOT), so a Windows-side existence
+// check would call it missing.
+test('WSL picker default path needs no Windows-side fs', async () => {
+  const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const wslRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wslfs-'));
+  mkdirSync(join(wslRoot, 'home', 'u', 'picks'), { recursive: true });
+  const { app, profile } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_WSL_UNC_ROOT: uncRoot,
+    FAKE_WSL_ROOT: wslRoot,
+    AGENT_WORKSPACE_TEST_PICKER_CANCEL: '1',
+  });
+  const logFile = join(profile, 'events.jsonl');
+  const lastDialog = () =>
+    app.evaluate(
+      () => (globalThis as any).__agentworkspace.lastOpenDialogOptions() as { defaultPath?: string } | null,
+    );
+  const missingCount = async () =>
+    (await readEvents(logFile)).filter((e) => e.event === 'picker-folder-missing').length;
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.find((h) => h.id === 'wsl:Fake')?.helper?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    const shell = await shellPage(app);
+    const setPicker = async (pickerFolder: string) => {
+      await shell.evaluate(
+        (value: string) =>
+          (window as any).agentworkspace.setSettings({ claude: { pickerFolder: value, defaultWslDistro: 'Fake' } }),
+        pickerFolder,
+      );
+      await expect
+        .poll(
+          async () =>
+            ((await state(app)).settings as unknown as { claude: { pickerFolder: string | null } }).claude
+              .pickerFolder,
+        )
+        .toBe(pickerFolder);
+    };
+    const pickDefault = async () => {
+      expect(await app.evaluate(() => (globalThis as any).__agentworkspace.claudeNewSession(null))).toBeNull();
+      return (await lastDialog())?.defaultPath;
+    };
+
+    // A UNC folder that exists inside the distro wins.
+    const picks = join(uncRoot, 'home', 'u', 'picks');
+    await setPicker(picks);
+    expect(await pickDefault()).toBe(picks);
+    expect(await missingCount()).toBe(0);
+
+    // A UNC folder gone inside the distro → the probed home, unchecked.
+    await setPicker(join(uncRoot, 'home', 'u', 'gone'));
+    expect(await pickDefault()).toBe(join(uncRoot, 'home', 'u'));
+    expect(await missingCount()).toBe(1);
+
+    // Nothing touched the Windows-side stand-in.
+    expect(readdirSync(uncRoot)).toEqual([]);
   } finally {
     await closeApp(app);
   }

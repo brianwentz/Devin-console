@@ -1,8 +1,10 @@
 // ClaudeUsageService (plan D1–D4, D7): one service owns both Claude-analytics
 // data sources — plan limits fetched from the OAuth /usage endpoint, and token
 // totals from an incremental transcript aggregator over every fs-ready host's
-// store. Publishes one pushed state on IpcChannels.claudeUsage; started once
-// the shell has loaded (host fs waits for probe-ready) and lazily on first use.
+// store. WSL hosts are read inside the distro over the helper channel
+// (`usage.accounts` / `usage.scan`) — never over \\wsl.localhost. Publishes
+// one pushed state on IpcChannels.claudeUsage; started once the shell has
+// loaded (WSL work waits for a ready channel) and lazily on first use.
 
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { open as openFile, readdir, readFile, stat as statFile } from 'node:fs/promises';
@@ -38,6 +40,7 @@ import { isWslHost, type ExecHost } from '../../core/execHost';
 import { log } from '../log';
 import { notifyShell } from '../window';
 import { createPushedStore } from '../pushedStore';
+import { HostRpcError } from '../hostChannel';
 import { testMode } from '../state';
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -68,12 +71,36 @@ const EMPTY_CACHE: UsageCacheFile = { version: 1, files: {}, accounts: {} };
 
 interface HostCreds {
   host: ExecHost;
+  // Held in memory for the fetch only — never logged, never in state.
   accessToken: string;
   expiresAt: number;
   plan: string | null;
   email: string | null;
   organization: string | null;
+  /** WSL hosts: the CLI's `.usage-cache` as read by the helper (undefined = local, read from disk). */
+  usageCache?: { body: string; mtimeMs: number } | null;
 }
+
+/** `usage.accounts` reply (src/helper/usage.ts). */
+interface HelperAccounts {
+  accessToken?: unknown;
+  expiresAt?: unknown;
+  plan?: unknown;
+  email?: unknown;
+  org?: unknown;
+  usageCache?: unknown;
+}
+
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+
+function helperUsageCache(v: unknown): { body: string; mtimeMs: number } | null {
+  if (!v || typeof v !== 'object') return null;
+  const { body, mtimeMs } = v as { body?: unknown; mtimeMs?: unknown };
+  return typeof body === 'string' && typeof mtimeMs === 'number' ? { body, mtimeMs } : null;
+}
+
+/** Plain-object check for a `usage.scan` bucket map (shape is trusted below that). */
+const isBuckets = (v: unknown): v is UsageBuckets => !!v && typeof v === 'object' && !Array.isArray(v);
 
 export class ClaudeUsageService {
   private started = false;
@@ -197,8 +224,9 @@ export class ClaudeUsageService {
 
   // --- credentials + accounts --------------------------------------------------
 
-  /** Races host fs work against HOST_FS_BUDGET_MS — a wedged UNC path must
-   * never hold a fetch/scan pass hostage (the loser keeps running detached). */
+  /** Races local fs work against HOST_FS_BUDGET_MS — a stalled disk must
+   * never hold a fetch/scan pass hostage (the loser keeps running detached).
+   * WSL work goes over the helper channel, which has its own request timeouts. */
   private async fsRace<T>(work: Promise<T>): Promise<{ ok: boolean; timedOut: boolean; value?: T }> {
     let timer: NodeJS.Timeout | null = null;
     try {
@@ -241,8 +269,9 @@ export class ClaudeUsageService {
     }
   }
 
-  /** Test-mode account file seam: a bare path is the default for all hosts;
-   * `;`-separated `hostId=path` entries override per host (multi-account). */
+  /** Local account file; test-mode seam: a bare path is the default, a
+   * `local=path` entry overrides it (WSL hosts read the distro's own file
+   * through the helper). */
   private accountFileFor(host: ExecHost): string {
     const env = testMode ? (process.env.AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE?.trim() ?? '') : '';
     if (!testMode || !env) return join(dirname(hosts().configDir(host)), '.claude.json');
@@ -276,9 +305,33 @@ export class ClaudeUsageService {
     }
   }
 
+  /** `usage.accounts` over the host's helper channel: null when signed out or
+   * the request failed, 'timeout' when the helper did not answer in time. */
+  private async wslAccount(host: ExecHost): Promise<HostCreds | null | 'timeout'> {
+    const channel = hosts().channel(host);
+    if (!channel) return null;
+    let res: HelperAccounts | null;
+    try {
+      res = await channel.request<HelperAccounts | null>('usage.accounts');
+    } catch (error) {
+      return error instanceof HostRpcError && error.code === 'timeout' ? 'timeout' : null;
+    }
+    const accessToken = strOrNull(res?.accessToken);
+    if (!res || !accessToken) return null;
+    return {
+      host,
+      accessToken,
+      expiresAt: Number(res.expiresAt) || 0,
+      plan: strOrNull(res.plan),
+      email: strOrNull(res.email),
+      organization: strOrNull(res.org),
+      usageCache: helperUsageCache(res.usageCache),
+    };
+  }
+
   // Group hosts by account email (no email → one group per host). Wsl hosts
-  // whose probe isn't ready are never touched; a ready host whose fs stalls
-  // past the budget is skipped the same way.
+  // without a ready channel are never touched, and one whose `usage.accounts`
+  // times out is skipped; a local fs stalling past the budget is skipped too.
   private async readAccounts(): Promise<{
     groups: { key: string; email: string | null; organization: string | null; plan: string | null; hosts: HostCreds[] }[];
     skippedHosts: HostId[];
@@ -289,6 +342,15 @@ export class ClaudeUsageService {
       .map((h) => h.id);
     const members = await Promise.all(
       hosts().readyList().map(async (host) => {
+        if (isWslHost(host)) {
+          const remote = await this.wslAccount(host);
+          if (remote === 'timeout') skippedHosts.push(host.id);
+          if (!remote || remote === 'timeout') return null;
+          return {
+            member: remote,
+            summary: { hostId: host.id, email: remote.email, organization: remote.organization, plan: remote.plan },
+          };
+        }
         const result = await this.fsRace(
           (async () => {
             const creds = await this.credsForHost(host);
@@ -336,6 +398,15 @@ export class ClaudeUsageService {
     // Fall back to the newest .usage-cache the CLI left on the account's hosts.
     let best: { at: number; body: unknown } | null = null;
     for (const member of members) {
+      if (member.usageCache !== undefined) {
+        const remote = member.usageCache;
+        try {
+          if (remote && (!best || remote.mtimeMs > best.at)) best = { at: remote.mtimeMs, body: JSON.parse(remote.body) };
+        } catch {
+          /* unparseable cache — skip */
+        }
+        continue;
+      }
       const file = join(hosts().configDir(member.host), '.usage-cache');
       try {
         const stat = await statFile(file);
@@ -557,6 +628,30 @@ export class ClaudeUsageService {
     return lines;
   }
 
+  /** `usage.scan` over the host's helper channel; null when it failed (the host lands in skippedHosts). */
+  private async wslScan(
+    host: ExecHost,
+    months: string[],
+  ): Promise<{ buckets: UsageBuckets; files: number; changed: number; skipped: number } | null> {
+    const channel = hosts().channel(host);
+    if (!channel) return null;
+    const t0 = Date.now();
+    try {
+      const res = await channel.request<{ buckets?: unknown; files?: unknown; changed?: unknown; skipped?: unknown } | null>(
+        'usage.scan',
+        { months },
+      );
+      if (!res || !isBuckets(res.buckets)) return null;
+      const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      return { buckets: res.buckets, files: count(res.files), changed: count(res.changed), skipped: count(res.skipped) };
+    } catch (error) {
+      if (error instanceof HostRpcError && error.code === 'timeout') {
+        log('claude', 'usage-scan-host-timeout', { detail: { host: host.id, ms: Date.now() - t0 } });
+      }
+      return null;
+    }
+  }
+
   private scanAll(): Promise<void> {
     return (this.scanTask ??= this.runScan().finally(() => {
       this.scanTask = null;
@@ -575,11 +670,11 @@ export class ClaudeUsageService {
     let skipped = 0;
     try {
       // configDir() answers from the captured local value, so a concurrent
-      // withConfigDir swap (SDK store call) can't be observed. Wsl hosts are
-      // never walked: reading transcripts over \wsl.localhost (9P) overloads
-      // the distro VM, so their token totals are paused (wslTotalsPaused).
-      // Each remaining host's walk is raced against HOST_FS_BUDGET_MS and
-      // lands in skippedHosts on timeout.
+      // withConfigDir swap (SDK store call) can't be observed. The local
+      // walk is raced against HOST_FS_BUDGET_MS and lands in skippedHosts on
+      // timeout. WSL hosts are scanned inside the distro (`usage.scan` over
+      // the helper channel, 60 s timeout); its per-file cache lives in the
+      // helper, so nothing of theirs enters this.cache.files.
       const tasks: { host: ExecHost; path: string; key: string }[] = [];
       const skippedHosts = hosts()
         .list()
@@ -587,7 +682,13 @@ export class ClaudeUsageService {
         .map((h) => h.id);
       const readyHosts = hosts().readyList();
       const scannedHosts = readyHosts.filter((h) => !isWslHost(h));
-      const wslTotalsPaused = readyHosts.some(isWslHost);
+      const remote = Promise.all(
+        readyHosts.filter(isWslHost).map(async (host) => {
+          const result = await this.wslScan(host, [current, previous]);
+          if (!result) skippedHosts.push(host.id);
+          return { host, result };
+        }),
+      );
       const collect = async (host: ExecHost): Promise<{ host: ExecHost; path: string; key: string }[]> => {
         const dir = join(hosts().configDir(host), 'projects');
         const found: { host: ExecHost; path: string; key: string }[] = [];
@@ -679,6 +780,16 @@ export class ClaudeUsageService {
       await Promise.all(
         Array.from({ length: Math.min(SCAN_WORKERS, tasks.length) }, () => worker()),
       );
+      let wslFiles = 0;
+      for (const { host, result } of await remote) {
+        if (!result) continue;
+        wslFiles += result.files;
+        changed += result.changed;
+        skipped += result.skipped;
+        const byModel = Object.values(result.buckets[current]?.byModel ?? {});
+        if (byModel.length > 0) perHost[host.id] = sumTotals(byModel);
+        globalBuckets = mergeBuckets(globalBuckets, result.buckets);
+      }
       const month = globalBuckets[current] ?? { byModel: {}, byDay: {} };
       const tokens = {
         total: sumTotals(Object.values(month.byModel)),
@@ -694,13 +805,13 @@ export class ClaudeUsageService {
         scannedAt: new Date(this.now()).toISOString(),
         scanning: null,
       };
-      this.store.update((state) => ({ ...state, month: current, wslTotalsPaused, tokens }));
+      this.store.update((state) => ({ ...state, month: current, tokens }));
       // Only `tasks` feed the totals, so stale keys never count — but prune
       // them from the file (e.g. local: keys left by a pre-fix scan that read
       // a WSL store as local) so the cache doesn't carry them forever.
       const pruned = pruneFileCache(
         this.cache.files,
-        // Every ready host, wsl included, so keys cached by pre-pause builds drop out.
+        // Every ready host, wsl included: wsl keys left by pre-helper builds drop out.
         readyHosts.map((h) => h.id),
         tasks.map((t) => t.key),
       );
@@ -711,8 +822,8 @@ export class ClaudeUsageService {
       this.saveCache();
       log('claude', 'usage-scan', {
         detail: {
-          files,
-          wslFiles: tasks.filter((t) => isWslHost(t.host)).length,
+          files: files + wslFiles,
+          wslFiles,
           changed,
           skipped,
           skippedHosts,

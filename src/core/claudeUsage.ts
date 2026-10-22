@@ -361,7 +361,6 @@ export function emptyClaudeUsageState(month: string): ClaudeUsageState {
     accounts: [],
     perToken: false,
     month,
-    wslTotalsPaused: false,
     tokens: {
       total: emptyTotals(),
       byModel: {},

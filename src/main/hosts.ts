@@ -8,7 +8,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { app } from 'electron';
 import {
   hostIdForPath as coreHostIdForPath,
@@ -194,12 +194,6 @@ export class HostsRegistry {
     } catch {
       this.wsl = null;
     }
-  }
-
-  /** False until the async `wsl.exe` lookup settles (callers caching a null
-   * result should check this first). */
-  get wslResolved(): boolean {
-    return this.wsl !== undefined;
   }
 
   /** The `wsl.exe` invocation prefix ([file, ...args]); null when absent or
@@ -1201,6 +1195,29 @@ export class HostsRegistry {
       return out.replace(`\\\\wsl.localhost\\${host.distro}`, root);
     }
     return out;
+  }
+
+  /** Existence check for a Windows-side path (picker start folder): local via
+   * fs/promises, a WSL path as `fs.stat` over the host's helper channel —
+   * never Windows-side fs on `\\wsl.localhost`. False while the channel is down. */
+  async pathExists(winPath: string): Promise<boolean> {
+    const id = this.pathHostId(winPath);
+    if (id === 'local') {
+      return access(winPath).then(
+        () => true,
+        () => false,
+      );
+    }
+    const host = this.hostById(id);
+    if (!host || !isWslHost(host) || !this.fsReady(host)) return false;
+    const channel = this.channel(host);
+    if (!channel) return false;
+    try {
+      const res = await channel.request<{ exists?: unknown } | null>('fs.stat', { path: this.hostPath(host, winPath) });
+      return res?.exists === true;
+    } catch {
+      return false;
+    }
   }
 
   /** The local host's Claude home as captured at startup — never the value a

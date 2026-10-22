@@ -177,29 +177,12 @@ export class TerminalHost {
     return shell;
   }
 
-  // `wsl.exe -l -q` prints UTF-16LE; cache for the process lifetime.
-  private wslDistrosCache: string[] | null = null;
+  // Installed distro names for WT profile matching: the registry's cached
+  // `wsl -l -v` table (every installed distro, enabled or not) — never a spawn.
   private wslDistros(): string[] {
-    if (this.wslDistrosCache) return this.wslDistrosCache;
-    const cmd = hosts().wslCmd();
-    try {
-      if (!cmd) {
-        // Don't freeze an unresolved-lookup miss for the process lifetime.
-        if (hosts().wslResolved) this.wslDistrosCache = [];
-        return [];
-      }
-      const [file, ...prefix] = cmd;
-      log('host', 'host-exec', { detail: { host: 'all', kind: 'enum' } });
-      const result = spawnSync(file!, [...prefix, '-l', '-q'], { encoding: 'utf16le', windowsHide: true });
-      const raw = result.stdout ?? '';
-      this.wslDistrosCache = raw
-        .split(/[\r\n]+/)
-        .map((line) => line.replace(/[^\x20-\x7E]/g, '').trim())
-        .filter((line) => line.length > 0 && !line.startsWith('('));
-    } catch {
-      this.wslDistrosCache = [];
-    }
-    return this.wslDistrosCache;
+    return hosts()
+      .enumerate()
+      .map((row) => row.name);
   }
 
   private pwshPathCache: string | null | undefined;
