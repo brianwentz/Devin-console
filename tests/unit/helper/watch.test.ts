@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { appendFileSync, mkdirSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectsWatcher, WATCH_DEBOUNCE_MS, type WatchChange } from '../../../src/helper/watch';
@@ -25,25 +25,56 @@ afterEach(() => {
 
 const projects = (): string => join(home.dir, 'projects');
 
-function startWatching(opts: Partial<ConstructorParameters<typeof ProjectsWatcher>[0]> = {}): {
+interface Recorder {
   raw: WatchChange[];
   payloads: StoreChanged[];
-} {
-  const raw: WatchChange[] = [];
-  const payloads: StoreChanged[] = [];
+  /** Date.now() of the latest onChange (or of start). */
+  lastAt: number;
+  /** changePayload promises not yet resolved. */
+  pending: number;
+}
+
+function startWatching(opts: Partial<ConstructorParameters<typeof ProjectsWatcher>[0]> = {}): Recorder {
+  const rec: Recorder = { raw: [], payloads: [], lastAt: Date.now(), pending: 0 };
+  type Listener = (event: string, name: string | Buffer | null) => void;
+  const inner = (opts.watchFn ?? watch) as (p: string, o: { persistent: boolean }, l: Listener) => FSWatcher;
   watcher = new ProjectsWatcher({
     projectsDir: projects(),
     onChange: (c) => {
-      raw.push(c);
-      void changePayload(projects(), c).then((p) => payloads.push(p));
+      rec.raw.push(c);
+      rec.lastAt = Date.now();
+      rec.pending++;
+      void changePayload(projects(), c)
+        .then((p) => rec.payloads.push(p))
+        .finally(() => rec.pending--);
     },
     ...opts,
+    // Raw OS events also count as activity, so quiesce() can't return while a debounce window is open.
+    watchFn: (p: string, o: { persistent: boolean }, l: Listener) =>
+      inner(p, o, (event, name) => {
+        rec.lastAt = Date.now();
+        l(event, name);
+      }),
   });
   watcher.start();
-  return { raw, payloads };
+  return rec;
 }
 
 const settle = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// macOS fs.watch (FSEvents/kqueue) can deliver events for files created just BEFORE
+// the watch began — here the fixture copy in beforeEach. Wait until neither a raw OS
+// event nor an onChange has arrived for 2× the debounce (any window opened by a late
+// event has flushed by then) and every payload has resolved, then drop whatever
+// arrived, so the test's own mutation is the only thing left to observe.
+async function quiesce(rec: Recorder, maxMs = 3000): Promise<void> {
+  const quietMs = 2 * WATCH_DEBOUNCE_MS;
+  const end = Date.now() + maxMs;
+  rec.lastAt = Math.max(rec.lastAt, Date.now());
+  while (Date.now() < end && (Date.now() - rec.lastAt < quietMs || rec.pending > 0)) await settle(20);
+  rec.raw.length = 0;
+  rec.payloads.length = 0;
+}
 
 async function until<T>(fn: () => T | undefined, ms = 3000): Promise<T> {
   const end = Date.now() + ms;
@@ -57,9 +88,10 @@ async function until<T>(fn: () => T | undefined, ms = 3000): Promise<T> {
 
 describe('helper watch', () => {
   it('watch emits {files, sessions} within 1 s of an append', async () => {
-    const { payloads } = startWatching();
+    const rec = startWatching();
+    const { payloads } = rec;
     expect(watcher!.mode).toBe('watch');
-    await settle(100);
+    await quiesce(rec);
     const file = join(projects(), 'C--work-alpha', `${SESSION_A}.jsonl`);
     const t0 = Date.now();
     appendFileSync(file, transcriptLines(SESSION_A, 1).replace(`${SESSION_A}-m0`, `${SESSION_A}-x0`));
@@ -104,8 +136,9 @@ describe('helper watch', () => {
   });
 
   it('deleted transcript → removed', async () => {
-    const { payloads } = startWatching();
-    await settle(100);
+    const rec = startWatching();
+    const { payloads } = rec;
+    await quiesce(rec);
     rmSync(join(projects(), 'C--work-alpha', `${SESSION_B}.jsonl`));
     const p = await until(() => payloads.find((x) => x.removed.length > 0));
     expect(p.removed).toEqual([SESSION_B]);
@@ -144,8 +177,9 @@ describe('helper watch', () => {
   });
 
   it('subagent transcript changes are reported under <proj>/<id>/subagents/', async () => {
-    const { raw } = startWatching();
-    await settle(100);
+    const rec = startWatching();
+    const { raw } = rec;
+    await quiesce(rec);
     appendFileSync(join(projects(), 'C--work-alpha', SESSION_A, 'subagents', 'agent-fixture01.jsonl'), '\n');
     const c = await until(() => raw.find((x) => x.files.length > 0));
     expect(c.files).toEqual([`C--work-alpha/${SESSION_A}/subagents/agent-fixture01.jsonl`]);
