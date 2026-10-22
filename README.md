@@ -47,13 +47,13 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Notifications**.
-- The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals cover this PC only for now — totals for WSL distros are paused.
+- The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals include your WSL distros, counted inside each distro.
 
 ## Running sessions in WSL
 
 Add a workspace under `\\wsl.localhost\<distro>\…` on the **Local** or **Claude** surface and its sessions run inside that distro. Enable or disable distros under **Settings → General → Hosts**.
 
-- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings and lists background agents — all inside the distro rather than through the `\\wsl.localhost` network share. (Claude usage totals for WSL sessions are paused for now; the Analytics page still reads the distro's Claude sign-in details through that share. Both move inside the distro in a later update.)
+- **Node.js 18 or newer must be installed in the distro.** The app runs a small helper there with the distro's own Node.js; it lists Claude sessions, loads their history, renames/forks/deletes transcripts, writes the Claude hook settings, lists background agents, reads the distro's Claude sign-in details and counts its Claude usage totals for the Analytics page, and checks a "Folder pickers start in" folder that points into the distro — all inside the distro rather than through the `\\wsl.localhost` network share. (The folder picker itself is Windows' own dialog, so browsing a distro folder there still goes through that share.)
 - The helper is copied to `~/.agent-workspace/` in the distro on first use (one file per app version; copies unused for a week are cleaned up). Deleting the folder is safe — it is copied again on the next start.
 - Without Node.js (or with a version older than 18) the distro's row says **Node 18 or newer is required** and that distro's sessions don't load. Install Node in the distro, then press **Re-check**.
 - The app never starts a stopped distro. While a distro is stopped its helper shows as **paused** and its sessions keep their last state; they refresh once the distro runs again. If the helper keeps failing the row shows it stopped — **Re-check** tries again.

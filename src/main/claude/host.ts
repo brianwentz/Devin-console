@@ -172,13 +172,13 @@ export class ClaudeHost {
       opts.messages ??
       (async (id) => {
         const sdk = await loadSdk();
-        return (await hosts().withConfigDir(LOCAL_HOST, () => sdk.getSessionMessages(id))) as unknown[];
+        return (await sdk.getSessionMessages(id)) as unknown[];
       });
     this.readSubagentMessages =
       opts.subagentMessages ??
       (async (id, agentId) => {
         const sdk = await loadSdk();
-        return (await hosts().withConfigDir(LOCAL_HOST, () => sdk.getSubagentMessages(id, agentId))) as unknown[];
+        return (await sdk.getSubagentMessages(id, agentId)) as unknown[];
       });
     this.onPullRequestUrl = opts.onPullRequestUrl;
     this.onEvent = opts.onEvent ?? (() => undefined);

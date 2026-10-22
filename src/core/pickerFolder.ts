@@ -2,23 +2,21 @@
 // OS dialog just opens there). Precedence: the configured folder when it is
 // set AND still exists → the default WSL distro's home (the pre-S3 default)
 // → undefined (the OS decides). A configured folder that is missing is
-// skipped, never cleared — callers log `picker-folder-missing`.
-export function pickerStartPath(
+// skipped, never cleared — `onMissing` fires so callers can log
+// `picker-folder-missing`. The distro home comes from the host probe, so it
+// is never checked (a check would mean Windows-side fs on a UNC path).
+// `exists` is async: callers answer a UNC folder over the host's helper
+// channel, a local one with fs/promises; a rejection counts as missing.
+export async function pickerStartPath(
   configured: string | null,
   distroHome: string | undefined,
-  exists: (path: string) => boolean,
-): string | undefined {
+  exists: (path: string) => Promise<boolean>,
+  onMissing?: () => void,
+): Promise<string | undefined> {
   const folder = configured?.trim() ?? '';
-  if (folder && exists(folder)) return folder;
+  if (!folder) return distroHome;
+  const found = await exists(folder).catch(() => false);
+  if (found) return folder;
+  onMissing?.();
   return distroHome;
-}
-
-// True when a configured folder was set but skipped (lets callers log once
-// without repeating the existence check).
-export function pickerFolderMissing(
-  configured: string | null,
-  exists: (path: string) => boolean,
-): boolean {
-  const folder = configured?.trim() ?? '';
-  return folder !== '' && !exists(folder);
 }

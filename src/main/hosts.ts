@@ -1,14 +1,14 @@
 // Execution host registry (main): enumerates `wsl.exe` distros into ExecHost
 // records, probes each enabled host once per app run (home/shell/env capture/
 // CLIs/hook reachability), and hands out spawn/pty/exec specs shaped by
-// core/execHost. `withConfigDir` serialises SDK store calls across hosts.
+// core/execHost. Remote hosts' files are reached only over the helper channel.
 // Never logs env values or resolved paths.
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { app } from 'electron';
 import {
   hostIdForPath as coreHostIdForPath,
@@ -49,6 +49,7 @@ import { loadHelperBundleInfo, type HelperBundleInfo } from './helperBundle';
 import { HostChannel, type HelperStatus } from './hostChannel';
 import { EnumerationCache, enumOutcome, helperSpawnGate } from '../core/hostEnum';
 import { hooksOffSpawnError } from '../core/hooksOffBackoff';
+import { wtDistroList } from '../core/windowsTerminal';
 
 const execFileAsync = promisify(execFile);
 
@@ -70,7 +71,6 @@ function enumFreshMs(): number {
   const override = testMode ? Number(process.env.AGENT_WORKSPACE_TEST_ENUM_FRESH_MS) : NaN;
   return Number.isFinite(override) && override > 0 ? override : ENUM_FRESH_MS;
 }
-const ENV_CACHE_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_MARKER = '__DW_ENV__';
 const HOOK_HEALTH_PATH = `${HOOK_PATH_PREFIX}health`;
@@ -163,12 +163,9 @@ export class HostsRegistry {
   private lastPublished: HostStatus[] | null = null;
   private enumWaiters: Array<() => void> = [];
   private entries = new Map<HostId, WslEntry>();
-  private configMutex: Promise<unknown> = Promise.resolve();
   private errorParts = new Map<string, Partial<Record<HostErrorPart, string>>>();
-  /** The local Claude home, captured once at construction. `withConfigDir`
-   * rewrites `process.env.CLAUDE_CONFIG_DIR` for the SDK while a store call
-   * runs, so reading the env var live would hand a WSL store to any caller
-   * that asks for the local host mid-swap (the usage scanner did). */
+  /** The local Claude home, captured once at construction (ux3 S7: app code
+   * never reads `process.env.CLAUDE_CONFIG_DIR` live). */
   private readonly localConfigDirValue: string;
 
   constructor() {
@@ -194,12 +191,6 @@ export class HostsRegistry {
     } catch {
       this.wsl = null;
     }
-  }
-
-  /** False until the async `wsl.exe` lookup settles (callers caching a null
-   * result should check this first). */
-  get wslResolved(): boolean {
-    return this.wsl !== undefined;
   }
 
   /** The `wsl.exe` invocation prefix ([file, ...args]); null when absent or
@@ -268,6 +259,44 @@ export class HostsRegistry {
   }
 
   // --- enumeration -----------------------------------------------------------
+
+  private installedLazy: string[] | null = null;
+  private installedLazyTask: Promise<void> | null = null;
+  private installedLazyFailedAt: number | null = null;
+
+  /** Installed distro names for the Windows Terminal profile match
+   * (`wtDistroList`): the enumeration while WSL is enabled; with WSL disabled
+   * (the enumeration is empty by design) one lazy async `wsl -l -q` per run
+   * (a failed one is retried after 5 minutes).
+   * null = not known yet. Never spawns synchronously. */
+  installedDistroNames(): string[] | null {
+    const pick = wtDistroList({
+      wslEnabled: state.settings?.current.hosts.wslEnabled ?? true,
+      enumCompleted: this.distros.completed,
+      enumNames: this.distros.rows.map((row) => row.name),
+      lazyNames: this.installedLazy,
+      lazyFailedAtMs: this.installedLazyFailedAt,
+    });
+    if (pick.needLazyList) {
+      this.installedLazyTask ??= this.runWsl(['-l', '-q'], { kind: 'enum', host: 'all', requireSuccess: false }).then(
+        ({ stdout }) => {
+          this.installedLazyTask = null;
+          // UTF-16LE; strip the BOM/NULs and the "(Default)"-style notes.
+          this.installedLazy = stdout
+            .toString('utf16le')
+            .split(/[\r\n]+/)
+            .map((line) => line.replace(/[^\x20-\x7E]/g, '').trim())
+            .filter((line) => line.length > 0 && !line.startsWith('('));
+        },
+        () => {
+          // Unknown, not empty: [] would hide every WT WSL profile for the run.
+          this.installedLazyTask = null;
+          this.installedLazyFailedAt = Date.now();
+        },
+      );
+    }
+    return pick.distros;
+  }
 
   /** Cached distro rows ([] until the first async `-l -v` lands). Read paths
    * (statuses/list/enabledDistros) never spawn: enumeration runs at start, on
@@ -1038,7 +1067,7 @@ export class HostsRegistry {
 
   // --- env + spawn -------------------------------------------------------------
 
-  /** The cached §1.4 environment; re-captures when stale (call before spawns).
+  /** The cached §1.4 environment (call before spawns).
    * `explicit` = a user action (chat prompt, agent start) that may boot a
    * Stopped distro; otherwise a Stopped distro gets its cached env only. */
   async shellEnv(
@@ -1057,13 +1086,15 @@ export class HostsRegistry {
       return (await this.fetchChannelEnv(entry)) ?? entry.env;
     }
     try {
-      if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
+      // Without a ready channel the probe's one -ilc capture is the env for
+      // the run; it is never re-captured on a timer (`recheckEnv` is the
+      // explicit user refresh). envAt > 0 also keeps the probe's own execOn
+      // from waiting on itself.
+      if (entry.envAt > 0) return entry.env;
       if (!entry.probed && !entry.probing) await this.probe(entry);
       else if (entry.probing) await entry.probing;
-      // The escape hatch: plain WSL environment, never a re-capture.
+      // The escape hatch: plain WSL environment, never a capture.
       if (this.overrides(host.id).envCaptureDisabled === true) return null;
-      if (Date.now() - entry.envAt < ENV_CACHE_MS) return entry.env;
-      await this.captureEnv(entry, entry.status.shell ?? '/bin/bash');
       return entry.env;
     } finally {
       // An explicit start just booted a Stopped distro: re-read the table so
@@ -1203,35 +1234,33 @@ export class HostsRegistry {
     return out;
   }
 
-  /** The local host's Claude home as captured at startup — never the value a
-   * `withConfigDir` swap has temporarily placed in `process.env`. */
+  /** Existence check for a Windows-side path (picker start folder): local via
+   * fs/promises, a WSL path as `fs.stat` over the host's helper channel —
+   * never Windows-side fs on `\\wsl.localhost`. False while the channel is down. */
+  async pathExists(winPath: string): Promise<boolean> {
+    const id = this.pathHostId(winPath);
+    if (id === 'local') {
+      return access(winPath).then(
+        () => true,
+        () => false,
+      );
+    }
+    const host = this.hostById(id);
+    if (!host || !isWslHost(host) || !this.fsReady(host)) return false;
+    const channel = this.channel(host);
+    if (!channel) return false;
+    try {
+      const res = await channel.request<{ exists?: unknown } | null>('fs.stat', { path: this.hostPath(host, winPath) });
+      return res?.exists === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The local host's Claude home, captured at construction. A remote host's
+   * Claude home is only ever reached through its helper channel. */
   localConfigDir(): string {
     return this.localConfigDirValue;
-  }
-
-  configDir(host: ExecHost): string {
-    if (!isWslHost(host)) return this.localConfigDirValue;
-    const home = this.entries.get(host.id)?.host.home ?? this.overrides(host.id).home ?? null;
-    return this.windowsPath(host, `${home ?? ''}/.claude`);
-  }
-
-  /** Serialised `CLAUDE_CONFIG_DIR` swap around an SDK store call (§1.2). The
-   * swap is only ever observable through `process.env` (the SDK reads it);
-   * `configDir()` keeps answering from the captured local value. */
-  withConfigDir<T>(host: ExecHost, fn: () => Promise<T>): Promise<T> {
-    const dir = this.configDir(host);
-    const run = this.configMutex.then(async () => {
-      const previous = process.env.CLAUDE_CONFIG_DIR;
-      process.env.CLAUDE_CONFIG_DIR = dir;
-      try {
-        return await fn();
-      } finally {
-        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-        else process.env.CLAUDE_CONFIG_DIR = previous;
-      }
-    });
-    this.configMutex = run.catch(() => undefined);
-    return run;
   }
 
   // --- membership --------------------------------------------------------------

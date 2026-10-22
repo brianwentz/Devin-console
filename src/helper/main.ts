@@ -6,8 +6,9 @@
 // stdin EOF, SIGTERM and SIGHUP so a dropped channel never leaves an orphan.
 
 import { readdirSync, statSync, unlinkSync, utimesSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   FrameTooLarge,
   HELPER_PROTOCOL,
@@ -20,8 +21,9 @@ import {
 } from '../core/hostRpc';
 import { agentsHandlers } from './agents';
 import { hooksHandlers, hooksOffOnce } from './hooks';
-import { RpcError, safeMessage, type Handler } from './params';
+import { RpcError, safeMessage, str, type Handler } from './params';
 import { changePayload, storeHandlers, type StoreChanged } from './store';
+import { usageHandlers } from './usage';
 import { ProjectsWatcher, type WatchChange } from './watch';
 
 export const TOUCH_INTERVAL_MS = 3_600_000;
@@ -80,6 +82,17 @@ export function cleanupOldHelpers(dir: string, selfName: string, now = Date.now(
     }
   }
   return deleted;
+}
+
+/** fs.stat: existence check for an absolute distro path (the app's picker start folder). */
+export async function statPath(path: string): Promise<{ exists: boolean; dir: boolean }> {
+  if (!isAbsolute(path)) throw new RpcError('bad-params', 'path must be absolute');
+  try {
+    const info = await stat(path);
+    return { exists: true, dir: info.isDirectory() };
+  } catch {
+    return { exists: false, dir: false };
+  }
 }
 
 const isRequest = (f: unknown): f is { id: number; method: string; params?: unknown } =>
@@ -206,6 +219,8 @@ function run(): void {
     ...storeHandlers(configDir),
     ...hooksHandlers(configDir),
     ...agentsHandlers(),
+    ...usageHandlers(configDir),
+    'fs.stat': (params) => statPath(str(params, 'path')),
   };
 
   let inFlight = 0;

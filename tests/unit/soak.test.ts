@@ -31,6 +31,21 @@ describe('summarizeSoak', () => {
     expect(s.wslUsageScanFiles).toBe(0);
   });
 
+  it('counts remote-fs-violation events by op and keeps them in the reduced log', () => {
+    const text = [
+      line(1, 'remote-fs-violation', { op: 'readFileSync' }),
+      line(2, 'remote-fs-violation', { op: 'promises.stat', path: '\\\\wsl.localhost\\D\\x' }),
+      line(3, 'host-exec', { host: 'wsl:A', kind: 'exec' }),
+    ].join('\n');
+    const s = summarizeSoak(text, t0, 2);
+    expect(s.remoteFsViolations).toBe(2);
+    expect(s.remoteFsViolationOps).toEqual({ readFileSync: 1, 'promises.stat': 1 });
+    expect(summarizeSoak(line(1, 'host-exec', { kind: 'exec' }), t0, 1).remoteFsViolations).toBe(0);
+    const reduced = reduceEventLog(text);
+    expect(reduced).toContain('"op":"promises.stat"');
+    expect(reduced).not.toContain('wsl.localhost');
+  });
+
   it('reports null wslUsageScanFiles when the field is absent and reduces the log', () => {
     const text = [
       line(1, 'usage-scan', { files: 4 }),

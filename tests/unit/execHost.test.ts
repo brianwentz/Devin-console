@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadHelperBundleInfo } from '../../src/main/helperBundle';
+import { isRemoteFsPath } from '../../src/main/remoteFsGuard';
 import {
   deriveHelperState,
   displayPath,
@@ -51,6 +52,25 @@ describe('hostIdForPath', () => {
     expect(hostIdForPath('/home/brian')).toBe('local');
     expect(hostIdForPath('\\\\server\\share\\x')).toBe('local');
     expect(hostIdForPath('src/x')).toBe('local');
+  });
+});
+
+describe('extended-length UNC (\\\\?\\UNC\\) forms (R33)', () => {
+  it('map to the wsl host, case-insensitively, for both servers', () => {
+    expect(hostIdForPath('\\\\?\\UNC\\wsl.localhost\\Ubuntu-22.04\\home\\b')).toBe('wsl:Ubuntu-22.04');
+    expect(hostIdForPath('\\\\?\\unc\\WSL$\\Ubuntu-22.04\\home')).toBe('wsl:Ubuntu-22.04');
+    expect(hostIdForPath('\\\\?\\UNC\\server\\share\\x')).toBe('local');
+    expect(hostIdForPath('\\\\?\\C:\\x')).toBe('local');
+  });
+  it('toHostPath strips the extended prefix', () => {
+    expect(toHostPath(UB, '\\\\?\\UNC\\wsl.localhost\\Ubuntu-22.04\\home\\b\\x')).toBe('/home/b/x');
+    expect(toHostPath(UB, '\\\\?\\unc\\wsl$\\Ubuntu-22.04\\home')).toBe('/home');
+  });
+  // The guard folds case/slashes only on Windows (UNC paths exist nowhere else),
+  // same as the win32-only case test in remoteFsGuard.test.ts.
+  it.runIf(process.platform === 'win32')('the remote-fs guard already matches the extended forms', () => {
+    expect(isRemoteFsPath('\\\\?\\UNC\\wsl.localhost\\D\\x', [])).toBe(true);
+    expect(isRemoteFsPath('\\\\?\\UNC\\wsl$\\D\\x', [])).toBe(true);
   });
 });
 

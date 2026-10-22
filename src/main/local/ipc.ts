@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { app, dialog } from 'electron';
 import { openFolderDialog } from '../dialogs';
-import { pickerFolderMissing, pickerStartPath } from '../../core/pickerFolder';
+import { pickerStartPath } from '../../core/pickerFolder';
 import { guardedHandle, guardedOn, handleResult } from '../ipcGuard';
 import {
   IpcChannels,
@@ -114,11 +113,9 @@ export function setupLocal(): void {
         defaultHost && isWslHost(defaultHost) && defaultHost.home
           ? hosts().windowsPath(defaultHost, defaultHost.home)
           : undefined;
-      const configured = local?.pickerFolder ?? null;
-      if (pickerFolderMissing(configured, existsSync)) {
-        log('local', 'picker-folder-missing', { detail: { surface: 'local' } });
-      }
-      const defaultPath = pickerStartPath(configured, distroHome, existsSync);
+      const defaultPath = await pickerStartPath(local?.pickerFolder ?? null, distroHome, (p) => hosts().pathExists(p), () =>
+        log('local', 'picker-folder-missing', { detail: { surface: 'local' } }),
+      );
       const options: Electron.OpenDialogOptions = {
         title: 'Add workspace folder',
         properties: ['openDirectory'],

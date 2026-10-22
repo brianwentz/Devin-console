@@ -194,7 +194,7 @@ export class ClaudeHooks {
         result = { installed: enabled, error: null };
       } else {
         result = !isWslHost(host)
-          ? await applyGlobalHooks(hosts().configDir(host), enabled, info.port, info.token, addr)
+          ? await applyGlobalHooks(hosts().localConfigDir(), enabled, info.port, info.token, addr)
           : channelReady
             ? await this.applyOverChannel(host, enabled, info, addr)
             : await this.removeOnce(host);

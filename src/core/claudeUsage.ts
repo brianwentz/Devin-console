@@ -138,9 +138,95 @@ export function emptyTotals(): ClaudeTokenTotals {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
 }
 
-export function monthKey(date: Date): string {
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  return `${date.getFullYear()}-${m}`;
+// --- calendar keys in an explicit zone ---------------------------------------
+// Day/month keys are computed in `timeZone` (an IANA name) when given, else
+// with the process's local getters. The WSL helper runs in the distro's zone,
+// so the app passes its own zone and both scans key buckets identically.
+
+const partsFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zoneParts(ms: number, timeZone: string): { y: number; m: number; d: number; h: number; min: number; s: number } {
+  let fmt = partsFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    });
+    partsFormatters.set(timeZone, fmt);
+  }
+  const out: Record<string, number> = {};
+  for (const part of fmt.formatToParts(ms)) {
+    if (part.type !== 'literal') out[part.type] = Number(part.value);
+  }
+  return { y: out.year!, m: out.month!, d: out.day!, h: out.hour!, min: out.minute!, s: out.second! };
+}
+
+/** True when `timeZone` is an IANA zone this runtime's Intl knows. */
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+// formatToParts costs ~3 µs and a first scan reads ~1M lines, so the zone
+// date is memoized per (zone, 15-minute bucket): every UTC offset is a
+// multiple of 15 min, so a local date never changes inside a bucket.
+const ZONE_BUCKET_MS = 900_000;
+const ZONE_MEMO_MAX = 10_000;
+const zoneMemo = new Map<string, { y: number; m: number; d: number }>();
+
+/** Test seam: forget memoized zone dates. */
+export function clearZoneKeyMemo(): void {
+  zoneMemo.clear();
+}
+
+function ymd(date: Date, timeZone?: string): { y: number; m: number; d: number } {
+  if (!timeZone) return { y: date.getFullYear(), m: date.getMonth() + 1, d: date.getDate() };
+  const bucket = Math.floor(date.getTime() / ZONE_BUCKET_MS);
+  const key = `${timeZone}|${bucket}`;
+  let hit = zoneMemo.get(key);
+  if (!hit) {
+    const p = zoneParts(bucket * ZONE_BUCKET_MS, timeZone);
+    hit = { y: p.y, m: p.m, d: p.d };
+    if (zoneMemo.size >= ZONE_MEMO_MAX) zoneMemo.clear();
+    zoneMemo.set(key, hit);
+  }
+  return hit;
+}
+
+export function monthKey(date: Date, timeZone?: string): string {
+  const { y, m } = ymd(date, timeZone);
+  return `${y}-${pad2(m)}`;
+}
+
+export function dayKey(date: Date, timeZone?: string): string {
+  const { y, m, d } = ymd(date, timeZone);
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+}
+
+/** Epoch ms of local midnight on the 1st of `y-m` in `timeZone` (process-local when absent). */
+function monthStartMs(y: number, m: number, timeZone?: string): number {
+  if (!timeZone) return new Date(y, m - 1, 1).getTime();
+  const wall = Date.UTC(y, m - 1, 1);
+  // Two passes settle the zone offset (DST changes never fall on the 1st at 00:00 by more than one shift).
+  let guess = wall;
+  for (let i = 0; i < 2; i++) {
+    const p = zoneParts(guess, timeZone);
+    const offset = Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, p.s) - guess;
+    guess = wall - offset;
+  }
+  return guess;
 }
 
 export function previousMonthKey(key: string): string {
@@ -164,7 +250,7 @@ function addTotals(into: ClaudeTokenTotals, usage: Raw): void {
  */
 export function aggregateUsageLines(
   lines: Iterable<string>,
-  opts: { months?: Set<string> } = {},
+  opts: { months?: Set<string>; timeZone?: string | undefined } = {},
 ): UsageBuckets {
   const out: UsageBuckets = {};
   const seen = new Set<string>();
@@ -191,11 +277,9 @@ export function aggregateUsageLines(
     }
     const date = new Date(String(parsed.timestamp ?? ''));
     if (Number.isNaN(date.getTime())) continue;
-    const month = monthKey(date);
+    const month = monthKey(date, opts.timeZone);
     if (opts.months && !opts.months.has(month)) continue;
-    const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-      date.getDate(),
-    ).padStart(2, '0')}`;
+    const day = dayKey(date, opts.timeZone);
     const model = typeof parsed.message.model === 'string' ? parsed.message.model : 'unknown';
     const perModel =
       (Number(usage.input_tokens) || 0) +
@@ -292,13 +376,13 @@ export function fileScanPlan(
  * month of interest can't contain lines from any requested month (line
  * timestamps precede the file's last write) → skip reading it entirely.
  */
-export function fileMayContainMonths(mtimeMs: number, months: Set<string>): boolean {
+export function fileMayContainMonths(mtimeMs: number, months: Set<string>, timeZone?: string): boolean {
   if (months.size === 0) return true;
   let earliest: number | null = null;
   for (const key of months) {
     const [y, m] = key.split('-').map(Number);
     if (!y || !m) continue;
-    const start = new Date(y, m - 1, 1).getTime(); // local midnight of the 1st
+    const start = monthStartMs(y, m, timeZone); // midnight of the 1st in the zone
     if (earliest === null || start < earliest) earliest = start;
   }
   return earliest === null || mtimeMs >= earliest;
@@ -361,7 +445,6 @@ export function emptyClaudeUsageState(month: string): ClaudeUsageState {
     accounts: [],
     perToken: false,
     month,
-    wslTotalsPaused: false,
     tokens: {
       total: emptyTotals(),
       byModel: {},

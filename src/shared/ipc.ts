@@ -393,8 +393,6 @@ export const ClaudeUsageStateSchema = z.object({
   accounts: z.array(ClaudeUsageAccountSchema), // [] → per-token plan / not signed in
   perToken: z.boolean(), // no OAuth creds on any host
   month: z.string(), // 'yyyy-mm' (local)
-  /** A WSL host is ready but its transcripts are not scanned (UNC reads are paused); token totals cover this PC only. */
-  wslTotalsPaused: z.boolean(),
   tokens: z.object({
     total: ClaudeTokenTotalsSchema,
     byModel: z.record(z.string(), ClaudeTokenTotalsSchema),

@@ -241,11 +241,6 @@ export function ClaudeAnalyticsPanel({ state, style }: ClaudeAnalyticsPanelProps
               )}
             </div>
           </div>
-          {state.wslTotalsPaused && (
-            <div id="claudeWslTotalsPaused" className="px-1 text-xs text-[#7f8ca0]">
-              Token totals for WSL distros are paused
-            </div>
-          )}
           {models.length > 0 && (
             <div className="rounded-lg bg-[#161f2d] py-1">
               <TokenTable models={models} byModel={state.tokens.byModel} byHost={state.tokens.byHost} />

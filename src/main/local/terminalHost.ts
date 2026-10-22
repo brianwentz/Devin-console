@@ -177,29 +177,11 @@ export class TerminalHost {
     return shell;
   }
 
-  // `wsl.exe -l -q` prints UTF-16LE; cache for the process lifetime.
-  private wslDistrosCache: string[] | null = null;
-  private wslDistros(): string[] {
-    if (this.wslDistrosCache) return this.wslDistrosCache;
-    const cmd = hosts().wslCmd();
-    try {
-      if (!cmd) {
-        // Don't freeze an unresolved-lookup miss for the process lifetime.
-        if (hosts().wslResolved) this.wslDistrosCache = [];
-        return [];
-      }
-      const [file, ...prefix] = cmd;
-      log('host', 'host-exec', { detail: { host: 'all', kind: 'enum' } });
-      const result = spawnSync(file!, [...prefix, '-l', '-q'], { encoding: 'utf16le', windowsHide: true });
-      const raw = result.stdout ?? '';
-      this.wslDistrosCache = raw
-        .split(/[\r\n]+/)
-        .map((line) => line.replace(/[^\x20-\x7E]/g, '').trim())
-        .filter((line) => line.length > 0 && !line.startsWith('('));
-    } catch {
-      this.wslDistrosCache = [];
-    }
-    return this.wslDistrosCache;
+  // Installed distro names for WT profile matching (null = not known yet →
+  // WSL profiles stay embeddable): the hosts enumeration, or with WSL disabled
+  // one lazy async `wsl -l -q` per run — never a sync spawn on the main thread.
+  private wslDistros(): string[] | null {
+    return hosts().installedDistroNames();
   }
 
   private pwshPathCache: string | null | undefined;
