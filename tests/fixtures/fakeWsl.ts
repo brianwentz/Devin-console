@@ -200,6 +200,20 @@ const commandV = (bin: string): string | null => {
   }
 };
 
+// The fake claude reports the CLI version the installed SDK targets, so a
+// Dependabot SDK bump never turns into a host version-mismatch warning.
+const sdkTargetVersion = (): string => {
+  try {
+    const entry = require.resolve('@anthropic-ai/claude-agent-sdk');
+    const manifest = JSON.parse(readFileSync(join(entry, '..', 'manifest.json'), 'utf8')) as {
+      version?: string;
+    };
+    return manifest.version ?? '2.1.296';
+  } catch {
+    return '2.1.296';
+  }
+};
+
 // A linux PATH `claude`/`devin` maps onto the fixture the e2e installed.
 const realBin = (argv: string[]): string[] => {
   const file = argv[0] ?? '';
@@ -207,7 +221,7 @@ const realBin = (argv: string[]): string[] => {
     const cmd = process.env.FAKE_WSL_CLAUDE_CMD;
     if (cmd) return [process.execPath, cmd, ...argv.slice(1)];
     if (argv[1] === '--version') {
-      return [process.execPath, '-e', 'console.log("2.1.296 (Claude Code)")'];
+      return [process.execPath, '-e', `console.log(${JSON.stringify(`${sdkTargetVersion()} (Claude Code)`)})`];
     }
     if (argv[1] === 'agents') {
       const json = process.env.FAKE_CLAUDE_AGENTS ?? '[]';
