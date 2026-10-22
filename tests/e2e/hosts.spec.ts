@@ -452,6 +452,47 @@ const agentPolls = async (logFile: string, host: string) =>
   (await readEvents(logFile)).filter(
     (e) => e.event === 'claude-agents' && (e.detail as { host?: string } | undefined)?.host === host,
   ).length;
+// What a missing agents poll hangs on: the helper channel must be ready and the
+// probe must have found claude. Shown when the wait times out so a CI-only
+// failure explains itself (state, helper, claude path, and the log lines about them).
+const agentDiagnostics = async (app: ElectronApplication, logFile: string, host: string) => {
+  const row = (await state(app)).hosts.find((h) => h.id === host);
+  const lines = (await readEvents(logFile))
+    .filter((e) => {
+      const detail = e.detail as { host?: string } | undefined;
+      if (e.event === 'host-list' || e.event === 'claude-agents-error') return true;
+      return /^(host-helper|host-probe|host-env|claude-agents)/.test(String(e.event)) && detail?.host === host;
+    })
+    .slice(-14)
+    .map((e) => `${String(e.ts ?? '').slice(11, 23)} ${e.event} ${JSON.stringify(e.detail ?? {})}`);
+  return [
+    `host ${host}: ${JSON.stringify({
+      state: row?.state,
+      error: row?.error,
+      helper: row?.helper,
+      claude: row?.claude,
+    })}`,
+    ...lines,
+  ].join('\n');
+};
+// At least `min` agents polls for the host, or a failure that says why not.
+const waitForAgentPolls = async (
+  app: ElectronApplication,
+  logFile: string,
+  host: string,
+  min = 2,
+) => {
+  try {
+    await expect
+      .poll(() => agentPolls(logFile, host), { timeout: 30_000 })
+      .toBeGreaterThanOrEqual(min);
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n${await agentDiagnostics(app, logFile, host)}`,
+      { cause: error },
+    );
+  }
+};
 const channelEvents = async (logFile: string, host: string) =>
   (await readEvents(logFile)).filter((e) => {
     const detail = e.detail as { host?: string; mode?: string; events?: number } | undefined;
@@ -496,7 +537,7 @@ test('disabling a distro stops its agents poll and store watch', async () => {
       })
       .toBe('ready');
     // Positive control: the agents poller runs `claude agents` in the helper.
-    await expect.poll(() => agentPolls(logFile, 'wsl:Fake'), { timeout: 30_000 }).toBeGreaterThan(1);
+    await waitForAgentPolls(app, logFile, 'wsl:Fake');
 
     await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
     const row = shell.locator('[data-host-id="wsl:Fake"]');
@@ -681,7 +722,7 @@ test('a distro that stops mid-run gets no background work after the next tick', 
     (await agentPolls(logFile, 'wsl:Fake'));
   try {
     await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
-    await expect.poll(() => agentPolls(logFile, 'wsl:Fake'), { timeout: 30_000 }).toBeGreaterThan(1);
+    await waitForAgentPolls(app, logFile, 'wsl:Fake');
     // `wsl --terminate Fake` / a VM crash: the helper dies with the distro.
     writeFileSync(distros, 'Fake:Stopped:default');
     await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.hostHelperKill(id), 'wsl:Fake');
