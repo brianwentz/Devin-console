@@ -804,6 +804,13 @@ variable that selects it.
   runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
   prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
   from `src/shared/ipc.ts`; run `npm run smoke:install` when a settings schema changes.
+- Adding a local ACP provider (A3): the Devin Local host (`DevinLocalHost`, `src/main/local/acpHost.ts`) takes an `AcpAgentSpec`
+  (`src/core/acpAgentSpec.ts`, re-exported by `src/main/local/agentSpec.ts`): `providerId`, `label`, `args` (appended to the resolved binary), optional
+  `modes`, and `resolveCommand(host)` → a binary argv, `{ full }` (a complete argv used verbatim — the test-mode `AGENT_WORKSPACE_LOCAL_AGENT_CMD`
+  override) or null (`missing-cli`); pure `fullCommand(spec, resolved)` builds the spawn argv. `createDevinSpec` (`src/main/local/devinSpec.ts`) is the
+  only spec: local = test override → `local.devinPath` → PATH, resolved once when the host starts; a WSL host = the probe's CLI path
+  (`hosts.overrides[id].devinPath` wins inside the probe), read after `shellEnv(host, { explicit: true })` on each agent start. A new agent = a new spec,
+  its descriptor and a `PROVIDER_UI` entry; spawn the external CLI (never fork Node), and the WSL routing / no-Windows-side-fs-on-`\\wsl.localhost` rules apply.
 
 ## Conventions
 - `src/core/` is pure TS — no `electron` imports (unit-testable).
