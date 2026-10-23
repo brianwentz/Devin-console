@@ -1016,6 +1016,7 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   `Runtime.evaluate`. Keep it — the installed smoke depends on it.
 - Test fixtures never point at the committed `tests/fixtures/claude-home` tree — copy it (the SDK writes into its config dir).
 - e2e: cancel a running Claude turn before `app.close()`; `expect.poll` does not retry a throwing readFileSync (poll `existsSync` instead).
+- Test temp files: Playwright (e2e + smoke configs) and Vitest run `tests/support/globalTemp.ts`, which points `TEMP`/`TMP`/`TMPDIR` at one `aw-run-<pid>-<time>` directory under the real temp dir and deletes it when the run ends (a start-of-run sweep removes roots left by killed runs older than 2 h). So `mkdtempSync(join(tmpdir(), …))` in a spec needs no manual cleanup — don't build temp paths from a hard-coded `/tmp` or `os.homedir()`; the helpers live in `tests/support/tempRoot.ts` (unit-tested in `tests/unit/tempRoot.test.ts`).
 - Docs: `README.md` is the user-facing description of the app and must be kept in sync with the code: whenever a PR adds, removes or renames a
   user-visible feature, rail button, Settings field/tab, keyboard shortcut, persisted file in userData, or install/update step, update the matching
   README section (intro bullets, First run, Notifications and PR auto-open, Devin Local, Settings reference, Keyboard shortcuts, Where things live) in
