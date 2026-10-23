@@ -130,6 +130,9 @@ export function setAddressBar(open: boolean, mode: AddressBarMode, source: strin
   if (open && (!state.paneOpen || state.paneCollapsed)) return;
   const current = state.addressBar;
   if (current.open === open && (!open || current.mode === mode)) return;
+  // Settle a pending session change first so the recorded scope is current —
+  // otherwise the next applyLayout would close the bar straight away.
+  if (open) syncScope();
   state.addressBar = { open, mode: open ? mode : current.mode };
   addressBarContext = open
     ? { surface: state.surface, scope: state.tabManager?.currentScope ?? '' }

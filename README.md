@@ -106,8 +106,8 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Shift+[` / `]` | Shrink / grow the pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
-| `Ctrl+T` | New tab: open the address bar (opens Linked Context first when it is hidden) |
-| `Ctrl+L` | Edit the active tab's address (a new tab when the session has none) |
+| `Ctrl+T` | New tab: open the address bar (opens Linked Context first when it is hidden). macOS: `Cmd+T` only; inside the terminal it stays the terminal's own key |
+| `Ctrl+L` | Edit the active tab's address (a new tab when the session has none). macOS: `Cmd+L` only; inside the terminal it clears the screen as usual |
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
 | `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; the OpenHands home page) |
 | `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |

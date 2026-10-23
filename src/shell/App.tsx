@@ -6,6 +6,7 @@ import {
   sessionsColumnSurface,
   TITLE_BAR_HEIGHT,
 } from '../core/layout';
+import { addressBarShortcut } from '../core/addressBarKeys';
 import { PROVIDERS, providerBySurface } from '../core/providers';
 import { PROVIDER_UI } from './providers';
 import { renderBadgeDataUrl } from './badge';
@@ -23,6 +24,43 @@ import { TerminalDock } from './components/TerminalDock';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AnalyticsTabs } from './components/AnalyticsTabs';
 import { AddressBar } from './components/AddressBar';
+
+// The shell's own Ctrl+T / Ctrl+L (Cmd on macOS). Main deliberately leaves
+// them to the renderer: inside the terminal dock they are ^T / ^L for the pty,
+// and in any other text field they keep their editing meaning.
+function addressBarKeyAllowed(target: Element | null): boolean {
+  if (!target || target === document.body) return true;
+  if (target.id === 'tabAddressBarInput') return true;
+  if (target.closest('#terminalDock, .xterm')) return false;
+  if (target instanceof HTMLElement && target.isContentEditable) return false;
+  return !(
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  );
+}
+
+function useAddressBarShortcuts(): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const kind = addressBarShortcut(
+        {
+          key: event.key,
+          control: event.ctrlKey,
+          meta: event.metaKey,
+          shift: event.shiftKey,
+          alt: event.altKey,
+        },
+        window.agentworkspace.platform,
+      );
+      if (!kind || !addressBarKeyAllowed(document.activeElement)) return;
+      event.preventDefault();
+      window.agentworkspace.setAddressBar({ open: true, mode: kind, source: 'shortcut' });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+}
 
 function useWindowSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
@@ -44,6 +82,7 @@ function useWindowSize(): { width: number; height: number } {
 export function App() {
   const state = useShellState();
   const size = useWindowSize();
+  useAddressBarShortcuts();
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {

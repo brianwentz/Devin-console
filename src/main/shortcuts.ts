@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { addressBarShortcut } from '../core/addressBarKeys';
 import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx, sidebarShortcutSurface } from '../core/layout';
 import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
@@ -68,9 +69,11 @@ export function openNewSession(): void {
 }
 
 // Ctrl+T (new tab) / Ctrl+L (edit the active tab's address; new when the
-// scope has no tab). Ctrl+T opens a closed pane first; Ctrl+L needs the pane
-// visible. Focus goes to the shell so the bar's input takes the keys.
-function openAddressBarShortcut(kind: 'new' | 'current'): boolean {
+// scope has no tab) — Cmd on macOS. Ctrl+T opens a closed pane first; Ctrl+L
+// needs the pane visible. Focus goes to the shell so the bar's input takes the
+// keys. Hosted views reach this from handleShortcut; the shell's own keys are
+// matched in the renderer (App.tsx) so the terminal dock keeps ^L / ^T.
+export function openAddressBarShortcut(kind: 'new' | 'current'): boolean {
   let acted = false;
   if (kind === 'new' && !state.paneOpen) {
     setPaneOpen(true, 'shortcut');
@@ -142,8 +145,8 @@ export function handleShortcut(
       runtimeFor(state.surface)?.newSession ?? runtimeFor('devin-cloud')?.newSession;
     void newSession?.();
     handled = true;
-  } else if (ctrl && !input.shift && !input.alt && (key === 't' || key === 'l')) {
-    handled = openAddressBarShortcut(key === 't' ? 'new' : 'current');
+  } else if (view !== 'shell' && addressBarShortcut(input, process.platform)) {
+    handled = openAddressBarShortcut(addressBarShortcut(input, process.platform)!);
   } else if (ctrl && !input.alt && key === '`' && dockSurface(state.surface)) {
     // Off dock surfaces (Settings/Analytics) the shortcut is a no-op, matching
     // the disabled rail button — the persisted toggle is left untouched.

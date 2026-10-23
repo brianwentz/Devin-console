@@ -316,8 +316,11 @@ variable that selects it.
   `#tabAddressBarError`) is shell DOM at y 36 across the pane; `computeBounds` (`addressBarOpen`, `ADDRESS_BAR_HEIGHT` 32) moves `ghTab` down by
   the bar instead of raising the shell. Main state `state.addressBar {open, mode}` → `ShellState.tabs.addressBar`; single seam `setAddressBar(open, mode,
   source)` in `window.ts` (shell sends `tabs:addressBar {open, mode?, source?}`); `applyLayout` closes it on pane hidden/collapsed, surface switch or
-  scope change. Ctrl+T/Ctrl+L run on every attached webContents (`shortcuts.ts`; Ctrl+T opens a closed pane first, Ctrl+L needs the pane visible)
-  and focus the shell via `focusContents`. Enter → `openUserUrl({source:'typed', target: mode})`; ok / Esc / blur close it. Never persisted.
+  scope change. Ctrl+T/Ctrl+L (macOS: Cmd only — plain Ctrl+T/L stay readline keys; pure matcher `src/core/addressBarKeys.ts`) are caught in main
+  (`shortcuts.ts` `before-input-event`) for hosted views only; on the shell they are matched in the renderer (`App.tsx` keydown) and skipped while
+  focus is in the terminal dock (`#terminalDock`/`.xterm`, so ^L/^T reach the pty) or another text field, then sent as `tabs:addressBar
+  {source:'shortcut'}` → the same `openAddressBarShortcut` (Ctrl+T opens a closed pane first, Ctrl+L needs the pane visible; focuses the shell via
+  `focusContents`). Enter → `openUserUrl({source:'typed', target: mode})`; ok / Esc / blur close it. Never persisted.
 - `tabs-preload` event: on scope switch/launch the visible scope's discarded tabs are background-loaded (150 ms stagger); the live cap
   (`tabs.maxLiveTabs`) and idle discard apply to hidden scopes only — the visible scope's tabs are exempt.
 

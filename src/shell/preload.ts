@@ -295,7 +295,7 @@ const api = {
   setAddressBar: (arg: {
     open: boolean;
     mode?: 'new' | 'current';
-    source?: 'button' | 'enter' | 'escape' | 'blur';
+    source?: 'button' | 'shortcut' | 'enter' | 'escape' | 'blur';
   }) => ipcRenderer.send(IpcChannels.tabsAddressBar, arg),
   openReloadMenu: (x: number, y: number) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {

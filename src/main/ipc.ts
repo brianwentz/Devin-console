@@ -53,7 +53,7 @@ import { notifier, openNotification, openPr, openPrs } from './notifier';
 import { prStore } from './prs';
 import { handleLink, openUserUrl } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
-import { historyAction, navigationTarget } from './shortcuts';
+import { historyAction, navigationTarget, openAddressBarShortcut } from './shortcuts';
 import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, SessionReorderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
 import { state } from './state';
 import { keepAliveMs } from './tabs';
@@ -227,7 +227,10 @@ export function setupIpc(): void {
     const parsed = AddressBarArg.safeParse(payload);
     if (!parsed.success) return;
     const { open, mode, source } = parsed.data;
-    setAddressBar(open, mode ?? 'new', source ?? 'shell');
+    // The shell's Ctrl+T / Ctrl+L (matched in the renderer, outside the
+    // terminal dock) take the same path as the hosted-view shortcut.
+    if (open && source === 'shortcut') openAddressBarShortcut(mode ?? 'new');
+    else setAddressBar(open, mode ?? 'new', source ?? 'shell');
   });
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);

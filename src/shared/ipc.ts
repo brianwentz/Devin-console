@@ -1150,7 +1150,7 @@ export type AddressBarMode = z.infer<typeof AddressBarModeSchema>;
 export const AddressBarArg = z.object({
   open: z.boolean(),
   mode: AddressBarModeSchema.optional(),
-  source: z.enum(['button', 'enter', 'escape', 'blur']).optional(),
+  source: z.enum(['button', 'shortcut', 'enter', 'escape', 'blur']).optional(),
 });
 export type OpenUserUrlReply =
   | { ok: true }

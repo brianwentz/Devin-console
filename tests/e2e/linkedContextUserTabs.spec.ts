@@ -25,6 +25,7 @@ type G = typeof globalThis & {
     setPaneOpen(value: boolean): void;
     setSurface(value: string): void;
     getShellWebContents(): Electron.WebContents;
+    terminalRead(id: string): string;
   };
 };
 
@@ -49,10 +50,10 @@ interface Launched {
 }
 
 // Shared launch: one temp profile per test; `profile` lets a test relaunch on it.
-async function launch(profile?: string): Promise<Launched> {
+async function launch(profile?: string, env: Record<string, string> = {}): Promise<Launched> {
   const dir = profile ?? mkdtempSync(join(tmpdir(), 'agent-workspace-usertabs-'));
   const logFile = join(dir, 'events.jsonl');
-  const app = await launchApp(dir, logFile, join(dir, 'downloads'), fixtures);
+  const app = await launchApp(dir, logFile, join(dir, 'downloads'), fixtures, env);
   const shell = await shellPage(app);
   return { app, shell, profile: dir, logFile };
 }
@@ -152,6 +153,18 @@ test('"+" opens the bar; a typed URL opens a tab in the current scope that survi
     await expect.poll(() => ghTabY(app)).toBe(TITLE_BAR);
     expect((await state(app)).tabs.tabs).toHaveLength(0);
 
+    // Blur closes without a tab.
+    await plus.click();
+    await expect(input).toBeFocused();
+    await input.fill(typed);
+    await input.evaluate((el) => (el as HTMLInputElement).blur());
+    await expect(bar).toHaveCount(0);
+    await expect.poll(async () => (await addressBarEvents(logFile)).at(-1)?.detail).toMatchObject({
+      open: false,
+      source: 'blur',
+    });
+    expect((await state(app)).tabs.tabs).toHaveLength(0);
+
     await plus.click();
     await expect(input).toBeFocused();
     await input.fill(typed);
@@ -165,6 +178,8 @@ test('"+" opens the bar; a typed URL opens a tab in the current scope that survi
     const events = await addressBarEvents(logFile);
     expect(events.length).toBeGreaterThanOrEqual(2);
     expect(events[0]!.detail).toMatchObject({ open: true, mode: 'new', source: 'button' });
+    // The new tab view takes focus, but the close is still the Enter's.
+    expect(events.at(-1)!.detail).toMatchObject({ open: false, source: 'enter' });
     for (const event of events) expect(JSON.stringify(event)).not.toContain('/page/x');
   } finally {
     await dispose(first, true);
@@ -274,6 +289,50 @@ test('a Devin tenant URL goes to the Cloud surface; pane toggle, surface switch 
     await expect.poll(async () => (await addressBar(app)).open).toBe(false);
     await expect.poll(() => ghTabY(app)).toBe(TITLE_BAR);
     await expect(bar).toHaveCount(0);
+  } finally {
+    await dispose(launched);
+  }
+});
+
+test('Ctrl+L / Ctrl+T inside the terminal dock reach the pty and never open the bar or the pane', async () => {
+  const launched = await launch(undefined, {
+    AGENT_WORKSPACE_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',
+  });
+  const { app, shell } = launched;
+  try {
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setPaneOpen(false));
+    await expect.poll(async () => (await state(app)).paneOpen).toBe(false);
+    const width = await app.evaluate(
+      ({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.getContentBounds().width,
+    );
+    await shell.click('#terminalToggle');
+    await shell.click('#terminalNew');
+    let id = '';
+    await expect
+      .poll(async () => {
+        id = (await state(app)).terminals[0]?.id ?? '';
+        return id;
+      })
+      .not.toBe('');
+    await shell.waitForSelector(`[data-terminal-id="${id}"] .xterm`);
+    const read = () =>
+      app.evaluate((_e, tid: string) => (globalThis as G).__agentworkspace.terminalRead(tid), id);
+    await expect.poll(read).toContain('ready');
+    await shell.locator(`[data-terminal-id="${id}"]`).click();
+
+    // Through sendInputEvent, so main's before-input-event sees the keys too.
+    await shortcut(app, 'L');
+    await shortcut(app, 'T');
+    await shell.keyboard.type('z');
+    await shell.keyboard.press('Enter');
+    await expect.poll(read).toContain('\\x0c');
+    await expect.poll(read).toContain('\\x14');
+    expect(await addressBar(app)).toEqual({ open: false, mode: 'new' });
+    await expect(shell.locator('#tabAddressBar')).toHaveCount(0);
+    expect((await state(app)).paneOpen).toBe(false);
+    expect(
+      await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.getContentBounds().width),
+    ).toBe(width);
   } finally {
     await dispose(launched);
   }

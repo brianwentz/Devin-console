@@ -27,6 +27,11 @@ export function AddressBar({ rect, mode, activeUrl }: AddressBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(() => (mode === 'current' ? (activeUrl ?? '') : ''));
   const [error, setError] = useState<string | null>(null);
+  // One request at a time (a double Enter must not open two tabs). A blur
+  // while it is in flight — the new tab view taking focus — is deferred so a
+  // success still closes as 'enter'.
+  const pending = useRef(false);
+  const blurredWhilePending = useRef(false);
 
   useEffect(() => {
     const input = inputRef.current;
@@ -36,13 +41,28 @@ export function AddressBar({ rect, mode, activeUrl }: AddressBarProps) {
   }, []);
 
   const submit = async () => {
-    const reply = await window.agentworkspace.openUserUrl({
-      url: value,
-      source: 'typed',
-      target: mode,
-    });
-    if (reply.ok) window.agentworkspace.setAddressBar({ open: false, source: 'enter' });
-    else setError(REASON_TEXT[reply.reason]);
+    if (pending.current) return;
+    pending.current = true;
+    blurredWhilePending.current = false;
+    let reply: OpenUserUrlReply;
+    try {
+      reply = await window.agentworkspace.openUserUrl({
+        url: value,
+        source: 'typed',
+        target: mode,
+      });
+    } finally {
+      pending.current = false;
+    }
+    if (reply.ok) {
+      window.agentworkspace.setAddressBar({ open: false, source: 'enter' });
+      return;
+    }
+    if (blurredWhilePending.current) {
+      window.agentworkspace.setAddressBar({ open: false, source: 'blur' });
+      return;
+    }
+    setError(REASON_TEXT[reply.reason]);
   };
 
   return (
@@ -76,7 +96,10 @@ export function AddressBar({ rect, mode, activeUrl }: AddressBarProps) {
             window.agentworkspace.setAddressBar({ open: false, source: 'escape' });
           }
         }}
-        onBlur={() => window.agentworkspace.setAddressBar({ open: false, source: 'blur' })}
+        onBlur={() => {
+          if (pending.current) blurredWhilePending.current = true;
+          else window.agentworkspace.setAddressBar({ open: false, source: 'blur' });
+        }}
       />
       {error && (
         <span id="tabAddressBarError" role="alert" className="shrink-0 text-xs text-[#f28b82]">
