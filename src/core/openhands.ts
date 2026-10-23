@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import type { CloudSessionState } from '../shared/ipc';
 
-export type OhStatus = 'starting' | 'running' | 'waiting' | 'finished' | 'error' | 'paused';
+export type OhStatus = 'starting' | 'idle' | 'running' | 'waiting' | 'finished' | 'error' | 'paused';
 
 export interface OhRow {
   id: string;
@@ -20,7 +20,8 @@ export interface OhRow {
 
 export const UNTITLED = 'Untitled conversation';
 export const NO_REPOSITORY = 'No repository';
-const CONVERSATION_ID_RE = /\/conversations\/([0-9a-f]{32})/;
+const CONVERSATION_ID_RE = /\/conversations\/([0-9a-f]{32})(?:[/?#]|$)/;
+const REPO_RE = /^[\w.-]+(\/[\w.-]+)+$/;
 const CURSOR_OVERLAP_MS = 5000;
 
 export function normalizeBaseUrl(raw: string, allowHttp = false): string | null {
@@ -53,7 +54,9 @@ export function conversationUrl(base: string, id: string): string {
 export function conversationIdFromUrl(base: string, url: string, pattern: RegExp = CONVERSATION_ID_RE): string | null {
   const b = base.replace(/\/+$/, '');
   if (url !== b && !url.startsWith(`${b}/`)) return null;
-  const m = pattern.exec(url.slice(b.length));
+  // Never reuse a caller's global/sticky regex: lastIndex state would leak between calls.
+  const re = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''));
+  const m = re.exec(url.slice(b.length));
   return m?.[1] ?? null;
 }
 
@@ -87,6 +90,8 @@ export function mapStatus(sandbox: string | null | undefined, execution: string 
           return 'error';
         case 'finished':
           return 'finished';
+        case 'idle':
+          return 'idle';
         case 'paused':
           return 'paused';
         default:
@@ -98,7 +103,8 @@ export function mapStatus(sandbox: string | null | undefined, execution: string 
 }
 
 export function prUrl(gitProvider: string | null | undefined, repo: string | null | undefined, n: number): string | null {
-  if (!repo || !Number.isInteger(n) || n < 0) return null;
+  if (!repo || !REPO_RE.test(repo) || repo.split('/').some((x) => x === '.' || x === '..')) return null;
+  if (!Number.isInteger(n) || n <= 0) return null;
   switch (gitProvider) {
     case 'github':
       return `https://github.com/${repo}/pull/${n}`;
@@ -130,7 +136,7 @@ function toRow(c: z.infer<typeof OhConversationSchema>): OhRow {
   const cost = c.metrics?.accumulated_cost;
   return {
     id: c.id,
-    title: c.title?.trim() ? c.title : UNTITLED,
+    title: c.title?.trim() || UNTITLED,
     updatedAt: parseTime(c.updated_at) || parseTime(c.created_at),
     status: mapStatus(c.sandbox_status, c.execution_status),
     section: repo ?? NO_REPOSITORY,
@@ -180,8 +186,10 @@ export async function listAllPages<T>(
 }
 
 export function nextCursor(rows: OhRow[], prev: number | null): number | null {
-  if (rows.length === 0) return prev;
-  const next = Math.max(...rows.map((r) => r.updatedAt)) - CURSOR_OVERLAP_MS;
+  // Rows with unparseable dates carry updatedAt 0 and must not move the cursor.
+  const newest = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), 0);
+  if (newest <= 0) return prev;
+  const next = Math.max(0, newest - CURSOR_OVERLAP_MS);
   return prev === null ? next : Math.max(prev, next);
 }
 
@@ -226,6 +234,7 @@ export function toCloudSession(row: OhRow, baseUrl: string): CloudSessionState {
     isStarred: false,
     directChildrenCount: 0,
     hasMoreChildren: false,
+    // PR state is unknown at this layer, so every known PR counts as open.
     prs: { open: row.prUrls.length, queued: 0, draft: 0, merged: 0, closed: 0 },
     isArchived: false,
     updatedAt: row.updatedAt,

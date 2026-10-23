@@ -45,12 +45,19 @@ describe('normalizeBaseUrl / apiUrl / conversation urls', () => {
       apiUrl('https://corp/openhands', '/api/v1/app-conversations/search', { limit: 100, page_id: undefined }),
     ).toBe('https://corp/openhands/api/v1/app-conversations/search?limit=100');
     expect(apiUrl('https://c', 'api/x')).toBe('https://c/api/x');
+    expect(apiUrl('https://corp/openhands/', '/api/v1/x')).toBe('https://corp/openhands/api/v1/x');
   });
   it('round-trips conversation urls', () => {
     const u = conversationUrl('https://corp/openhands', ID);
     expect(u).toBe(`https://corp/openhands/conversations/${ID}`);
     expect(conversationIdFromUrl('https://corp/openhands', u)).toBe(ID);
     expect(conversationIdFromUrl('https://corp/openhands', 'https://corp/openhands/conversations/xyz')).toBeNull();
+    expect(conversationUrl('https://oh.corp/', ID)).toBe(`https://oh.corp/conversations/${ID}`);
+    expect(conversationIdFromUrl('https://oh.corp', `https://oh.corp/conversations/${ID}?x=1`)).toBe(ID);
+    expect(conversationIdFromUrl('https://oh.corp', `https://oh.corp/conversations/${ID}f`)).toBeNull();
+    const g = /\/conversations\/([0-9a-f]{32})/g;
+    expect(conversationIdFromUrl('https://oh.corp', `https://oh.corp/conversations/${ID}`, g)).toBe(ID);
+    expect(conversationIdFromUrl('https://oh.corp', `https://oh.corp/conversations/${ID}`, g)).toBe(ID);
     expect(conversationIdFromUrl('https://corp/openhands', `https://other/conversations/${ID}`)).toBeNull();
   });
 });
@@ -71,7 +78,7 @@ describe('mapStatus', () => {
     expect(mapStatus('running', 'finished')).toBe('finished');
     expect(mapStatus('RUNNING', 'something_new')).toBe('running');
     expect(mapStatus('RUNNING', null)).toBe('running');
-    expect(mapStatus('RUNNING', 'idle')).toBe('running');
+    expect(mapStatus('RUNNING', 'idle')).toBe('idle');
   });
   it('ignores execution status unless the sandbox is running', () => {
     expect(mapStatus('PAUSED', 'finished')).toBe('paused');
@@ -86,6 +93,10 @@ describe('prUrl', () => {
     expect(prUrl('forgejo', 'o/r', 7)).toBeNull();
     expect(prUrl(null, 'o/r', 7)).toBeNull();
     expect(prUrl('github', null, 7)).toBeNull();
+    expect(prUrl('github', 'o/r?x#', 7)).toBeNull();
+    expect(prUrl('github', '../..', 7)).toBeNull();
+    expect(prUrl('github', 'o/r', 0)).toBeNull();
+    expect(prUrl('github', 'o/r', 1.5)).toBeNull();
   });
 });
 
@@ -124,6 +135,7 @@ describe('parseSearchPage', () => {
     const a = page.items[0]!;
     const b = page.items[1]!;
     expect(a.title).toBe('Untitled conversation');
+    expect(parseSearchPage({ items: [{ id: 'x', title: '  Hi  ' }] }).items[0]?.title).toBe('  Hi  '.trim());
     expect(a.section).toBe('No repository');
     expect(a.repo).toBeNull();
     expect(a.status).toBe('finished');
@@ -151,6 +163,9 @@ describe('cursor and merge', () => {
     expect(nextCursor([row({ updatedAt: 1000 }), row({ id: 'b', updatedAt: 9000 })], null)).toBe(4000);
     expect(nextCursor([], 123)).toBe(123);
     expect(nextCursor([], null)).toBeNull();
+    expect(nextCursor([row({ updatedAt: 0 })], null)).toBeNull();
+    expect(nextCursor([row({ updatedAt: 0 })], 77)).toBe(77);
+    expect(nextCursor([row({ updatedAt: 2000 })], null)).toBe(0);
     expect(nextCursor([row({ updatedAt: 9000 })], 9999)).toBe(9999);
   });
   it('mergeRows dedups newest wins, sorted desc', () => {
@@ -181,6 +196,8 @@ describe('statusTransitions', () => {
   });
   it('is silent otherwise', () => {
     expect(statusTransitions(prev('a', 'running'), [row({ id: 'a', status: 'paused' })])).toEqual([]);
+    expect(statusTransitions(prev('a', 'running'), [row({ id: 'a', status: 'idle' })])).toEqual([]);
+    expect(statusTransitions(prev('a', 'finished'), [row({ id: 'a', status: 'idle' })])).toEqual([]);
     expect(statusTransitions(prev('a', 'finished'), [row({ id: 'a', status: 'finished' })])).toEqual([]);
     expect(statusTransitions(prev('a', 'running'), [row({ id: 'z', status: 'finished' })])).toEqual([]);
     expect(statusTransitions(new Map(), [row({ id: 'a', status: 'finished' })])).toEqual([]);
@@ -235,5 +252,7 @@ describe('toCloudSession', () => {
     expect(s.updatedAt).toBe(1000);
     expect(s.status).toBe('waiting');
     expect(s.prs.open).toBe(1);
+    const idle = toCloudSession(row({ status: 'idle' }), 'https://corp');
+    expect(CloudSessionSchema.parse(idle).status).toBe('idle');
   });
 });
