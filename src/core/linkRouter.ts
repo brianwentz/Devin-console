@@ -87,8 +87,10 @@ function sameHostAndPort(a: URL, b: URL): boolean {
   return normalizeHost(a.hostname) === normalizeHost(b.hostname) && a.port === b.port;
 }
 
-// The non-Devin provider owning `rawUrl` (same hostname + port semantics as the
-// tenant check), in registry order.
+// The non-Devin provider owning `rawUrl`, in registry order. Full origin
+// compare (scheme included, like the provider pool's `ownsUrl`): an http link
+// to an https provider host is not the provider's. Devin keeps the looser
+// host + port tenant check in `routeUrl`.
 export function providerForUrl(rawUrl: string, context: RouteContext): string | null {
   let url: URL;
   try {
@@ -99,7 +101,8 @@ export function providerForUrl(rawUrl: string, context: RouteContext): string | 
   for (const p of context.providers ?? []) {
     if (p.providerId === DEVIN_PROVIDER_ID) continue;
     try {
-      if (sameHostAndPort(new URL(p.origin), url)) return p.providerId;
+      const origin = new URL(p.origin);
+      if (origin.protocol === url.protocol && sameHostAndPort(origin, url)) return p.providerId;
     } catch {
       // Malformed provider origin never matches.
     }

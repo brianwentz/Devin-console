@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   matchesAuthOrigin,
+  providerForUrl,
   route,
   routeUrl,
   type RouteDecision,
@@ -311,6 +312,14 @@ describe('provider-owned origins', () => {
         githubOrigins: ['https://x.test'],
       }),
     ).toBe('github');
+  });
+
+  it('an http link to a provider https host is not classified as the provider', () => {
+    expect(providerForUrl('https://x.test/a', providerContext)).toBe('x');
+    expect(providerForUrl('http://x.test/a', providerContext)).toBeNull();
+    expect(providerForUrl('https://x.test:8443/a', providerContext)).toBeNull();
+    expect(routeUrl('http://x.test/a', providerContext)).not.toBe('provider');
+    expect(route('http://x.test/a', 'devin', 'new-window', providerContext).kind).not.toBe('provider');
   });
 
   it('hands a navigation toward another provider origin to that provider', () => {
