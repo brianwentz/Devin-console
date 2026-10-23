@@ -133,8 +133,8 @@ export class SecretStore {
       }
     }
     if (reEncrypt) await this.persist();
-    // §3.3: on darwin the safeStorage key is keyed by app name, so a
-    // migrated profile's secret can never decrypt — drop it (per field; the
+    // Â§3.3: on darwin the safeStorage key is keyed by app name, so a
+    // migrated profile's secret can never decrypt â€” drop it (per field; the
     // file goes when nothing else is left). Gated on the migration having run
     // this launch so an ordinary Keychain hiccup deletes nothing.
     if (failed.length > 0 && process.platform === 'darwin' && migrationRan()) {
