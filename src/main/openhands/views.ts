@@ -86,7 +86,7 @@ export function openhandsOpenSession(id: string): boolean {
 
 // A conversation was deleted on the server: drop its pooled view and any
 // claim that it is the open conversation. When it was the active view the
-// home page takes over first (no reload — it shows whatever it had).
+// home page takes over first (reloaded only if its URL left the base).
 export function openhandsForgetSession(id: string): void {
   const pool = poolFor(OPENHANDS_PROVIDER_ID);
   if (pool?.activeKey() === id) pool.show(HOME_KEY, openhandsBaseUrl());

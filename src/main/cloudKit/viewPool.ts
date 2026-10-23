@@ -360,7 +360,7 @@ export class ViewPool {
     return this.active?.key ?? null;
   }
 
-  // Drops a non-active view at once, without the beforeunload negotiation —
+  // Drops a non-active view at once, without the beforeunload negotiation -
   // for a page whose content no longer exists (deleted conversation).
   remove(key: string): boolean {
     const entry = this.entries.get(key);

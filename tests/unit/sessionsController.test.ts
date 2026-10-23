@@ -170,7 +170,7 @@ describe('CloudSessionsController', () => {
     active = controller;
     await controller.refresh('start');
 
-    await controller.mutate({ op: 'rename', id: 'a', title: 'new' });
+    await expect(controller.mutate({ op: 'rename', id: 'a', title: 'new' })).resolves.toBe(false);
     expect(source.mutate).toHaveBeenCalledWith({ op: 'rename', id: 'a', title: 'new' });
     expect(controller.snapshot().lastError).toEqual({ op: 'rename', message: 'boom [redacted] token' });
     expect(onChange).toHaveBeenCalled();
@@ -185,7 +185,7 @@ describe('CloudSessionsController', () => {
     const { source } = fakeSource({ mutate: vi.fn(async () => ({ ok: false, status: 409 })) });
     const { controller, events } = makeController(source);
     active = controller;
-    await controller.mutate({ op: 'delete', id: 'a' });
+    await expect(controller.mutate({ op: 'delete', id: 'a' })).resolves.toBe(false);
     expect(controller.snapshot().lastError).toEqual({ op: 'delete', message: 'HTTP 409' });
     expect(events).toContainEqual({
       event: 'cloud-sessions-mutate',
@@ -193,11 +193,19 @@ describe('CloudSessionsController', () => {
     });
   });
 
+  it('a mutate after stop() resolves false without calling the source', async () => {
+    const { source } = fakeSource();
+    const { controller } = makeController(source);
+    controller.stop();
+    await expect(controller.mutate({ op: 'delete', id: 'a' })).resolves.toBe(false);
+    expect(source.mutate).not.toHaveBeenCalled();
+  });
+
   it('a successful mutate refreshes the list', async () => {
     const { source } = fakeSource();
     const { controller } = makeController(source);
     active = controller;
-    await controller.mutate({ op: 'delete', id: 'a' });
+    await expect(controller.mutate({ op: 'delete', id: 'a' })).resolves.toBe(true);
     expect(source.mutate).toHaveBeenCalledTimes(1);
     expect(source.list).toHaveBeenCalledTimes(1);
     expect(controller.snapshot().lastError).toBeNull();
@@ -209,7 +217,7 @@ describe('CloudSessionsController', () => {
     });
     const { controller } = makeController(source);
     active = controller;
-    await controller.mutate({ op: 'rename', id: 'a', title: 'x' });
+    await expect(controller.mutate({ op: 'rename', id: 'a', title: 'x' })).resolves.toBe(false);
     expect(source.mutate).not.toHaveBeenCalled();
     expect(controller.snapshot().lastError).toEqual({ op: 'rename', message: 'unsupported' });
 

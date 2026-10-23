@@ -893,7 +893,7 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   dialog, auto-confirmed in test mode → `openhandsDelete`); header `new-session`, `refresh`. In test mode the invoke stays open until `openhandsMenuClick(id)`.
   Every id from the renderer is validated through `isConversationId`. IPC (shell-only): `openhands:open|newSession|openHome|refresh|rename|sessionReorder|contextMenu`.
 - **Delete of the open conversation**: `core.mutate` resolves true only when the server accepted the mutation (`CloudSessionsController.mutate` →
-  `Promise<boolean>`). Only then `openhandsForgetSession(id)`: if that view is active, home is shown first (no forced reload), `state.openhandsSessionId` → null
+  `Promise<boolean>`). Only then `openhandsForgetSession(id)`: if that view is active, home is shown first (reloaded only if its URL left the base), `state.openhandsSessionId` → null
   (tab scope falls back to GLOBAL), the pooled view is removed without a beforeunload negotiation (`ViewPool.remove`), `applyLayout`/`notifyShell`. A failed
   delete (HTTP error) leaves the pool, scope and rows untouched and surfaces the controller's `lastError {op:'delete', message:'HTTP <n>'}`.
 - **Not connected**: `openhandsRename`/`openhandsDelete` while no gate is open make the core hold `{op, message:'not-connected'}` (`localError()`, calls
