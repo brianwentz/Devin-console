@@ -116,7 +116,7 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Enter` | Send the message in a Devin Local or Claude chat composer (`Enter` inserts a newline) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the focused view |
 
-Linked Context tabs can be dragged to reorder; right-click a tab for *Copy address*, or the strip for *Reload all tabs in this session*. Drag a link (from a browser, a page or another app) onto the tab row to open it as a new tab in the current session; dropped text that is not a web address is refused with a short message, and a link that is already open just switches to its tab.
+Linked Context tabs can be dragged to reorder; right-click a tab for *Copy address*, or the strip for *Reload all tabs in this session*. Drag a link (from a browser, a page or another app) onto the tab row to open it as a new tab in the current session; dropped text that is not a web address is refused with a short message, and a link that is already open just switches to its tab. The star at the right end of the tab row lists your Google Chrome bookmarks (bookmarks bar, then *Other bookmarks* and *Mobile bookmarks*, folders as submenus); pick one to open it as a new tab in the current session. Without Chrome it reads *Chrome bookmarks not found*.
 
 In the terminal: `Ctrl+C` copies when text is selected (otherwise it is sent to the shell), `Ctrl+Shift+C` copies, `Ctrl+V` / `Ctrl+Shift+V` paste; right-click copies the selection or pastes when nothing is selected. On macOS use `Cmd+C` / `Cmd+V` — plain `Ctrl+C` / `Ctrl+V` keep their terminal meaning.
 

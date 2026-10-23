@@ -5,6 +5,7 @@ import { NotificationBanner } from './NotificationBanner';
 import { TabStrip } from './TabStrip';
 import { useTabDrop } from './useTabDrop';
 import { AgMark } from './icons/AgMark';
+import { StarIcon } from './icons/StarIcon';
 
 type Tab = ShellState['tabs']['tabs'][number];
 
@@ -147,7 +148,7 @@ export function TitleBar({
             ↻
           </button>
           <TabStrip tabs={tabs} activeId={activeId} />
-          {/* Outside the strip's scroll/sortable area; #tabFavorites follows it. */}
+          {/* Outside the strip's scroll/sortable area, like #tabFavorites after it. */}
           <button
             id="tabNew"
             type="button"
@@ -159,6 +160,21 @@ export function TitleBar({
             }
           >
             +
+          </button>
+          <button
+            id="tabFavorites"
+            type="button"
+            aria-label="Chrome bookmarks"
+            title="Chrome bookmarks"
+            className={`app-no-drag shrink-0 self-center flex items-center justify-center ${navButton}`}
+            onClick={(e) => {
+              // The shell view sits at the window origin with a fixed zoom, so client
+              // coordinates are window coordinates; the menu drops from the bottom-left.
+              const rect = e.currentTarget.getBoundingClientRect();
+              void window.agentworkspace.openFavoritesMenu(rect.left, rect.bottom);
+            }}
+          >
+            <StarIcon />
           </button>
           {drop.hint && (
             <div

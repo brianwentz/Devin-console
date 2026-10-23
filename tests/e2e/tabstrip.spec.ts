@@ -34,7 +34,9 @@ async function order(app: ElectronApplication): Promise<string[]> {
 
 // Fractions of the 1338 px available at the 1400 px test window (see core/layout paneAvailable).
 const WIDE_PANE = 0.568; // ≈760 px, rendered at 698 px so the devin view keeps MIN_DEVIN_WIDTH
-const NARROW_PANE = 0.314; // ≈420 px
+// ≈460 px: after the 138 px caption overlay and the back/forward/reload/+/star
+// buttons the strip still fits one 104 px min-width tab, so "fully visible" holds.
+const NARROW_PANE = 0.344;
 
 async function setPaneFraction(app: ElectronApplication, fraction: number): Promise<void> {
   await app.evaluate(

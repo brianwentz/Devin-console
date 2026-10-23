@@ -25,6 +25,7 @@ import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
+import { favoritesMenuClick, favoritesMenuItems } from './favoritesMenu';
 import { allPoolViews } from './cloudKit/pools';
 import { state, testMode } from './state';
 import {
@@ -355,6 +356,8 @@ export function registerTestHooks(): void {
         }
         claudeSessions().open(id);
       },
+      favoritesMenuItems: () => favoritesMenuItems(),
+      favoritesMenuClick: (id: string) => favoritesMenuClick(id),
       claudeMenuItems: () => claudeSessions().menuItems(),
       claudeMenuClick: (id: string) => claudeSessions().clickMenuItem(id),
       localMenuItems: () => localContextMenuItems(),

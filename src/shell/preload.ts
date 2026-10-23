@@ -25,6 +25,7 @@ import {
   type OpenHandsContextMenuResult,
   type OpenUserUrlReply,
   type FavoritesProfilesReply,
+  type FavoritesMenuReply,
   type ScopeSummary,
   type Settings,
   type SettingsCommitResult,
@@ -300,6 +301,8 @@ const api = {
   }) => ipcRenderer.send(IpcChannels.tabsAddressBar, arg),
   favoritesProfiles: () =>
     ipcRenderer.invoke(IpcChannels.favoritesProfiles) as Promise<FavoritesProfilesReply>,
+  openFavoritesMenu: (x: number, y: number) =>
+    ipcRenderer.invoke(IpcChannels.tabsFavoritesMenu, { x, y }) as Promise<FavoritesMenuReply>,
   reportDropTypes: (types: string[]) => {
     if (Array.isArray(types)) ipcRenderer.send(IpcChannels.tabsDropTypes, { types });
   },

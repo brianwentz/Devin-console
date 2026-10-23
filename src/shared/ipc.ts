@@ -70,6 +70,7 @@ export const IpcChannels = {
   tabsAddressBar: 'tabs:addressBar',
   tabsDropTypes: 'tabs:dropTypes',
   favoritesProfiles: 'favorites:profiles',
+  tabsFavoritesMenu: 'tabs:favoritesMenu',
   navAction: 'nav:action',
   surfaceSet: 'surface:set',
   linkOpen: 'link:open',
@@ -1172,6 +1173,12 @@ export const TabsDropTypesArg = z.object({
 export const ChromeProfileSchema = z.object({ dir: z.string().max(64), name: z.string().max(256) });
 export const FavoritesProfilesReplySchema = z.object({ profiles: z.array(ChromeProfileSchema).max(500) });
 export type FavoritesProfilesReply = z.infer<typeof FavoritesProfilesReplySchema>;
+// tabs:favoritesMenu — window coordinates of the star's bottom-left corner.
+const MenuCoord = z.number().finite().min(-100_000).max(100_000);
+export const FavoritesMenuArg = z.object({ x: MenuCoord, y: MenuCoord });
+export interface FavoritesMenuReply {
+  action: 'open' | null;
+}
 export type OpenUserUrlReply =
   | { ok: true }
   | {

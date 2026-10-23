@@ -77,6 +77,11 @@ function fakeFs(initial: Record<string, string>) {
       const f = files.get(path)!;
       files.set(path, { text, mtimeMs: f.mtimeMs, size: f.size ?? Buffer.byteLength(f.text) });
     },
+    // Same mtime, new content and its real size (a coarse-mtime filesystem).
+    replaceKeepingMtime(path: string, text: string) {
+      const f = files.get(path)!;
+      files.set(path, { text, mtimeMs: f.mtimeMs, size: Buffer.byteLength(text) });
+    },
     remove: (path: string) => files.delete(path),
     reads,
     logs,
@@ -183,6 +188,17 @@ describe('createBookmarksReader — cache', () => {
     await reader.load();
     fs.put(WORK_BM, bookmarksJson(['https://example.org/new']));
     expect(firstBarUrl(await reader.load())).toBe('https://example.org/new');
+    expect(fs.reads.filter((p) => p === WORK_BM)).toHaveLength(2);
+  });
+
+  it('same mtime but a changed size → re-reads the new content', async () => {
+    const fs = standardFs();
+    const reader = createBookmarksReader(fs.deps);
+    await reader.load();
+    const text = bookmarksJson(['https://example.org/resized']);
+    expect(Buffer.byteLength(text)).not.toBe(Buffer.byteLength(fixture('Profile 1', 'Bookmarks')));
+    fs.replaceKeepingMtime(WORK_BM, text);
+    expect(firstBarUrl(await reader.load())).toBe('https://example.org/resized');
     expect(fs.reads.filter((p) => p === WORK_BM)).toHaveLength(2);
   });
 

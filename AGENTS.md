@@ -338,6 +338,14 @@ variable that selects it.
   `openUserUrl({source:'drop', target:'new'})` — main validates; a refusal (or no text / over 8192 chars) shows `#tabDropHint[data-state=error]`
   for 3 s. Every drag entering the row sends `tabs:dropTypes {types}` (guardedOn, `TabsDropTypesArg`, ≤32 names ≤128 chars); main logs
   `tab-drop-types` only under `AGENT_WORKSPACE_DEBUG_DROPS`. Favicons are `draggable=false` so a tab's own icon can't be dropped as a link.
+- Favorites menu: `#tabFavorites` (star, after `#tabNew`, outside the strip's sortable/scroll area) → `tabs:favoritesMenu {x, y}` (guardedHandle,
+  `FavoritesMenuArg` — finite, ±100000; the button's bottom-left in window coordinates, the shell view has a fixed zoom) → `src/main/favoritesMenu.ts`
+  re-loads `bookmarksReader()` on every open (profile resolved at click time) and pops a native `Menu` (paints above hosted views, no shell raise) from
+  `buildFavoritesMenu`; folders → `submenu`, "… N more" disabled; states as one disabled item: `Chrome bookmarks not found` (missing),
+  `Chrome bookmarks couldn't be read` (unreadable), `No bookmarks`. A click → `openUserUrl(url, 'favorite', 'new')`; the invoke resolves `{action:
+  'open'|null}` when the menu closes. Test mode = the Claude context-menu seam: the menu is described (ids `m0…` depth-first) and the invoke stays open
+  until `favoritesMenuClick(id)` (a disabled item does nothing; a new open replaces the pending one). Labels/URLs are never logged — only
+  `tab-user-open`'s URL.
 - `tabs-preload` event: on scope switch/launch the visible scope's discarded tabs are background-loaded (150 ms stagger); the live cap
   (`tabs.maxLiveTabs`) and idle discard apply to hidden scopes only — the visible scope's tabs are exempt.
 
@@ -440,7 +448,7 @@ variable that selects it.
   `src/core/settingsDraft.ts` route a validation error to the tab holding the field. The `links` "Link Handling" tab (`LinksTab.tsx`, `#linkRulesList`
   rows `[data-rule-id][data-rule-invalid]`, `#linkRuleAdd`, `#linkRuleTestInput`/`#linkRuleTestResult`) also hosts the `#allowExternalInput` "Open
   non-GitHub links in system browser" checkbox, then a Linked Context section (`data-settings-section=links-linked-context`: tab keep-alive hours, max live
-  tabs, `prs.autoOpenTabs`). The `devin` tab has two sections — `devin-cloud` (tenant/API base, token + identity, user/org id, usage poll, Cloud pool) and, after
+  tabs, `prs.autoOpenTabs`), then a Favorites section (`data-settings-section=links-favorites`, `#favoritesProfileSelect`). The `devin` tab has two sections — `devin-cloud` (tenant/API base, token + identity, user/org id, usage poll, Cloud pool) and, after
   a separator, `devin-local`.
 - ux2 P3 tabs (`settings/LocalTab.tsx`, `settings/ClaudeTab.tsx`, shared bits in `settings/fields.tsx`: `CliPathHint`, `FieldError`, `WslDistroSelect`,
   `HostsPointer`): the Devin tab's **Devin Local** section = `#devinPathInput` (+ `#devinPathInputError` not-found hint from `local.cliPath`), `#localDefaultWslDistroSelect`,
@@ -1086,6 +1094,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `claudeUsageState` / `claudeUsageRefresh` | Claude usage state snapshot / force fetch+scan (resolves when both finish). |
 | `devinUsageState` / `devinUsageRefresh` | Devin usage metric state snapshot / force a poll (resolves when it finishes). |
 | `lastOpenDialogOptions()` | The options of the most recent `openFolderDialog` call (recorded in test mode). |
+| `favoritesMenuItems()` / `favoritesMenuClick(id)` | The open favorites menu as `{id,label,enabled,submenu?}[]` (null while none is open or its bookmarks are still loading) / click an item → `{action:'open'\|null}`, resolving the open `tabs:favoritesMenu` invoke. |
 | `lastFolderPrompt()` | `{title, hostId, start, hosts}` of the most recent in-app remote folder prompt (P3; null before one opened). |
 | `hostSshAdd(alias)` | `hosts().addSshHost(alias)` — the `hosts:sshAdd` path (validation + lower-casing) without the Settings UI. |
 | `hostSshRecover(trigger)` / `hostHookForwardVerified(id)` | Run the ssh connection-failure recovery now (unthrottled) / whether that ssh host's hook forward passed the challenge. |
