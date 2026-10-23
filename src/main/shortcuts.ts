@@ -7,7 +7,14 @@ import { cloudViews } from './cloudViews';
 import { poolForSurface } from './cloudKit/pools';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
-import { applyLayout, cancelDrag, focusContents, setPaneOpen, setSessionsOpen } from './window';
+import {
+  applyLayout,
+  cancelDrag,
+  focusContents,
+  setAddressBar,
+  setPaneOpen,
+  setSessionsOpen,
+} from './window';
 
 export function historyAction(
   action: 'back' | 'forward' | 'reload',
@@ -58,6 +65,22 @@ export function openNewSession(): void {
   applyLayout();
   log('devin', 'new-session', { url });
   focusContents(state.devinView?.webContents, 'new-session');
+}
+
+// Ctrl+T (new tab) / Ctrl+L (edit the active tab's address; new when the
+// scope has no tab). Ctrl+T opens a closed pane first; Ctrl+L needs the pane
+// visible. Focus goes to the shell so the bar's input takes the keys.
+function openAddressBarShortcut(kind: 'new' | 'current'): boolean {
+  let acted = false;
+  if (kind === 'new' && !state.paneOpen) {
+    setPaneOpen(true, 'shortcut');
+    acted = true;
+  }
+  if (!state.paneOpen || state.paneCollapsed) return acted;
+  const mode = kind === 'current' && state.tabManager?.activeId ? 'current' : 'new';
+  setAddressBar(true, mode, 'shortcut');
+  focusContents(state.shellView?.webContents, 'address-bar');
+  return true;
 }
 
 export function handleShortcut(
@@ -119,6 +142,8 @@ export function handleShortcut(
       runtimeFor(state.surface)?.newSession ?? runtimeFor('devin-cloud')?.newSession;
     void newSession?.();
     handled = true;
+  } else if (ctrl && !input.shift && !input.alt && (key === 't' || key === 'l')) {
+    handled = openAddressBarShortcut(key === 't' ? 'new' : 'current');
   } else if (ctrl && !input.alt && key === '`' && dockSurface(state.surface)) {
     // Off dock surfaces (Settings/Analytics) the shortcut is a no-op, matching
     // the disabled rail button — the persisted toggle is left untouched.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADDRESS_BAR_HEIGHT,
   ANALYTICS_TABS_HEIGHT,
   clampFraction01,
   clampPaneWidth,
@@ -448,5 +449,54 @@ describe('analytics tab strip', () => {
     expect(bounds.paneCollapsed).toBe(true);
     expect(bounds.analyticsTabs).toEqual({ x: 56, y: 36, width: 844, height: 60 });
     expect(bounds.devin).toEqual({ x: 56, y: 96, width: 844, height: 804 });
+  });
+});
+
+describe('address bar carve-out', () => {
+  it('is 32 px and absent by default', () => {
+    expect(ADDRESS_BAR_HEIGHT).toBe(32);
+    const base = computeBounds({ width: 1400, height: 900 }, layout());
+    const explicit = computeBounds({ width: 1400, height: 900 }, layout({ addressBarOpen: false }));
+    expect(explicit).toEqual(base);
+  });
+
+  it('moves the gh tab rect down by the bar height when the pane is visible', () => {
+    const base = computeBounds({ width: 1400, height: 900 }, layout());
+    const bounds = computeBounds({ width: 1400, height: 900 }, layout({ addressBarOpen: true }));
+    expect(base.ghTab).not.toBeNull();
+    expect(bounds.ghTab).toEqual({
+      x: base.ghTab!.x,
+      y: TITLE_BAR_HEIGHT + ADDRESS_BAR_HEIGHT,
+      width: base.ghTab!.width,
+      height: base.ghTab!.height - ADDRESS_BAR_HEIGHT,
+    });
+    expect({ ...bounds, ghTab: null }).toEqual({ ...base, ghTab: null });
+  });
+
+  it('leaves every rect untouched when the pane is closed or auto-collapsed', () => {
+    const closed = computeBounds({ width: 1400, height: 900 }, layout({ paneOpen: false }));
+    expect(
+      computeBounds({ width: 1400, height: 900 }, layout({ paneOpen: false, addressBarOpen: true })),
+    ).toEqual(closed);
+    const collapsed = computeBounds({ width: 900, height: 900 }, layout());
+    expect(collapsed.paneCollapsed).toBe(true);
+    expect(computeBounds({ width: 900, height: 900 }, layout({ addressBarOpen: true }))).toEqual(
+      collapsed,
+    );
+  });
+
+  it('composes with the analytics strip and never makes the gh rect negative', () => {
+    const both = computeBounds(
+      { width: 1400, height: 900 },
+      layout({ analyticsTabs: true, addressBarOpen: true }),
+    );
+    const analytics = computeBounds({ width: 1400, height: 900 }, layout({ analyticsTabs: true }));
+    expect(both.devin).toEqual(analytics.devin);
+    expect(both.analyticsTabs).toEqual(analytics.analyticsTabs);
+    expect(both.ghTab?.y).toBe(TITLE_BAR_HEIGHT + ADDRESS_BAR_HEIGHT);
+
+    const tiny = computeBounds({ width: 1400, height: 50 }, layout({ addressBarOpen: true }));
+    expect(tiny.ghTab?.y).toBe(TITLE_BAR_HEIGHT + 14);
+    expect(tiny.ghTab?.height).toBe(0);
   });
 });

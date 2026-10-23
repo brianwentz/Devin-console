@@ -66,6 +66,7 @@ export const IpcChannels = {
   tabsReloadMenu: 'tabs:reloadMenu',
   tabsTabMenu: 'tabs:tabMenu',
   tabsOpenUserUrl: 'tabs:openUserUrl',
+  tabsAddressBar: 'tabs:addressBar',
   navAction: 'nav:action',
   surfaceSet: 'surface:set',
   linkOpen: 'link:open',
@@ -1055,6 +1056,7 @@ export const ShellStateSchema = z.object({
     activeId: z.string().nullable(),
     scope: z.string(),
     hiddenTabCount: z.number().int(),
+    addressBar: z.object({ open: z.boolean(), mode: z.enum(['new', 'current']) }),
   }),
   credentials: z.array(CredentialEntrySchema),
   autofill: z.object({
@@ -1140,6 +1142,15 @@ export const OpenUserUrlArg = z.object({
   url: z.string().max(8192),
   source: z.enum(['drop', 'typed', 'favorite']),
   target: z.enum(['new', 'current']),
+});
+export const AddressBarModeSchema = z.enum(['new', 'current']);
+export type AddressBarMode = z.infer<typeof AddressBarModeSchema>;
+// Shell -> main: open/close the Linked Context address bar. `source` names the
+// shell trigger for the `address-bar` log (shortcuts are main-side).
+export const AddressBarArg = z.object({
+  open: z.boolean(),
+  mode: AddressBarModeSchema.optional(),
+  source: z.enum(['button', 'enter', 'escape', 'blur']).optional(),
 });
 export type OpenUserUrlReply =
   | { ok: true }

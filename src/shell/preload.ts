@@ -292,6 +292,11 @@ const api = {
     ipcRenderer.invoke(IpcChannels.tabsOpenUserUrl, arg) as Promise<
       OpenUserUrlReply
     >,
+  setAddressBar: (arg: {
+    open: boolean;
+    mode?: 'new' | 'current';
+    source?: 'button' | 'enter' | 'escape' | 'blur';
+  }) => ipcRenderer.send(IpcChannels.tabsAddressBar, arg),
   openReloadMenu: (x: number, y: number) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {
       ipcRenderer.send(IpcChannels.tabsReloadMenu, { x, y });

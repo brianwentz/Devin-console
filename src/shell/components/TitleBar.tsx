@@ -150,6 +150,19 @@ export function TitleBar({
             activeId={activeId}
             scope={scope}
           />
+          {/* Outside the strip's scroll/sortable area; #tabFavorites follows it. */}
+          <button
+            id="tabNew"
+            type="button"
+            aria-label="New tab"
+            title="New tab (Ctrl+T)"
+            className={`app-no-drag shrink-0 self-center ${navButton}`}
+            onClick={() =>
+              window.agentworkspace.setAddressBar({ open: true, mode: 'new', source: 'button' })
+            }
+          >
+            +
+          </button>
         </div>
       )}
     </header>

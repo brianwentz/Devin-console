@@ -92,6 +92,9 @@ export const state = {
     noUserIdentity: false,
     identity: { source: null as IdentitySource | null, resolved: false },
   },
+  // Linked Context address bar (shell DOM under the title bar; main carves the
+  // hosted tab rect). Never persisted.
+  addressBar: { open: false, mode: 'new' as 'new' | 'current' },
   // P6: notification panel z-order raise flag (set via notifications:panel IPC).
   notificationsPanelOpen: false,
   // Same raise flag for the PR panel (set via prs:panel IPC).

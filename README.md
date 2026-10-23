@@ -44,6 +44,7 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 
 - The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.
 - Click any GitHub link in a session — it opens in the tabbed **Linked Context** pane on the right (`Ctrl+Shift+G` toggles it). **Settings → Link Handling → Linked Context** holds the tab pool (keep-alive, max live tabs) and the toggle that opens a tab when a session creates a PR.
+- Open any web page in the pane yourself: the **+** button after the tabs (or `Ctrl+T`) shows an address bar under the tab row — type an address and press `Enter`. `Ctrl+L` edits the active tab's address instead. `Esc` or clicking away closes the bar; Devin tenant addresses open in the Cloud surface.
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Devin**.
@@ -105,6 +106,8 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Shift+[` / `]` | Shrink / grow the pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
+| `Ctrl+T` | New tab: open the address bar (opens Linked Context first when it is hidden) |
+| `Ctrl+L` | Edit the active tab's address (a new tab when the session has none) |
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
 | `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; the OpenHands home page) |
 | `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |

@@ -20,7 +20,7 @@ import {
 import { unreadPrCount, visiblePrs } from '../core/prPanelModel';
 import { usageLevel } from '../core/usageAlerts';
 import { effectiveScope } from '../core/tabModel';
-import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
+import { IpcChannels, SettingsSchema, type AddressBarMode, type ShellState } from '../shared/ipc';
 
 import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
@@ -117,7 +117,43 @@ export function layoutState(): LayoutState {
     sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
     sessionsWidth: state.sessionsWidth,
     analyticsTabs: state.surface === 'analytics',
+    addressBarOpen: state.addressBar.open,
   };
+}
+
+// Where the address bar was opened: a surface or tab-scope change closes it.
+let addressBarContext: { surface: string; scope: string } | null = null;
+
+// Single seam for the Linked Context address bar (button, Ctrl+T/Ctrl+L,
+// Enter/Esc/blur from the shell, automatic closes). The URL is never logged.
+export function setAddressBar(open: boolean, mode: AddressBarMode, source: string): void {
+  if (open && (!state.paneOpen || state.paneCollapsed)) return;
+  const current = state.addressBar;
+  if (current.open === open && (!open || current.mode === mode)) return;
+  state.addressBar = { open, mode: open ? mode : current.mode };
+  addressBarContext = open
+    ? { surface: state.surface, scope: state.tabManager?.currentScope ?? '' }
+    : null;
+  log('shell', 'address-bar', { detail: { open, mode: state.addressBar.mode, source } });
+  applyLayout();
+}
+
+// Reason the open address bar must close now, or null. Runs inside applyLayout
+// after syncScope so a scope switch is already visible.
+function addressBarCloseReason(paneCollapsed: boolean): string | null {
+  if (!state.addressBar.open) return null;
+  if (!state.paneOpen || paneCollapsed) return 'pane-hidden';
+  if (addressBarContext?.surface !== state.surface) return 'surface';
+  if (addressBarContext.scope !== (state.tabManager?.currentScope ?? '')) return 'scope';
+  return null;
+}
+
+function closeAddressBarIfStale(paneCollapsed: boolean): void {
+  const reason = addressBarCloseReason(paneCollapsed);
+  if (!reason) return;
+  state.addressBar = { open: false, mode: state.addressBar.mode };
+  addressBarContext = null;
+  log('shell', 'address-bar', { detail: { open: false, mode: state.addressBar.mode, source: reason } });
 }
 
 // Analytics surface: the hosted tenant view is shown only on the Devin tab;
@@ -166,7 +202,10 @@ export function publicState(): ShellState {
     openhandsSessionId: state.openhandsSessionId,
     openhandsApiKeySet: state.secrets?.hasOpenHandsApiKey() ?? false,
     settings: state.settings?.current ?? SettingsSchema.parse({}),
-    tabs: state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 },
+    tabs: {
+      ...(state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 }),
+      addressBar: { ...state.addressBar },
+    },
     credentials: state.credentials?.list() ?? [],
     autofill: {
       picker: state.autofillPicker
@@ -396,7 +435,12 @@ export function applyLayout(): void {
     runtimeFor(layoutSurface)?.onSurfaceEnter?.();
   }
   syncScope();
-  const bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  closeAddressBarIfStale(false);
+  let bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  if (bounds.paneCollapsed && state.addressBar.open) {
+    closeAddressBarIfStale(true);
+    bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  }
   applyBounds(bounds, windowRef.getContentBounds());
   if (!state.dragging) {
     ensureShellBottom();

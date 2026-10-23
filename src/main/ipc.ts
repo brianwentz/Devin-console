@@ -35,6 +35,7 @@ import {
   TabsReloadMenuArg,
   TabsTabMenuArg,
   OpenUserUrlArg,
+  AddressBarArg,
   type Settings,
   type SettingsCommitResult,
   type SettingsPatch,
@@ -76,6 +77,7 @@ import {
   notifyShell,
   publicState,
   setNotificationsPanel,
+  setAddressBar,
   setPrsPanel,
   setPaneOpen,
   setSessionsOpen,
@@ -220,6 +222,12 @@ export function setupIpc(): void {
     const parsed = OpenUserUrlArg.safeParse(payload);
     if (!parsed.success) return { ok: false, reason: 'invalid' };
     return openUserUrl(parsed.data.url, parsed.data.source, parsed.data.target);
+  });
+  guardedOn(IpcChannels.tabsAddressBar, (_event, payload: unknown) => {
+    const parsed = AddressBarArg.safeParse(payload);
+    if (!parsed.success) return;
+    const { open, mode, source } = parsed.data;
+    setAddressBar(open, mode ?? 'new', source ?? 'shell');
   });
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);

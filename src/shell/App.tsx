@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { computeBounds, dockSurface, RAIL_WIDTH, sessionsColumnSurface } from '../core/layout';
+import {
+  computeBounds,
+  dockSurface,
+  RAIL_WIDTH,
+  sessionsColumnSurface,
+  TITLE_BAR_HEIGHT,
+} from '../core/layout';
 import { PROVIDERS, providerBySurface } from '../core/providers';
 import { PROVIDER_UI } from './providers';
 import { renderBadgeDataUrl } from './badge';
@@ -16,6 +22,7 @@ import { Splitter } from './components/Splitter';
 import { TerminalDock } from './components/TerminalDock';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AnalyticsTabs } from './components/AnalyticsTabs';
+import { AddressBar } from './components/AddressBar';
 
 function useWindowSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
@@ -82,10 +89,23 @@ export function App() {
     sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
     sessionsWidth: state.sessionsWidth,
     analyticsTabs: state.surface === 'analytics',
+    addressBarOpen: state.tabs.addressBar.open,
   });
   const analyticsTab = state.settings.analytics.tab;
   const paneVisible = state.paneOpen && !bounds.paneCollapsed;
   const mainRect = bounds.devin;
+  // computeBounds moved the hosted tab down; the bar fills the gap above it.
+  const addressBarRect =
+    paneVisible && state.tabs.addressBar.open && bounds.ghTab
+      ? {
+          x: bounds.ghTab.x,
+          y: TITLE_BAR_HEIGHT,
+          width: bounds.ghTab.width,
+          height: bounds.ghTab.y - TITLE_BAR_HEIGHT,
+        }
+      : null;
+  const activeTabUrl =
+    state.tabs.tabs.find((tab) => tab.id === state.tabs.activeId)?.url ?? null;
   const surfaceProvider = providerBySurface(state.surface);
   const Sidebar = surfaceProvider ? PROVIDER_UI[surfaceProvider.id].Sidebar : undefined;
   const Panel = surfaceProvider ? PROVIDER_UI[surfaceProvider.id].Panel : undefined;
@@ -120,6 +140,14 @@ export function App() {
         activeId={state.tabs.activeId}
         scope={state.tabs.scope}
       />
+      {addressBarRect && (
+        <AddressBar
+          key={state.tabs.addressBar.mode}
+          rect={addressBarRect}
+          mode={state.tabs.addressBar.mode}
+          activeUrl={activeTabUrl}
+        />
+      )}
       {paneVisible && bounds.splitter && (
         <Splitter axis="x" rect={bounds.splitter} enabled={state.paneOpen} />
       )}

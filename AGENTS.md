@@ -311,6 +311,13 @@ variable that selects it.
   `normalizeUserUrl` (`src/core/userUrl.ts`: bare hosts get https, localhost/IP literals http, non-http(s) schemes rejected) then `openUserUrl` in `src/main/routing.ts`.
   Devin/provider URLs go through `applyDecision` (their own view); every other kind — including `external` — opens a pane tab (`target:'current'` →
   `TabManager.navigateActive`); `deny`/`mailto` → `{ok:false, reason:'scheme'}`. Logs `tab-user-open`.
+- Address bar: `#tabNew` (after `<TabStrip/>`, outside its sortable/scroll area) / Ctrl+T → mode `new`, Ctrl+L → mode `current` (prefilled with the
+  active tab's URL; `new` when the scope has no tab) — `src/shell/components/AddressBar.tsx` (`#tabAddressBar`, `#tabAddressBarInput`,
+  `#tabAddressBarError`) is shell DOM at y 36 across the pane; `computeBounds` (`addressBarOpen`, `ADDRESS_BAR_HEIGHT` 32) moves `ghTab` down by
+  the bar instead of raising the shell. Main state `state.addressBar {open, mode}` → `ShellState.tabs.addressBar`; single seam `setAddressBar(open, mode,
+  source)` in `window.ts` (shell sends `tabs:addressBar {open, mode?, source?}`); `applyLayout` closes it on pane hidden/collapsed, surface switch or
+  scope change. Ctrl+T/Ctrl+L run on every attached webContents (`shortcuts.ts`; Ctrl+T opens a closed pane first, Ctrl+L needs the pane visible)
+  and focus the shell via `focusContents`. Enter → `openUserUrl({source:'typed', target: mode})`; ok / Esc / blur close it. Never persisted.
 - `tabs-preload` event: on scope switch/launch the visible scope's discarded tabs are background-loaded (150 ms stagger); the live cap
   (`tabs.maxLiveTabs`) and idle discard apply to hidden scopes only — the visible scope's tabs are exempt.
 
@@ -1043,6 +1050,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `getAnalyticsBounds` | Analytics view bounds. |
 | `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume` | Updater simulation (no network in test mode). |
 | `openUserUrl(url, source, target)` | Calls `routing.ts openUserUrl` (the `tabs:openUserUrl` handler's body); returns `{ok:true}` or `{ok:false, reason}`. |
+| `addressBar()` | The Linked Context address bar state `{open, mode}`. |
 | `localDeleteSession` / `localDeleteWorkspaceSessions` | Devin Local single / bulk delete. |
 | `localMenuItems` / `localMenuClick(id)` | Local sidebar context-menu descriptions (test mode describes instead of popping), resolve the open `local:contextMenu` invoke by item id → `{action}`. |
 | `claudeState` / `claudeRefresh` / `claudeSelect` | Claude sidebar snapshot / refresh / select a session. |
@@ -1094,6 +1102,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `window-activate` | `{ reason, quiet }` — window-bring-forward request via `activateWindow`; `quiet: true` means it showed without activating. |
 | `tabs-preload` | Visible scope's discarded tabs background-loaded. |
 | `tab-user-open` | `{ source: 'drop'\|'typed'\|'favorite', target: 'new'\|'current', kind }` + the url — `tabs:openUserUrl` accepted a user-supplied URL (`kind` = the `routeUrl` kind). |
+| `address-bar` | `{ open, mode: 'new'\|'current', source }` — `source` = `button\|shortcut\|enter\|escape\|blur` or an automatic close `pane-hidden\|surface\|scope`; never the URL. |
 | `rule-tab` / `rule-tab-background` | `{ruleId, ruleKind}` — never the pattern. |
 | `cloud-token` | fixed `reason` ('view-not-ready'\|'no-devindebug'\|'login-required'\|'timeout'\|'error'). |
 | `cloud-connect` | `{ok:false, reason:'timeout'}` when CONNECTING for 20 s. |

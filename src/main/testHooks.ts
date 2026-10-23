@@ -287,6 +287,7 @@ export function registerTestHooks(): void {
       simulateUpdateResume: () => updateOnResume(),
       openUserUrl: (url: string, source: 'drop' | 'typed' | 'favorite', target: 'new' | 'current') =>
         openUserUrl(url, source, target),
+      addressBar: () => ({ ...state.addressBar }),
       panelOpen: () => state.notificationsPanelOpen,
       // Service-user identity resolution (never the raw user id).
       identity: () => identityResolver().current(),
