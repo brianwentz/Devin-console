@@ -24,13 +24,15 @@ const PR_STATE_REFRESH_MS = 10 * 60_000;
 
 export class ClaudePrTracking {
   private prRefreshTimer: NodeJS.Timeout | null = null;
+  private unsubscribeCache: (() => void) | null = null;
 
   constructor(private readonly owner: ClaudeSessions) {}
 
   start(): void {
     // Title/state cache landings feed setPrState; refresh non-final entries
     // every 10 min while focused.
-    prTitles.onChange = this.onCacheChange;
+    this.unsubscribeCache?.();
+    this.unsubscribeCache = prTitles.addChangeListener(this.onCacheChange);
     // Prefer the PR-owning session's host for the `gh` fallback — on this
     // machine gh is authenticated inside WSL, not on Windows.
     prTitles.ghResolver = async (url: string) => {
@@ -54,7 +56,8 @@ export class ClaudePrTracking {
   stop(): void {
     if (this.prRefreshTimer) clearInterval(this.prRefreshTimer);
     this.prRefreshTimer = null;
-    if (prTitles.onChange === this.onCacheChange) prTitles.onChange = null;
+    this.unsubscribeCache?.();
+    this.unsubscribeCache = null;
     prTitles.ghResolver = null;
   }
 
