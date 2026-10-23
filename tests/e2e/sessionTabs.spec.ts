@@ -158,7 +158,7 @@ test('tabs follow the visible session; hidden tabs stay live and keep scroll/for
           `document.querySelector('[data-testid="tabStripEmpty"]')?.textContent ?? null`,
         ),
       )
-      .toBe('No GitHub tabs for this session — links from the worklog open here.');
+      .toBe('No tabs yet — drop a link here or press +');
     expect(
       await evaluateInShell(
         app,

@@ -16,6 +16,10 @@ import type { ProviderViewName } from '../core/providers';
 export type ViewName = 'shell' | 'devin' | 'analytics' | 'host' | ProviderViewName | `gh:${string}`;
 
 export const testMode = process.env.AGENT_WORKSPACE_TEST === '1';
+// Drag diagnostic (`tab-drop-types`): test mode or an unpackaged (dev) build only.
+// `defaultApp` is Electron's flag for `electron <path>` launches.
+export const debugDrops =
+  process.env.AGENT_WORKSPACE_DEBUG_DROPS === '1' && (testMode || Boolean(process.defaultApp));
 /**
  * Quiet test mode (plans/quiet-tests.md): every test-mode launch keeps the
  * window invisible (opacity 0, skip-taskbar, never activated) so a full e2e

@@ -1,13 +1,15 @@
 // Linked Context user tabs: the "+" button, the on-demand address bar and its
-// shortcuts (Ctrl+T / Ctrl+L). Task 4 adds the drop cases to this file.
-import { mkdtempSync, rmSync } from 'node:fs';
+// shortcuts (Ctrl+T / Ctrl+L), and links dropped onto the tab row.
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
+  CLAUDE_FIXTURE_HOME,
   closeApp,
+  evaluateInShell,
   launchApp,
   openTab,
   readEvents,
@@ -26,6 +28,9 @@ type G = typeof globalThis & {
     setSurface(value: string): void;
     getShellWebContents(): Electron.WebContents;
     terminalRead(id: string): string;
+    tabInfo(id: string): { url: string; originSessionId: string | null } | null;
+    claudeSelect(id: string): void;
+    openhandsOpen(id: string): boolean;
   };
 };
 
@@ -333,6 +338,196 @@ test('Ctrl+L / Ctrl+T inside the terminal dock reach the pty and never open the 
     expect(
       await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.getContentBounds().width),
     ).toBe(width);
+  } finally {
+    await dispose(launched);
+  }
+});
+
+// --- links dropped onto the tab row -------------------------------------------
+
+type DragKind = 'dragenter' | 'dragover' | 'dragleave' | 'drop';
+
+// A synthetic HTML5 drag on the strip; it bubbles to the pane segment's
+// handlers. Returns whether the handler accepted it (defaultPrevented).
+async function drag(
+  app: ElectronApplication,
+  kind: DragKind,
+  data: Record<string, string>,
+): Promise<boolean> {
+  return (await evaluateInShell(
+    app,
+    `(() => {
+      const target = document.getElementById('tabStrip');
+      if (!target) throw new Error('no #tabStrip');
+      const dt = new DataTransfer();
+      for (const [type, value] of Object.entries(${JSON.stringify(data)})) dt.setData(type, value);
+      const event = new DragEvent(${JSON.stringify(kind)}, { bubbles: true, cancelable: true, dataTransfer: dt });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    })()`,
+  )) as boolean;
+}
+
+async function dropUrl(app: ElectronApplication, url: string): Promise<void> {
+  await drag(app, 'dragenter', { 'text/uri-list': url });
+  await drag(app, 'dragover', { 'text/uri-list': url });
+  await drag(app, 'drop', { 'text/uri-list': `# dragged\r\n${url}\r\n`, 'text/plain': url });
+}
+
+async function visibleTabs(app: ElectronApplication) {
+  const s = await state(app);
+  return { ids: s.tabs.tabs.map((tab) => tab.id), activeId: s.tabs.activeId };
+}
+
+function tabInfo(app: ElectronApplication, id: string) {
+  return app.evaluate((_e, tid: string) => (globalThis as G).__agentworkspace.tabInfo(tid), id);
+}
+
+test('a link dragged over the tab row shows the drop hint; sidebar drags and plain text do not open tabs', async () => {
+  const launched = await launch();
+  const { app, shell, logFile } = launched;
+  const hint = shell.locator('#tabDropHint');
+  try {
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setPaneOpen(true));
+    await expect(shell.locator('#tabStrip')).toHaveAttribute('aria-label', 'Linked Context tabs');
+    await expect(shell.locator('[data-testid="tabStripEmpty"]')).toHaveText(
+      'No tabs yet — drop a link here or press +',
+    );
+    const url = `${fixtures.idpUrl}/page/drop`;
+
+    expect(await drag(app, 'dragenter', { 'text/uri-list': url })).toBe(true);
+    expect(await drag(app, 'dragover', { 'text/uri-list': url })).toBe(true);
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveAttribute('data-state', 'drop');
+    await drag(app, 'dragleave', { 'text/uri-list': url });
+    await expect(hint).toHaveCount(0);
+
+    // Sidebar row / folder drags are not accepted and never show the hint.
+    for (const mime of ['application/x-devin-session', 'application/x-devin-folder']) {
+      expect(await drag(app, 'dragenter', { [mime]: 'row', 'text/plain': url })).toBe(false);
+      expect(await drag(app, 'dragover', { [mime]: 'row', 'text/plain': url })).toBe(false);
+      await expect(hint).toHaveCount(0);
+      await drag(app, 'drop', { [mime]: 'row', 'text/plain': url });
+    }
+    // Neither is a file drag.
+    expect(await drag(app, 'dragover', { Files: '' })).toBe(false);
+    await expect(hint).toHaveCount(0);
+    expect((await state(app)).tabs.tabs).toHaveLength(0);
+
+    // Plain text that is not a URL: no tab, a transient error hint.
+    await drag(app, 'dragenter', { 'text/plain': 'hello world' });
+    expect(await drag(app, 'dragover', { 'text/plain': 'hello world' })).toBe(true);
+    await drag(app, 'drop', { 'text/plain': 'hello world', 'text/html': '<b>hello world</b>' });
+    await expect(hint).toHaveAttribute('data-state', 'error');
+    await expect(hint).toHaveText("That doesn't look like a web address");
+    await expect(hint).toHaveCount(0, { timeout: 8_000 });
+    expect((await state(app)).tabs.tabs).toHaveLength(0);
+
+    // A javascript: link is refused by main, never opened.
+    await drag(app, 'drop', { 'text/uri-list': 'javascript:alert(1)' });
+    await expect(hint).toHaveText('Only http and https addresses can open here');
+    expect((await state(app)).tabs.tabs).toHaveLength(0);
+
+    // The diagnostic stays off without AGENT_WORKSPACE_DEBUG_DROPS.
+    expect((await readEvents(logFile)).some((e) => e.event === 'tab-drop-types')).toBe(false);
+  } finally {
+    await dispose(launched);
+  }
+});
+
+test('a dropped link opens in the current scope on every surface; a duplicate focuses the existing tab', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-workspace-usertabs-'));
+  const claudeHome = join(dir, 'claude-home');
+  cpSync(CLAUDE_FIXTURE_HOME, claudeHome, { recursive: true });
+  const claudeId = '11111111-0000-4000-8000-00000000000a';
+  const openhandsId = '0123456789abcdef0123456789abcd0d';
+  fixtures.openhands.setConversations([
+    {
+      id: openhandsId,
+      title: 'Drop target',
+      selected_repository: 'o/r',
+      git_provider: 'github',
+      sandbox_status: 'RUNNING',
+      execution_status: 'running',
+      created_at: '2026-10-20T09:00:00Z',
+      updated_at: '2026-10-20T10:00:00Z',
+    },
+  ]);
+  const launched = await launch(dir, {
+    CLAUDE_CONFIG_DIR: claudeHome,
+    AGENT_WORKSPACE_DEBUG_DROPS: '1',
+  });
+  const { app, logFile } = launched;
+  try {
+    await app.evaluate(() => (globalThis as G).__agentworkspace.setPaneOpen(true));
+
+    // Cloud: the open session's scope, then the duplicate rule.
+    await openSession(app, 'A');
+    const first = `${fixtures.idpUrl}/page/drop`;
+    const second = `${fixtures.idpUrl}/page/drop-2`;
+    await dropUrl(app, first);
+    await waitForTabCount(app, 1);
+    const firstId = (await visibleTabs(app)).ids[0]!;
+    expect(await tabInfo(app, firstId)).toMatchObject({ url: first, originSessionId: 'A' });
+    await dropUrl(app, second);
+    await waitForTabCount(app, 2);
+    await expect.poll(async () => (await visibleTabs(app)).activeId).not.toBe(firstId);
+    await dropUrl(app, first);
+    await expect.poll(async () => (await visibleTabs(app)).activeId).toBe(firstId);
+    expect((await visibleTabs(app)).ids).toHaveLength(2);
+
+    const surfaces: Array<{ name: string; scope: string; enter: () => Promise<unknown> }> = [
+      {
+        name: 'local',
+        scope: 'local:drop-local-1',
+        enter: async () => {
+          await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('local'));
+          await evaluateInShell(app, `window.agentworkspace.localActiveSession('drop-local-1')`);
+        },
+      },
+      {
+        name: 'claude',
+        scope: `claude:${claudeId}`,
+        enter: async () => {
+          await app.evaluate(() => (globalThis as G).__agentworkspace.setSurface('claude'));
+          await app.evaluate(
+            (_e, id: string) => (globalThis as G).__agentworkspace.claudeSelect(id),
+            claudeId,
+          );
+        },
+      },
+      {
+        name: 'openhands',
+        scope: `openhands:${openhandsId}`,
+        enter: () =>
+          app.evaluate(
+            (_e, id: string) => (globalThis as G).__agentworkspace.openhandsOpen(id),
+            openhandsId,
+          ),
+      },
+    ];
+    for (const surface of surfaces) {
+      await surface.enter();
+      await expect
+        .poll(async () => (await state(app)).tabs.scope, { message: surface.name })
+        .toBe(surface.scope);
+      const url = `${fixtures.idpUrl}/page/drop-${surface.name}`;
+      await dropUrl(app, url);
+      await expect
+        .poll(async () => (await state(app)).tabs.tabs.map((tab) => tab.url), {
+          message: surface.name,
+        })
+        .toEqual([url]);
+      const id = (await visibleTabs(app)).ids[0]!;
+      expect(await tabInfo(app, id)).toMatchObject({ url, originSessionId: surface.scope });
+    }
+
+    // AGENT_WORKSPACE_DEBUG_DROPS: one event per drag entering the row (each
+    // dropUrl), MIME type names only — never the dropped values.
+    const diagnostics = (await readEvents(logFile)).filter((e) => e.event === 'tab-drop-types');
+    expect(diagnostics).toHaveLength(6);
+    for (const event of diagnostics) expect(event.detail).toEqual({ types: ['text/uri-list'] });
+    for (const event of diagnostics) expect(JSON.stringify(event)).not.toContain('/page/');
   } finally {
     await dispose(launched);
   }

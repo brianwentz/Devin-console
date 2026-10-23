@@ -67,6 +67,7 @@ export const IpcChannels = {
   tabsTabMenu: 'tabs:tabMenu',
   tabsOpenUserUrl: 'tabs:openUserUrl',
   tabsAddressBar: 'tabs:addressBar',
+  tabsDropTypes: 'tabs:dropTypes',
   navAction: 'nav:action',
   surfaceSet: 'surface:set',
   linkOpen: 'link:open',
@@ -1151,6 +1152,11 @@ export const AddressBarArg = z.object({
   open: z.boolean(),
   mode: AddressBarModeSchema.optional(),
   source: z.enum(['button', 'shortcut', 'enter', 'escape', 'blur']).optional(),
+});
+// Shell -> main: MIME type names of a drag entering the tab row (never values);
+// logged only under AGENT_WORKSPACE_DEBUG_DROPS.
+export const TabsDropTypesArg = z.object({
+  types: z.array(z.string().max(128)).max(32),
 });
 export type OpenUserUrlReply =
   | { ok: true }

@@ -297,6 +297,9 @@ const api = {
     mode?: 'new' | 'current';
     source?: 'button' | 'shortcut' | 'enter' | 'escape' | 'blur';
   }) => ipcRenderer.send(IpcChannels.tabsAddressBar, arg),
+  reportDropTypes: (types: string[]) => {
+    if (Array.isArray(types)) ipcRenderer.send(IpcChannels.tabsDropTypes, { types });
+  },
   openReloadMenu: (x: number, y: number) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {
       ipcRenderer.send(IpcChannels.tabsReloadMenu, { x, y });

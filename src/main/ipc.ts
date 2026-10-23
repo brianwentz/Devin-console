@@ -35,6 +35,7 @@ import {
   TabsReloadMenuArg,
   TabsTabMenuArg,
   OpenUserUrlArg,
+  TabsDropTypesArg,
   AddressBarArg,
   type Settings,
   type SettingsCommitResult,
@@ -55,7 +56,7 @@ import { handleLink, openUserUrl } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
 import { historyAction, navigationTarget, openAddressBarShortcut } from './shortcuts';
 import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, SessionReorderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
-import { state } from './state';
+import { debugDrops, state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
 import { runtimeFor, runtimes } from './providers';
@@ -231,6 +232,12 @@ export function setupIpc(): void {
     // terminal dock) take the same path as the hosted-view shortcut.
     if (open && source === 'shortcut') openAddressBarShortcut(mode ?? 'new');
     else setAddressBar(open, mode ?? 'new', source ?? 'shell');
+  });
+  guardedOn(IpcChannels.tabsDropTypes, (_event, payload: unknown) => {
+    if (!debugDrops) return;
+    const parsed = TabsDropTypesArg.safeParse(payload);
+    if (!parsed.success) return;
+    log('shell', 'tab-drop-types', { detail: { types: parsed.data.types } });
   });
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);

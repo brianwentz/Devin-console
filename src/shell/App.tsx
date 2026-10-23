@@ -177,7 +177,6 @@ export function App() {
         paneWidth={bounds.ghTab?.width ?? 0}
         tabs={state.tabs.tabs}
         activeId={state.tabs.activeId}
-        scope={state.tabs.scope}
       />
       {addressBarRect && (
         <AddressBar

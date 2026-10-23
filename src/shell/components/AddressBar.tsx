@@ -1,17 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Rect } from '../../core/layout';
 import type { AddressBarMode, OpenUserUrlReply } from '../../shared/ipc';
-
-type Reason = Extract<OpenUserUrlReply, { ok: false }>['reason'];
-
-const REASON_TEXT: Record<Reason, string> = {
-  empty: 'Type a web address',
-  scheme: 'Only http and https addresses can open here',
-  'not-a-url': "That doesn't look like a web address",
-  'too-long': 'That address is too long',
-  invalid: "Couldn't open that address",
-  unavailable: "Couldn't open that address",
-};
+import { USER_URL_REASON_TEXT } from '../userUrlText';
 
 interface AddressBarProps {
   rect: Rect;
@@ -62,7 +52,7 @@ export function AddressBar({ rect, mode, activeUrl }: AddressBarProps) {
       window.agentworkspace.setAddressBar({ open: false, source: 'blur' });
       return;
     }
-    setError(REASON_TEXT[reply.reason]);
+    setError(USER_URL_REASON_TEXT[reply.reason]);
   };
 
   return (
