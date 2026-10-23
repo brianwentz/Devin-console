@@ -910,6 +910,16 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   `session:openhands:<id>`) gated by `notifications.collect` + `notifications.kinds[kind]` (`notifyAllowed`, same defaults as Claude: finished off).
   `pruneForeign` keeps them; `SourceGlyph` is the rail's Hand icon. `ProviderRuntime.openNotification` → `openhandsOpenSession(id)` (surface `openhands`,
   pooled view, `openhandsSessionId`, `activateWindow`; an id that does not parse as a conversation id falls back to home, a well-formed id of a conversation that no longer exists just opens its page). `stop()` on a source drops the transitions of a list still in flight, so a base URL change never notifies for the old origin. A successful delete also `closeScope('openhands:<id>')` (`applyLayout` runs even if that rejects).
+- **Pull requests** (`src/main/openhands/prs.ts` `createOpenHandsPrTracker`, electron-free; built with each source in `providers/openhands.ts build()`, so a
+  base URL change stops the old tracker and starts from an empty set): an in-memory `Set<url>` per conversation (cap `PRS_PER_CONVERSATION` 20, newest kept;
+  nothing persisted). `source.ts` calls `onRows(rows)` after every successful list (all rows known, incremental lists merged; never after `stop()`), before
+  the transitions — row `prUrls` (`pr_number` → `prUrl`) are merged in, conversations that left the list are dropped (one that returns counts as new); a URL evicted by the cap is never re-added. The first `onRows` is a baseline;
+  a URL first seen later (rows or events) → `autoOpenLocalPr(url, 'openhands:<id>', 'openhands-poll')` (gated on `prs.autoOpenTabs`). Each `finished`
+  transition runs one `onFinished(id)`: `GET /api/v1/conversation/<id>/events/search?limit=100&sort_order=TIMESTAMP_DESC` through the same gated fetch
+  (param names research-derived, pending the live probe), body `{items}` or a bare array, each event's `JSON.stringify` scanned by
+  `extractPullRequestUrls`; skipped while a scan for that id is in flight; event text is never logged or kept. Any change → `prTitles.ensure(new urls)` +
+  `prStore().reconcile(allOpenPullRequests())` + `notifyShell`. `openPullRequests()` → `SessionPrLink {source:'openhands'}` (merged/closed per the
+  `prTitles` state left out); `openSessionPr` / a notification with `prUrl` → `openhandsOpenSession(id)` + the PR tab in `openhands:<id>`.
 
 ## Conventions
 - `src/core/` is pure TS — no `electron` imports (unit-testable).
@@ -1034,7 +1044,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only, plus `provider` (the pool's providerId); `discard` `reason` = `idle\|cap\|switch\|removed` (`removed` = the view of a deleted OpenHands conversation, `ViewPool.remove`). |
 | `pr-read` / `pr-dismiss` | `{ all, count }`. |
 | `prs-panel` / `prs-save-error` | PR panel open/close, store write failure. |
-| `pr-auto-open` | `detail.source` = `local-chat\|local-terminal\|claude-chat\|claude-terminal\|claude-hook` or the poller; `catchUp` for ledger catch-up. |
+| `pr-auto-open` | `detail.source` = `local-chat\|local-terminal\|claude-chat\|claude-terminal\|claude-hook\|openhands-poll` or the poller; `catchUp` for ledger catch-up. |
 | `pr-catch-up` | `{ count, lastGoodAgeMs }`. |
 | `pr-open` | PR opened from the panel. |
 | `pr-title` | never the title text; `state`, `{via:'page'\|'gh'}`. |
@@ -1066,6 +1076,8 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `openhands-open` | `{ sessionId }` (conversation id) or `{ found: false }` — a sidebar row opened its pooled view. |
 | `openhands-notify` | `{ kind: 'waiting'\|'finished'\|'blocked', count }` — status-transition notifications added after a list (counts only; never titles). |
 | `openhands-notify-error` | `{ code }` — error class name when adding the entries threw. |
+| `openhands-events-scan` | `{ count, prs }` — events read / distinct PR URLs found by the finished-conversation scan (never event text). |
+| `openhands-events-scan-error` | `{ code }` — the events search failed (fetch error code or `HTTP <status>`, or the error class name). |
 | `openhands-views-reset` | No detail — base URL change reset (on the surface) or disposed (off it) the pooled OpenHands views. |
 | `openhands-delete-confirm` | `{ confirmed }` — the delete confirm dialog's answer (auto-confirmed in test mode). |
 | `openhands-session-reorder` | `{ section: 'recent'\|'pinned'\|'repo', count }` — row drag in the OpenHands sidebar persisted to `openhands.sessionOrder`. |

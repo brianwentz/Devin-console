@@ -265,3 +265,32 @@ describe('openhands source stop', () => {
     expect(onTransitions).not.toHaveBeenCalled();
   });
 });
+
+describe('openhands source rows', () => {
+  it('reports the merged rows after each successful list, never after stop()', async () => {
+    const A = 'a'.repeat(32);
+    const B = 'b'.repeat(32);
+    const queue = [
+      page([item(A, 1, { id: A, pr_number: [7] })]),
+      page([item(B, 2, { id: B })]),
+      page([item(B, 3, { id: B })]),
+    ];
+    const onRows = vi.fn();
+    const source = createOpenHandsSource({
+      fetch: vi.fn(async () => queue.shift()!),
+      now: () => T,
+      log: vi.fn(),
+      baseUrl: () => BASE,
+      onRows,
+    });
+    await source.list();
+    expect(onRows.mock.calls[0]![0].map((r: { id: string; prUrls: string[] }) => [r.id, r.prUrls])).toEqual([
+      [A, ['https://github.com/o/r/pull/7']],
+    ]);
+    await source.list(); // incremental: merged with A
+    expect(onRows.mock.calls[1]![0].map((r: { id: string }) => r.id).sort()).toEqual([A, B]);
+    source.stop();
+    await source.list();
+    expect(onRows).toHaveBeenCalledTimes(2);
+  });
+});

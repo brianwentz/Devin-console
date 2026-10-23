@@ -14,8 +14,12 @@ import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
 import type { CloudCache } from '../../core/cloudCache';
 import { CloudSessionsController } from '../cloudKit/sessionsController';
+import { autoOpenLocalPr } from '../local/prAutoOpen';
 import { log } from '../log';
 import { notificationStore } from '../notifications';
+import { createOpenHandsPrTracker, type OpenHandsPrTracker } from '../openhands/prs';
+import { allOpenPullRequests, prStore } from '../prs';
+import { prTitles } from '../prTitles';
 import { createTransitionNotifier } from '../openhands/notify';
 import { OpenHandsContextMenu } from '../openhands/contextMenu';
 import { createOpenHandsFetch } from '../openhands/fetch';
@@ -33,7 +37,7 @@ import {
   resetOpenHandsViews,
 } from '../openhands/views';
 import { idleOpenHandsState, openhandsEffectiveBase, setOpenHandsSnapshotSource } from '../openhandsConfig';
-import { state, testMode } from '../state';
+import { fixtureOrigins, state, testMode } from '../state';
 import { activateWindow, applyLayout, notifyShell } from '../window';
 import type { ProviderRuntime } from './runtime';
 
@@ -62,6 +66,19 @@ const notifyTransitions = createTransitionNotifier({
   log: (event, detail) => log('shell', event, { detail }),
 });
 
+// PR panel + auto-open: one tracker per base URL (built with its source), so a
+// base change drops the old origin's PRs and starts a fresh baseline.
+let prTracker: OpenHandsPrTracker | null = null;
+
+function reconcilePrs(): void {
+  try {
+    prStore().reconcile(allOpenPullRequests(), Date.now());
+  } catch {
+    // PR store not initialised yet (boot order): the next poll reconciles.
+  }
+  notifyShell();
+}
+
 function build(base: string) {
   const fetcher = createOpenHandsFetch({
     baseUrl: () => base,
@@ -73,12 +90,32 @@ function build(base: string) {
     sessionFetch: ((url, init) =>
       session.fromPartition(PARTITION).fetch(String(url), init as RequestInit)) as typeof fetch,
   });
+  const tracker = createOpenHandsPrTracker({
+    fetch: fetcher,
+    githubOrigins: fixtureOrigins,
+    autoOpen: (url, id) => void autoOpenLocalPr(url, providerScope('openhands', id), 'openhands-poll'),
+    onChange: (added) => {
+      if (added.length > 0) prTitles.ensure(added);
+      reconcilePrs();
+    },
+    stateOf: (url) => prTitles.getInfo(url)?.state ?? null,
+    log: (event, detail) => log('shell', event, { detail }),
+  });
+  const previous = prTracker;
+  previous?.stop();
+  prTracker = tracker;
+  if (previous) reconcilePrs();
   const source = createOpenHandsSource({
     fetch: fetcher,
     now: () => Date.now(),
     log: (event, detail) => log('shell', event, { detail }),
     baseUrl: () => base,
-    onTransitions: notifyTransitions,
+    onRows: (rows) => tracker.onRows(rows),
+    onTransitions: (transitions) => {
+      notifyTransitions(transitions);
+      // One events scan per finished transition (skipped while one is in flight).
+      for (const t of transitions) if (t.kind === 'finished') void tracker.onFinished(t.id);
+    },
   });
   const controller = new CloudSessionsController(source, {
     tenantKey: () => tenantKey(base),
@@ -151,7 +188,10 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
     setOpenHandsSnapshotSource(snapshot);
     void core.start();
   },
-  dispose: () => core.dispose(),
+  dispose: () => {
+    prTracker?.stop();
+    return core.dispose();
+  },
   onFocus() {
     core.onFocus();
   },
@@ -183,11 +223,17 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   showHome: () => openhandsShowHome({ reload: true, focus: true }),
   openNotification(entry) {
     if (entry.source !== 'openhands' || !entry.sessionId) return false;
-    // A malformed id cannot open a conversation: land on home instead.
-    if (!openhandsOpenSession(entry.sessionId)) openhandsShowHome();
-    notifyShell();
+    openConversationPr(entry.sessionId, entry.prUrl ?? undefined);
     activateWindow('notification-open');
     return true;
+  },
+  openPullRequests() {
+    return prTracker?.openPullRequests() ?? [];
+  },
+  openSessionPr(sessionId, prUrl) {
+    log('shell', 'pr-open', { url: prUrl, detail: { sessionId } });
+    openConversationPr(sessionId, prUrl);
+    activateWindow('session-pr');
   },
   async newSession() {
     menu.record('new-session');
@@ -195,6 +241,19 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
     notifyShell();
   },
 };
+
+// Notification / PR panel: the conversation on the OpenHands surface, and the
+// PR (if any) as a tab in its `openhands:<id>` scope.
+function openConversationPr(id: string, prUrl?: string): void {
+  // A malformed id cannot open a conversation: land on home instead.
+  if (!openhandsOpenSession(id)) {
+    openhandsShowHome();
+  } else if (prUrl) {
+    state.tabManager?.open(prUrl, { originSessionId: providerScope('openhands', id) });
+    applyLayout();
+  }
+  notifyShell();
+}
 
 // Sidebar actions (src/main/ipc.ts) and test hooks.
 export function openhandsContextMenu(arg: OpenHandsContextMenuRequest) {

@@ -42,6 +42,8 @@ export interface OpenHandsSourceDeps {
   baseUrl(): string;
   /** Status transitions of a successful list (never the first one: that is a baseline). */
   onTransitions?(transitions: OhTransition[]): void;
+  /** Every row known after a successful list (incremental lists merged in). */
+  onRows?(rows: readonly OhRow[]): void;
 }
 
 export interface OpenHandsSource extends CloudSessionSource {
@@ -163,6 +165,8 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
           cursor = nextCursor(items, cursor);
         }
         if (!stopped) {
+          // Rows first: the PR tracker's baseline precedes any finished-scan.
+          deps.onRows?.(rows);
           const transitions = tracker.observe(items, full);
           if (transitions.length > 0) deps.onTransitions?.(transitions);
         }
