@@ -101,6 +101,11 @@ export class CloudSessionsController {
     await Promise.all([cache, this.refresh('start')]);
   }
 
+  // Resolves once every queued cache write has settled (never rejects).
+  drain(): Promise<void> {
+    return this.writeChain;
+  }
+
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;

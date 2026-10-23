@@ -1,5 +1,5 @@
 // B1 T21: OpenHands sessions source + runtime against the fixture server.
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -20,8 +20,14 @@ test.afterAll(async () => {
   await fixtures.close();
 });
 
-async function launch(profile: string) {
-  const app = await launchApp(profile, join(profile, 'events.jsonl'), join(profile, 'downloads'), fixtures);
+async function launch(profile: string, extraEnv: Record<string, string> = {}) {
+  const app = await launchApp(
+    profile,
+    join(profile, 'events.jsonl'),
+    join(profile, 'downloads'),
+    fixtures,
+    extraEnv,
+  );
   await expect
     .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
     .toBe(true);
@@ -98,5 +104,77 @@ test('a redirecting API is refused and the key is not sent to the redirect targe
   } finally {
     fixtures.openhands.setRedirect('search', null);
     await quit(app, profile);
+  }
+});
+
+const FAST_POLL = { AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS: '200' };
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const cacheFor = (tenantUrl: string) =>
+  JSON.stringify({
+    version: 1,
+    tenantUrl,
+    savedAt: '2026-10-20T10:00:00.000Z',
+    sessions: [],
+    folders: [],
+    folderTotals: {},
+  });
+
+test('no network until the user opts in: idle without a key, cache or surface visit; the surface opens it', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohgate-'));
+  const before = fixtures.openhands.requests().length;
+  const app = await launch(profile, FAST_POLL);
+  try {
+    await sleep(1500);
+    expect(fixtures.openhands.requests().length).toBe(before);
+    expect((await state(app)).openhands).toMatchObject({ status: 'idle', connection: 'idle', sessions: [] });
+    // A focus event must not open it either.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.emit('focus'));
+    await sleep(500);
+    expect(fixtures.openhands.requests().length).toBe(before);
+
+    await evaluateInShell(app, `document.getElementById('openhandsButton').click()`);
+    await expect.poll(async () => (await state(app)).openhands.status).toBe('ready');
+    expect(fixtures.openhands.requests().length).toBeGreaterThan(before);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('setting an API key opens the gate', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohgate-'));
+  const before = fixtures.openhands.requests().length;
+  const app = await launch(profile, FAST_POLL);
+  try {
+    await sleep(800);
+    expect(fixtures.openhands.requests().length).toBe(before);
+    await evaluateInShell(app, `window.agentworkspace.openhandsApiKeySet('OH-KEY-3')`);
+    await expect.poll(async () => (await state(app)).openhands.connection).toBe('api-key');
+    expect(fixtures.openhands.lastAuthHeader()).toBe('Bearer OH-KEY-3');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('a cache for the current tenant opens the gate; a cache for another tenant does not', async () => {
+  const matching = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohgate-'));
+  writeFileSync(join(matching, 'openhands-cache.json'), cacheFor(fixtures.openhands.url));
+  const before = fixtures.openhands.requests().length;
+  const app = await launch(matching, FAST_POLL);
+  try {
+    await expect.poll(() => fixtures.openhands.requests().length).toBeGreaterThan(before);
+  } finally {
+    await quit(app, matching);
+  }
+
+  const other = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohgate-'));
+  writeFileSync(join(other, 'openhands-cache.json'), cacheFor(fixtures.openhandsAlt.url));
+  const mark = fixtures.openhands.requests().length;
+  const app2 = await launch(other, FAST_POLL);
+  try {
+    await sleep(1200);
+    expect(fixtures.openhands.requests().length).toBe(mark);
+    expect((await state(app2)).openhands.status).toBe('idle');
+  } finally {
+    await quit(app2, other);
   }
 });

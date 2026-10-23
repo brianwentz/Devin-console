@@ -21,6 +21,8 @@ export interface ProviderRuntime {
   newSession?(): Promise<void>;
   /** Stored credentials changed (e.g. an API key was set or cleared). */
   onCredentialsChanged?(): void;
+  /** The user entered this provider's surface (called from applyLayout). */
+  onSurfaceEnter?(): void;
 }
 
 const registry: ProviderRuntime[] = [];

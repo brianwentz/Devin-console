@@ -55,6 +55,12 @@ describe('createOpenHandsFetch', () => {
     expect(String(calls(netFetch)[0]![0])).not.toContain('evil');
   });
 
+  it("treats Electron 44's exact redirect message as redirect-refused", async () => {
+    // Electron 44 rejects redirect:'error' (and 'manual') with this message.
+    const { f } = setup({ key: ['K1'], net: [async () => Promise.reject(new Error('Redirect was cancelled'))] });
+    expect(await f('/p')).toMatchObject({ status: 0, error: 'redirect-refused' });
+  });
+
   it('maps a redirect-ish error message to redirect-refused', async () => {
     const { f } = setup({
       key: ['K1'],

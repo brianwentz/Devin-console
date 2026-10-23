@@ -59,14 +59,19 @@ export class OpenHandsError extends Error {
   }
 }
 
-function connectionFor(result: OpenHandsFetchResult): OpenHandsConnection {
+// `listResult`: a non-2xx list answer is a connection problem; a failed
+// mutation (e.g. 404 on delete) says nothing about the connection.
+function connectionFor(result: OpenHandsFetchResult, listResult: boolean): OpenHandsConnection {
   switch (result.error) {
     case 'api-key-rejected':
       return 'api-key-rejected';
     case 'login-required':
       return 'login-required';
-    case undefined:
-      return result.status > 0 && result.status < 500 ? (result.mode === 'api-key' ? 'api-key' : 'web-session') : 'error';
+    case undefined: {
+      if (result.mode === 'api-key' && result.status === 403) return 'api-key-rejected';
+      const healthy = listResult ? result.status >= 200 && result.status < 300 : result.status > 0 && result.status < 500;
+      return healthy ? (result.mode === 'api-key' ? 'api-key' : 'web-session') : 'error';
+    }
     default:
       return 'error';
   }
@@ -81,8 +86,8 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
   let connection: OpenHandsConnection = 'idle';
   let lastAuthLog = '';
 
-  const note = (result: OpenHandsFetchResult): void => {
-    connection = connectionFor(result);
+  const note = (result: OpenHandsFetchResult, listResult: boolean): void => {
+    connection = connectionFor(result, listResult);
     const ok = result.error === undefined && result.status >= 200 && result.status < 300;
     const key = `${result.mode}:${ok}`;
     if (key !== lastAuthLog) {
@@ -91,9 +96,9 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
     }
   };
 
-  const request = async (path: string, init?: RequestInit): Promise<OpenHandsFetchResult> => {
+  const request = async (path: string, init?: RequestInit, listResult = false): Promise<OpenHandsFetchResult> => {
     const result = await deps.fetch(path, init);
-    note(result);
+    note(result, listResult);
     return result;
   };
 
@@ -131,7 +136,7 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
           const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
           if (pageId !== null) params.set('page_id', pageId);
           if (since !== undefined) params.set('updated_at__gte', since);
-          const result = await request(`${SEARCH_PATH}?${params.toString()}`);
+          const result = await request(`${SEARCH_PATH}?${params.toString()}`, undefined, true);
           if (result.error) throw new OpenHandsError(result.error, result.status);
           if (result.status < 200 || result.status >= 300) {
             throw new OpenHandsError(`HTTP ${result.status}`, result.status);

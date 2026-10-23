@@ -89,10 +89,8 @@ test('Settings → OpenHands: API key save/clear never exposes the key; base URL
     ]) {
       expect(await hasEl(app, id), id).toBe(true);
     }
-    // Port 9 is unreachable: the runtime's first list settles on 'error'.
-    await expect
-      .poll(async () => attr(app, 'openhandsConnectionStatus', 'data-status'))
-      .toBe('error');
+    // No gate is open (no key, no cache, surface not entered): nothing was contacted.
+    expect(await attr(app, 'openhandsConnectionStatus', 'data-status')).toBe('idle');
     expect(await attr(app, 'openhandsConnectionStatus', 'data-key-set')).toBe('false');
 
     await setInputValue(app, 'openhandsApiKeyInput', KEY);

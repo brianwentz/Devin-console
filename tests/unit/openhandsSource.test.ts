@@ -116,6 +116,25 @@ describe('openhands source', () => {
     expect(source.connection()).toBe('error');
   });
 
+  it('maps a 403 on the key path to api-key-rejected and other non-2xx list results to error', async () => {
+    const a = make([{ status: 403, body: null, mode: 'api-key' }]);
+    await expect(a.source.list()).rejects.toThrow();
+    expect(a.source.connection()).toBe('api-key-rejected');
+    const b = make([{ status: 500, body: null, mode: 'api-key' }]);
+    await expect(b.source.list()).rejects.toThrow();
+    expect(b.source.connection()).toBe('error');
+    const c = make([{ status: 404, body: null, mode: 'web-session' }]);
+    await expect(c.source.list()).rejects.toThrow();
+    expect(c.source.connection()).toBe('error');
+  });
+
+  it('a failed mutation does not flip the connection to error', async () => {
+    const { source } = make([page([]), { status: 404, body: null, mode: 'api-key' }]);
+    await source.list();
+    await source.mutate!({ op: 'delete', id: 'x' });
+    expect(source.connection()).toBe('api-key');
+  });
+
   it('rename PATCHes {title}; delete DELETEs', async () => {
     const { source, calls, log } = make(() => ({ status: 200, body: {}, mode: 'api-key' }));
     expect(await source.mutate!({ op: 'rename', id: 'abc', title: 'New' })).toEqual({ ok: true, status: 200 });

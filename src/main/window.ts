@@ -26,7 +26,7 @@ import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
 import { claudeUsage } from './claude/usage';
 import { devinUsage } from './devinUsage';
-import { runtimes } from './providers';
+import { runtimeFor, runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
 import { pools, poolForSurface } from './cloudKit/pools';
 import { terminalHost } from './local/terminalHost';
@@ -416,6 +416,7 @@ export function applyLayout(): void {
   if (state.surface !== layoutSurface) {
     layoutSurface = state.surface;
     if (layoutSurface === 'claude') claudeSessions().onSurfaceEnter();
+    else runtimeFor(layoutSurface)?.onSurfaceEnter?.();
   }
   syncScope();
   const bounds = computeBounds(windowRef.getContentBounds(), layoutState());

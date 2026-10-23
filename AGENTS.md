@@ -215,7 +215,7 @@ variable that selects it.
 ### Stores preserve unknown data (ux3 S6)
 - Rule: a build may only rewrite what it understands in a user-data store; everything else in the file comes back out exactly as it went in, across
   upgrades *and* downgrades. Applies to `settings.json`, `claude-sessions.json`, `local-sessions.json`, `notifications.json`, `pr-ledger.json`; caches
-  rebuilt from source (`cloud-cache.json`, `claude-usage-cache.json`, `devin-usage-cache.json`, `usage-alerts.json`, `prs.json`, `identity.json`) and the encrypted credential stores are exempt.
+  rebuilt from source (`cloud-cache.json`, `claude-usage-cache.json`, `devin-usage-cache.json`, `openhands-cache.json`, `usage-alerts.json`, `prs.json`, `identity.json`) and the encrypted credential stores are exempt.
 - Mechanism: each store keeps the file as read (`raw`) and saves `overlayKnown(raw, inMemoryValue, spec)` (`src/core/storePreserve.ts`). A `PreserveSpec`
   marks the structural parts — `object` (unknown keys survive), `record` / `array` with an `identity` key (membership from memory, unknown fields inside a
   matched entry survive), `replace` (memory wins wholesale: scalars, plain arrays, records whose absence is a deletion such as `workspaceLabels`,
@@ -835,6 +835,15 @@ variable that selects it.
   Cache `userData/openhands-cache.json` (rows only, `tenantKey` = normalised base URL; dropped on a base URL change, which also restarts the
   source with a fresh cursor). `ShellState.openhands` is `buildOpenHandsShellState(controller.snapshot(), source.connection())`; a failed list
   shows as `lastError {op:'list'}` (the controller's own `lastError` only carries mutations), `connection` follows the auth mode.
+- OpenHands opt-in gate (`src/main/openhands/runtimeCore.ts`, `createOpenHandsRuntimeCore`; the module singleton in `providers/openhands.ts` is a thin
+  wrapper): the OpenHands host is never contacted for a user who does not use OpenHands. No controller start, poll timer, focus refresh or request
+  happens until a gate opens — (a) an API key is stored (checked at start; `onCredentialsChanged` with a key set), (b) the openhands surface was entered
+  this run (optional `ProviderRuntime.onSurfaceEnter()`, called generically from `applyLayout` for the entered surface's runtime), (c) a
+  `openhands-cache.json` whose tenant matches the current base URL exists (`cacheMatchesTenant` = `parseCloudCacheValue`; another tenant's leftover
+  file does not count). Until then `ShellState.openhands` stays idle. Once open the gate stays open for the run; the test hook `openhandsRefresh()`
+  opens it. A focus full list restarts the poll timer; settings commits reschedule only on a `pollSeconds`/base URL change; a base URL change awaits
+  the old controller's queued cache writes (`CloudSessionsController.drain()`) before dropping the cache. On the key path a 403 list answer is
+  `api-key-rejected`, any other non-2xx list answer `error`.
 - OpenHands transport (`src/main/openhands/fetch.ts`, `createOpenHandsFetch`): an API key → `net.fetch` with `Authorization: Bearer` and
   `credentials:'omit'`; no key → the `persist:openhands` session's cookies. Both use `redirect:'error'` (Electron 44's `'manual'` rejects with
   "Redirect was cancelled"); any redirect rejection or a response URL outside the base origin is `redirect-refused` (connection `error`), never

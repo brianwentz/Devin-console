@@ -78,7 +78,7 @@ Claude Code sessions can also run on another machine you reach over SSH (a Linux
 
 ## Where things live
 
-`%APPDATA%\agent-workspace\` on Windows, `~/Library/Application Support/agent-workspace/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (Devin API token and OpenHands API key, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar pin/archive/removed state and recorded PRs), `claude-hooks.json` (hook listener port + bearer token, mode 0600), `claude-usage-cache.json` (usage fetch caches + transcript-scan offsets), `events.jsonl` (the event log), and the two browser profiles (`persist:cloud`, `persist:github`). Uninstalling removes the app; delete this folder to remove all data.
+`%APPDATA%\agent-workspace\` on Windows, `~/Library/Application Support/agent-workspace/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (Devin API token and OpenHands API key, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar pin/archive/removed state and recorded PRs), `claude-hooks.json` (hook listener port + bearer token, mode 0600), `claude-usage-cache.json` (usage fetch caches + transcript-scan offsets), `openhands-cache.json` (the last OpenHands conversation list, so the sidebar renders at once), `events.jsonl` (the event log), and the two browser profiles (`persist:cloud`, `persist:github`). Uninstalling removes the app; delete this folder to remove all data.
 
 Claude session transcripts stay where Claude Code keeps them (`~/.claude/projects/`). The one Claude config file the app edits is `~/.claude/settings.json` (on this PC and in WSL distros — never on an SSH host, except to remove a hook block an earlier version left there), and only when *Report Claude Code sessions started from other terminals* is on: the original is copied once to `~/.claude/settings.json.agent-workspace.bak` before the hook block is added, and the block is removed again when the toggle is turned off.
 
@@ -95,7 +95,8 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
-| `Ctrl+N` | New Devin session |
+| `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; stays on OpenHands) |
+| `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |
 | `` Ctrl+` `` | Toggle terminal dock (Cloud, Local and Claude surfaces; inert on Settings and Analytics) |
 | `Ctrl+Enter` | Send the message in a Devin Local or Claude chat composer (`Enter` inserts a newline) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the focused view |

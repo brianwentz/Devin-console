@@ -34,6 +34,9 @@ export interface OpenHandsFetchDeps {
 }
 
 const isAuthStatus = (status: number): boolean => status === 401 || status === 403;
+// Electron 44's net.fetch / session.fetch reject a redirect under
+// redirect:'error' (and 'manual') with the message "Redirect was cancelled";
+// pinned by tests/unit/openhandsFetch.test.ts.
 const isRedirectError = (error: unknown): boolean =>
   /redirect/i.test(error instanceof Error ? error.message : String(error));
 
