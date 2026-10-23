@@ -3,20 +3,38 @@
 import { matchLinkRule, type CompiledRule } from './linkRules';
 import { isAnalyticsUrl } from './sessions';
 
-export type RouteKind = 'devin' | 'github' | 'rule' | 'external' | 'mailto' | 'deny';
+export type RouteKind = 'devin' | 'github' | 'provider' | 'rule' | 'external' | 'mailto' | 'deny';
 
-export type RouteSource = 'devin' | 'github' | 'local' | 'claude' | 'shell' | 'analytics';
+export type RouteSource =
+  | 'devin'
+  | 'github'
+  | 'local'
+  | 'claude'
+  | 'shell'
+  | 'analytics'
+  | 'provider';
 export type RouteDisposition = 'new-window' | 'navigate' | 'background';
 
 export type RouteDecision =
   | { kind: 'gh-tab'; background: boolean }
   | { kind: 'in-place' }
   | { kind: 'devin' }
+  | { kind: 'provider'; providerId: string }
   | { kind: 'external' }
   | { kind: 'deny' };
 
+// The Devin Cloud provider id; its decisions stay `{ kind: 'devin' }`.
+export const DEVIN_PROVIDER_ID = 'devin-cloud';
+
+export interface RouteProvider {
+  providerId: string;
+  origin: string;
+}
+
 export interface RouteContext {
   tenantUrl: string;
+  // Hosted providers in registry order. Absent/empty = Devin via `tenantUrl` only.
+  providers?: readonly RouteProvider[];
   githubOrigins?: readonly string[];
   rules?: readonly CompiledRule[];
 }
@@ -32,6 +50,30 @@ function normalizeHost(hostname: string): string {
 export function isGitHubHost(hostname: string): boolean {
   const host = normalizeHost(hostname);
   return hostMatches(host, 'github.com') || hostMatches(host, 'githubusercontent.com');
+}
+
+function sameHostAndPort(a: URL, b: URL): boolean {
+  return normalizeHost(a.hostname) === normalizeHost(b.hostname) && a.port === b.port;
+}
+
+// The non-Devin provider owning `rawUrl` (same hostname + port semantics as the
+// tenant check), in registry order.
+export function providerForUrl(rawUrl: string, context: RouteContext): string | null {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  for (const p of context.providers ?? []) {
+    if (p.providerId === DEVIN_PROVIDER_ID) continue;
+    try {
+      if (sameHostAndPort(new URL(p.origin), url)) return p.providerId;
+    } catch {
+      // Malformed provider origin never matches.
+    }
+  }
+  return null;
 }
 
 // Host classification only: which surface "owns" the URL. Used by `route()` and
@@ -59,15 +101,12 @@ export function routeUrl(rawUrl: string, context: RouteContext): RouteKind {
 
   try {
     const tenant = new URL(context.tenantUrl);
-    if (
-      normalizeHost(tenant.hostname) === normalizeHost(url.hostname) &&
-      tenant.port === url.port
-    ) {
-      return 'devin';
-    }
+    if (sameHostAndPort(tenant, url)) return 'devin';
   } catch {
     return 'deny';
   }
+
+  if (providerForUrl(rawUrl, context)) return 'provider';
 
   if (matchLinkRule(url.href, context.rules ?? [])) return 'rule';
 
@@ -91,15 +130,26 @@ export function route(
   source: RouteSource,
   disposition: RouteDisposition,
   context: RouteContext,
+  sourceProviderId?: string,
 ): RouteDecision {
   const kind = routeUrl(rawUrl, context);
   if (kind === 'deny') return { kind: 'deny' };
   if (kind === 'mailto') return { kind: 'external' };
 
-  const hosted = source === 'devin' || source === 'github' || source === 'analytics';
+  const providerId = kind === 'provider' ? providerForUrl(rawUrl, context) : null;
+
+  const hosted =
+    source === 'devin' || source === 'github' || source === 'analytics' || source === 'provider';
   if (disposition === 'navigate' && hosted) {
-    if ((kind === 'github' || kind === 'rule') && (source === 'devin' || source === 'analytics')) {
+    if (
+      (kind === 'github' || kind === 'rule') &&
+      (source === 'devin' || source === 'analytics' || source === 'provider')
+    ) {
       return { kind: 'gh-tab', background: false };
+    }
+    // A provider view navigating onto another provider's origin hands off.
+    if (providerId && source === 'provider' && providerId !== sourceProviderId) {
+      return { kind: 'provider', providerId };
     }
     // Analytics is a hosted surface: same-tab clicks into the rest of the
     // tenant (e.g. a session from a chart) open in the Cloud view instead.
@@ -116,5 +166,6 @@ export function route(
     return { kind: 'gh-tab', background: disposition === 'background' };
   }
   if (kind === 'devin') return { kind: 'devin' };
+  if (providerId) return { kind: 'provider', providerId };
   return { kind: 'external' };
 }

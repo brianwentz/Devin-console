@@ -246,3 +246,80 @@ describe('link rules', () => {
     expect(route(url, 'github', 'navigate', ruleContext)).toEqual({ kind: 'in-place' });
   });
 });
+
+describe('provider-owned origins', () => {
+  const providerContext = {
+    ...context,
+    providers: [
+      { providerId: 'devin-cloud', origin: 'https://cloudbeds.devinenterprise.com' },
+      { providerId: 'x', origin: 'https://x.test' },
+    ],
+  };
+
+  it('behaves identically with only the Devin provider', () => {
+    const devinOnly = {
+      ...context,
+      providers: [{ providerId: 'devin-cloud', origin: context.tenantUrl }],
+    };
+    for (const url of [
+      'https://cloudbeds.devinenterprise.com/sessions/1',
+      'https://github.com/o/r',
+      'https://example.com/',
+    ]) {
+      expect(routeUrl(url, devinOnly)).toBe(routeUrl(url, context));
+      expect(route(url, 'devin', 'new-window', devinOnly)).toEqual(
+        route(url, 'devin', 'new-window', context),
+      );
+    }
+  });
+
+  it('routes a new-window link to a provider origin to that provider', () => {
+    expect(route('https://x.test/conversations/1', 'devin', 'new-window', providerContext)).toEqual({
+      kind: 'provider',
+      providerId: 'x',
+    });
+  });
+
+  it('keeps navigations inside a provider view in place', () => {
+    expect(
+      route('https://x.test/conversations/2', 'provider', 'navigate', providerContext, 'x'),
+    ).toEqual({ kind: 'in-place' });
+  });
+
+  it('sends a Devin tenant new-window link from a provider view to Devin', () => {
+    expect(
+      route('https://cloudbeds.devinenterprise.com/sessions/1', 'provider', 'new-window', providerContext, 'x'),
+    ).toEqual({ kind: 'devin' });
+  });
+
+  it('opens GitHub navigations from a provider view as a foreground gh-tab', () => {
+    expect(route('https://github.com/o/r', 'provider', 'navigate', providerContext, 'x')).toEqual({
+      kind: 'gh-tab',
+      background: false,
+    });
+  });
+
+  it('ranks github over provider over rule', () => {
+    const rules = compileLinkRules([
+      { id: 'r', kind: 'prefix', pattern: 'https://x.test/', enabled: true },
+    ] as LinkRule[]);
+    expect(routeUrl('https://x.test/a', { ...providerContext, rules })).toBe('provider');
+    expect(
+      routeUrl('https://x.test/a', {
+        ...providerContext,
+        githubOrigins: ['https://x.test'],
+      }),
+    ).toBe('github');
+  });
+
+  it('hands a navigation toward another provider origin to that provider', () => {
+    const two = {
+      ...providerContext,
+      providers: [...providerContext.providers, { providerId: 'y', origin: 'https://y.test' }],
+    };
+    expect(route('https://y.test/a', 'provider', 'navigate', two, 'x')).toEqual({
+      kind: 'provider',
+      providerId: 'y',
+    });
+  });
+});

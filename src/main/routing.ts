@@ -14,6 +14,8 @@ import { allowExternalEnabled } from './settings';
 import { fixtureOrigins, state, type ViewName } from './state';
 import { GLOBAL } from '../core/tabModel';
 import { keyForUrl } from '../core/viewPool';
+import { DEVIN_PROVIDER_ID } from '../core/linkRouter';
+import { poolFor } from './cloudKit/pools';
 import { cloudViews } from './cloudViews';
 import { applyLayout, notifyShell, setPaneOpen } from './window';
 import { handleShortcut } from './shortcuts';
@@ -29,10 +31,16 @@ export function routeContext(): RouteContext {
     lastRules = rules;
     lastCompiled = compileLinkRules(rules);
   }
-  return { tenantUrl: state.tenantUrl, githubOrigins: fixtureOrigins, rules: lastCompiled };
+  return {
+    tenantUrl: state.tenantUrl,
+    providers: [{ providerId: DEVIN_PROVIDER_ID, origin: state.tenantUrl }],
+    githubOrigins: fixtureOrigins,
+    rules: lastCompiled,
+  };
 }
 
-export function sourceOf(view: ViewName): RouteSource {
+export function sourceOf(view: ViewName, providerId?: string): RouteSource {
+  if (providerId && providerId !== DEVIN_PROVIDER_ID) return 'provider';
   if (view === 'devin') return 'devin';
   if (view === 'analytics') return 'analytics';
   if (view === 'shell') return 'shell';
@@ -91,9 +99,10 @@ export function applyDecision(
   view: ViewName,
   event: string,
   disposition: RouteDisposition,
+  sourceProviderId?: string,
 ): RouteDecision {
   const context = routeContext();
-  const decision = route(rawUrl, sourceOf(view), disposition, context);
+  const decision = route(rawUrl, sourceOf(view, sourceProviderId), disposition, context, sourceProviderId);
   switch (decision.kind) {
     case 'gh-tab': {
       openGitHubTab(rawUrl, decision.background);
@@ -126,6 +135,19 @@ export function applyDecision(
       recordDecision(view, event, rawUrl, 'devin');
       applyLayout();
       break;
+    case 'provider': {
+      const pool = poolFor(decision.providerId);
+      if (pool) {
+        // Hosted providers all live on the cloud surface until a second one defines its own.
+        state.surface = 'cloud';
+        pool.show(pool.keyForUrl(rawUrl), rawUrl);
+        recordDecision(view, event, rawUrl, 'provider', { providerId: decision.providerId });
+        applyLayout();
+      } else {
+        recordDecision(view, event, rawUrl, 'deny');
+      }
+      break;
+    }
     case 'external':
       openExternal(rawUrl, view, event, routeUrl(rawUrl, routeContext()) === 'mailto' ? 'mailto' : 'external');
       break;
