@@ -27,6 +27,7 @@ import { setPermissions } from './permissions';
 import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
 import { cloudViews } from './cloudViews';
+import { pools } from './cloudKit/pools';
 import { SettingsStore } from './settings';
 import { providerBySurface } from '../core/providers';
 import { fixtureOrigins, quiet, state, testMode } from './state';
@@ -221,14 +222,14 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     }
     const contents = [
       state.shellView?.webContents,
-      ...cloudViews().views().map((view) => view.webContents),
+      ...pools().flatMap((p) => p.views()).map((view) => view.webContents),
       state.analyticsView?.webContents,
       ...(state.tabManager?.getViews().map((view) => view.webContents) ?? []),
     ].filter((item): item is Electron.WebContents => Boolean(item && !item.isDestroyed()));
     const before = webContents.getAllWebContents().length;
     log('shell', 'window-close-start', { detail: { webContentsCount: before } });
     state.tabManager?.dispose();
-    for (const view of cloudViews().views()) detachView(view);
+    for (const view of pools().flatMap((p) => p.views())) detachView(view);
     detachView(state.analyticsView);
     detachView(state.shellView);
     for (const item of contents) {

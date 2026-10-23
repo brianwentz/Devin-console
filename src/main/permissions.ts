@@ -1,8 +1,10 @@
+import { session } from 'electron';
 import { isGitHubHost } from '../core/linkRouter';
 import { ruleOwnsOrigin } from '../core/linkRules';
+import { pools } from './cloudKit/pools';
 import { log } from './log';
 import { routeContext } from './routing';
-import { fixtureOrigins, originOf, state } from './state';
+import { fixtureOrigins } from './state';
 
 // F1: GitHub tab views get sanitized clipboard writes (PR copy buttons); the
 // Devin view gets clipboard-write only (OS notifications go through the in-app center). In test mode
@@ -26,10 +28,11 @@ export function setPermissions(
   const isGhTab = viewName.startsWith('gh:');
   const allowed = (permission: string, origin: string): boolean => {
     if (viewName === 'devin') {
-      return (
-        originOf(origin) === originOf(state.tenantUrl) &&
-        permission === 'clipboard-sanitized-write'
+      // Resolved at check time: the pool may register after this handler is set.
+      const pool = pools().find(
+        (p) => session.fromPartition(p.config.partition) === targetSession,
       );
+      return !!pool?.config.ownsUrl(origin) && permission === 'clipboard-sanitized-write';
     }
     if (isGhTab) return permission === 'clipboard-sanitized-write' && isGitOrigin(origin);
     return false;

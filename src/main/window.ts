@@ -28,7 +28,7 @@ import { claudeUsage } from './claude/usage';
 import { devinUsage } from './devinUsage';
 import { runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
-import { cloudViews } from './cloudViews';
+import { pools, poolForSurface } from './cloudKit/pools';
 import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
@@ -339,8 +339,8 @@ export function lowerShell(): void {
   const { windowRef, shellView, analyticsView, tabManager } = state;
   if (!windowRef || !shellView) return;
   shellView.setBackgroundColor('#111827');
-  const pooled = cloudViews().views();
-  const active = cloudViews().activeView();
+  const pooled = pools().flatMap((p) => p.views());
+  const active = poolForSurface(state.surface)?.activeView() ?? null;
   const children = [...windowRef.contentView.children];
   for (const child of children) {
     if (
@@ -353,7 +353,7 @@ export function lowerShell(): void {
     }
   }
   windowRef.contentView.addChildView(shellView, 0);
-  if (state.surface === 'cloud' && active) windowRef.contentView.addChildView(active);
+  if (active) windowRef.contentView.addChildView(active);
   if (analyticsHostedVisible() && analyticsView)
     windowRef.contentView.addChildView(analyticsView);
   if (state.paneOpen && !state.paneCollapsed) addAtTop(tabManager?.activeView ?? null);
@@ -375,14 +375,15 @@ export function syncScope(): void {
 
 // Shared geometry for applyLayout and the live drag resize in moveDrag.
 function applyBounds(bounds: WindowBounds, size: { width: number; height: number }): void {
-  const { shellView, devinView, tabManager } = state;
+  const { shellView, tabManager } = state;
   state.paneCollapsed = bounds.paneCollapsed;
   state.sessionsCollapsed = bounds.sessionsCollapsed;
   shellView?.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
   // Only the ACTIVE pooled view is laid out/attached; every other pooled view
   // gets zero bounds and stays detached.
-  for (const view of cloudViews().views()) {
-    if (view === devinView && state.surface === 'cloud') {
+  const visible = poolForSurface(state.surface)?.activeView() ?? null;
+  for (const view of pools().flatMap((p) => p.views())) {
+    if (view === visible) {
       view.setBounds(nativeBounds(bounds.devin));
     } else {
       view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -416,8 +417,9 @@ export function applyLayout(): void {
   applyBounds(bounds, windowRef.getContentBounds());
   if (!state.dragging) {
     ensureShellBottom();
-    for (const view of cloudViews().views()) {
-      if (view === devinView && state.surface === 'cloud') ensureAttached(view);
+    const visible = poolForSurface(state.surface)?.activeView() ?? null;
+    for (const view of pools().flatMap((p) => p.views())) {
+      if (view === visible) ensureAttached(view);
       else detachView(view);
     }
     if (analyticsHostedVisible()) ensureAttached(state.analyticsView);

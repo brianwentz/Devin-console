@@ -93,7 +93,7 @@ export class ViewPool {
   private sweepTimer: NodeJS.Timeout | null = null;
   private activeNavigateCbs = new Set<() => void>();
 
-  constructor(private readonly config: ViewPoolConfig) {}
+  constructor(readonly config: ViewPoolConfig) {}
 
   get providerId(): string {
     return this.config.providerId;

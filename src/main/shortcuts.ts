@@ -4,6 +4,7 @@ import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
 import { runtimeFor } from './providers';
 import { cloudViews } from './cloudViews';
+import { poolForSurface } from './cloudKit/pools';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
 import { applyLayout, cancelDrag, focusContents, setPaneOpen, setSessionsOpen } from './window';
@@ -29,7 +30,7 @@ export function navigationTarget(): Electron.WebContents | null {
     (state.paneOpen ? state.tabManager?.activeWebContents : null) ??
     (state.surface === 'analytics'
       ? state.analyticsView?.webContents
-      : state.devinView?.webContents) ??
+      : (poolForSurface(state.surface)?.activeView() ?? state.devinView)?.webContents) ??
     null
   );
 }
@@ -40,7 +41,7 @@ export function focusVisibleContents(contents: Electron.WebContents | null): voi
     state.paneOpen && !state.paneCollapsed && contents === state.tabManager?.activeWebContents;
   if (
     contents === state.shellView?.webContents ||
-    (state.surface === 'cloud' && contents === state.devinView?.webContents) ||
+    contents === poolForSurface(state.surface)?.activeView()?.webContents ||
     (state.surface === 'analytics' && contents === state.analyticsView?.webContents) ||
     visibleTab
   ) {

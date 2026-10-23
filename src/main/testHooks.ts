@@ -25,6 +25,7 @@ import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
+import { pools } from './cloudKit/pools';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -160,8 +161,8 @@ export function registerTestHooks(): void {
       ipcProbe: () => {
         // A pooled NON-active Cloud view — must still pass the hosted-view
         // guard (a detached view's webContents is just as privileged).
-        const pooled = cloudViews()
-          .views()
+        const pooled = pools()
+          .flatMap((p) => p.views())
           .map((v) => v.webContents)
           .find((wc) => wc !== state.devinView?.webContents);
         return {
