@@ -108,7 +108,7 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
 | `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; the OpenHands home page) |
 | `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |
-| `` Ctrl+` `` | Toggle terminal dock (Cloud, Local and Claude surfaces; inert on Settings and Analytics) |
+| `` Ctrl+` `` | Toggle terminal dock (Cloud, Local, Claude and OpenHands surfaces; inert on Settings and Analytics) |
 | `Ctrl+Enter` | Send the message in a Devin Local or Claude chat composer (`Enter` inserts a newline) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the focused view |
 

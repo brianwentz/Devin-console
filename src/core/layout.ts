@@ -61,7 +61,7 @@ export const MIN_TERMINAL_HEIGHT = 120;
 export const TERMINAL_RESERVED_MAIN = 200;
 
 // The terminal dock belongs to the work surfaces only: it is laid out (and
-// Ctrl+` / the rail toggle act) on Cloud, Local and Claude, never on Settings or
+// Ctrl+` / the rail toggle act) on every provider surface (Cloud, Local, Claude, OpenHands), never on Settings or
 // Analytics. `layout.terminalOpen` persists across a visit to an off-surface —
 // this predicate gates visibility, not the stored preference. Single source of
 // truth for main (native view bounds), App (shell DOM) and Rail (button state).
