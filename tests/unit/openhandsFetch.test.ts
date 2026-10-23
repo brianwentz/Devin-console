@@ -119,10 +119,16 @@ describe('createOpenHandsFetch', () => {
     expect(new Headers(calls(netFetch)[1]![1].headers).get('authorization')).toBe('Bearer NEW');
   });
 
-  it('no key, 401 then 403 -> login-required', async () => {
-    const { f, sessionFetch } = setup({ key: [null], session: [async () => json(401), async () => json(403)] });
+  it('no key, 401 -> login-required after a single request (no cookie retry)', async () => {
+    const { f, sessionFetch } = setup({ key: [null], session: [async () => json(401), async () => json(200)] });
+    expect(await f('/p')).toMatchObject({ status: 401, error: 'login-required', mode: 'web-session' });
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('no key, 403 -> login-required after a single request', async () => {
+    const { f, sessionFetch } = setup({ key: [null], session: [async () => json(403)] });
     expect(await f('/p')).toMatchObject({ status: 403, error: 'login-required', mode: 'web-session' });
-    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
   });
 
   it('passes method/body through and parses non-json as null', async () => {

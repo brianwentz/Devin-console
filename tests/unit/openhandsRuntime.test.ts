@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { OpenHandsConnection } from '../../src/shared/ipc';
 import {
+  authBackoffMs,
   cacheMatchesTenant,
   createOpenHandsRuntimeCore,
   type CoreController,
@@ -13,6 +15,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
   let changes = 0;
   let base = 'https://a.test';
   let poll = 30;
+  let connection: OpenHandsConnection = 'idle';
   const built: { base: string; source: CoreSource & { listing: boolean }; controller: CoreController }[] = [];
   const timers: { fn: () => void; ms: number; cleared: boolean }[] = [];
   const calls: string[] = [];
@@ -28,7 +31,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
         isListing() {
           return this.listing;
         },
-        connection: () => 'idle' as const,
+        connection: () => connection,
       };
       const controller: CoreController = {
         start: vi.fn(async () => {
@@ -81,6 +84,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
     live,
     setBase: (b: string) => (base = b),
     setPoll: (n: number) => (poll = n),
+    setConnection: (c: OpenHandsConnection) => (connection = c),
   };
 }
 
@@ -277,5 +281,98 @@ describe('cacheMatchesTenant (gate c)', () => {
   it('rejects junk and missing files', () => {
     expect(cacheMatchesTenant(null, 'https://a.test')).toBe(false);
     expect(cacheMatchesTenant({ nope: 1 }, 'https://a.test')).toBe(false);
+  });
+});
+
+describe('openhands runtime core: signed-out poll backoff', () => {
+  const MIN = 60_000;
+  const last = (h: ReturnType<typeof harness>) => h.live().at(-1)!;
+  // Fires the pending poll tick and lets its list + reschedule settle.
+  const tickOnce = async (h: ReturnType<typeof harness>) => {
+    last(h).fn();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('authBackoffMs multiplies x4 per refusal, caps at 16 min, never drops below the base', () => {
+    expect(authBackoffMs(30_000, 0)).toBe(30_000);
+    expect(authBackoffMs(30_000, 1)).toBe(120_000);
+    expect(authBackoffMs(30_000, 2)).toBe(480_000);
+    expect(authBackoffMs(30_000, 3)).toBe(16 * MIN);
+    expect(authBackoffMs(30_000, 9)).toBe(16 * MIN);
+    expect(authBackoffMs(20 * MIN, 2)).toBe(20 * MIN);
+  });
+
+  it('stretches the next tick per consecutive refused list and caps at 16 min', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    // start() list was refused once: 30 s -> 120 s
+    expect(last(h).ms).toBe(120_000);
+    await tickOnce(h);
+    expect(last(h).ms).toBe(480_000);
+    await tickOnce(h);
+    expect(last(h).ms).toBe(16 * MIN);
+    await tickOnce(h);
+    expect(last(h).ms).toBe(16 * MIN);
+  });
+
+  it('api-key-rejected backs off too; becoming authenticated resets', async () => {
+    const h = harness({ key: true });
+    h.setConnection('api-key-rejected');
+    await h.core.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(last(h).ms).toBe(120_000);
+    h.setConnection('web-session');
+    await tickOnce(h);
+    expect(last(h).ms).toBe(30_000);
+  });
+
+  it('credentials change resets the backoff (and applies it at once)', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await tickOnce(h);
+    expect(last(h).ms).toBe(480_000);
+    h.setConnection('api-key');
+    await h.core.onCredentialsChanged(true);
+    expect(last(h).ms).toBe(30_000);
+  });
+
+  it('surface entry resets the backoff', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await tickOnce(h);
+    expect(last(h).ms).toBe(480_000);
+    h.core.onSurfaceEnter();
+    expect(last(h).ms).toBe(30_000);
+  });
+
+  it('a successful focus refresh resets; a refused one keeps backing off', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    h.core.onFocus();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(last(h).ms).toBe(480_000);
+    h.setConnection('web-session');
+    h.core.onFocus();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(last(h).ms).toBe(30_000);
   });
 });

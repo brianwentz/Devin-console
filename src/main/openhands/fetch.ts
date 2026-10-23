@@ -87,11 +87,8 @@ export function createOpenHandsFetch(deps: OpenHandsFetchDeps): OpenHandsFetch {
       }
       return { ...first, error: 'api-key-rejected' };
     }
-    let result = await once(deps.sessionFetch, path, init, 'web-session', null);
-    if (isAuthStatus(result.status)) {
-      result = await once(deps.sessionFetch, path, init, 'web-session', null);
-      if (isAuthStatus(result.status)) return { ...result, error: 'login-required' };
-    }
-    return result;
+    // Nothing to re-read on the cookie path: a refusal is final until the user signs in.
+    const result = await once(deps.sessionFetch, path, init, 'web-session', null);
+    return isAuthStatus(result.status) ? { ...result, error: 'login-required' } : result;
   };
 }

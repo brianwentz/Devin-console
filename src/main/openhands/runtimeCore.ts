@@ -14,6 +14,16 @@ import type { CloudMutation } from '../cloudKit/source';
 
 export type RefreshReason = 'start' | 'poll' | 'focus' | 'full' | 'mutate' | 'settings' | 'test';
 const BLURRED_FACTOR = 4;
+// A refused list (signed out / key rejected) stretches the next tick x4 per
+// consecutive refusal, up to 16 min — the usage service's own backoff ceiling.
+const AUTH_BACKOFF_FACTOR = 4;
+const AUTH_BACKOFF_MAX_MS = 16 * 60_000;
+
+/** Next poll delay after `failures` consecutive refused lists (never below the base). */
+export function authBackoffMs(baseMs: number, failures: number): number {
+  if (failures <= 0) return baseMs;
+  return Math.max(baseMs, Math.min(baseMs * AUTH_BACKOFF_FACTOR ** failures, AUTH_BACKOFF_MAX_MS));
+}
 
 export interface CoreController {
   start(): Promise<void>;
@@ -41,6 +51,7 @@ export interface CoreUsage {
 }
 
 const authenticated = (c: OpenHandsConnection): boolean => c === 'api-key' || c === 'web-session';
+const refused = (c: OpenHandsConnection): boolean => c === 'login-required' || c === 'api-key-rejected';
 
 export interface OhSettingsLike {
   openhands: { baseUrl: string; pollSeconds: number };
@@ -90,6 +101,8 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
   let local: { op: 'rename' | 'delete'; message: string } | null = null;
   // The active source's connection as last seen after a list.
   let lastConnection: OpenHandsConnection = 'idle';
+  // Consecutive lists the server refused; drives the poll backoff.
+  let authFailures = 0;
 
   const clearTimer = (): void => {
     if (timer !== null) deps.clearTimer(timer);
@@ -99,7 +112,8 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
   const schedule = (): void => {
     clearTimer();
     if (disposed || !active) return;
-    const ms = deps.pollMs(deps.pollSeconds()) * (deps.focused() ? 1 : BLURRED_FACTOR);
+    const base = deps.pollMs(deps.pollSeconds()) * (deps.focused() ? 1 : BLURRED_FACTOR);
+    const ms = authBackoffMs(base, authFailures);
     timer = deps.setTimer(() => void tick(), ms);
   };
 
@@ -112,6 +126,7 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     const next = active.source.connection();
     const previous = lastConnection;
     lastConnection = next;
+    authFailures = refused(next) ? authFailures + 1 : 0;
     if (authenticated(next) && previous !== next && previous !== 'idle') active.usage?.recover();
   };
 
@@ -153,7 +168,9 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     active = started;
     lastConnection = started.source.connection();
     void started.controller.start().then(() => {
-      if (active === started) noteConnection();
+      if (active !== started) return;
+      noteConnection();
+      if (authFailures > 0) schedule();
     });
     started.usage?.start();
     schedule();
@@ -193,6 +210,11 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     onSurfaceEnter(): void {
       surfaceEntered = true;
       open();
+      // The user is looking: the next tick is at the normal cadence again.
+      if (authFailures > 0) {
+        authFailures = 0;
+        schedule();
+      }
     },
     async onCredentialsChanged(keySet: boolean): Promise<void> {
       if (keySet) open();
@@ -200,14 +222,23 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
       // Usage must not sit out a backoff earned by the old credentials.
       active.usage?.recover();
       active.source.requestFull();
+      authFailures = 0;
       await active.controller.refresh('settings');
       // Already recovered for this change: only record the connection.
-      if (active) lastConnection = active.source.connection();
+      if (active) {
+        lastConnection = active.source.connection();
+        authFailures = refused(lastConnection) ? 1 : 0;
+        schedule();
+      }
     },
     onFocus(): void {
       if (!active) return;
       active.source.requestFull();
-      void refreshList('focus');
+      // A refused focus list keeps (and extends) the backoff; a good one clears it.
+      const had = authFailures;
+      void refreshList('focus').then(() => {
+        if (authFailures !== had) schedule();
+      });
       schedule();
     },
     async onSettingsChanged(previous: OhSettingsLike, next: OhSettingsLike): Promise<void> {
