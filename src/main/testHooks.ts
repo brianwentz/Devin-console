@@ -225,6 +225,10 @@ export function registerTestHooks(): void {
         notifier.restart('test-clear-pat');
       },
       hasPat: () => state.secrets?.hasPat() ?? false,
+      // Task 14: seed/clear the OpenHands API key (never returns it).
+      secretsSetOpenHands: async (value: string | null) => {
+        await state.secrets?.setOpenHandsApiKey(value);
+      },
       pollNow: () => notifier.pollNow(),
       // Cloud session sidebar data layer.
       cloudState: () => cloudSessions().snapshot(),

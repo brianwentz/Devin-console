@@ -712,3 +712,42 @@ test('settings.json keeps unknown keys and an invalid untouched value across a r
   expect((repaired?.detail as any)).toMatchObject({ dropped: ['claude.showArchived'], preserved: true });
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
 });
+
+// Task 14: the OpenHands API key is a sibling secret field — writing or
+// clearing one never touches the other. The test only checks which base64
+// fields are present in secrets.json; it never decrypts them.
+test('secrets.json keeps devinPat and openhandsApiKey independent', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-secrets-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  const hook = (name: string, ...args: unknown[]) =>
+    app.evaluate(
+      async (_electron, [n, a]) => (globalThis as any).__agentworkspace[n as string](...(a as unknown[])),
+      [name, args] as [string, unknown[]],
+    );
+  const secrets = () => JSON.parse(readFileSync(join(profile, 'secrets.json'), 'utf8'));
+
+  await hook('secretsSetOpenHands', 'oh-key-1');
+  expect(Object.keys(secrets()).sort()).toEqual(['openhandsApiKey', 'version']);
+  const ohBlob = secrets().openhandsApiKey as string;
+  expect(ohBlob.length).toBeGreaterThan(0);
+
+  // Saving the Devin token leaves the OpenHands key unchanged.
+  await hook('setPat', 'devin-pat-1');
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'openhandsApiKey', 'version']);
+  expect(secrets().openhandsApiKey).toBe(ohBlob);
+
+  // Clearing the Devin token leaves the OpenHands key in place.
+  await hook('clearPat');
+  expect(Object.keys(secrets()).sort()).toEqual(['openhandsApiKey', 'version']);
+  expect(secrets().openhandsApiKey).toBe(ohBlob);
+
+  // Reverse: clearing the OpenHands key leaves the Devin token in place.
+  await hook('setPat', 'devin-pat-2');
+  const patBlob = secrets().devinPat as string;
+  await hook('secretsSetOpenHands', null);
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'version']);
+  expect(secrets().devinPat).toBe(patBlob);
+
+  await quit(app, profile);
+});
