@@ -222,6 +222,12 @@ variable that selects it.
 - Each store logs `store-preserved {store, keys}` once at load when the file carried data this build does not know (keys capped at 50).
 
 ### Cloud session sidebar
+- Capability-driven: `SessionSidebar.tsx` takes `{providerId, idPrefix, capabilities, state, actions}`; the devin-cloud adapter is
+  `DevinCloudSidebar.tsx` (`idPrefix=''` keeps every id; a prefix camel-cases them via `prefixedId` — `openhandsSessionNew`).
+  `CloudSourceCapabilities` (`src/core/cloudKit/capabilities.ts`, Devin `{folders:'server', archive:true, rename:false, delete:false,
+  reorder:true}`) rides `ShellState.cloud.capabilities` and also gates main's `cloud:contextMenu` items; `folders:'derived'` groups rows by
+  their `section` (`sidebarListData`, `src/core/cloudKit/sidebar.ts`) with collapse/row reorder but no folder create/rename/move;
+  `archive:false` drops the archive items and the show-archived toggle.
 - Shell-rendered column right of the rail, `SessionSidebar.tsx`. Geometry in `computeBounds`: `leftChrome = RAIL + sessionsWidth + SPLITTER` when visible,
   collapse order is pane then sessions when `width − leftChrome < MIN_DEVIN_WIDTH`; drag axis `'s'`; `setSessionsOpen(open, source)` seam + `cloud:panel`
   IPC + Ctrl+Shift+S on the cloud surface.

@@ -11,7 +11,7 @@ import { ClaudeView } from './claude/ClaudeView';
 import { ClaudeAnalyticsTab } from './components/analytics/ClaudeAnalyticsTab';
 import { ClaudeSidebar } from './components/ClaudeSidebar';
 import { ClaudeGlyph } from './components/icons/ClaudeGlyph';
-import { SessionSidebar } from './components/SessionSidebar';
+import { DevinCloudSidebar } from './components/DevinCloudSidebar';
 import { ClaudeTab } from './components/settings/ClaudeTab';
 import { DevinTab } from './components/settings/DevinTab';
 import { LocalPanel } from './local/LocalPanel';
@@ -107,7 +107,7 @@ export const PROVIDER_UI: ProviderUiMap = {
     RailButton: CloudButton,
     SettingsTab: DevinTab,
     AnalyticsPanel: DevinAnalyticsPlaceholder,
-    Sidebar: SessionSidebar,
+    Sidebar: DevinCloudSidebar,
   },
   'devin-local': {
     RailButton: LocalButton,

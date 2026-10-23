@@ -767,8 +767,20 @@ export const CloudSessionSchema = z.object({
   }),
   isArchived: z.boolean(),
   updatedAt: z.number().finite(),
+  // Derived grouping key for sources with `folders: 'derived'` (e.g. the
+  // repository); Devin rows never carry it.
+  section: z.string().optional(),
 });
 export type CloudSessionState = z.infer<typeof CloudSessionSchema>;
+
+// Mirrors CloudSourceCapabilities (src/core/cloudKit/capabilities.ts).
+export const CloudSourceCapabilitiesSchema = z.object({
+  folders: z.enum(['server', 'derived', 'none']),
+  archive: z.boolean(),
+  rename: z.boolean(),
+  delete: z.boolean(),
+  reorder: z.boolean(),
+});
 
 export const CloudStateSchema = z.object({
   status: z.enum(['disabled', 'no-token', 'connecting', 'ready', 'error']),
@@ -785,6 +797,8 @@ export const CloudStateSchema = z.object({
   // True while the displayed list came from userData/cloud-cache.json and no
   // live session/list has replaced it yet.
   cached: z.boolean(),
+  // What the sidebar may offer for this source (folders/archive/reorder…).
+  capabilities: CloudSourceCapabilitiesSchema,
 });
 export type CloudState = z.infer<typeof CloudStateSchema>;
 
@@ -1151,6 +1165,13 @@ export const CloudContextMenuArg = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
 });
+export type CloudContextMenuRequest = {
+  kind: 'session' | 'folder' | 'header';
+  sessionId?: string;
+  name?: string;
+  x: number;
+  y: number;
+};
 export const CloudShowArchivedArg = z.object({ value: z.boolean() });
 export const CloudNewSessionArg = z.object({ folder: CloudFolderName.nullable() });
 

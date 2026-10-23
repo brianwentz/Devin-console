@@ -22,6 +22,10 @@ import {
 } from '../core/cloudAcp';
 import { parseCloudCache, serializeCloudCache } from '../core/cloudCache';
 import {
+  DEVIN_CLOUD_CAPABILITIES,
+  type CloudSourceCapabilities,
+} from '../core/cloudKit/capabilities';
+import {
   addFolder,
   moveSession,
   removeFolder,
@@ -112,6 +116,8 @@ class CloudSessions {
   private lastOrgSyncAt = 0;
   private emptyListSynced = false;
   private showArchived = false;
+  // Gates the sidebar controls (shell, via snapshot) and the menu items below.
+  private readonly capabilities: CloudSourceCapabilities = DEVIN_CLOUD_CAPABILITIES;
   private cached = false;
   private lastCacheJson = '';
   private pendingNewSession: { folder: string; at: number } | null = null;
@@ -148,6 +154,7 @@ class CloudSessions {
       showArchived: this.showArchived,
       lastError: this.lastError,
       cached: this.cached,
+      capabilities: this.capabilities,
     };
   }
 
@@ -582,17 +589,19 @@ class CloudSessions {
     const items: Electron.MenuItemConstructorOptions[] = [];
 
     if (arg.kind === 'header') {
-      items.push(
-        { label: 'New session', click: () => this.newSession(null) },
-        { type: 'separator' },
-      );
-      items.push({
-        label: 'Show archived sessions',
-        type: 'checkbox',
-        checked: this.showArchived,
-        click: (item) => this.setShowArchived(item.checked),
-      });
-    } else if (arg.kind === 'folder' && arg.name) {
+      items.push({ label: 'New session', click: () => this.newSession(null) });
+      if (this.capabilities.archive) {
+        items.push(
+          { type: 'separator' },
+          {
+            label: 'Show archived sessions',
+            type: 'checkbox',
+            checked: this.showArchived,
+            click: (item) => this.setShowArchived(item.checked),
+          },
+        );
+      }
+    } else if (arg.kind === 'folder' && arg.name && this.capabilities.folders === 'server') {
       const name = arg.name;
       items.push(
         { label: 'New session in folder', click: () => this.newSession(name) },
@@ -635,14 +644,19 @@ class CloudSessions {
       items.push(
         { label: 'Copy link', click: () => this.copyLink(session.id) },
         { label: 'Open in browser', click: () => void shell.openExternal(session.url || link) },
-        { type: 'separator' },
-        { label: 'Move to folder', submenu },
-        { type: 'separator' },
-        {
-          label: session.isArchived ? 'Unarchive' : 'Archive',
-          click: () => void this.sessionArchive(session.id, !session.isArchived),
-        },
       );
+      if (this.capabilities.folders === 'server') {
+        items.push({ type: 'separator' }, { label: 'Move to folder', submenu });
+      }
+      if (this.capabilities.archive) {
+        items.push(
+          { type: 'separator' },
+          {
+            label: session.isArchived ? 'Unarchive' : 'Archive',
+            click: () => void this.sessionArchive(session.id, !session.isArchived),
+          },
+        );
+      }
     } else {
       return { action: null };
     }

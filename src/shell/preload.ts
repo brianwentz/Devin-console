@@ -3,6 +3,7 @@ import type { AppNotification } from '../core/notificationModel';
 import type { CredentialEntry } from '../core/credentials';
 import {
   IpcChannels,
+  type CloudContextMenuRequest,
   type LocalContextMenuRequest,
   type LocalContextMenuResult,
   SurfaceSchema,
@@ -432,13 +433,7 @@ const api = {
       ipcRenderer.send(IpcChannels.cloudCopyLink, { sessionId });
     }
   },
-  cloudContextMenu: (request: {
-    kind: 'session' | 'folder' | 'header';
-    sessionId?: string;
-    name?: string;
-    x: number;
-    y: number;
-  }) =>
+  cloudContextMenu: (request: CloudContextMenuRequest) =>
     ipcRenderer.invoke(IpcChannels.cloudContextMenu, request) as Promise<{
       action: 'rename' | 'new-folder' | null;
     }>,
