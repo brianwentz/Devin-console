@@ -276,6 +276,11 @@ variable that selects it.
 - Capability-driven sidebar: `SessionSidebar.tsx` takes a `CloudSourceCapabilities` (`src/core/cloudKit/capabilities.ts` — `folders:
   'server'|'derived'|'none'`, `archive`, `rename`, `delete`, `reorder`; Devin's is `DEVIN_CLOUD_CAPABILITIES`) and renders only the controls the source
   supports; list shaping is the pure `sidebarListData` (`src/core/cloudKit/sidebar.ts`).
+- REST-poll sessions controller: `CloudSessionsController` (`src/main/cloudKit/sessionsController.ts`, electron-free) drives a `CloudSessionSource`
+  (`src/main/cloudKit/source.ts` — `providerId`, `capabilities`, `start(onChange)`/`stop()`, `list()` → `CloudListData`, optional `mutate(CloudMutation)`
+  for `rename`/`delete`, `readIdentity()`): coalesced list (in flight + one dirty follow-up), per-tenant cache in the `cloudCache.ts` shape read alongside
+  the first list (`cached` until a live list lands; injected `readCache`/`writeCache`), `lastError {op,message}` from a failed or unsupported mutate,
+  cleared by the next successful list; cache writes are serialised and retried after a failure; `snapshot()` is a `CloudState`. Devin's socket controller (`cloudSessions.ts`) does not use it.
 - Secrets: `secrets.json` holds `devinPat` and `openhandsApiKey` (each safeStorage-encrypted, base64); `SecretStore.get/setOpenHandsApiKey` are
   siblings of the PAT methods and writing or clearing one never rewrites or removes the other (untouched fields — and unknown ones, the schema is
   `.passthrough()` — come back out verbatim; the file goes only when no secret is left). The darwin migration reset drops per field. Neither value is
@@ -927,6 +932,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `cloud-watchdog` | 30 s watchdog re-ran the token/connect path. |
 | `cloud-refresh-force` | Refresh button forced a reconnect. |
 | `cloud-cache` / `cloud-cache-error` | `{loaded,...}` — cached list load. |
+| `cloud-sessions-list` / `cloud-sessions-mutate` / `cloud-sessions-cache` / `cloud-sessions-cache-error` | REST-poll sessions controller: `{provider, ok, count?, ms, reason}` / `{provider, op, ok, status, reason?}` / `{provider, loaded, count?}` / `{provider, op: read\|write, code}`; `cloud-sessions-source-error` / `cloud-sessions-emit-error` `{provider, code}` when `source.start` / the state listener throws — never titles, paths or messages. |
 | `cloud-new-session-settled` / `cloud-new-session-skip` | skip reasons `{existing\|not-listed\|folder-gone}`. |
 | `cloud-org-change` | `{reason}`, no ids. |
 | `cloud-mutate` | `{op,ok,status}` only. |

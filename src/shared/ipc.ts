@@ -770,6 +770,9 @@ export const CloudSessionSchema = z.object({
   // Derived grouping key for sources with `folders: 'derived'` (e.g. the
   // repository); Devin rows never carry it.
   section: z.string().optional(),
+  // Accumulated session cost in the provider's unit (REST-poll sources such as
+  // OpenHands); null = reported unknown. Devin rows never carry it.
+  cost: z.number().finite().nullable().optional(),
 });
 export type CloudSessionState = z.infer<typeof CloudSessionSchema>;
 
