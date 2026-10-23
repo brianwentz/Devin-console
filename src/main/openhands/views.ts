@@ -8,7 +8,7 @@
 // until the user enters the surface or opens a conversation — the opt-in gate
 // in runtimeCore.ts covers the REST side the same way.
 
-import { conversationIdFromUrl, conversationUrl, openhandsOwnsUrl, openhandsViewKey } from '../../core/openhands';
+import { conversationUrl, isConversationId, openhandsOwnsUrl, openhandsViewKey } from '../../core/openhands';
 import { HOME_KEY } from '../../core/viewPool';
 import { createViewPool, type ViewPool, type ViewPoolConfig } from '../cloudKit/viewPool';
 import { poolFor, registerPool } from '../cloudKit/pools';
@@ -72,13 +72,12 @@ export function openhandsShowHome(opts: { reload?: boolean; focus?: boolean } = 
 // cannot steer the view anywhere but a conversation page on the base origin.
 export function openhandsOpenSession(id: string): boolean {
   const base = openhandsBaseUrl();
-  const url = conversationUrl(base, id);
-  if (conversationIdFromUrl(base, url) !== id) {
+  if (!isConversationId(base, id)) {
     log('shell', 'openhands-open', { detail: { found: false } });
     return false;
   }
   state.surface = 'openhands';
-  openhandsViews().show(id, url);
+  openhandsViews().show(id, conversationUrl(base, id));
   state.openhandsSessionId = id;
   applyLayout();
   log('shell', 'openhands-open', { detail: { sessionId: id } });

@@ -379,3 +379,9 @@ export function openhandsStatusLine(
       return "Couldn't load OpenHands sessions";
   }
 }
+
+// A renderer-supplied id is only trusted when the conversation URL rebuilt
+// from it parses back to the same id (rejects '../x', 'a/b', '?'/'#' tricks).
+export function isConversationId(base: string, id: string): boolean {
+  return conversationIdFromUrl(base, conversationUrl(base, id)) === id;
+}

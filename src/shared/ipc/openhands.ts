@@ -49,7 +49,7 @@ export const OpenHandsRenameArg = z.object({
   title: z.string().trim().min(1).max(200),
 });
 export const OpenHandsSessionReorderArg = z.object({
-  section: z.string().max(1024),
+  section: z.string().min(1).max(256),
   ids: z.array(z.string().max(128)).max(500),
 });
 export const OpenHandsContextMenuArg = z.object({

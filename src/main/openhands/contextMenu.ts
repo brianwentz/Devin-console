@@ -12,6 +12,7 @@
 import { clipboard, dialog, Menu, shell } from 'electron';
 import {
   conversationUrl,
+  isConversationId,
   openhandsMenuEntries,
   type OpenHandsMenuEntry,
   type OpenHandsMenuId,
@@ -78,7 +79,9 @@ export class OpenHandsContextMenu {
     // A menu left open (test mode) is superseded by the next one.
     this.pending?.resolve({ action: null });
     this.pending = null;
-    if (arg.kind === 'session' && !arg.sessionId) return { action: null };
+    if (arg.kind === 'session' && !(arg.sessionId && isConversationId(this.deps.baseUrl(), arg.sessionId))) {
+      return { action: null };
+    }
     const entries = openhandsMenuEntries(arg.kind, this.deps.capabilities());
     if (entries.length === 0) return { action: null };
     const sessionId = arg.sessionId;

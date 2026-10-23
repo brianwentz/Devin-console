@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   openHandsAuthOrigins,
+  isConversationId,
   openhandsMenuEntries,
   openhandsStatusLine,
   parseExtraAuthOrigins,
@@ -128,5 +129,17 @@ describe('openhandsStatusLine', () => {
     expect(openhandsStatusLine('error', 'api-key-required')).toBe('OpenHands needs an API key to load sessions');
     expect(openhandsStatusLine('error', 'api-key-rejected')).toBe('OpenHands rejected the API key');
     expect(openhandsStatusLine('error', 'error')).toBe("Couldn't load OpenHands sessions");
+  });
+});
+
+describe('isConversationId', () => {
+  const base = 'https://oh.test';
+  it('accepts a real conversation id', () => {
+    expect(isConversationId(base, ID)).toBe(true);
+  });
+  it('rejects tampered ids', () => {
+    for (const id of ['../x', 'a/b', `${ID}?x=1`, `${ID}#h`, `${ID}/../y`, '', 'short', `${ID}0`]) {
+      expect(isConversationId(base, id)).toBe(false);
+    }
   });
 });

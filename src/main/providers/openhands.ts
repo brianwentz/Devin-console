@@ -8,7 +8,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, net, session, webContents } from 'electron';
 import { sanitizeMessage } from '../../core/devinApi';
-import { effectiveBaseUrl, normalizeBaseUrl } from '../../core/openhands';
+import { effectiveBaseUrl, isConversationId, normalizeBaseUrl } from '../../core/openhands';
 import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
 import type { CloudCache } from '../../core/cloudCache';
@@ -172,11 +172,16 @@ export const openhandsMenuItems = () => menu.menuItems();
 export const openhandsMenuClick = (id: string) => menu.clickItem(id);
 export const openhandsMutations = () => menu.mutationLog();
 
+const validId = (id: string): boolean =>
+  isConversationId(effective(state.settings?.current.openhands.baseUrl), id);
+
 export async function openhandsRename(id: string, title: string): Promise<void> {
+  if (!validId(id)) return;
   menu.record('rename', { id });
   await core.mutate({ op: 'rename', id, title });
 }
 export async function openhandsDelete(id: string): Promise<void> {
+  if (!validId(id)) return;
   await core.mutate({ op: 'delete', id });
 }
 // Sidebar refresh button.
