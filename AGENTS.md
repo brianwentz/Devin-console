@@ -267,6 +267,18 @@ variable that selects it.
   `applyLimits()` converts via `cloudKeepAliveMs`, test override included), viewName, hooks {attach, onActiveSession, onHomeToSession}}`.
   `src/main/cloudKit/pools.ts` = `registerPool`/`pools`/`poolFor(providerId)`/`poolForSurface(surface)`; `cloudViews()` is `poolFor('devin-cloud')`
   (created + registered on first call). Devin's pure keying/ownership: `devinViewKey`/`devinOwnsUrl` in `src/core/cloudKit/devinViews.ts`.
+- Provider routing: `RouteContext.providers` (`src/core/linkRouter.ts`, `{providerId, origin}[]` in registry order; absent/empty = Devin via
+  `tenantUrl` only) lets the link router match any hosted provider's origin; `main/routing.ts` builds it and maps the winning `providerId` to a rail
+  surface through `surfaceForProvider(id)` (`src/core/providers.ts`) — a provider needs no new routing branch.
+- Capability-driven sidebar: `SessionSidebar.tsx` takes a `CloudSourceCapabilities` (`src/core/cloudKit/capabilities.ts` — `folders:
+  'server'|'derived'|'none'`, `archive`, `rename`, `delete`, `reorder`; Devin's is `DEVIN_CLOUD_CAPABILITIES`) and renders only the controls the source
+  supports; list shaping is the pure `sidebarListData` (`src/core/cloudKit/sidebar.ts`).
+- Secrets: `secrets.json` holds `devinPat` and `openhandsApiKey` (each safeStorage-encrypted, base64); `SecretStore.get/setOpenHandsApiKey` are
+  siblings of the PAT methods and writing or clearing one never rewrites or removes the other (untouched fields — and unknown ones, the schema is
+  `.passthrough()` — come back out verbatim; the file goes only when no secret is left). The darwin migration reset drops per field. Neither value is
+  ever logged or put in state/IPC; test hook `secretsSetOpenHands(value|null)` seeds/clears the key.
+- Recorded deviation (Open Item): Devin's `cloudSessions.ts` is not on a generic sessions controller — only the view pool, routing, sidebar
+  capabilities and secrets are on the cloud kit; moving Devin's list/mutation layer onto a shared controller is deferred.
 
 ### Pane toggle & splitter
 - The rail button `#paneToggle` is user-labelled "Linked Context" (Chromium icon `src/shell/components/icons/ChromiumIcon.tsx`); ids stay stable across label renames.
@@ -876,6 +888,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `hostEnumerateIfStale()` | The background-check re-list: runs `wsl -l -v` only when the cached table is older than `ENUM_FRESH_MS` (inside a failure backoff it is a no-op). |
 | `remoteFsViolations()` | App `fs` calls on a WSL path the remote-fs guard saw since start (both modes); `launchApp` teardown asserts 0. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
+| `secretsSetOpenHands(value)` | Seed (string) or clear (`null`) the encrypted OpenHands API key in `secrets.json`; never returns it. |
 
 ## Log events
 
@@ -907,7 +920,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `cloud-org-change` | `{reason}`, no ids. |
 | `cloud-mutate` | `{op,ok,status}` only. |
 | `cloud-session-reorder` | `{ section: 'folder'\|'pinned'\|'recent'\|'participated', count }` — row drag in the Cloud sidebar persisted to `sessions.sessionOrder` (app-local, no server op). |
-| `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only. |
+| `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only, plus `provider` (the pool's providerId). |
 | `pr-read` / `pr-dismiss` | `{ all, count }`. |
 | `prs-panel` / `prs-save-error` | PR panel open/close, store write failure. |
 | `pr-auto-open` | `detail.source` = `local-chat\|local-terminal\|claude-chat\|claude-terminal\|claude-hook` or the poller; `catchUp` for ledger catch-up. |
