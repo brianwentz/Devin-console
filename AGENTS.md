@@ -998,8 +998,9 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `devin-usage-fetch` | `{ ok, status, ms, stale, reason? }` — `reason: login-required\|no-devindebug\|view-not-ready\|timeout\|error\|http\|parse\|network\|disabled` (channel `cloud`; token never logged). |
 | `devin-usage-cache` | `{ loaded }` — `userData/devin-usage-cache.json` load. |
 | `openhands-list` | `{ count, ms, incremental }` — one OpenHands conversation list (counts only; never titles, urls or `session_api_key`). |
-| `openhands-mutate` | `{ op: 'rename'|'delete', ok, status }`. |
-| `openhands-auth` | `{ mode: 'api-key'|'web-session', ok }` — logged when the (mode, ok) pair changes; the key is never logged. |
+| `openhands-mutate` | `{ op: 'rename'\|'delete', ok, status }`. |
+| `openhands-auth` | `{ mode: 'api-key'\|'web-session', ok }` — logged when the (mode, ok) pair changes; the key is never logged. |
+| `openhands-stop-error` | `{ code }` (error class name only) — stopping the OpenHands sessions controller threw during a base-URL restart or dispose; teardown continues. |
 | `usage-alert` | `{ metric, threshold, percent }` — a threshold crossed (fires even when the kind is muted; channel `shell`). |
 | `usage-alerts-save-error` | `{ message }` — ledger write failure. |
 | `active-session` | Local selected session lifted to state. |
