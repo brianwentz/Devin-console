@@ -56,6 +56,12 @@ export interface OpenHandsUsageService {
   refresh(): Promise<void>;
   /** Re-reads `visible()`: fetches at once when it became visible and the last pass is ≥ 60 s old. */
   visibilityChanged(): void;
+  /**
+   * Credentials changed or the connection became authenticated: drop the
+   * backoff and run a pass now (after one already in flight, which used the
+   * old credentials). No-op unless running.
+   */
+  recover(): void;
   cards(): OpenHandsUsageCards;
   summary(): UsageSummaryItem[];
   backoffMs(): number;
@@ -183,6 +189,18 @@ export function createOpenHandsUsageService(deps: OpenHandsUsageDeps): OpenHands
       clear();
     },
     refresh,
+    recover() {
+      if (!running) return;
+      clear();
+      backoff = 0;
+      const pass = inFlight
+        ? inFlight.then(() => {
+            backoff = 0;
+            return refresh();
+          })
+        : refresh();
+      void pass.finally(() => schedule(usageDelayMs(deps.visible(), backoff)));
+    },
     visibilityChanged() {
       if (!running) return;
       const due = lastAttempt === null || deps.now() - lastAttempt >= OPENHANDS_USAGE_VISIBLE_MS;

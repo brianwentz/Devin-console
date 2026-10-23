@@ -18,6 +18,7 @@ import {
 import { createOpenHandsUsageService } from '../../src/main/openhands/usage';
 import type { OpenHandsFetchResult } from '../../src/main/openhands/fetch';
 import type { UsageReading } from '../../src/main/cloudKit/usage';
+import type { OpenHandsConnection } from '../../src/shared/ipc';
 import {
   createOpenHandsRuntimeCore,
   type CoreController,
@@ -149,7 +150,22 @@ describe('openhands usage cards', () => {
     expect(usageAuthHint(refused('login-required'), 'idle')).toBe('login-required');
     expect(usageAuthHint(refused('api-key-rejected'), 'login-required')).toBe('api-key-rejected');
     // A plain 5xx error is not a sign-in problem.
-    expect(usageAuthHint({ ...pending, credits: { state: 'error' } }, 'web-session')).toBeNull();
+    expect(usageAuthHint({ ...pending, credits: { state: 'error' } }, 'error')).toBeNull();
+  });
+
+  it('usageAuthHint: a healthy live connection hides a stale card auth reason', () => {
+    const refused = (reason: 'login-required' | 'api-key-rejected'): OpenHandsUsageCards => ({
+      credits: { state: 'error', reason },
+      quota: { state: 'error', reason, stale: { percent: 30, resetsAt: null } },
+      spend30d: { state: 'pending' },
+    });
+    expect(usageAuthHint(refused('api-key-rejected'), 'api-key')).toBeNull();
+    expect(usageAuthHint(refused('api-key-rejected'), 'web-session')).toBeNull();
+    expect(usageAuthHint(refused('login-required'), 'web-session')).toBeNull();
+    expect(usageAuthHint(refused('login-required'), 'api-key')).toBeNull();
+    // Not yet known to be healthy: the card reason still speaks.
+    expect(usageAuthHint(refused('login-required'), 'idle')).toBe('login-required');
+    expect(usageAuthHint(refused('api-key-rejected'), 'error')).toBe('api-key-rejected');
   });
 
   it('backoff 1 -> 16 min, reset on success; delay = max(cadence, backoff)', () => {
@@ -375,6 +391,72 @@ describe('openhands usage service', () => {
     h.service.stop();
   });
 
+  it('recover(): drops the 401/403 backoff and fetches at once, cards reach ok', async () => {
+    let signedIn = false;
+    const h = serviceHarness(
+      (p) =>
+        signedIn
+          ? happy(p)
+          : ({ status: 401, body: null, mode: 'web-session', error: 'login-required' } as OpenHandsFetchResult),
+      { visible: true },
+    );
+    h.service.start();
+    await vi.waitFor(() => expect(h.service.cards().credits.state).toBe('error'));
+    await h.service.refresh();
+    await h.service.refresh();
+    expect(h.service.backoffMs()).toBe(240_000);
+    const before = h.paths.length;
+    signedIn = true;
+    h.service.recover();
+    await vi.waitFor(() => expect(h.service.cards().credits.state).toBe('ok'));
+    expect(h.paths.length).toBeGreaterThan(before);
+    expect(h.service.backoffMs()).toBe(0);
+    expect(h.service.cards().quota.state).toBe('ok');
+    // Back on the visible 60 s cadence.
+    await vi.waitFor(() => expect(h.live().at(-1)?.ms).toBe(60_000));
+    expect(h.live()).toHaveLength(1);
+    h.service.stop();
+  });
+
+  it('recover() during a pass with the old credentials runs one more pass after it', async () => {
+    let release: (() => void) | null = null;
+    let phase: 'old' | 'held' | 'new' = 'old';
+    const refused = { status: 401, body: null, mode: 'api-key', error: 'api-key-rejected' } as OpenHandsFetchResult;
+    const h = serviceHarness((p) => {
+      if (phase === 'new') return happy(p);
+      if (phase === 'held' && p === '/api/quota/status') {
+        return new Promise<OpenHandsFetchResult>((resolve) => {
+          release = () => resolve(refused);
+        });
+      }
+      return refused;
+    });
+    h.service.start();
+    await h.service.refresh();
+    phase = 'held';
+    const stale = h.service.refresh();
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    phase = 'new';
+    h.service.recover();
+    (release as unknown as () => void)();
+    await stale;
+    await vi.waitFor(() => expect(h.service.cards().quota.state).toBe('ok'));
+    expect(h.service.cards().credits.state).toBe('ok');
+    expect(h.service.backoffMs()).toBe(0);
+    h.service.stop();
+  });
+
+  it('recover() is a no-op before start / after stop', async () => {
+    const h = serviceHarness(happy);
+    h.service.recover();
+    expect(h.paths).toHaveLength(0);
+    h.service.start();
+    h.service.stop();
+    h.service.recover();
+    expect(h.paths).toHaveLength(0);
+    expect(h.live()).toHaveLength(0);
+  });
+
   it('a rejected API key is carried as api-key-rejected', async () => {
     const h = serviceHarness(
       (p) =>
@@ -475,8 +557,10 @@ describe('openhands usage service', () => {
 });
 
 describe('openhands runtime core + usage', () => {
-  function coreHarness() {
-    const usage: (CoreUsage & { started: number; stopped: number })[] = [];
+  function coreHarness(opts: { hasKey?: boolean } = {}) {
+    const usage: (CoreUsage & { started: number; stopped: number; recovered: number })[] = [];
+    let connection: OpenHandsConnection = 'idle';
+    const timers: { fn: () => void; cleared: boolean }[] = [];
     const core = createOpenHandsRuntimeCore({
       currentBase: () => 'https://a.test',
       baseOf: (s) => s.openhands.baseUrl,
@@ -486,11 +570,15 @@ describe('openhands runtime core + usage', () => {
         const u = {
           started: 0,
           stopped: 0,
+          recovered: 0,
           start() {
             this.started++;
           },
           stop() {
             this.stopped++;
+          },
+          recover() {
+            this.recovered++;
           },
         };
         usage.push(u);
@@ -503,22 +591,112 @@ describe('openhands runtime core + usage', () => {
           mutate: async () => true,
         } satisfies CoreController;
         return {
-          source: { requestFull: () => {}, isListing: () => false, connection: () => 'idle' as const },
+          source: { requestFull: () => {}, isListing: () => false, connection: () => connection },
           controller,
           usage: u,
         };
       },
-      hasKey: async () => false,
+      hasKey: async () => opts.hasKey ?? false,
       cacheMatches: async () => false,
       dropCache: async () => {},
-      setTimer: () => ({}),
-      clearTimer: () => {},
+      setTimer: (fn) => {
+        const t = { fn, cleared: false };
+        timers.push(t);
+        return t;
+      },
+      clearTimer: (h) => {
+        (h as { cleared: boolean }).cleared = true;
+      },
       focused: () => true,
       onChange: () => {},
       log: () => {},
     });
-    return { core, usage };
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    // Fire the pending sessions poll (the core's list cadence).
+    const poll = async () => {
+      const t = timers.filter((x) => !x.cleared).at(-1);
+      t!.cleared = true;
+      t!.fn();
+      await flush();
+    };
+    return {
+      core,
+      usage,
+      flush,
+      poll,
+      setConnection: (c: OpenHandsConnection) => (connection = c),
+    };
   }
+
+  it('a list that moves the connection from refused to authenticated recovers usage at once', async () => {
+    const h = coreHarness();
+    await h.core.start();
+    h.core.onSurfaceEnter();
+    await h.flush();
+    const u = h.usage[0]!;
+    // First answer after the gate opens (idle -> …) is no recovery.
+    h.setConnection('login-required');
+    await h.poll();
+    expect(u.recovered).toBe(0);
+    // Still refused: nothing.
+    await h.poll();
+    expect(u.recovered).toBe(0);
+    // Signed in on the web page: the next list sees web-session.
+    h.setConnection('web-session');
+    await h.poll();
+    expect(u.recovered).toBe(1);
+    // Staying authenticated does not keep recovering.
+    await h.poll();
+    expect(u.recovered).toBe(1);
+    // Key rejected, then fixed (api-key): another recovery; focus lists count too.
+    h.setConnection('api-key-rejected');
+    await h.poll();
+    h.setConnection('api-key');
+    h.core.onFocus();
+    await h.flush();
+    expect(u.recovered).toBe(2);
+    await h.core.dispose();
+  });
+
+  it('idle -> authenticated on the first list does not recover (usage is just starting)', async () => {
+    const h = coreHarness();
+    await h.core.start();
+    h.setConnection('web-session');
+    h.core.onSurfaceEnter();
+    await h.flush();
+    await h.poll();
+    expect(h.usage[0]!.recovered).toBe(0);
+    await h.core.dispose();
+  });
+
+  it('a credentials change recovers usage once (not again for the same transition)', async () => {
+    const h = coreHarness();
+    await h.core.start();
+    h.core.onSurfaceEnter();
+    await h.flush();
+    h.setConnection('api-key-rejected');
+    await h.poll();
+    const u = h.usage[0]!;
+    expect(u.recovered).toBe(0);
+    h.setConnection('api-key');
+    await h.core.onCredentialsChanged(true);
+    expect(u.recovered).toBe(1);
+    await h.poll();
+    expect(u.recovered).toBe(1);
+    await h.core.dispose();
+  });
+
+  it('a credentials change with the gate closed opens it (key set) without a recover on a fresh service', async () => {
+    const h = coreHarness();
+    await h.core.start();
+    await h.core.onCredentialsChanged(false);
+    expect(h.usage).toHaveLength(0);
+    await h.core.onCredentialsChanged(true);
+    expect(h.usage).toHaveLength(1);
+    // recover() on a just-started service is harmless; it is asked once.
+    expect(h.usage[0]!.recovered).toBe(1);
+    await h.core.dispose();
+  });
 
   it('no usage service exists while the gate is closed; it starts with the gate and is replaced on a base change', async () => {
     const h = coreHarness();

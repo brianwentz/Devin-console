@@ -48,6 +48,23 @@ const hook = <T>(app: ElectronApplication, name: string, ...args: unknown[]) =>
     [name, args] as [string, unknown[]],
   );
 
+type ViewInfo = { key: string; url: string; active: boolean };
+const activeView = async (app: ElectronApplication) =>
+  (await hook<ViewInfo[]>(app, 'openhandsViewsInfo')).find((v) => v.active);
+const inActiveView = async (app: ElectronApplication, expr: string) => {
+  await expect.poll(async () => (await activeView(app))?.url).toMatch(/^http/);
+  const url = (await activeView(app))!.url;
+  return app.evaluate(
+    async ({ webContents }, [script, target]) => {
+      const wc = webContents.getAllWebContents().find((c) => c.getURL() === target);
+      return wc ? ((await wc.executeJavaScript(script as string)) as unknown) : undefined;
+    },
+    [expr, url] as [string, string],
+  );
+};
+const cookieNames = (app: ElectronApplication) =>
+  app.evaluate(async ({ session }) => (await session.fromPartition('persist:openhands').cookies.get({})).map((c) => c.name));
+
 const USAGE_PATH = /^\/api\/(billing\/credits|quota\/status|v1\/users\/me|organizations\/[^/]+\/conversations\/my-usage)/;
 const usageRequests = () => fixtures.openhands.requests().filter((r) => USAGE_PATH.test(r.path));
 
@@ -146,7 +163,7 @@ test('Analytics -> OpenHands: gated fetch, cards, unavailable credits, one 80% a
   }
 });
 
-test('signed out: the OpenHands tab shows the sign-in hint instead of Loading', async () => {
+test('signed out: the OpenHands tab shows the sign-in hint instead of Loading; signing in recovers at once', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohusage-auth-'));
   fixtures.openhands.requireAuth('cookie');
   const app = await launch(profile);
@@ -177,6 +194,25 @@ test('signed out: the OpenHands tab shows the sign-in hint instead of Loading', 
     // The hint takes the user to the OpenHands sign-in page (the sidebar banner's action).
     await shell.locator('#openhandsAnalyticsLogin').click();
     await expect.poll(async () => (await state(app)).surface).toBe('openhands');
+
+    // Signing in on that page: the next list sees web-session and usage
+    // recovers at once (no Refresh press, no waiting out the 401 backoff).
+    await expect.poll(async () => (await activeView(app))?.key).toBe('home');
+    await inActiveView(app, `location.href = '/login'`);
+    await expect.poll(async () => cookieNames(app)).toContain('openhands_auth');
+    await hook(app, 'openhandsRefresh');
+    expect((await state(app)).openhands.connection).toBe('web-session');
+    await expect
+      .poll(async () => (await hook<{ credits: { state: string } }>(app, 'openhandsUsageState')).credits.state)
+      .toBe('ok');
+    await shell.locator('#analyticsButton').click();
+    await expect(shell.locator('#openhandsAnalytics')).toBeVisible();
+    await expect(shell.locator('#openhandsAnalyticsLogin')).toHaveCount(0);
+    await expect(shell.locator('#openhandsAnalyticsSummaryHint')).toHaveCount(0);
+    for (const card of ['credits', 'quota', 'spend']) {
+      await expect(shell.locator(`[data-card=${card}]`)).toHaveAttribute('data-card-state', 'ok');
+    }
+    await expect(shell.locator('#openhandsUsageSummary')).toContainText('Credits $12.34');
   } finally {
     await close(app);
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });

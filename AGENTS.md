@@ -444,10 +444,12 @@ variable that selects it.
   `/api/organizations/<org>/conversations/my-usage?time_window=30d` (`parseMyUsage` → `total_spend`). Cards `Card<T>` =
   `pending | ok {value,fetchedAt} | unavailable | error {stale?}` (`nextCard`): 200 + parsed → ok, 200 unparsed → error keeping a known value (else unavailable), 404 / 503 → unavailable (no backoff for either),
   429/5xx/no response and 401/403 → error keeping the last good value with backoff 1→16 min (`nextBackoffMs`); 401/403 also carry
-  `reason: 'login-required'|'api-key-rejected'` from the transport's `error`. Cadence
+  `reason: 'login-required'|'api-key-rejected'` from the transport's `error`. `recover()` drops the backoff and fetches at once (one more pass
+  after an in-flight one); the core calls it on `onCredentialsChanged` and when a list moves the source's connection from a refused state into
+  `api-key`/`web-session` (`noteConnection` after every list; not on the gate's first `idle` → … answer). Cadence
   `usageDelayMs`: 15 min, 60 s while the tab is visible (backoff only slows it); first poll 5 s after the gate opens, at once when the tab is visible.
   The panel (`#openhandsAnalytics`, `[data-card=credits|quota|spend|top][data-card-state]` — `top` is `ok` once the conversation list is `ready` or cached, `error` while signed out or the list failed, else `pending`;
-  `usageAuthHint(cards, connection)` → `#openhandsAnalyticsLogin` (opens the OpenHands home, like the sidebar's `#openhandsLogin`) or
+  `usageAuthHint(cards, connection)` (a healthy `api-key`/`web-session` connection hides a stale card reason) → `#openhandsAnalyticsLogin` (opens the OpenHands home, like the sidebar's `#openhandsLogin`) or
   `#openhandsAnalyticsApiKeyHint` (Settings → OpenHands) above the cards and `#openhandsAnalyticsSummaryHint` in the summary row, shared actions in
   `src/shell/openhands/authActions.ts`; signed-out cards read `Not signed in`, never `Loading…`, unavailable text `Not available on this server`, quota via
   the shared `Gauge`) sends `openhands:usageVisible {visible}` on mount/unmount — showing it is an explicit OpenHands action: `core.onSurfaceEnter()` opens

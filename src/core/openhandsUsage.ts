@@ -128,9 +128,12 @@ export type UsageAuthHint = 'login-required' | 'api-key-rejected' | 'api-key-req
 /**
  * What the Analytics -> OpenHands tab should ask the user to do, if anything:
  * from the source's connection (Settings status) or an auth-refused card.
- * A rejected key wins over a missing web sign-in.
+ * A healthy live connection ('api-key' / 'web-session') wins over a card's
+ * stale auth reason (the recovery pass is on its way); otherwise a rejected
+ * key wins over a missing web sign-in.
  */
 export function usageAuthHint(cards: OpenHandsUsageCards, connection: string | null | undefined): UsageAuthHint | null {
+  if (connection === 'api-key' || connection === 'web-session') return null;
   const reasons = [cards.credits, cards.quota, cards.spend30d].map((c) => (c.state === 'error' ? c.reason : undefined));
   if (connection === 'api-key-rejected' || reasons.includes('api-key-rejected')) return 'api-key-rejected';
   if (connection === 'api-key-required') return 'api-key-required';

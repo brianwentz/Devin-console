@@ -36,7 +36,11 @@ export interface CoreSource {
 export interface CoreUsage {
   start(): void;
   stop(): void;
+  /** Reset the backoff and fetch now (credentials changed / now authenticated). */
+  recover(): void;
 }
+
+const authenticated = (c: OpenHandsConnection): boolean => c === 'api-key' || c === 'web-session';
 
 export interface OhSettingsLike {
   openhands: { baseUrl: string; pollSeconds: number };
@@ -84,6 +88,8 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
   let gateSettled = false;
   // Rename/delete asked for while no gate is open: surfaced as lastError.
   let local: { op: 'rename' | 'delete'; message: string } | null = null;
+  // The active source's connection as last seen after a list.
+  let lastConnection: OpenHandsConnection = 'idle';
 
   const clearTimer = (): void => {
     if (timer !== null) deps.clearTimer(timer);
@@ -97,10 +103,28 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     timer = deps.setTimer(() => void tick(), ms);
   };
 
+  // After every list: a move into an authenticated connection out of a
+  // refused one (signed in on the web page, key fixed) lets usage recover at
+  // once instead of waiting out its 401/403 backoff. The first answer after
+  // the gate opens ('idle' -> …) is not a recovery: usage is starting anyway.
+  const noteConnection = (): void => {
+    if (!active) return;
+    const next = active.source.connection();
+    const previous = lastConnection;
+    lastConnection = next;
+    if (authenticated(next) && previous !== next && previous !== 'idle') active.usage?.recover();
+  };
+
+  const refreshList = async (reason: RefreshReason): Promise<void> => {
+    if (!active) return;
+    await active.controller.refresh(reason);
+    noteConnection();
+  };
+
   const tick = async (): Promise<void> => {
     timer = null;
     // A slow list must not queue a follow-up on top of itself.
-    if (!disposed && active && !active.source.isListing()) await active.controller.refresh('poll');
+    if (!disposed && active && !active.source.isListing()) await refreshList('poll');
     schedule();
   };
 
@@ -125,9 +149,13 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
 
   const startActive = (): void => {
     const base = deps.currentBase();
-    active = { base, ...deps.build(base) };
-    void active.controller.start();
-    active.usage?.start();
+    const started = { base, ...deps.build(base) };
+    active = started;
+    lastConnection = started.source.connection();
+    void started.controller.start().then(() => {
+      if (active === started) noteConnection();
+    });
+    started.usage?.start();
     schedule();
   };
 
@@ -169,13 +197,17 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     async onCredentialsChanged(keySet: boolean): Promise<void> {
       if (keySet) open();
       if (!active) return;
+      // Usage must not sit out a backoff earned by the old credentials.
+      active.usage?.recover();
       active.source.requestFull();
       await active.controller.refresh('settings');
+      // Already recovered for this change: only record the connection.
+      if (active) lastConnection = active.source.connection();
     },
     onFocus(): void {
       if (!active) return;
       active.source.requestFull();
-      void active.controller.refresh('focus');
+      void refreshList('focus');
       schedule();
     },
     async onSettingsChanged(previous: OhSettingsLike, next: OhSettingsLike): Promise<void> {
@@ -229,7 +261,7 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
       open();
       if (!active) return;
       active.source.requestFull();
-      await active.controller.refresh('test');
+      await refreshList('test');
     },
   };
 }
