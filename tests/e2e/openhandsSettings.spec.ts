@@ -52,7 +52,9 @@ test('the openhands rail button switches to a placeholder surface with GLOBAL ta
     await expect.poll(async () => hasEl(app, 'openhandsPanel')).toBe(true);
     const s = await state(app);
     expect(s.tabs.scope).toBe('');
-    expect(s.openhands).toMatchObject({ status: 'idle', connection: 'idle', sessions: [] });
+    // The runtime (T21) lists the fixture over the cookie path (no key set).
+    await expect.poll(async () => (await state(app)).openhands.status).toBe('ready');
+    expect((await state(app)).openhands).toMatchObject({ connection: 'web-session' });
     expect(await attr(app, 'openhandsButton', 'aria-pressed')).toBe('true');
     // Back to Cloud works (no hosted OpenHands view was attached).
     await shell(app, `document.getElementById('cloudButton').click()`);
@@ -87,7 +89,10 @@ test('Settings → OpenHands: API key save/clear never exposes the key; base URL
     ]) {
       expect(await hasEl(app, id), id).toBe(true);
     }
-    expect(await attr(app, 'openhandsConnectionStatus', 'data-status')).toBe('idle');
+    // Port 9 is unreachable: the runtime's first list settles on 'error'.
+    await expect
+      .poll(async () => attr(app, 'openhandsConnectionStatus', 'data-status'))
+      .toBe('error');
     expect(await attr(app, 'openhandsConnectionStatus', 'data-key-set')).toBe('false');
 
     await setInputValue(app, 'openhandsApiKeyInput', KEY);

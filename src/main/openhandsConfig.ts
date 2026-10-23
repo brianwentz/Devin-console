@@ -1,6 +1,6 @@
-// OpenHands (B1 T20): effective base URL and the ShellState slice. The runtime
-// (sessions controller + view pool) replaces `openhandsSnapshot`'s source later;
-// until then the surface shows a static idle state and no hosted view.
+// OpenHands (B1): effective base URL and the ShellState slice. The runtime
+// (src/main/providers/openhands.ts) feeds the live snapshot; until it has
+// started the surface shows a static idle state.
 import { effectiveBaseUrl } from '../core/openhands';
 import { OPENHANDS_DEFAULT_BASE_URL, type OpenHandsShellState } from '../shared/ipc';
 import { state, testMode } from './state';
@@ -22,7 +22,15 @@ const INITIAL_STATE: OpenHandsShellState = {
   capabilities: { folders: 'derived', archive: false, rename: true, delete: true, reorder: true },
 };
 
+let snapshotSource: (() => OpenHandsShellState | null) | null = null;
+
+export function setOpenHandsSnapshotSource(fn: (() => OpenHandsShellState | null) | null): void {
+  snapshotSource = fn;
+}
+
 export function openhandsSnapshot(): OpenHandsShellState {
+  const live = snapshotSource?.();
+  if (live) return live;
   return {
     ...INITIAL_STATE,
     sessions: [],

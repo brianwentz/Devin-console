@@ -51,7 +51,7 @@ import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolder
 import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
-import { runtimes } from './providers';
+import { runtimeFor, runtimes } from './providers';
 import { cloudViews } from './cloudViews';
 import {
   applyLayout,
@@ -431,6 +431,7 @@ function setupExtrasIpc(): void {
     } catch {
       return { ok: false };
     }
+    runtimeFor('openhands')?.onCredentialsChanged?.();
     notifyShell();
     return { ok: true };
   });
@@ -441,6 +442,7 @@ function setupExtrasIpc(): void {
     } catch {
       return { ok: false };
     }
+    runtimeFor('openhands')?.onCredentialsChanged?.();
     notifyShell();
     return { ok: true };
   });

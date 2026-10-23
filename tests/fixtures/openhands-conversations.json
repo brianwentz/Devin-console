@@ -1,0 +1,41 @@
+[
+  {
+    "id": "0123456789abcdef0123456789abcd01",
+    "title": "Fix the login redirect",
+    "selected_repository": "acme/web",
+    "git_provider": "github",
+    "pr_number": [12],
+    "sandbox_status": "RUNNING",
+    "execution_status": "running",
+    "created_at": "2026-10-20T09:00:00Z",
+    "updated_at": "2026-10-20T10:30:00Z",
+    "metrics": { "accumulated_cost": 0.42 },
+    "session_api_key": "SAK-fixture-secret",
+    "conversation_url": "http://runtime.invalid/api/conversations/0123456789abcdef0123456789abcd01"
+  },
+  {
+    "id": "0123456789abcdef0123456789abcd02",
+    "title": "Add pagination to the API",
+    "selected_repository": "acme/api",
+    "git_provider": "github",
+    "sandbox_status": "RUNNING",
+    "execution_status": "finished",
+    "created_at": "2026-10-19T09:00:00Z",
+    "updated_at": "2026-10-19T12:00:00Z",
+    "metrics": { "accumulated_cost": 1.5 },
+    "session_api_key": "SAK-fixture-secret",
+    "conversation_url": "http://runtime.invalid/api/conversations/0123456789abcdef0123456789abcd02"
+  },
+  {
+    "id": "0123456789abcdef0123456789abcd03",
+    "title": null,
+    "selected_repository": null,
+    "git_provider": null,
+    "sandbox_status": "PAUSED",
+    "execution_status": null,
+    "created_at": "2026-10-18T09:00:00Z",
+    "updated_at": "2026-10-18T09:05:00Z",
+    "session_api_key": "SAK-fixture-secret",
+    "conversation_url": null
+  }
+]

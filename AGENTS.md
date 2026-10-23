@@ -119,6 +119,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
 | `AGENT_WORKSPACE_TEST_OPENHANDS_URL` | test mode | Overrides `settings.openhands.baseUrl` in memory (never saved) via `effectiveBaseUrl` (`src/core/openhands.ts`) → `openhandsBaseUrl()` (`src/main/openhandsConfig.ts`, test hook `openhandsBaseUrl()`); http is allowed for loopback hosts only, an unusable value falls back to the saved URL. |
+| `AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS` | test mode | Overrides the OpenHands sessions poll interval (`settings.openhands.pollSeconds`; blurred polls still run at 4x it); `launchApp` sets `600000` and the fixture URL (`fixtures.openhands.url`) via `AGENT_WORKSPACE_TEST_OPENHANDS_URL` — specs opt into faster polling. |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Local host only (a `;`-separated `local=path` pair is also accepted; bare path = default) — a WSL host's account file is the distro's own `<home>/.claude.json`, read by its helper (`usage.accounts`); specs stage a second account by writing it under `FAKE_WSL_ROOT`. |
@@ -821,12 +822,25 @@ variable that selects it.
   runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
   prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
   from `src/shared/ipc.ts`; run `npm run smoke:install` when a settings schema changes.
-- OpenHands (B1 T20 — descriptor, settings and Settings tab only): `openhands` is `kind:'cloud'` with `scopeFallback:'global'` (no selection →
+- OpenHands (B1 T20 descriptor/settings, T21 runtime): `openhands` is `kind:'cloud'` with `scopeFallback:'global'` (no selection →
   GLOBAL tabs, never the Devin Cloud session's) and source `openhands` (so the notifications/PR source enums accept it); `analyticsTab:null`,
-  `usageMetrics:[]` for now. No runtime is registered and no view pool exists yet: the surface renders the `#openhandsPanel` placeholder and
-  `#openhandsButton` on the rail, main keeps `state.openhandsSessionId` (in the `syncScope` map) and `ShellState.openhands`
-  (`OpenHandsShellStateSchema`: `status, cached, sessions, folders, lastError, connection, capabilities`) is the static idle value from
-  `openhandsSnapshot()` (`src/main/openhandsConfig.ts`). `Ctrl+N` there still falls back to the Cloud new session.
+  `usageMetrics:[]` for now. No view pool exists yet: the surface renders the `#openhandsPanel` placeholder and `#openhandsButton` on the rail,
+  main keeps `state.openhandsSessionId` (in the `syncScope` map).
+- OpenHands runtime (B1 T21, `src/main/providers/openhands.ts`, registered after claude, started after the shell `loadURL`): a
+  `CloudSessionsController` over the REST-poll source `src/main/openhands/source.ts` (`createOpenHandsSource`; capabilities
+  `{folders:'derived', archive:false, rename:true, delete:true, reorder:true}`; rows via `toCloudSession`, sections = repository, paging by
+  `listAllPages` (opaque `page_id`, 50-page cap → `PagingError`)). Poll 1, every 10th poll, a focus, a mutation and a settings/key change
+  list everything (a full list drops vanished conversations); the others send `updated_at__gte` = `nextCursor` and merge. The runtime owns the
+  timer (`pollSeconds` focused, 4x blurred, `AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS` in test mode); a tick while a list is in flight is skipped.
+  Cache `userData/openhands-cache.json` (rows only, `tenantKey` = normalised base URL; dropped on a base URL change, which also restarts the
+  source with a fresh cursor). `ShellState.openhands` is `buildOpenHandsShellState(controller.snapshot(), source.connection())`; a failed list
+  shows as `lastError {op:'list'}` (the controller's own `lastError` only carries mutations), `connection` follows the auth mode.
+- OpenHands transport (`src/main/openhands/fetch.ts`, `createOpenHandsFetch`): an API key → `net.fetch` with `Authorization: Bearer` and
+  `credentials:'omit'`; no key → the `persist:openhands` session's cookies. Both use `redirect:'error'` (Electron 44's `'manual'` rejects with
+  "Redirect was cancelled"); any redirect rejection or a response URL outside the base origin is `redirect-refused` (connection `error`), never
+  retried, key never re-sent. Key + 401 → re-read the key once, still 401 → `api-key-rejected` with NO fallback to cookies; no key + 401/403 twice
+  → `login-required`. Setting or clearing the key (`onCredentialsChanged`) forces a full list. `Ctrl+N` on the OpenHands surface calls the
+  runtime's `newSession()` (surface stays `openhands`, then the optional `showHome` hook point) — it no longer opens a Devin Cloud session.
 - Adding a local ACP provider (A3): the Devin Local host (`DevinLocalHost`, `src/main/local/acpHost.ts`) takes an `AcpAgentSpec`
   (`src/core/acpAgentSpec.ts`, re-exported by `src/main/local/agentSpec.ts`): `providerId`, `label`, `args` (appended to the resolved binary), optional
   `modes`, and `resolveCommand(host)` → a binary argv, `{ full }` (a complete argv used verbatim — the test-mode `AGENT_WORKSPACE_LOCAL_AGENT_CMD`
@@ -920,6 +934,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `remoteFsViolations()` | App `fs` calls on a WSL path the remote-fs guard saw since start (both modes); `launchApp` teardown asserts 0. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
 | `secretsSetOpenHands(value)` | Seed (string) or clear (`null`) the encrypted OpenHands API key in `secrets.json`; never returns it. |
+| `openhandsState()` / `openhandsRefresh()` | The `ShellState.openhands` snapshot (null before the runtime started) / force a full list (resolves when it finishes). Fixture: `fixtures.openhands` / `fixtures.openhandsAlt` in `tests/fixtures/http.ts` (`setConversations`, `setStatus`, `setEvents`, `requireAuth`, `setRedirect`, `mutations`, `lastAuthHeader`, `setLoginRedirect`, `requests`, `authOrigin`). |
 | `openhandsBaseUrl()` | The effective OpenHands base URL (`AGENT_WORKSPACE_TEST_OPENHANDS_URL` wins over the setting). |
 
 ## Log events
@@ -982,6 +997,9 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `usage-cache-pruned` | `{ count }` — scan dropped cache keys of scanned hosts that no longer map to a file (e.g. wsl/local keys left by older builds). |
 | `devin-usage-fetch` | `{ ok, status, ms, stale, reason? }` — `reason: login-required\|no-devindebug\|view-not-ready\|timeout\|error\|http\|parse\|network\|disabled` (channel `cloud`; token never logged). |
 | `devin-usage-cache` | `{ loaded }` — `userData/devin-usage-cache.json` load. |
+| `openhands-list` | `{ count, ms, incremental }` — one OpenHands conversation list (counts only; never titles, urls or `session_api_key`). |
+| `openhands-mutate` | `{ op: 'rename'|'delete', ok, status }`. |
+| `openhands-auth` | `{ mode: 'api-key'|'web-session', ok }` — logged when the (mode, ok) pair changes; the key is never logged. |
 | `usage-alert` | `{ metric, threshold, percent }` — a threshold crossed (fires even when the kind is muted; channel `shell`). |
 | `usage-alerts-save-error` | `{ message }` — ledger write failure. |
 | `active-session` | Local selected session lifted to state. |

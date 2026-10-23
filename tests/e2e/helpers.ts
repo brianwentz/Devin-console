@@ -154,6 +154,9 @@ export async function launchApp(
       // opt into faster polling.
       AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL: fixtures.devinUsageUrl,
       AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS: '600000',
+      // OpenHands: fixture base URL; slow default cadence - specs opt in.
+      AGENT_WORKSPACE_TEST_OPENHANDS_URL: fixtures.openhands.url,
+      AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS: '600000',
       AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE: join(
         process.cwd(),
         'tests/fixtures/claude-account.json',

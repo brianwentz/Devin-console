@@ -19,6 +19,8 @@ export interface ProviderRuntime {
   /** PR-panel open for a row owned by this provider. */
   openSessionPr?(sessionId: string, prUrl: string): void;
   newSession?(): Promise<void>;
+  /** Stored credentials changed (e.g. an API key was set or cleared). */
+  onCredentialsChanged?(): void;
 }
 
 const registry: ProviderRuntime[] = [];

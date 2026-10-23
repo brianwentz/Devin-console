@@ -47,6 +47,7 @@ import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 import { hosts } from './hosts';
 import { openhandsBaseUrl } from './openhandsConfig';
+import { openhandsRefresh, openhandsState } from './providers/openhands';
 import { remoteFsViolationCount } from './remoteFsGuard';
 
 export function registerTestHooks(): void {
@@ -232,6 +233,9 @@ export function registerTestHooks(): void {
       },
       // B1 T20: effective OpenHands base URL (AGENT_WORKSPACE_TEST_OPENHANDS_URL wins).
       openhandsBaseUrl: () => openhandsBaseUrl(),
+      // B1 T21: OpenHands sidebar snapshot / force a full list (resolves when it finishes).
+      openhandsState: () => openhandsState(),
+      openhandsRefresh: () => openhandsRefresh(),
       pollNow: () => notifier.pollNow(),
       // Cloud session sidebar data layer.
       cloudState: () => cloudSessions().snapshot(),
