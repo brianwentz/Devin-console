@@ -908,7 +908,7 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   settings/key change list everything (a full list drops vanished conversations); the others send `updated_at__gte` = `nextCursor` and merge. Timer:
   `pollSeconds` focused, 4x blurred (`AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS`); a tick while a list is in flight is skipped; a focus full list restarts it. While the server refuses the list (connection `login-required` /
   `api-key-rejected`) the next tick is stretched x4 per consecutive refused list, capped at 16 min (`authBackoffMs`); it resets on a credentials change,
-  a surface entry and any list that comes back authenticated (a focus list included).
+  a surface entry and any list that comes back authenticated (a focus list included); a refused focus-triggered list steps the backoff too, not only tick polls.
   Cache `userData/openhands-cache.json` (rows only, `tenantKey` = normalised base URL). A base URL change stops the old controller, awaits its queued cache
   writes (`drain()`), drops the cache and starts a new source with a fresh cursor. `ShellState.openhands` = `buildOpenHandsShellState(controller.snapshot(),
   source.connection())` (incl. `lastSyncAt`, the controller's last successful list — the sidebar's "synced …" line); a failed list shows as `lastError {op:'list'}`, the controller's own `lastError` carries mutations.
@@ -926,7 +926,8 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   `openhandsOpenSession` (URL rebuilt from the id, must round-trip `conversationIdFromUrl`) → `pool.show(id)` + `state.openhandsSessionId`; the pool's
   `onActiveSession` hook keeps it in step when the page navigates (rekey). `setPermissions(session, 'openhands', 'persist:openhands')` mirrors Devin's
   (clipboard-sanitized-write only, own origin).
-- **Routing / auth origins**: `RouteProvider.authOrigins` (`src/core/linkRouter.ts`). A same-tab navigation whose source is the provider's own view
+- **Routing / auth origins**: `providerForUrl` for non-Devin providers compares the full origin, so it is scheme-sensitive — an http link to an https base (or the
+  reverse) is not owned by the provider (Devin keeps the host + port tenant check). `RouteProvider.authOrigins` (`src/core/linkRouter.ts`). A same-tab navigation whose source is the provider's own view
   (`attachRouting(contents, 'openhands', 'openhands')` → RouteSource `'provider'` + `sourceProviderId`) to a URL that prefix-matches an entry
   (`matchesAuthOrigin`: same origin, path equal/under the entry's on a segment boundary — never host-wide) is `{kind:'in-place'}` instead of a GitHub tab;
   new-window requests and other sources are unaffected. The list is `openHandsAuthOrigins(baseUrl, extra)` (`routing.ts openhandsRouteProvider`):
