@@ -344,7 +344,7 @@ variable that selects it.
   `buildFavoritesMenu`; folders → `submenu`, "… N more" disabled; states as one disabled item: `Chrome bookmarks not found` (missing),
   `Chrome bookmarks couldn't be read` (unreadable), `No bookmarks`. A click → `openUserUrl(url, 'favorite', 'new')`; the invoke resolves `{action:
   'open'|null}` when the menu closes. Test mode = the Claude context-menu seam: the menu is described (ids `m0…` depth-first) and the invoke stays open
-  until `favoritesMenuClick(id)` (a disabled item does nothing; a new open replaces the pending one). Labels/URLs are never logged — only
+  until `favoritesMenuClick(id)` (a disabled item does nothing; a new open settles the pending invoke with `{action:null}` and a load that finishes after a newer open started is dropped — per-open generation + per-open action, so overlapping opens cannot overwrite each other's reply). Labels/URLs are never logged — only
   `tab-user-open`'s URL.
 - `tabs-preload` event: on scope switch/launch the visible scope's discarded tabs are background-loaded (150 ms stagger); the live cap
   (`tabs.maxLiveTabs`) and idle discard apply to hidden scopes only — the visible scope's tabs are exempt.
@@ -1068,7 +1068,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 
 | Hook | Purpose |
 |---|---|
-| `ipcProbe()` | IPC guard probe; also reports `pooled` (whether a non-active pooled view passes `fromHostedView`). |
+| `ipcProbe()` | IPC guard probe; also reports `pooled` (whether a non-active pooled view passes `fromHostedView`); `ipcProbe(webContentsId?)` probes exactly that pooled view and returns its webContents id (null when none). |
 | `clipboardWrite` / `clipboardRead` | Wrap Electron's clipboard. |
 | `setSessionsOpen(v)` / `getSessionsBounds()` | Toggle / measure the Cloud session sidebar. |
 | `cloudState()` / `cloudRefresh()` | Cloud sidebar snapshot / force a list (reloads the fixture file). |
