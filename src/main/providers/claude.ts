@@ -38,6 +38,9 @@ export const claudeRuntime: ProviderRuntime = {
   onSettingsChanged(previous, next) {
     claudeSessions().onSettingsChanged(previous, next);
   },
+  onSurfaceEnter() {
+    claudeSessions().onSurfaceEnter();
+  },
   onPrPanelOpen() {
     claudeSessions().refreshPrStates('panel');
   },

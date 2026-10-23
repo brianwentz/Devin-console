@@ -169,6 +169,9 @@ describe('openhands source', () => {
     await controller.refresh('test');
     const shell = buildOpenHandsShellState(controller.snapshot(), source.connection());
     expect(OpenHandsShellStateSchema.safeParse(shell).success).toBe(true);
+    // The sidebar's "synced ..." line reads the controller's last successful list.
+    expect(shell.lastSyncAt).toBe(controller.snapshot().lastSyncAt);
+    expect(shell.lastSyncAt).not.toBeNull();
     const text = JSON.stringify(shell) + JSON.stringify(controller.snapshot());
     expect(text).not.toContain('SAK-fixture-secret');
     expect(text).not.toContain('runtime.test');

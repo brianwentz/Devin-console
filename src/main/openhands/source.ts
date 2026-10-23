@@ -215,6 +215,7 @@ export function buildOpenHandsShellState(snapshot: CloudState, connection: OpenH
   return {
     status,
     cached: snapshot.cached,
+    lastSyncAt: snapshot.lastSyncAt,
     sessions: snapshot.sessions,
     folders: snapshot.folders,
     lastError,

@@ -15,7 +15,7 @@ const ID_ALIASES = { cloudRefresh: 'refresh', sessionSearch: 'filter' } as const
 function toCloudState(oh: OpenHandsShellState): CloudState {
   return {
     status: oh.status === 'idle' ? 'connecting' : oh.status,
-    lastSyncAt: null,
+    lastSyncAt: oh.lastSyncAt,
     error: null,
     folders: oh.folders,
     folderTotals: {},

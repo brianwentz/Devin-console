@@ -340,8 +340,9 @@ export function lowerShell(): void {
   if (state.paneOpen && !state.paneCollapsed) addAtTop(tabManager?.activeView ?? null);
 }
 
-// The tab strip's scope follows the visible surface: the selected local
-// session on Local, else the Cloud session. setScope is a no-op when unchanged,
+// The tab strip's scope follows the visible surface: the selected session of
+// that surface (Cloud, Local, Claude, OpenHands; the registry's scopeFallback
+// covers surfaces without one). setScope is a no-op when unchanged,
 // so running it from applyLayout covers every surface/selection change without
 // each caller having to know about scopes.
 export function syncScope(): void {
@@ -392,8 +393,7 @@ export function applyLayout(): void {
   // Every surface change lands here, whichever path set state.surface.
   if (state.surface !== layoutSurface) {
     layoutSurface = state.surface;
-    if (layoutSurface === 'claude') claudeSessions().onSurfaceEnter();
-    else runtimeFor(layoutSurface)?.onSurfaceEnter?.();
+    runtimeFor(layoutSurface)?.onSurfaceEnter?.();
   }
   syncScope();
   const bounds = computeBounds(windowRef.getContentBounds(), layoutState());

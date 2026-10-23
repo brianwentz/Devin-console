@@ -20,16 +20,12 @@ export const GLOBAL = '';
 
 // Local (Devin CLI) sessions get their own GitHub tab scope, namespaced so a
 // local session id can never collide with a Cloud session id.
-export const LOCAL_SCOPE_PREFIX = 'local:';
-
 export function localScope(sessionId: string): string {
   return providerScope('local', sessionId);
 }
 
 // Claude Code sessions get their own GitHub tab scope, namespaced like the
 // local one so ids can never collide across sources.
-export const CLAUDE_SCOPE_PREFIX = 'claude:';
-
 export function claudeScope(sessionId: string): string {
   return providerScope('claude', sessionId);
 }

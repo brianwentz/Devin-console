@@ -234,12 +234,11 @@ export class ViewPool {
       if (opts.reload || stripHash(existing.view.webContents.getURL()) !== stripHash(url)) {
         this.loadUrl(existing, url);
       }
-      const hit = true;
       this.makeActive(existing);
       this.log('cloud-view-show', {
         kind: kindOf(key),
         sessionId: sid(key),
-        hit,
+        hit: true,
         liveCount: this.entries.size,
       });
       return;

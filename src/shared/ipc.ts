@@ -853,6 +853,8 @@ export type CloudState = z.infer<typeof CloudStateSchema>;
 export const OpenHandsShellStateSchema = z.object({
   status: OpenHandsStatusSchema,
   cached: z.boolean(),
+  /** Last successful list (ISO), or the cache's save time while only the cache is shown. */
+  lastSyncAt: z.string().nullable(),
   sessions: z.array(CloudSessionSchema),
   folders: z.array(z.string()),
   lastError: z.object({ op: z.string(), message: z.string() }).nullable(),

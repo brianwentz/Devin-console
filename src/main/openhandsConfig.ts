@@ -24,6 +24,7 @@ export function openhandsBaseUrl(): string {
 const INITIAL_STATE: OpenHandsShellState = {
   status: 'idle',
   cached: false,
+  lastSyncAt: null,
   sessions: [],
   folders: [],
   lastError: null,
