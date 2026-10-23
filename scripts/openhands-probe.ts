@@ -117,7 +117,17 @@ async function liveProbe(lines: string[]): Promise<void> {
   win.on('resize', fit);
 
   const baseHost = new URL(BASE).hostname;
-  const hosts: string[] = [];
+  const hosts = new Set<string>(); // first-seen order, de-duplicated
+  let recording = false; // (e) only counts navigations after login completed
+  let closed = false;
+  let onClosed: () => void = () => {};
+  const closedP = new Promise<void>((r) => {
+    onClosed = r;
+  });
+  win.on('closed', () => {
+    closed = true;
+    onClosed();
+  });
   let sawOther = false;
   let loggedIn: (() => void) | null = null;
   const loginDone = new Promise<void>((r) => {
@@ -132,13 +142,13 @@ async function liveProbe(lines: string[]): Promise<void> {
       return;
     }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
-    if (hosts[hosts.length - 1] !== u.hostname) hosts.push(u.hostname);
+    hosts.add(u.hostname);
     if (u.hostname !== baseHost) {
       sawOther = true;
       return;
     }
     if (u.pathname.startsWith('/conversations') || sawOther) loggedIn?.();
-    if (/^\/conversations\/[^/]+/.test(u.pathname) && !convShape) {
+    if (recording && /^\/conversations\/[^/]+/.test(u.pathname) && !convShape) {
       convShape = u.pathname.replace(/^\/conversations\/[^/]+/, '/conversations/<id>');
     }
   };
@@ -152,19 +162,21 @@ async function liveProbe(lines: string[]): Promise<void> {
   win.show();
   console.log('Log in to OpenHands in the probe window (10 min timeout).');
 
-  const ok = await Promise.race([loginDone.then(() => true), sleep(LOGIN_TIMEOUT_MS).then(() => false)]);
+  const ok = await Promise.race([loginDone.then(() => true), sleep(LOGIN_TIMEOUT_MS).then(() => false), closedP.then(() => false)]);
   lines.push(
     '## (d) Navigation hosts during login (main frame, in order, de-duplicated)',
     '',
-    hosts.length ? hosts.map((h) => `- ${h}`).join('\n') : '- none',
+    hosts.size ? [...hosts].map((h) => `- ${h}`).join('\n') : '- none',
     '',
   );
   if (!ok) {
-    lines.push('LOGIN WAIT TIMED OUT after 10 minutes - (a)-(c), (e), (f) not recorded.', '');
-    win.close();
+    lines.push(closed ? 'WINDOW CLOSED before login finished' : 'LOGIN WAIT TIMED OUT after 10 minutes', '- (a)-(c), (e), (f) not recorded.', '');
+    partial = closed ? 'window closed during login' : 'login timeout';
+    if (!closed) win.close();
     return;
   }
   await sleep(2000);
+  recording = true;
 
   const sesF: Fetcher = (u, i) => ses.fetch(u, i);
   const a = await probeFetch(sesF, '/api/v1/app-conversations/search?limit=5');
@@ -177,7 +189,14 @@ async function liveProbe(lines: string[]): Promise<void> {
     '',
   );
   if (API_KEY) {
-    const b = await probeFetch(sesF, '/api/v1/app-conversations/search?limit=5', { Authorization: `Bearer ${API_KEY}` });
+    // Key-only: a fresh in-memory partition that never held a cookie (no login, no
+    // navigation) + credentials:'omit' (Chromium never attaches a Cookie header), so a 200
+    // cannot come from the login session.
+    const keyOnly = session.fromPartition(`openhands-probe-keyonly-${Date.now()}`);
+    const cookiesInPartition = (await keyOnly.cookies.get({})).length;
+    const keyF: Fetcher = (u, i) => keyOnly.fetch(u, { ...i, credentials: 'omit' });
+    const b = await probeFetch(keyF, '/api/v1/app-conversations/search?limit=5', { Authorization: `Bearer ${API_KEY}` });
+    lines.push(`- key-only fetch (fresh partition, cookies in it: ${cookiesInPartition}, credentials: omit)`);
     lines.push(`- status: ${b.status} (type=${b.type}); response shape: ${b.shape}; items: ${b.items?.length ?? 'n/a'}`, '');
   } else lines.push('- OPENHANDS_API_KEY not set - skipped', '');
   lines.push(
@@ -189,7 +208,8 @@ async function liveProbe(lines: string[]): Promise<void> {
 
   console.log('Now click a conversation in the window (5 min timeout).');
   const t0 = Date.now();
-  while (!convShape && Date.now() - t0 < CLICK_TIMEOUT_MS) await sleep(500);
+  while (!convShape && !closed && Date.now() - t0 < CLICK_TIMEOUT_MS) await sleep(500);
+  if (closed) partial = 'window closed before (f)';
   lines.push(
     '## (e) Conversation page URL shape',
     '',
@@ -197,6 +217,7 @@ async function liveProbe(lines: string[]): Promise<void> {
     '',
   );
 
+  if (closed) return;
   const credits = await probeFetch(sesF, '/api/billing/credits');
   const quota = await probeFetch(sesF, '/api/quota/status');
   lines.push(
@@ -209,6 +230,8 @@ async function liveProbe(lines: string[]): Promise<void> {
   win.close();
 }
 
+let partial: string | null = null;
+
 async function main(): Promise<void> {
   await app.whenReady();
   const lines: string[] = [
@@ -220,7 +243,14 @@ async function main(): Promise<void> {
     `- OPENHANDS_API_KEY set: ${API_KEY ? 'yes' : 'no'} (value never recorded)`,
     '',
   ];
-  if (!SELFTEST) await liveProbe(lines);
+  if (!SELFTEST) {
+    try {
+      await liveProbe(lines);
+    } catch (e) {
+      partial = `error: ${msg(e)}`;
+    }
+  }
+  if (partial) lines.splice(3, 0, `- partial: true (${partial})`);
   const ses = session.fromPartition(SELFTEST ? 'openhands-probe-selftest' : 'persist:openhands-probe');
   lines.push(
     "## (g) Does `redirect:'manual'` return the 3xx instead of following? (local self-test, no real site)",
