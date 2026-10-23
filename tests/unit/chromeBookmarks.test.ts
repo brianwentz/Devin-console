@@ -181,10 +181,57 @@ describe('parseLocalState', () => {
   });
 });
 
+describe('tolerance and edge cases', () => {
+  it('keeps valid profiles when last_used is the wrong type', () => {
+    const r = parseLocalState({ profile: { info_cache: { Default: { name: 'A' } }, last_used: 5 } });
+    expect(r).toEqual({ profiles: [{ dir: 'Default', name: 'A' }], lastUsed: null });
+  });
+
+  it('survives a non-object profile and a non-object info_cache', () => {
+    expect(parseLocalState({ profile: 'x' })).toEqual({ profiles: [], lastUsed: null });
+    expect(parseLocalState({ profile: [] })).toEqual({ profiles: [], lastUsed: null });
+    // lastUsed is returned whenever it is a valid profile dir, even if not listed.
+    expect(parseLocalState({ profile: { info_cache: [], last_used: 'Profile 2' } })).toEqual({
+      profiles: [],
+      lastUsed: 'Profile 2',
+    });
+    expect(parseLocalState({ profile: { info_cache: 'x', last_used: 'Default' } }).profiles).toEqual([]);
+  });
+
+  it('does not split a surrogate pair when truncating', () => {
+    const label = buildFavoritesMenu(tree([u('a'.repeat(8) + '😀'.repeat(5), 'https://a.test/')]), { maxLabel: 10 })[0]!.label;
+    expect(label).toBe('a'.repeat(8) + '😀' + '…');
+    expect(Array.from(label)).toHaveLength(10);
+  });
+
+  it('drops nesting beyond the depth guard without throwing', () => {
+    let node: Record<string, unknown> = { type: 'url', name: 'deepest', url: 'https://d.test/' };
+    for (let i = 0; i < 40; i++) node = { type: 'folder', name: `f${i}`, children: [node] };
+    const t = parseChromeBookmarks({ roots: { bookmark_bar: { type: 'folder', name: 'b', children: [node] } } })!;
+    expect(JSON.stringify(t)).not.toContain('deepest');
+    expect(t.bar).toHaveLength(1);
+  });
+
+  it('applies the cap after filtering', () => {
+    const items: BookmarkNode[] = [];
+    for (let i = 0; i < 250; i++) {
+      items.push(u(`i${i}`, i % 10 === 0 ? 'javascript:void(0)' : i % 10 === 1 ? 'chrome://x' : `https://x.test/${i}`));
+    }
+    // 50 filtered out leaves exactly 200 valid: no "more"; 7 extra valid -> "… 7 more".
+    const exact = folderOf(buildFavoritesMenu(tree([{ kind: 'folder', name: 'F', children: items }])), 'F').children;
+    expect(exact).toHaveLength(200);
+    expect(exact.some((n) => n.kind === 'more')).toBe(false);
+    const extra = Array.from({ length: 7 }, (_, i) => u(`e${i}`, `https://e.test/${i}`));
+    const over = folderOf(buildFavoritesMenu(tree([{ kind: 'folder', name: 'F', children: [...items, ...extra] }])), 'F').children;
+    expect(over).toHaveLength(201);
+    expect(over[200]).toEqual({ kind: 'more', label: '… 7 more' });
+  });
+});
+
 describe('isValidProfileDir', () => {
   it('accepts Default and Profile N only', () => {
     for (const ok of ['Default', 'Profile 1', 'Profile 12']) expect(isValidProfileDir(ok)).toBe(true);
-    for (const bad of ['Guest Profile', 'System Profile', '../x', 'Profile x', 'Profile ', 'profile 1', 'Default/..', '']) {
+    for (const bad of ['Profile 0', 'Profile 007', 'Profile 1234567','Guest Profile', 'System Profile', '../x', 'Profile x', 'Profile ', 'profile 1', 'Default/..', '']) {
       expect(isValidProfileDir(bad)).toBe(false);
     }
   });

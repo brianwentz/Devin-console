@@ -73,7 +73,9 @@ function safeUrl(raw: string): URL | null {
 // single `&` as an accelerator marker), so the cap counts what the user sees in the menu
 // source text and an escape can never be cut in half.
 function menuLabel(raw: string, maxLabel: number): string {
-  const text = raw.length > maxLabel ? raw.slice(0, Math.max(0, maxLabel - 1)) + '…' : raw;
+  // Code points, not UTF-16 units, so a surrogate pair is never split.
+  const chars = Array.from(raw);
+  const text = chars.length > maxLabel ? chars.slice(0, Math.max(0, maxLabel - 1)).join('') + '…' : raw;
   return text.replace(/&/g, '&&');
 }
 
@@ -110,7 +112,8 @@ export function buildFavoritesMenu(
     { kind: 'folder', name: 'Other bookmarks', children: tree.other },
     { kind: 'folder', name: 'Mobile bookmarks', children: tree.mobile },
   ];
-  // Shape uncapped, then cap the top level like any other folder.
+  // Shape uncapped, then cap the top level like any other folder. The top-level cap may
+  // hide the Other/Mobile folders when the bar is huge; that is intentional.
   const shaped = shapeList(top, Number.MAX_SAFE_INTEGER, maxLabel);
   return capAll(shaped, maxPerFolder);
 }
@@ -123,36 +126,28 @@ function capAll(items: FavoritesMenuNode[], max: number): FavoritesMenuNode[] {
 }
 
 export function isValidProfileDir(dir: string): boolean {
-  return dir === 'Default' || /^Profile \d+$/.test(dir);
+  return dir === 'Default' || /^Profile [1-9]\d{0,5}$/.test(dir);
 }
 
 function profileOrder(dir: string): number {
   return dir === 'Default' ? -1 : Number(dir.slice('Profile '.length));
 }
 
-const LocalStateSchema = z
-  .object({
-    profile: z
-      .object({
-        info_cache: z.record(z.string(), z.unknown()).optional(),
-        last_used: z.string().optional(),
-      })
-      .passthrough()
-      .optional(),
-  })
-  .passthrough();
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+// Field-by-field tolerant: one wrong-typed field never drops the rest. `lastUsed` is
+// returned only when it is a valid profile dir (it need not be listed in info_cache).
 export function parseLocalState(json: unknown): { profiles: { dir: string; name: string }[]; lastUsed: string | null } {
-  const parsed = LocalStateSchema.safeParse(json);
-  const profile = parsed.success ? parsed.data.profile : undefined;
-  if (!profile) return { profiles: [], lastUsed: null };
-  const profiles = Object.entries(profile.info_cache ?? {})
+  const profile = isRecord(json) ? json.profile : undefined;
+  if (!isRecord(profile)) return { profiles: [], lastUsed: null };
+  const cache = isRecord(profile.info_cache) ? profile.info_cache : {};
+  const profiles = Object.entries(cache)
     .filter(([dir]) => isValidProfileDir(dir))
     .map(([dir, info]) => {
-      const name = (info as { name?: unknown } | null)?.name;
+      const name = isRecord(info) ? info.name : undefined;
       return { dir, name: typeof name === 'string' && name.trim() ? name : dir };
     })
     .sort((a, b) => profileOrder(a.dir) - profileOrder(b.dir));
   const last = profile.last_used;
-  return { profiles, lastUsed: last !== undefined && isValidProfileDir(last) ? last : null };
+  return { profiles, lastUsed: typeof last === 'string' && isValidProfileDir(last) ? last : null };
 }
