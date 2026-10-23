@@ -97,6 +97,12 @@ export function providerById(id: ProviderId): ProviderDescriptor {
   return p;
 }
 
+// Non-throwing surface lookup for a provider id that may come from outside the
+// ProviderId union (e.g. a route decision).
+export function surfaceForProvider(id: string): ProviderDescriptor['surface'] | undefined {
+  return PROVIDERS.find((p) => p.id === id)?.surface;
+}
+
 export function providerBySurface(surface: string): ProviderDescriptor | undefined {
   return PROVIDERS.find((p) => p.surface === surface);
 }

@@ -6,6 +6,7 @@ import {
   type RouteDecision,
   type RouteDisposition,
   type RouteSource,
+  DEVIN_PROVIDER_ID,
 } from '../core/linkRouter';
 import { compileLinkRules, matchLinkRule, type CompiledRule } from '../core/linkRules';
 import type { LinkRule } from '../shared/ipc';
@@ -14,7 +15,7 @@ import { allowExternalEnabled } from './settings';
 import { fixtureOrigins, state, type ViewName } from './state';
 import { GLOBAL } from '../core/tabModel';
 import { keyForUrl } from '../core/viewPool';
-import { DEVIN_PROVIDER_ID } from '../core/linkRouter';
+import { surfaceForProvider } from '../core/providers';
 import { poolFor } from './cloudKit/pools';
 import { cloudViews } from './cloudViews';
 import { applyLayout, notifyShell, setPaneOpen } from './window';
@@ -102,7 +103,14 @@ export function applyDecision(
   sourceProviderId?: string,
 ): RouteDecision {
   const context = routeContext();
-  const decision = route(rawUrl, sourceOf(view, sourceProviderId), disposition, context, sourceProviderId);
+  let result: RouteDecision | undefined;
+  const decision = route(
+    rawUrl,
+    sourceOf(view, sourceProviderId),
+    disposition,
+    context,
+    sourceProviderId,
+  );
   switch (decision.kind) {
     case 'gh-tab': {
       openGitHubTab(rawUrl, decision.background);
@@ -137,14 +145,16 @@ export function applyDecision(
       break;
     case 'provider': {
       const pool = poolFor(decision.providerId);
-      if (pool) {
-        // Hosted providers all live on the cloud surface until a second one defines its own.
-        state.surface = 'cloud';
+      const surface = surfaceForProvider(decision.providerId);
+      if (pool && surface) {
+        state.surface = surface;
         pool.show(pool.keyForUrl(rawUrl), rawUrl);
         recordDecision(view, event, rawUrl, 'provider', { providerId: decision.providerId });
         applyLayout();
       } else {
+        // No pool/surface for the id: nothing was applied, so report a deny.
         recordDecision(view, event, rawUrl, 'deny');
+        result = { kind: 'deny' };
       }
       break;
     }
@@ -155,7 +165,7 @@ export function applyDecision(
       recordDecision(view, event, rawUrl, 'deny');
       break;
   }
-  return decision;
+  return result ?? decision;
 }
 
 function popupDisposition(details: Electron.HandlerDetails): RouteDisposition {

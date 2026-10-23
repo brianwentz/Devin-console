@@ -8,6 +8,7 @@ import {
   providerById,
   providerBySource,
   providerBySurface,
+  surfaceForProvider,
 } from '../../src/core/providers';
 
 describe('provider registry', () => {
@@ -76,5 +77,15 @@ describe('provider registry', () => {
   it('has unique ids and surfaces', () => {
     expect(new Set(PROVIDERS.map((p) => p.id)).size).toBe(PROVIDERS.length);
     expect(new Set(PROVIDERS.map((p) => p.surface)).size).toBe(PROVIDERS.length);
+  });
+});
+
+describe('surfaceForProvider', () => {
+  it('maps a known provider id to its own surface', () => {
+    expect(surfaceForProvider('devin-cloud')).toBe('cloud');
+    expect(surfaceForProvider('claude')).toBe('claude');
+  });
+  it('returns undefined for an unknown id instead of throwing', () => {
+    expect(surfaceForProvider('nope')).toBeUndefined();
   });
 });
