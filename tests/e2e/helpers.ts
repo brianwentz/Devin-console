@@ -123,7 +123,8 @@ const profileWslRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wsl-'));
 
 // Quiet mode is the default for every test-mode launch (window invisible,
 // never takes the desktop foreground); AGENT_WORKSPACE_TEST_QUIET=0 shows it
-// — that is what  sets for watching a run.
+// — that is what `npm run test:e2e:headed` sets, process-wide, for watching a
+// run. Specs must not opt out themselves (tests/unit/quietGuard.test.ts).
 export async function launchApp(
   userData: string,
   logFile: string,

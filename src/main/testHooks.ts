@@ -169,12 +169,16 @@ export function registerTestHooks(): void {
         state.credentials?.update(id, patch) ?? null,
       deleteCredential: (id: string) => state.credentials?.delete(id) ?? false,
       // F4: would a foreign webContents (the devin view) pass the IPC guard?
-      ipcProbe: () => {
+      ipcProbe: (pooledId?: number) => {
         // A pooled NON-active Cloud view — must still pass the hosted-view
-        // guard (a detached view's webContents is just as privileged).
-        const pooled = allPoolViews()
-          .map((v) => v.webContents)
-          .find((wc) => wc !== state.devinView?.webContents);
+        // guard (a detached view's webContents is just as privileged). With a
+        // webContents id (from cloudViewLoadUrl), probe exactly that view: the
+        // pool order need not match the caller's pick, and the load rekeys it.
+        const pooled = pooledId !== undefined
+          ? webContents.fromId(pooledId)
+          : allPoolViews()
+              .map((v) => v.webContents)
+              .find((wc) => wc !== state.devinView?.webContents);
         return {
           foreign: fromShell({ sender: state.devinView?.webContents, senderFrame: null } as never),
           shell: state.shellView
@@ -191,9 +195,9 @@ export function registerTestHooks(): void {
       // fixture page, which the http fixture tenant can't satisfy.
       cloudViewLoadUrl: async (key: string, url: string) => {
         const target = cloudViews().viewForKey(key);
-        if (!target) return false;
+        if (!target) return null;
         await target.webContents.loadURL(url).catch(() => undefined);
-        return true;
+        return target.webContents.id;
       },
       cloudShow: (id: string) => cloudSessions().openSession(id),
       cloudPrefetchHook: (id: string) => cloudSessions().prefetchSession(id),

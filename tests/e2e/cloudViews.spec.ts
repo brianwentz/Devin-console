@@ -59,10 +59,11 @@ function hooks(app: ElectronApplication) {
           (globalThis as any).__agentworkspace.cloudViewLoadUrl(args.key, args.url),
         { key, url },
       ),
-    ipcProbe: () =>
-      app.evaluate(() => (globalThis as any).__agentworkspace.ipcProbe()) as Promise<{
-        pooled: boolean | null;
-      }>,
+    ipcProbe: (pooledId?: number) =>
+      app.evaluate(
+        (_e, id: number | undefined) => (globalThis as any).__agentworkspace.ipcProbe(id),
+        pooledId,
+      ) as Promise<{ pooled: boolean | null }>,
   };
 }
 
@@ -194,8 +195,9 @@ test('cloud view pool: cache, eviction, rekey, prefetch, guards, shutdown', asyn
       .poll(async () => (await h.views()).filter((v) => !v.active).length)
       .toBeGreaterThanOrEqual(1);
     const nonActive = (await h.views()).find((v) => !v.active)!.key;
-    await h.loadPooled(nonActive, `${fixtures.githubUrl}/page/pooled-guard`);
-    await expect.poll(async () => (await h.ipcProbe()).pooled, { timeout: 8000 }).toBe(true);
+    const pooledId = await h.loadPooled(nonActive, `${fixtures.githubUrl}/page/pooled-guard`);
+    expect(pooledId).toEqual(expect.any(Number));
+    await expect.poll(async () => (await h.ipcProbe(pooledId as number)).pooled, { timeout: 8000 }).toBe(true);
   } finally {
     await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
     await app.close().catch(() => undefined);

@@ -1,5 +1,6 @@
-// ux3 S1b: real-pointer drags through Chromium's native HTML5 DnD — needs an
-// activated window, so every launch opts out of quiet mode like tabstrip.
+// ux3 S1b: real-pointer drags through Chromium's native HTML5 DnD. Runs in the
+// default quiet mode (invisible, never activated) like every other spec — do
+// not opt out with AGENT_WORKSPACE_TEST_QUIET=0 (tests/unit/quietGuard.test.ts).
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,7 +61,6 @@ test('Local: real-pointer workspace header drag reorders and persists', async ()
   const wsB = mkdtempSync(join(tmpdir(), 'dndp-wsB-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    AGENT_WORKSPACE_TEST_QUIET: '0',
     AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
     AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',
@@ -99,7 +99,6 @@ test('Local: real-pointer workspace header drag reorders and persists', async ()
 
 test('Claude: real-pointer workspace header drag reorders and persists', async () => {
   const { app, profile } = await launchWithClaudeFixture(fixtures, {
-    AGENT_WORKSPACE_TEST_QUIET: '0',
     AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
   });
   try {
@@ -137,7 +136,6 @@ test('negative: a lone workspace header is not draggable', async () => {
   const ws = mkdtempSync(join(tmpdir(), 'dndp-ws-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    AGENT_WORKSPACE_TEST_QUIET: '0',
     AGENT_WORKSPACE_LOCAL_AGENT_CMD: FAKE_AGENT_CMD,
     AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
     FAKE_ACP_LIST: '1',

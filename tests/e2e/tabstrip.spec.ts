@@ -54,11 +54,9 @@ async function domOrder(shell: Page): Promise<string[]> {
 test('pointer and keyboard reorder, keyboard activate/close, titles', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-'));
   const logFile = join(profile, 'events.jsonl');
-  // Headed: dnd-kit's click-vs-drag distinction on the sub-activation-distance
-  // move needs a real activated window — the pointerup is otherwise swallowed.
-  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    AGENT_WORKSPACE_TEST_QUIET: '0',
-  });
+  // Quiet like every spec: dnd-kit's pointer and keyboard sensors work without
+  // an activated window (verified on Electron 44, 20/20 over repeats).
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await setPaneFraction(app, WIDE_PANE);

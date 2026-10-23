@@ -97,7 +97,13 @@ test('quiet (default): invisible + never activated; screenshot still renders; ge
   }
 });
 
+// This case shows a real window, so it only runs under `npm run test:e2e:headed`
+// (which exports AGENT_WORKSPACE_TEST_QUIET=0 process-wide) — never in a default run.
 test('AGENT_WORKSPACE_TEST_QUIET=0: headed run keeps the window visible', async () => {
+  test.skip(
+    process.env.AGENT_WORKSPACE_TEST_QUIET !== '0',
+    'visible-window case: run via npm run test:e2e:headed',
+  );
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-headed-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
