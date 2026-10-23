@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { routeUrl } from '../../../core/linkRouter';
 import { compileLinkRules, matchLinkRule, validateLinkRule } from '../../../core/linkRules';
-import type { LinkRule } from '../../../shared/ipc';
+import type { FavoritesProfilesReply, LinkRule } from '../../../shared/ipc';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
 import { FieldError, fieldInputClass } from './fields';
@@ -17,6 +17,72 @@ const PATTERN_PLACEHOLDER: Record<LinkRule['kind'], string> = {
   prefix: 'https://jira.example.com/browse/',
   regex: '^https://gitlab\\.example\\.com/.*/-/merge_requests/\\d+',
 };
+
+type ChromeProfile = FavoritesProfilesReply['profiles'][number];
+
+// Read-only Chrome profile list for the Favorites menu; null while loading.
+function useChromeProfiles(): ChromeProfile[] | null {
+  const [profiles, setProfiles] = useState<ChromeProfile[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    window.agentworkspace
+      .favoritesProfiles()
+      .then((reply) => {
+        if (live) setProfiles(reply.profiles);
+      })
+      .catch(() => {
+        if (live) setProfiles([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return profiles;
+}
+
+function FavoritesSection({ value, error }: { value: string; error: string | undefined }) {
+  const profiles = useChromeProfiles();
+  // A configured profile Chrome no longer lists stays selected (never silently changed).
+  const unlisted = value !== '' && profiles !== null && !profiles.some((p) => p.dir === value);
+  return (
+    <section
+      data-settings-section="links-favorites"
+      className={`flex flex-col gap-3 ${sectionSeparatorClass}`}
+    >
+      <h3 className={sectionHeadingClass}>Favorites</h3>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[#aeb9c8]">Chrome profile</span>
+        <select
+          id="favoritesProfileSelect"
+          className={inputClass}
+          style={{ maxWidth: '24rem' }}
+          value={value}
+          aria-invalid={error ? 'true' : undefined}
+          onChange={(event) => updateDraft({ favoritesChromeProfile: event.target.value })}
+        >
+          <option value="">Last used Chrome profile</option>
+          {(profiles ?? []).map((profile) => (
+            <option key={profile.dir} value={profile.dir}>
+              {profile.name}
+            </option>
+          ))}
+          {(unlisted || (value !== '' && profiles === null)) && (
+            <option value={value}>{profiles === null ? value : `${value} (not found)`}</option>
+          )}
+        </select>
+        <FieldError inputId="favoritesProfileSelect" message={error} />
+        <span className="text-xs text-[#7f8ca0]">
+          The favorites menu shows this profile's bookmarks, read from Google Chrome (read-only).
+        </span>
+        {profiles !== null && profiles.length === 0 && (
+          <span className="text-xs text-[#7f8ca0]">
+            Google Chrome profiles not found
+          </span>
+        )}
+      </label>
+    </section>
+  );
+}
 
 export function LinksTab() {
   const { draft, errors } = useSettingsDraft();
@@ -214,6 +280,7 @@ export function LinksTab() {
           <span>Open a tab when a session creates a PR</span>
         </label>
       </section>
+      <FavoritesSection value={draft.favoritesChromeProfile} error={errors.favoritesChromeProfile} />
     </div>
   );
 }

@@ -20,11 +20,12 @@ import {
   updateOnResume,
   updateOnWindowFocus,
 } from './updater';
-import { handleLink } from './routing';
+import { handleLink, openUserUrl } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
+import { favoritesMenuClick, favoritesMenuItems } from './favoritesMenu';
 import { allPoolViews } from './cloudKit/pools';
 import { state, testMode } from './state';
 import {
@@ -168,12 +169,16 @@ export function registerTestHooks(): void {
         state.credentials?.update(id, patch) ?? null,
       deleteCredential: (id: string) => state.credentials?.delete(id) ?? false,
       // F4: would a foreign webContents (the devin view) pass the IPC guard?
-      ipcProbe: () => {
+      ipcProbe: (pooledId?: number) => {
         // A pooled NON-active Cloud view — must still pass the hosted-view
-        // guard (a detached view's webContents is just as privileged).
-        const pooled = allPoolViews()
-          .map((v) => v.webContents)
-          .find((wc) => wc !== state.devinView?.webContents);
+        // guard (a detached view's webContents is just as privileged). With a
+        // webContents id (from cloudViewLoadUrl), probe exactly that view: the
+        // pool order need not match the caller's pick, and the load rekeys it.
+        const pooled = pooledId !== undefined
+          ? webContents.fromId(pooledId)
+          : allPoolViews()
+              .map((v) => v.webContents)
+              .find((wc) => wc !== state.devinView?.webContents);
         return {
           foreign: fromShell({ sender: state.devinView?.webContents, senderFrame: null } as never),
           shell: state.shellView
@@ -190,9 +195,9 @@ export function registerTestHooks(): void {
       // fixture page, which the http fixture tenant can't satisfy.
       cloudViewLoadUrl: async (key: string, url: string) => {
         const target = cloudViews().viewForKey(key);
-        if (!target) return false;
+        if (!target) return null;
         await target.webContents.loadURL(url).catch(() => undefined);
-        return true;
+        return target.webContents.id;
       },
       cloudShow: (id: string) => cloudSessions().openSession(id),
       cloudPrefetchHook: (id: string) => cloudSessions().prefetchSession(id),
@@ -285,6 +290,9 @@ export function registerTestHooks(): void {
       simulateUpdateAvailable: (version: string) => updateAvailable(version),
       simulateUpdateFocus: () => updateOnWindowFocus(),
       simulateUpdateResume: () => updateOnResume(),
+      openUserUrl: (url: string, source: 'drop' | 'typed' | 'favorite', target: 'new' | 'current') =>
+        openUserUrl(url, source, target),
+      addressBar: () => ({ ...state.addressBar }),
       panelOpen: () => state.notificationsPanelOpen,
       // Service-user identity resolution (never the raw user id).
       identity: () => identityResolver().current(),
@@ -352,6 +360,8 @@ export function registerTestHooks(): void {
         }
         claudeSessions().open(id);
       },
+      favoritesMenuItems: () => favoritesMenuItems(),
+      favoritesMenuClick: (id: string) => favoritesMenuClick(id),
       claudeMenuItems: () => claudeSessions().menuItems(),
       claudeMenuClick: (id: string) => claudeSessions().clickMenuItem(id),
       localMenuItems: () => localContextMenuItems(),

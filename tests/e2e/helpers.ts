@@ -123,7 +123,8 @@ const profileWslRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-wsl-'));
 
 // Quiet mode is the default for every test-mode launch (window invisible,
 // never takes the desktop foreground); AGENT_WORKSPACE_TEST_QUIET=0 shows it
-// — that is what  sets for watching a run.
+// — that is what `npm run test:e2e:headed` sets, process-wide, for watching a
+// run. Specs must not opt out themselves (tests/unit/quietGuard.test.ts).
 export async function launchApp(
   userData: string,
   logFile: string,
@@ -178,6 +179,9 @@ export async function launchApp(
       // host); hosts.ssh is empty unless a spec adds one.
       AGENT_WORKSPACE_TEST_SSH_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeSsh.cjs')}`,
       FAKE_SSH_ROOT: join(profileWslRoot, 'ssh-root'),
+      // The favorites reader never sees the real Chrome profile: a missing dir by
+      // default; specs pass a copy of tests/fixtures/chrome-user-data.
+      AGENT_WORKSPACE_TEST_CHROME_USER_DATA: join(profileWslRoot, 'no-chrome'),
       ...extraEnv,
     },
   });

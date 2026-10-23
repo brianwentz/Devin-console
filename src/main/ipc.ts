@@ -34,6 +34,13 @@ import {
   TabsCloseScopeArg,
   TabsReloadMenuArg,
   TabsTabMenuArg,
+  OpenUserUrlArg,
+  TabsDropTypesArg,
+  FavoritesMenuArg,
+  type FavoritesMenuReply,
+  AddressBarArg,
+  FavoritesProfilesReplySchema,
+  type FavoritesProfilesReply,
   type Settings,
   type SettingsCommitResult,
   type SettingsPatch,
@@ -49,11 +56,12 @@ import { log } from './log';
 import { badgeIconSize, notificationStore } from './notifications';
 import { notifier, openNotification, openPr, openPrs } from './notifier';
 import { prStore } from './prs';
-import { handleLink } from './routing';
+import { handleLink, openUserUrl } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
-import { historyAction, navigationTarget } from './shortcuts';
+import { historyAction, navigationTarget, openAddressBarShortcut } from './shortcuts';
 import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, SessionReorderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
-import { state } from './state';
+import { bookmarksReader } from './bookmarks';
+import { debugDrops, state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
 import { runtimeFor, runtimes } from './providers';
@@ -66,6 +74,7 @@ import {
 } from './providers/openhands';
 import { openhandsOpenSession, openhandsShowHome } from './openhands/views';
 import { cloudViews } from './cloudViews';
+import { popupFavoritesMenu } from './favoritesMenu';
 import {
   applyLayout,
   beginDrag,
@@ -75,6 +84,7 @@ import {
   notifyShell,
   publicState,
   setNotificationsPanel,
+  setAddressBar,
   setPrsPanel,
   setPaneOpen,
   setSessionsOpen,
@@ -214,6 +224,40 @@ export function setupIpc(): void {
       x: Math.round(parsed.data.x),
       y: Math.round(parsed.data.y),
     });
+  });
+  guardedHandle(IpcChannels.tabsOpenUserUrl, (_event, payload: unknown) => {
+    const parsed = OpenUserUrlArg.safeParse(payload);
+    if (!parsed.success) return { ok: false, reason: 'invalid' };
+    return openUserUrl(parsed.data.url, parsed.data.source, parsed.data.target);
+  });
+  guardedOn(IpcChannels.tabsAddressBar, (_event, payload: unknown) => {
+    const parsed = AddressBarArg.safeParse(payload);
+    if (!parsed.success) return;
+    const { open, mode, source } = parsed.data;
+    // The shell's Ctrl+T / Ctrl+L (matched in the renderer, outside the
+    // terminal dock) take the same path as the hosted-view shortcut.
+    if (open && source === 'shortcut') openAddressBarShortcut(mode ?? 'new');
+    else setAddressBar(open, mode ?? 'new', source ?? 'shell');
+  });
+  guardedOn(IpcChannels.tabsDropTypes, (_event, payload: unknown) => {
+    if (!debugDrops) return;
+    const parsed = TabsDropTypesArg.safeParse(payload);
+    if (!parsed.success) return;
+    log('shell', 'tab-drop-types', { detail: { types: parsed.data.types } });
+  });
+  // Native: the menu paints above the hosted views, so the shell is never raised.
+  guardedHandle(IpcChannels.tabsFavoritesMenu, async (_event, payload: unknown): Promise<FavoritesMenuReply> => {
+    const parsed = FavoritesMenuArg.safeParse(payload);
+    if (!parsed.success) return { action: null };
+    return popupFavoritesMenu(parsed.data.x, parsed.data.y);
+  });
+  // Settings-only: Chrome profile names reach the shell's Settings page, never a log.
+  guardedHandle(IpcChannels.favoritesProfiles, async (): Promise<FavoritesProfilesReply> => {
+    const profiles = await bookmarksReader().profiles();
+    const parsed = FavoritesProfilesReplySchema.safeParse({
+      profiles: profiles.map((p) => ({ dir: p.dir, name: Array.from(p.name).slice(0, 256).join('') })),
+    });
+    return parsed.success ? parsed.data : { profiles: [] };
   });
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);

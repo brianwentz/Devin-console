@@ -54,6 +54,20 @@ button:disabled {
   background: #27364a;
 }
 
+/* Link drag over the tab row (pointer-events: none, so the drag keeps hitting the row). */
+.tabDropHint {
+  z-index: 2;
+  margin: 3px 6px 3px 0;
+  border: 1px dashed #5b8cc9;
+  background: rgba(16, 23, 34, 0.92);
+  color: #c9d6e6;
+}
+
+.tabDropHint.error {
+  border-color: #d93a2f;
+  color: #f0b6b0;
+}
+
 .tab {
   /* shrink to fit the title-row strip before it scrolls */
   flex: 1 1 170px;

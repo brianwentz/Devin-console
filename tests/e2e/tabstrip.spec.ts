@@ -34,7 +34,9 @@ async function order(app: ElectronApplication): Promise<string[]> {
 
 // Fractions of the 1338 px available at the 1400 px test window (see core/layout paneAvailable).
 const WIDE_PANE = 0.568; // ≈760 px, rendered at 698 px so the devin view keeps MIN_DEVIN_WIDTH
-const NARROW_PANE = 0.314; // ≈420 px
+// ≈460 px: after the 138 px caption overlay and the back/forward/reload/+/star
+// buttons the strip still fits one 104 px min-width tab, so "fully visible" holds.
+const NARROW_PANE = 0.344;
 
 async function setPaneFraction(app: ElectronApplication, fraction: number): Promise<void> {
   await app.evaluate(
@@ -52,11 +54,9 @@ async function domOrder(shell: Page): Promise<string[]> {
 test('pointer and keyboard reorder, keyboard activate/close, titles', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-'));
   const logFile = join(profile, 'events.jsonl');
-  // Headed: dnd-kit's click-vs-drag distinction on the sub-activation-distance
-  // move needs a real activated window — the pointerup is otherwise swallowed.
-  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
-    AGENT_WORKSPACE_TEST_QUIET: '0',
-  });
+  // Quiet like every spec: dnd-kit's pointer and keyboard sensors work without
+  // an activated window (verified on Electron 44, 20/20 over repeats).
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
   try {
     await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
     await setPaneFraction(app, WIDE_PANE);

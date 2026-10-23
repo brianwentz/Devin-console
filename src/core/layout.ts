@@ -21,6 +21,9 @@ export interface LayoutState {
   // Analytics surface only: the shell-rendered Devin/Claude tab strip sits at
   // the top of the main column and the main rect shrinks by its height.
   analyticsTabs?: boolean;
+  // Linked Context address bar: shell DOM drawn under the title bar across
+  // the pane; the hosted tab rect shrinks by its height while the pane shows.
+  addressBarOpen?: boolean;
 }
 
 export interface WindowBounds {
@@ -46,6 +49,8 @@ export const TITLE_BAR_HEIGHT = 36;
 // one-line usage summary row rides inside the same strip region.
 export const ANALYTICS_USAGE_ROW_HEIGHT = 24;
 export const ANALYTICS_TABS_HEIGHT = 36 + ANALYTICS_USAGE_ROW_HEIGHT;
+// Height of the on-demand Linked Context address bar row (shell DOM).
+export const ADDRESS_BAR_HEIGHT = 32;
 export const MIN_PANE_WIDTH = 320;
 // Cloud session sidebar column (left of the devin view, right of the rail).
 export const SESSIONS_MIN_WIDTH = 200;
@@ -154,7 +159,24 @@ export function leftChrome(layout: LayoutState, width: number): number {
 // everything else is laid out: full main-column width, directly under the
 // title bar; the main rect moves down and shrinks by the strip height. Pane,
 // splitters, sessions column and dock are unaffected.
+// The address bar is carved out of the top of the pane the same way: only the
+// hosted tab rect moves; a closed or auto-collapsed pane has nothing to shift.
 export function computeBounds(windowSize: Size, layout: LayoutState): WindowBounds {
+  const bounds = computeAnalyticsBounds(windowSize, layout);
+  if (!layout.addressBarOpen || !bounds.ghTab) return bounds;
+  const barHeight = Math.min(ADDRESS_BAR_HEIGHT, bounds.ghTab.height);
+  return {
+    ...bounds,
+    ghTab: {
+      x: bounds.ghTab.x,
+      y: bounds.ghTab.y + barHeight,
+      width: bounds.ghTab.width,
+      height: Math.max(0, bounds.ghTab.height - barHeight),
+    },
+  };
+}
+
+function computeAnalyticsBounds(windowSize: Size, layout: LayoutState): WindowBounds {
   const base = computeBoundsBase(windowSize, layout);
   if (!layout.analyticsTabs) return base;
   const stripHeight = Math.min(ANALYTICS_TABS_HEIGHT, base.devin.height);

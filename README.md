@@ -44,6 +44,8 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 
 - The window opens on the **Cloud** surface — your Devin tenant's web app, hosted. Change the tenant under **Settings → Devin → Tenant URL**; SSO sign-in runs inside the hosted view, nothing is intercepted.
 - Click any GitHub link in a session — it opens in the tabbed **Linked Context** pane on the right (`Ctrl+Shift+G` toggles it). **Settings → Link Handling → Linked Context** holds the tab pool (keep-alive, max live tabs) and the toggle that opens a tab when a session creates a PR.
+- **Settings → Link Handling → Favorites** picks which Google Chrome profile the favorites (bookmarks) menu shows — *Last used Chrome profile* by default. Bookmarks are read from Chrome's own files on this computer and never changed; if a chosen profile disappears, the menu falls back to the last used one and the setting keeps your choice.
+- Open any web page in the pane yourself: the **+** button after the tabs (or `Ctrl+T`) shows an address bar under the tab row — type an address and press `Enter`. `Ctrl+L` edits the active tab's address instead. `Esc` or clicking away closes the bar; Devin tenant addresses open in the Cloud surface.
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Devin**.
@@ -105,6 +107,8 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Shift+[` / `]` | Shrink / grow the pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
+| `Ctrl+T` | New tab: open the address bar (opens Linked Context first when it is hidden). macOS: `Cmd+T` only; inside the terminal or a text field it stays that control's own key |
+| `Ctrl+L` | Edit the active tab's address (a new tab when the session has none). macOS: `Cmd+L` only; inside the terminal or a text field it keeps its usual meaning |
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
 | `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; the OpenHands home page) |
 | `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |
@@ -112,7 +116,7 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Enter` | Send the message in a Devin Local or Claude chat composer (`Enter` inserts a newline) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the focused view |
 
-GitHub tabs can be dragged to reorder; right-click a tab for *Copy address*, or the strip for *Reload all tabs in this session*.
+Linked Context tabs can be dragged to reorder; right-click a tab for *Copy address*, or the strip for *Reload all tabs in this session*. Drag a link (from a browser, a page or another app) onto the tab row to open it as a new tab in the current session; dropped text that is not a web address is refused with a short message, and a link that is already open just switches to its tab. The star at the right end of the tab row lists your Google Chrome bookmarks (bookmarks bar, then *Other bookmarks* and *Mobile bookmarks*, folders as submenus); pick one to open it as a new tab in the current session. Without Chrome it reads *Chrome bookmarks not found*.
 
 In the terminal: `Ctrl+C` copies when text is selected (otherwise it is sent to the shell), `Ctrl+Shift+C` copies, `Ctrl+V` / `Ctrl+Shift+V` paste; right-click copies the selection or pastes when nothing is selected. On macOS use `Cmd+C` / `Cmd+V` — plain `Ctrl+C` / `Ctrl+V` keep their terminal meaning.
 

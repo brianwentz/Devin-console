@@ -116,7 +116,8 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_GH_CMD` | test mode | Full command line replacing `gh` for the PR-state fallback (`out/fixtures/fakeGh.cjs` reads `FAKE_GH_JSON`). |
 | `AGENT_WORKSPACE_TEST_WSL_CMD` | test mode | Full command line replacing `wsl.exe` for *every* invocation (enumeration, probe, spawn, pty, helper deploy/launch). `launchApp` defaults it to `node out/fixtures/fakeWsl.cjs` with `FAKE_WSL_DISTROS=''` so specs stay local-only; the fake reads `FAKE_WSL_DISTROS` (`"Fake:Running:default,Other:Stopped"`; `FAKE_WSL_DISTROS_FILE`, same syntax re-read per call, wins when the file exists — flips a distro mid-run; a spec of `FAIL` makes `-l` hang until the caller's timeout kills it — a wedged VM; `NONE` makes it exit 1 at once with no output — no distros / no WSL feature), `FAKE_WSL_HOME` (default `/home/u`), `FAKE_WSL_ROOT` (`--cd` map root), `FAKE_WSL_ENV_MARKER`, `FAKE_WSL_NO_CLAUDE`, `FAKE_WSL_NO_GH`, `FAKE_WSL_HOOKS`, `FAKE_WSL_CLAUDE_CMD`, `FAKE_WSL_DEVIN_CMD`, `FAKE_WSL_SPAWN_LOG`, `FAKE_WSL_PROBE_DELAY_MS` (sleeps that long inside the probe line before answering), `FAKE_WSL_NO_NODE=1` (the env capture's `__DW_NODE__` marker answers `NONODE` instead of a node version), `FAKE_WSL_NODE_VERSION` (that marker's version, default `22.12.0`), `FAKE_WSL_NODE` (node binary the helper launch line runs; default the fake's own node), `FAKE_WSL_HELPER_HANG=1` (stops forwarding the helper's stdout after its first line - wedged-VM simulation), `FAKE_WSL_HELPER_TERMINATE_ONCE=<marker>` (while the marker exists the launch deletes it, flips `FAKE_WSL_DISTROS_FILE` to Stopped and exits 1 before hello). The helper child gets the canned env + the Windows basics node needs + every `FAKE_*` knob + `FAKE_WSL_HELPER=1` (so specs can tell `env.get` from the `-ilc` capture), never the whole Windows env; it runs with `node -r out/fixtures/fakeWslHelperPreload.cjs`, which maps the helper's exec of the probed linux `…/claude` path (`agents.list`) to a node one-liner printing `FAKE_CLAUDE_AGENTS` (raw JSON, default `[]`) — the same knob `wsl.exe … claude agents` answers with — and maps a linux path given to `fs/promises.stat` / `fs/promises.readdir` (`fs.stat` / `fs.readdir`) under `FAKE_WSL_ROOT`; the fake drains the helper's stdout before exiting. The probe's presence check is read from the line's `test -f` path (`$HOME/…` or a quoted override home). The fake also emulates the helper deploy line (stdin -> `<FAKE_WSL_ROOT><dir>/<name>`), the probe's `HELPER_PRESENT` token and the `test -f ... \|\| exit 86` launch prefix (exit 86 when the file is missing), with `HOME`/`CLAUDE_CONFIG_DIR` under `FAKE_WSL_ROOT`. |
 | `AGENT_WORKSPACE_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro; also an extra remote-fs guard prefix — the app must never touch it Windows-side. |
-| `AGENT_WORKSPACE_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
+| `AGENT_WORKSPACE_DEBUG_DROPS` | test mode or dev (unpackaged, `process.defaultApp`) | `1` = main logs `tab-drop-types {types}` for every drag entering the Linked Context tab row (MIME type names only, never the values) — the Chrome drag spike: `AGENT_WORKSPACE_DEBUG_DROPS=1 npm start`, drag each gesture onto the row, read the event log; results go in `docs/evidence/chrome-drag-spike.md` (git-ignored). Ignored in packaged builds. |
+| `AGENT_WORKSPACE_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`; no spec may set it (only `quiet.spec.ts`'s headed case, skipped unless headed) and no spec may call `_electron.launch` directly — `tests/unit/quietGuard.test.ts` enforces both. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
 | `AGENT_WORKSPACE_TEST_OPENHANDS_URL` | test mode | Overrides `settings.openhands.baseUrl` in memory (never saved) via `effectiveBaseUrl` (`src/core/openhands.ts`) → `openhandsEffectiveBase()` (`src/main/openhandsConfig.ts`, test hook `openhandsBaseUrl()`); http is allowed for loopback hosts only, an unusable value falls back to the saved URL. |
 | `AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP` | test mode | Comma-separated `https://from=<target>` pairs (`parseUrlAliases`; target https or loopback http): when the saved (normalised) base URL equals a `from`, the effective base is the target — wins over `AGENT_WORKSPACE_TEST_OPENHANDS_URL`. Lets an e2e type an https value into Settings → OpenHands and land on a fixture origin (`openhands.spec.ts` maps `https://alt.openhands.test` to `fixtures.openhandsAlt.url`). |
@@ -125,6 +126,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Local host only (a `;`-separated `local=path` pair is also accepted; bare path = default) — a WSL host's account file is the distro's own `<home>/.claude.json`, read by its helper (`usage.accounts`); specs stage a second account by writing it under `FAKE_WSL_ROOT`. |
+| `AGENT_WORKSPACE_TEST_CHROME_USER_DATA` | test mode | Replaces the Chrome user-data dir the favorites reader uses (`src/core/bookmarksReader.ts chromeUserDataDir`) — point it at a copy of `tests/fixtures/chrome-user-data` (`Local State` + `Default/Bookmarks` + `Profile 1/Bookmarks`); never the real Chrome profile. |
 | `AGENT_WORKSPACE_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
 | `AGENT_WORKSPACE_PROBE_HOST` / `AGENT_WORKSPACE_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `AGENT_WORKSPACE_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
@@ -169,6 +171,14 @@ variable that selects it.
   fraction on load), `windowPlacements` (per-display-config window bounds/maximized), `layout.terminalOpen`/`layout.terminalHeight` (the dock's
   visibility is `terminalOpen ∧ dockSurface(surface)` — there is no per-surface opt-in key any more; `terminal.allSurfaces` was deleted in ux2 P0 and is
   ignored on load — since ux3 S6 it stays in the file as unknown data rather than being stripped), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
+- `favorites.chromeProfile` (`string | null`, default null = Chrome's last used profile; schema: `isValidProfileDir` — `Default` / `Profile N`) — Settings → Link Handling → Favorites
+  `#favoritesProfileSelect` (draft field `favoritesChromeProfile`, `DRAFT_TAB` 'links'); options come from `favorites:profiles` (guardedHandle, no payload →
+  `FavoritesProfilesReplySchema {profiles: {dir,name}[]}`; names shown only there, never logged); a configured dir Chrome no longer lists stays selected as
+  `<dir> (not found)`. Reader: pure `createBookmarksReader` (`src/core/bookmarksReader.ts`, injected read+stat only) wired to `fs/promises` `readFile`/`stat` by
+  `src/main/bookmarks.ts` (`bookmarksReader()`): user-data dir win32 `%LOCALAPPDATA%\Google\Chrome\User Data`, darwin `~/Library/Application Support/Google/Chrome`
+  (test mode `AGENT_WORKSPACE_TEST_CHROME_USER_DATA`); profile = the setting if listed in `Local State`, else `last_used` if listed, else `Default`; reads only
+  `Local State` + `<profile>/Bookmarks`, never writes; re-parses only on an mtime/size change (cache per file path); a partial/garbled file keeps the last good
+  result; `load()` → `ok {tree}` (empty tree included) | `missing` (no dir / Local State / profile / file) | `unreadable` (bad file, nothing cached).
 - `sessions.open`/`sessions.width`/`sessions.collapsedFolders` (Cloud session sidebar, below); `sessions.open` also drives the Settings checkbox
   `#sessionsColumnToggle` and applies to the `cloud`, `claude` and `local` surfaces (`computeBounds` reserves the column for all three);
   `sessions.maxLiveViews` (1..20, default 6) + `sessions.keepAliveHours` (0..168, default 24) — the Cloud view pool caps/idle TTL.
@@ -307,6 +317,35 @@ variable that selects it.
   does not composite and whites the window, so the overlay raise there is opaque).
 
 ### GitHub tabs
+- `tabs:openUserUrl` (guardedHandle, `OpenUserUrlArg {url, source: drop|typed|favorite, target: new|current}`) is the one entry point for user-supplied URLs:
+  `normalizeUserUrl` (`src/core/userUrl.ts`: bare hosts get https, localhost/IP literals http, non-http(s) schemes rejected) then `openUserUrl` in `src/main/routing.ts`.
+  Devin/provider URLs go through `applyDecision` (their own view); every other kind — including `external` — opens a pane tab (`target:'current'` →
+  `TabManager.navigateActive`); `deny`/`mailto` → `{ok:false, reason:'scheme'}`. Logs `tab-user-open`.
+- Address bar: `#tabNew` (after `<TabStrip/>`, outside its sortable/scroll area) / Ctrl+T → mode `new`, Ctrl+L → mode `current` (prefilled with the
+  active tab's URL; `new` when the scope has no tab) — `src/shell/components/AddressBar.tsx` (`#tabAddressBar`, `#tabAddressBarInput`,
+  `#tabAddressBarError`) is shell DOM at y 36 across the pane; `computeBounds` (`addressBarOpen`, `ADDRESS_BAR_HEIGHT` 32) moves `ghTab` down by
+  the bar instead of raising the shell. Main state `state.addressBar {open, mode}` → `ShellState.tabs.addressBar`; single seam `setAddressBar(open, mode,
+  source)` in `window.ts` (shell sends `tabs:addressBar {open, mode?, source?}`); `applyLayout` closes it on pane hidden/collapsed, surface switch or
+  scope change. Ctrl+T/Ctrl+L (macOS: Cmd only — plain Ctrl+T/L stay readline keys; pure matcher `src/core/addressBarKeys.ts`) are caught in main
+  (`shortcuts.ts` `before-input-event`) for hosted views only; on the shell they are matched in the renderer (`App.tsx` keydown) and skipped while
+  focus is in the terminal dock (`#terminalDock`/`.xterm`, so ^L/^T reach the pty) or another text field, then sent as `tabs:addressBar
+  {source:'shortcut'}` → the same `openAddressBarShortcut` (Ctrl+T opens a closed pane first, Ctrl+L needs the pane visible; focuses the shell via
+  `focusContents`). Enter → `openUserUrl({source:'typed', target: mode})`; ok / Esc / blur close it. Never persisted.
+- Link drops: the pane segment of `TitleBar.tsx` is an HTML5 drop target (`src/shell/components/useTabDrop.ts`; dnd-kit's tab reorder is
+  pointer-based, so they never meet). Pure `src/core/dropUrl.ts` (owns `SESSION_MIME`/`FOLDER_MIME`, re-exported by `sidebar/dnd.ts`):
+  `isUrlDrag(types)` (text/uri-list, text/plain or `URL`, never a sidebar MIME drag) gates `preventDefault`/`dropEffect='copy'` and `#tabDropHint`
+  (`data-state=drop`, `pointer-events:none`, no shell raise); `pickDroppedUrl` takes the first non-`#` uri-list line, else text/plain, else `URL` →
+  `openUserUrl({source:'drop', target:'new'})` — main validates; a refusal (or no text / over 8192 chars) shows `#tabDropHint[data-state=error]`
+  for 3 s. Every drag entering the row sends `tabs:dropTypes {types}` (guardedOn, `TabsDropTypesArg`, ≤32 names ≤128 chars); main logs
+  `tab-drop-types` only under `AGENT_WORKSPACE_DEBUG_DROPS`. Favicons are `draggable=false` so a tab's own icon can't be dropped as a link.
+- Favorites menu: `#tabFavorites` (star, after `#tabNew`, outside the strip's sortable/scroll area) → `tabs:favoritesMenu {x, y}` (guardedHandle,
+  `FavoritesMenuArg` — finite, ±100000; the button's bottom-left in window coordinates, the shell view has a fixed zoom) → `src/main/favoritesMenu.ts`
+  re-loads `bookmarksReader()` on every open (profile resolved at click time) and pops a native `Menu` (paints above hosted views, no shell raise) from
+  `buildFavoritesMenu`; folders → `submenu`, "… N more" disabled; states as one disabled item: `Chrome bookmarks not found` (missing),
+  `Chrome bookmarks couldn't be read` (unreadable), `No bookmarks`. A click → `openUserUrl(url, 'favorite', 'new')`; the invoke resolves `{action:
+  'open'|null}` when the menu closes. Test mode = the Claude context-menu seam: the menu is described (ids `m0…` depth-first) and the invoke stays open
+  until `favoritesMenuClick(id)` (a disabled item does nothing; a new open settles the pending invoke with `{action:null}` and a load that finishes after a newer open started is dropped — per-open generation + per-open action, so overlapping opens cannot overwrite each other's reply). Labels/URLs are never logged — only
+  `tab-user-open`'s URL.
 - `tabs-preload` event: on scope switch/launch the visible scope's discarded tabs are background-loaded (150 ms stagger); the live cap
   (`tabs.maxLiveTabs`) and idle discard apply to hidden scopes only — the visible scope's tabs are exempt.
 
@@ -409,7 +448,7 @@ variable that selects it.
   `src/core/settingsDraft.ts` route a validation error to the tab holding the field. The `links` "Link Handling" tab (`LinksTab.tsx`, `#linkRulesList`
   rows `[data-rule-id][data-rule-invalid]`, `#linkRuleAdd`, `#linkRuleTestInput`/`#linkRuleTestResult`) also hosts the `#allowExternalInput` "Open
   non-GitHub links in system browser" checkbox, then a Linked Context section (`data-settings-section=links-linked-context`: tab keep-alive hours, max live
-  tabs, `prs.autoOpenTabs`). The `devin` tab has two sections — `devin-cloud` (tenant/API base, token + identity, user/org id, usage poll, Cloud pool) and, after
+  tabs, `prs.autoOpenTabs`), then a Favorites section (`data-settings-section=links-favorites`, `#favoritesProfileSelect`). The `devin` tab has two sections — `devin-cloud` (tenant/API base, token + identity, user/org id, usage poll, Cloud pool) and, after
   a separator, `devin-local`.
 - ux2 P3 tabs (`settings/LocalTab.tsx`, `settings/ClaudeTab.tsx`, shared bits in `settings/fields.tsx`: `CliPathHint`, `FieldError`, `WslDistroSelect`,
   `HostsPointer`): the Devin tab's **Devin Local** section = `#devinPathInput` (+ `#devinPathInputError` not-found hint from `local.cliPath`), `#localDefaultWslDistroSelect`,
@@ -1029,15 +1068,18 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 
 | Hook | Purpose |
 |---|---|
-| `ipcProbe()` | IPC guard probe; also reports `pooled` (whether a non-active pooled view passes `fromHostedView`). |
+| `ipcProbe(id?)` | IPC guard probe; also reports `pooled` (whether a non-active pooled view passes `fromHostedView`); `ipcProbe(webContentsId)` probes exactly that pooled view (take the id from `cloudViewLoadUrl`). |
 | `clipboardWrite` / `clipboardRead` | Wrap Electron's clipboard. |
 | `setSessionsOpen(v)` / `getSessionsBounds()` | Toggle / measure the Cloud session sidebar. |
 | `cloudState()` / `cloudRefresh()` | Cloud sidebar snapshot / force a list (reloads the fixture file). |
 | `cloudMenuItems` / `cloudMenuClick` / `cloudMutations()` | Cloud context-menu descriptions, click an item, read the fake backend's recorded ops. |
 | `cloudNewSession(folder)` / `cloudNoteHomeNavigation(id)` | Drive the new-session pending-folder watch. |
+| `cloudViewLoadUrl(key, url)` | Load a URL in a pooled view; returns that view's webContents id (null when no such view) for `ipcProbe(id)`. |
 | `cloudViewsInfo()` / `cloudShow(id)` / `cloudPrefetchHook(id)` / `cloudIdleSweep()` / `setCloudKeepAliveMs(ms)` | Cloud view pool inspection and control. |
 | `getAnalyticsBounds` | Analytics view bounds. |
 | `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume` | Updater simulation (no network in test mode). |
+| `openUserUrl(url, source, target)` | Calls `routing.ts openUserUrl` (the `tabs:openUserUrl` handler's body); returns `{ok:true}` or `{ok:false, reason}`. |
+| `addressBar()` | The Linked Context address bar state `{open, mode}`. |
 | `localDeleteSession` / `localDeleteWorkspaceSessions` | Devin Local single / bulk delete. |
 | `localMenuItems` / `localMenuClick(id)` | Local sidebar context-menu descriptions (test mode describes instead of popping), resolve the open `local:contextMenu` invoke by item id → `{action}`. |
 | `claudeState` / `claudeRefresh` / `claudeSelect` | Claude sidebar snapshot / refresh / select a session. |
@@ -1053,6 +1095,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `claudeUsageState` / `claudeUsageRefresh` | Claude usage state snapshot / force fetch+scan (resolves when both finish). |
 | `devinUsageState` / `devinUsageRefresh` | Devin usage metric state snapshot / force a poll (resolves when it finishes). |
 | `lastOpenDialogOptions()` | The options of the most recent `openFolderDialog` call (recorded in test mode). |
+| `favoritesMenuItems()` / `favoritesMenuClick(id)` | The open favorites menu as `{id,label,enabled,submenu?}[]` (null while none is open or its bookmarks are still loading) / click an item → `{action:'open'\|null}`, resolving the open `tabs:favoritesMenu` invoke. |
 | `lastFolderPrompt()` | `{title, hostId, start, hosts}` of the most recent in-app remote folder prompt (P3; null before one opened). |
 | `hostSshAdd(alias)` | `hosts().addSshHost(alias)` — the `hosts:sshAdd` path (validation + lower-casing) without the Settings UI. |
 | `hostSshRecover(trigger)` / `hostHookForwardVerified(id)` | Run the ssh connection-failure recovery now (unthrottled) / whether that ssh host's hook forward passed the challenge. |
@@ -1088,6 +1131,11 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `window-quiet` | `{ opacity: 0, skipTaskbar: true }` — test-mode quiet launch applied. |
 | `window-activate` | `{ reason, quiet }` — window-bring-forward request via `activateWindow`; `quiet: true` means it showed without activating. |
 | `tabs-preload` | Visible scope's discarded tabs background-loaded. |
+| `user-url-route` | `{url, decision}` — `openUserUrl` sent a Devin/provider URL through `applyDecision` (`decision` = `devin`\|`provider`\|`deny`); the single `tab-user-open` record follows for the accepted action. |
+| `tab-user-open` | `{ source: 'drop'\|'typed'\|'favorite', target: 'new'\|'current', kind }` + the url — `tabs:openUserUrl` accepted a user-supplied URL (`kind` = the `routeUrl` kind). |
+| `bookmarks-load` | `{ ok, count, ms, cached }` — one favorites read (`count` = url bookmarks in the tree, `cached` = served from the mtime/size cache or the last good tree); never names, URLs, profile dirs or paths. |
+| `tab-drop-types` | `{ types: string[] }` — MIME type names of a drag entering the tab row (≤32, each ≤128 chars); only with `AGENT_WORKSPACE_DEBUG_DROPS=1` in test mode / dev builds. Never the dragged values. |
+| `address-bar` | `{ open, mode: 'new'\|'current', source }` — `source` = `button\|shortcut\|enter\|escape\|blur` or an automatic close `pane-hidden\|surface\|scope`; never the URL. |
 | `rule-tab` / `rule-tab-background` | `{ruleId, ruleKind}` — never the pattern. |
 | `cloud-token` | fixed `reason` ('view-not-ready'\|'no-devindebug'\|'login-required'\|'timeout'\|'error'). |
 | `cloud-connect` | `{ok:false, reason:'timeout'}` when CONNECTING for 20 s. |

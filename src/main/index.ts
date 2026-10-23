@@ -139,7 +139,7 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
             buttons: ['Quit', 'Cancel'],
             defaultId: 1,
             cancelId: 1,
-            message: `${probe.vetoed.length} GitHub tab(s) have unsaved changes. Quit anyway?`,
+            message: `${probe.vetoed.length} tab(s) have unsaved changes. Quit anyway?`,
           }) === 0;
       if (!quit) {
         log('shell', 'shutdown-vetoed', { detail: { vetoed: probe.vetoed } });

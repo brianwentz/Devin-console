@@ -3,7 +3,9 @@ import { RAIL_WIDTH, TITLE_BAR_HEIGHT } from '../../core/layout';
 import type { ShellState } from '../../shared/ipc';
 import { NotificationBanner } from './NotificationBanner';
 import { TabStrip } from './TabStrip';
+import { useTabDrop } from './useTabDrop';
 import { AgMark } from './icons/AgMark';
+import { StarIcon } from './icons/StarIcon';
 
 type Tab = ShellState['tabs']['tabs'][number];
 
@@ -14,7 +16,6 @@ interface TitleBarProps {
   paneWidth: number; // ghTab.width when the pane is visible
   tabs: Tab[];
   activeId: string | null;
-  scope: string;
 }
 
 interface WindowControlsOverlayLike {
@@ -70,9 +71,9 @@ export function TitleBar({
   paneWidth,
   tabs,
   activeId,
-  scope,
 }: TitleBarProps) {
   const overlayReserve = useOverlayReserve();
+  const drop = useTabDrop();
   const active = tabs.find((tab) => tab.id === activeId) ?? null;
   const dragRight = paneVisible ? paneX : windowWidth - overlayReserve;
   const paneSegmentWidth = paneVisible ? Math.max(0, paneWidth - overlayReserve) : 0;
@@ -109,6 +110,7 @@ export function TitleBar({
         <div
           className="app-no-drag absolute top-0 h-full flex items-stretch gap-1.5 pr-1.5"
           style={{ left: paneX, width: paneSegmentWidth }}
+          {...drop.handlers}
         >
           <button
             id="backButton"
@@ -145,11 +147,45 @@ export function TitleBar({
           >
             ↻
           </button>
-          <TabStrip
-            tabs={tabs}
-            activeId={activeId}
-            scope={scope}
-          />
+          <TabStrip tabs={tabs} activeId={activeId} />
+          {/* Outside the strip's scroll/sortable area, like #tabFavorites after it. */}
+          <button
+            id="tabNew"
+            type="button"
+            aria-label="New tab"
+            title="New tab (Ctrl+T)"
+            className={`app-no-drag shrink-0 self-center ${navButton}`}
+            onClick={() =>
+              window.agentworkspace.setAddressBar({ open: true, mode: 'new', source: 'button' })
+            }
+          >
+            +
+          </button>
+          <button
+            id="tabFavorites"
+            type="button"
+            aria-label="Chrome bookmarks"
+            title="Chrome bookmarks"
+            className={`app-no-drag shrink-0 self-center flex items-center justify-center ${navButton}`}
+            onClick={(e) => {
+              // The shell view sits at the window origin with a fixed zoom, so client
+              // coordinates are window coordinates; the menu drops from the bottom-left.
+              const rect = e.currentTarget.getBoundingClientRect();
+              void window.agentworkspace.openFavoritesMenu(rect.left, rect.bottom);
+            }}
+          >
+            <StarIcon />
+          </button>
+          {drop.hint && (
+            <div
+              id="tabDropHint"
+              role="status"
+              data-state={drop.hint.state}
+              className={`tabDropHint ${drop.hint.state} pointer-events-none absolute inset-0 flex items-center justify-center rounded-md text-[12px]`}
+            >
+              {drop.hint.state === 'drop' ? 'Drop to open in a new tab' : drop.hint.text}
+            </div>
+          )}
         </div>
       )}
     </header>

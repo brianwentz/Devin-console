@@ -1,0 +1,22 @@
+{
+   "profile": {
+      "info_cache": {
+         "Default": {
+            "name": "Person 1",
+            "is_using_default_name": true
+         },
+         "Profile 1": {
+            "name": "Work",
+            "is_using_default_name": false
+         },
+         "Guest Profile": {
+            "name": "Guest",
+            "is_ephemeral": true
+         }
+      },
+      "last_used": "Profile 1"
+   },
+   "browser": {
+      "enabled_labs_experiments": []
+   }
+}

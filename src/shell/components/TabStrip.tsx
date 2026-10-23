@@ -30,13 +30,12 @@ type Tab = ShellState['tabs']['tabs'][number];
 interface TabStripProps {
   tabs: Tab[];
   activeId: string | null;
-  scope: string;
 }
 
 // Tabs only ever move along the strip.
 const horizontalOnly: Modifier = ({ transform }) => ({ ...transform, y: 0 });
 
-export function TabStrip({ tabs, activeId, scope }: TabStripProps) {
+export function TabStrip({ tabs, activeId }: TabStripProps) {
   const stripRef = useRef<HTMLElement>(null);
   const sensors = useSensors(
     // Distance constraint keeps plain clicks (activate / close) working.
@@ -72,7 +71,7 @@ export function TabStrip({ tabs, activeId, scope }: TabStripProps) {
       id="tabStrip"
       ref={stripRef}
       role="tablist"
-      aria-label="GitHub tabs"
+      aria-label="Linked Context tabs"
       className="shell-chrome app-no-drag flex flex-1 min-w-0 overflow-x-auto overflow-y-hidden items-stretch"
       style={{ scrollbarWidth: 'none' }}
       onWheel={onWheel}
@@ -94,9 +93,7 @@ export function TabStrip({ tabs, activeId, scope }: TabStripProps) {
           data-testid="tabStripEmpty"
           className="flex-1 flex items-center justify-center text-[#7d8a99] text-[12px]"
         >
-          {scope === ''
-            ? 'No GitHub tabs — links from Devin open here.'
-            : 'No GitHub tabs for this session — links from the worklog open here.'}
+          No tabs yet — drop a link here or press +
         </div>
       )}
     </section>
@@ -173,7 +170,8 @@ function SortableTab({ tab, active }: { tab: Tab; active: boolean }) {
       }}
       {...pointerListeners}
     >
-      {tab.favicon && <img className="favicon" src={tab.favicon} alt="" />}
+      {/* Not natively draggable: dropped on the row it would open the icon as a tab. */}
+      {tab.favicon && <img className="favicon" src={tab.favicon} alt="" draggable={false} />}
       <span className="tabTitle">{tab.title || safeHostname(tab.url)}</span>
       {tab.loading && <span className="spinner" aria-label="Loading" />}
       <button

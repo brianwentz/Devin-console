@@ -29,6 +29,7 @@ export const SETTINGS_PRESERVE_SPEC: PreserveSpec = structural({
   tabs: structural(),
   notifications: structural({ kinds: structural() }),
   prs: structural(),
+  favorites: structural(),
   layout: structural(),
   sessions: structural(),
   terminal: structural(),
@@ -299,6 +300,7 @@ export function mergeSettings(current: Settings, patch: unknown): Settings {
     pane,
     notifications,
     prs,
+    favorites,
     local,
     tabs,
     layout,
@@ -325,6 +327,7 @@ export function mergeSettings(current: Settings, patch: unknown): Settings {
         }
       : current.notifications,
     prs: mergeDefined(current.prs, prs),
+    favorites: mergeDefined(current.favorites, favorites),
     local: mergeDefined(current.local, local),
     layout: mergeDefined(current.layout, layout),
     terminal: mergeDefined(current.terminal, terminal),

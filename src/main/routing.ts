@@ -10,6 +10,8 @@ import {
 } from '../core/linkRouter';
 import { compileLinkRules, matchLinkRule, type CompiledRule } from '../core/linkRules';
 import type { LinkRule } from '../shared/ipc';
+import { normalizeUserUrl } from '../core/userUrl';
+import type { OpenUserUrlReply } from '../shared/ipc';
 import { log } from './log';
 import { allowExternalEnabled } from './settings';
 import { fixtureOrigins, state, testMode, type ViewName } from './state';
@@ -101,10 +103,11 @@ function openGitHubTab(url: string, background: boolean): string | undefined {
 }
 
 // Navigate the Cloud view (also used by the scope menu — F7).
-export function loadInDevinView(url: string): void {
-  if (!state.cloudViewsRef) return;
+export function loadInDevinView(url: string): boolean {
+  if (!state.cloudViewsRef) return false;
   state.surface = 'cloud';
   cloudViews().show(keyForUrl(url, state.tenantUrl), url);
+  return true;
 }
 
 // Apply a LinkRouter decision. Returns the decision so callers can preventDefault etc.
@@ -155,7 +158,12 @@ export function applyDecision(
       recordDecision(view, event, rawUrl, 'allow-in-view');
       break;
     case 'devin':
-      loadInDevinView(rawUrl);
+      if (!loadInDevinView(rawUrl)) {
+        // No Cloud view pool yet: nothing was applied, so report a deny.
+        recordDecision(view, event, rawUrl, 'deny');
+        result = { kind: 'deny' };
+        break;
+      }
       recordDecision(view, event, rawUrl, 'devin');
       applyLayout();
       break;
@@ -182,6 +190,40 @@ export function applyDecision(
       break;
   }
   return result ?? decision;
+}
+
+// Single entry point for a URL the user supplied (address bar, drop, favorite).
+// Devin/provider URLs load in their own view like a shell link; everything else
+// — including URLs a link would send to the system browser — becomes a pane tab.
+export function openUserUrl(
+  rawUrl: string,
+  source: 'drop' | 'typed' | 'favorite',
+  target: 'new' | 'current',
+): OpenUserUrlReply {
+  const normalized = normalizeUserUrl(rawUrl);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason };
+  const url = normalized.url;
+  const kind = routeUrl(url, routeContext());
+  if (kind === 'deny' || kind === 'mailto') return { ok: false, reason: 'scheme' };
+
+  if (kind === 'devin' || kind === 'provider') {
+    const applied = applyDecision(url, 'shell', 'user-url-route', 'navigate');
+    if (applied.kind === 'deny') return { ok: false, reason: 'unavailable' };
+    log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
+    return { ok: true };
+  }
+
+  const manager = state.tabManager;
+  if (!manager) return { ok: false, reason: 'unavailable' };
+  log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
+  setPaneOpen(true, 'user-url');
+  if (target === 'current' && manager.navigateActive(url)) {
+    applyLayout();
+    return { ok: true };
+  }
+  manager.open(url, { originSessionId: manager.currentScope });
+  applyLayout();
+  return { ok: true };
 }
 
 function popupDisposition(details: Electron.HandlerDetails): RouteDisposition {

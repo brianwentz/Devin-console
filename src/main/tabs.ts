@@ -11,6 +11,7 @@ import {
   openTab,
   pickDiscardCandidates,
   pruneScopes,
+  pullRequestKey,
   reorderTab,
   restoreTabs,
   scopeOf,
@@ -794,6 +795,35 @@ export class TabManager {
     this.state = reorderTab(this.state, tabId, toIndex);
     this.log('tab-reorder', { id: tabId, toIndex });
     this.onChange();
+  }
+
+  // Point the active tab at `url` (address bar / favorites with target 'current').
+  // A discarded tab only records the url; its view loads it when recreated.
+  navigateActive(url: string): boolean {
+    const id = this.activeId;
+    const entry = id ? this.entries.get(id) : undefined;
+    if (!id || !entry) return false;
+    // Keep per-scope dedupe: a different tab already showing this URL (or PR) wins.
+    const key = pullRequestKey(url);
+    const other = visibleTabs(this.state, this.scope).find(
+      (tab) =>
+        tab.id !== id && (tab.url === url || (key !== null && pullRequestKey(tab.url) === key)),
+    );
+    if (other) {
+      this.activate(other.id);
+      return true;
+    }
+    const contents = entry.view?.webContents;
+    const live = !!contents && !contents.isDestroyed();
+    // A discarded tab has no view to finish loading; only a live one is loading.
+    if (live) entry.loading = true;
+    this.updateUrl(id, url);
+    if (contents && live) {
+      contents.loadURL(url).catch((error: unknown) => {
+        this.log('load-error', { id, message: String(error) }, url);
+      });
+    }
+    return true;
   }
 
   updateUrl(tabId: string, url: string): void {

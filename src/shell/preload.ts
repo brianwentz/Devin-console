@@ -23,6 +23,9 @@ import {
   type OpenHandsApiKeyResult,
   type OpenHandsContextMenuRequest,
   type OpenHandsContextMenuResult,
+  type OpenUserUrlReply,
+  type FavoritesProfilesReply,
+  type FavoritesMenuReply,
   type ScopeSummary,
   type Settings,
   type SettingsCommitResult,
@@ -282,6 +285,26 @@ const api = {
     ipcRenderer.invoke(IpcChannels.tabsListScopes) as Promise<ScopeSummary[]>,
   closeScope: (scope: string) => {
     if (typeof scope === 'string') ipcRenderer.send(IpcChannels.tabsCloseScope, { scope });
+  },
+  openUserUrl: (arg: {
+    url: string;
+    source: 'drop' | 'typed' | 'favorite';
+    target: 'new' | 'current';
+  }) =>
+    ipcRenderer.invoke(IpcChannels.tabsOpenUserUrl, arg) as Promise<
+      OpenUserUrlReply
+    >,
+  setAddressBar: (arg: {
+    open: boolean;
+    mode?: 'new' | 'current';
+    source?: 'button' | 'shortcut' | 'enter' | 'escape' | 'blur';
+  }) => ipcRenderer.send(IpcChannels.tabsAddressBar, arg),
+  favoritesProfiles: () =>
+    ipcRenderer.invoke(IpcChannels.favoritesProfiles) as Promise<FavoritesProfilesReply>,
+  openFavoritesMenu: (x: number, y: number) =>
+    ipcRenderer.invoke(IpcChannels.tabsFavoritesMenu, { x, y }) as Promise<FavoritesMenuReply>,
+  reportDropTypes: (types: string[]) => {
+    if (Array.isArray(types)) ipcRenderer.send(IpcChannels.tabsDropTypes, { types });
   },
   openReloadMenu: (x: number, y: number) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {

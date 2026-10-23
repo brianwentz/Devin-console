@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -124,6 +124,59 @@ test('a prefix rule routes matching links to a pane tab and logs rule-tab', asyn
     );
     await waitForDecision(logFile, 'external', 'elsewhere');
     expect((await state(app)).tabs.tabs).toHaveLength(1);
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+const profileOptions = (app: ElectronApplication) =>
+  shell(
+    app,
+    `[...document.querySelectorAll('#favoritesProfileSelect option')].map((o) => o.value + '=' + o.textContent)`,
+  ) as Promise<string[]>;
+
+test('Favorites: the Chrome profile select lists Local State profiles and commits the choice', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-favorites-'));
+  const chrome = join(profile, 'chrome-user-data');
+  cpSync(join(process.cwd(), 'tests/fixtures/chrome-user-data'), chrome, { recursive: true });
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    AGENT_WORKSPACE_TEST_CHROME_USER_DATA: chrome,
+  });
+  try {
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await clickTab(app, 'links');
+    await expect
+      .poll(() => profileOptions(app))
+      .toEqual(['=Last used Chrome profile', 'Default=Person 1', 'Profile 1=Work']);
+    expect(await shell(app, `document.getElementById('favoritesProfileSelect').value`)).toBe('');
+    expect(await setRuleControl(app, '#favoritesProfileSelect', 'Default')).toBe(true);
+    await clickTab(app, 'passwords');
+    await expect
+      .poll(async () => ((await state(app)).settings as any).favorites?.chromeProfile)
+      .toBe('Default');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('Favorites: without Chrome the select keeps an unlisted configured profile', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-favorites-missing-'));
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ favorites: { chromeProfile: 'Profile 7' } }));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  try {
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await clickTab(app, 'links');
+    await expect
+      .poll(() => profileOptions(app))
+      .toEqual(['=Last used Chrome profile', 'Profile 7=Profile 7 (not found)']);
+    expect(await shell(app, `document.getElementById('favoritesProfileSelect').value`)).toBe('Profile 7');
+    expect(
+      await shell(app, `document.querySelector('[data-settings-section="links-favorites"]').textContent.includes('Google Chrome profiles not found')`),
+    ).toBe(true);
+    await clickTab(app, 'passwords');
+    expect(((await state(app)).settings as any).favorites?.chromeProfile).toBe('Profile 7');
   } finally {
     await quit(app, profile);
   }
