@@ -8,7 +8,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, net, session, webContents } from 'electron';
 import { sanitizeMessage } from '../../core/devinApi';
-import { isConversationId, normalizeBaseUrl } from '../../core/openhands';
+import { isConversationId, normalizeBaseUrl, openhandsOwnsUrl } from '../../core/openhands';
 import { providerScope } from '../../core/tabModel';
 import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
@@ -179,6 +179,19 @@ function build(base: string) {
   return { source, controller, usage };
 }
 
+// The hosted view navigating onto the base origin while the list is refused
+// (a web sign-in just finished) lists now instead of waiting out the backoff.
+let unsubscribeNavigate: (() => void) | null = null;
+function watchViewNavigation(): void {
+  if (unsubscribeNavigate) return;
+  unsubscribeNavigate = openhandsViews().onActiveNavigate(() => {
+    const url = openhandsViews().activeView()?.webContents.getURL() ?? '';
+    if (url && openhandsOwnsUrl(url, effective(state.settings?.current.openhands.baseUrl))) {
+      core.onViewNavigatedHome();
+    }
+  });
+}
+
 const core = createOpenHandsRuntimeCore<OpenHandsUsageService>({
   currentBase: () => effective(state.settings?.current.openhands.baseUrl),
   baseOf: (s: OhSettingsLike) => effective(s.openhands.baseUrl),
@@ -247,6 +260,8 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
     prTracker?.refreshStates();
   },
   dispose: () => {
+    unsubscribeNavigate?.();
+    unsubscribeNavigate = null;
     unsubscribePrTitles?.();
     unsubscribePrTitles = null;
     prTracker?.stop();
@@ -276,6 +291,7 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   },
   onSurfaceEnter() {
     core.onSurfaceEnter();
+    watchViewNavigation();
     // The pool opens no view until the user is here (no request before that).
     if (!openhandsViews().activeView()) openhandsShowHome();
   },

@@ -16,6 +16,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
   let base = 'https://a.test';
   let poll = 30;
   let connection: OpenHandsConnection = 'idle';
+  let clock = 1_000_000;
   const built: { base: string; source: CoreSource & { listing: boolean }; controller: CoreController }[] = [];
   const timers: { fn: () => void; ms: number; cleared: boolean }[] = [];
   const calls: string[] = [];
@@ -68,6 +69,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
     clearTimer: (h) => {
       (h as { cleared: boolean }).cleared = true;
     },
+    now: () => clock,
     focused: () => opts.focused ?? true,
     onChange: () => {
       changes++;
@@ -84,6 +86,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
     live,
     setBase: (b: string) => (base = b),
     setPoll: (n: number) => (poll = n),
+    advance: (ms: number) => (clock += ms),
     setConnection: (c: OpenHandsConnection) => (connection = c),
   };
 }
@@ -374,5 +377,97 @@ describe('openhands runtime core: signed-out poll backoff', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(last(h).ms).toBe(30_000);
+  });
+});
+
+describe('openhands runtime core: sign-in recovery', () => {
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+  const pollLists = (h: ReturnType<typeof harness>) => h.calls.filter((c) => c.startsWith('refresh:')).length;
+
+  it('a forced refresh that comes back authenticated re-arms the timer at the base cadence', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await settle();
+    for (let i = 0; i < 2; i++) {
+      h.live().at(-1)!.fn();
+      await settle();
+    }
+    expect(h.live().at(-1)!.ms).toBe(16 * 60_000);
+    h.setConnection('web-session');
+    await h.core.forceRefresh();
+    expect(h.live().at(-1)!.ms).toBe(30_000);
+  });
+
+  it('a view navigating home while refused lists at once and resets the backoff', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await settle();
+    h.live().at(-1)!.fn();
+    await settle();
+    expect(h.live().at(-1)!.ms).toBe(480_000);
+    const before = pollLists(h);
+    h.core.onViewNavigatedHome();
+    await settle();
+    expect(pollLists(h)).toBe(before + 1);
+    // Reset to zero, then the (still refused) list counts once: 4x, not 16x.
+    expect(h.live().at(-1)!.ms).toBe(120_000);
+    // Signed in: the next refresh runs at the base cadence.
+    h.setConnection('web-session');
+    h.advance(6_000);
+    h.core.onViewNavigatedHome();
+    expect(pollLists(h)).toBe(before + 1);
+  });
+
+  it('ignores a navigation while the connection is not refused', async () => {
+    const h = harness({ key: true });
+    h.setConnection('web-session');
+    await h.core.start();
+    await settle();
+    const before = pollLists(h);
+    h.core.onViewNavigatedHome();
+    await settle();
+    expect(pollLists(h)).toBe(before);
+  });
+
+  it('two navigations within 5 s list once; a later one lists again', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await settle();
+    const before = pollLists(h);
+    h.core.onViewNavigatedHome();
+    await settle();
+    h.advance(2_000);
+    h.core.onViewNavigatedHome();
+    await settle();
+    expect(pollLists(h)).toBe(before + 1);
+    h.advance(4_000);
+    h.core.onViewNavigatedHome();
+    await settle();
+    expect(pollLists(h)).toBe(before + 2);
+  });
+
+  it('a navigation inside the window leaves one trailing hint that lists when the window ends', async () => {
+    const h = harness({ key: true });
+    h.setConnection('login-required');
+    await h.core.start();
+    await settle();
+    const before = pollLists(h);
+    h.core.onViewNavigatedHome();
+    h.advance(1_000);
+    h.core.onViewNavigatedHome();
+    h.core.onViewNavigatedHome();
+    await settle();
+    expect(pollLists(h)).toBe(before + 1);
+    const trailing = h.timers.filter((t) => t.ms === 4_000 && !t.cleared);
+    expect(trailing).toHaveLength(1);
+    h.advance(4_000);
+    trailing[0]!.fn();
+    await settle();
+    expect(pollLists(h)).toBe(before + 2);
   });
 });

@@ -200,8 +200,11 @@ test('signed out: the OpenHands tab shows the sign-in hint instead of Loading; s
     await expect.poll(async () => (await activeView(app))?.key).toBe('home');
     await inActiveView(app, `location.href = '/login'`);
     await expect.poll(async () => cookieNames(app)).toContain('openhands_auth');
-    await hook(app, 'openhandsRefresh');
-    expect((await state(app)).openhands.connection).toBe('web-session');
+    // No refresh hook: the view landing back on the origin lists at once
+    // (the signed-out backoff would otherwise hold the next list for minutes).
+    await expect
+      .poll(async () => (await state(app)).openhands.connection, { timeout: 10_000 })
+      .toBe('web-session');
     await expect
       .poll(async () => (await hook<{ credits: { state: string } }>(app, 'openhandsUsageState')).credits.state)
       .toBe('ok');

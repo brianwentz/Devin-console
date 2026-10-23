@@ -18,6 +18,8 @@ const BLURRED_FACTOR = 4;
 // consecutive refusal, up to 16 min — the usage service's own backoff ceiling.
 const AUTH_BACKOFF_FACTOR = 4;
 const AUTH_BACKOFF_MAX_MS = 16 * 60_000;
+// At most one list per this window from "the hosted view navigated home".
+const SIGN_IN_HINT_MIN_MS = 5_000;
 
 /** Next poll delay after `failures` consecutive refused lists (never below the base). */
 export function authBackoffMs(baseMs: number, failures: number): number {
@@ -69,6 +71,8 @@ export interface RuntimeCoreDeps<U extends CoreUsage = CoreUsage> {
   /** A cache file for `base`'s tenant exists. */
   cacheMatches(base: string): Promise<boolean>;
   dropCache(): Promise<void>;
+  /** Clock for the sign-in hint rate limit (default Date.now). */
+  now?(): number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
   focused(): boolean;
@@ -103,6 +107,13 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
   let lastConnection: OpenHandsConnection = 'idle';
   // Consecutive lists the server refused; drives the poll backoff.
   let authFailures = 0;
+  let lastSignInHintAt = -Infinity;
+  let hintTimer: unknown = null;
+
+  const clearHintTimer = (): void => {
+    if (hintTimer !== null) deps.clearTimer(hintTimer);
+    hintTimer = null;
+  };
 
   const clearTimer = (): void => {
     if (timer !== null) deps.clearTimer(timer);
@@ -126,7 +137,11 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     const next = active.source.connection();
     const previous = lastConnection;
     lastConnection = next;
-    authFailures = refused(next) ? authFailures + 1 : 0;
+    const failures = refused(next) ? authFailures + 1 : 0;
+    const changed = failures !== authFailures;
+    authFailures = failures;
+    // The armed timer carries the old delay: re-arm at the new one.
+    if (changed) schedule();
     if (authenticated(next) && previous !== next && previous !== 'idle') active.usage?.recover();
   };
 
@@ -145,6 +160,7 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
 
   const stopActive = (): Active<U> | null => {
     clearTimer();
+    clearHintTimer();
     const old = active;
     active = null;
     if (old) {
@@ -170,7 +186,6 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     void started.controller.start().then(() => {
       if (active !== started) return;
       noteConnection();
-      if (authFailures > 0) schedule();
     });
     started.usage?.start();
     schedule();
@@ -182,6 +197,34 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
     local = null;
     startActive();
   };
+
+  /**
+   * The active hosted view navigated onto the base origin while the server
+   * refuses the list: the user may have just signed in on that page, which
+   * no other trigger sees. Drop the backoff and list now (>= 5 s apart).
+   */
+  function navigatedHome(): void {
+    if (disposed || !active || !refused(active.source.connection())) return;
+    const at = (deps.now ?? Date.now)();
+    const wait = SIGN_IN_HINT_MIN_MS - (at - lastSignInHintAt);
+    if (wait > 0) {
+      // Inside the window: one trailing hint, so the navigation that
+      // actually finished the sign-in is not lost behind an earlier one.
+      if (hintTimer === null) {
+        hintTimer = deps.setTimer(() => {
+          hintTimer = null;
+          navigatedHome();
+        }, wait);
+      }
+      return;
+    }
+    lastSignInHintAt = at;
+    authFailures = 0;
+    schedule();
+    if (active.source.isListing()) return;
+    active.source.requestFull();
+    void refreshList('focus');
+  }
 
   return {
     // Evaluates gates (a) and (c); (b) may already have been flagged.
@@ -231,14 +274,12 @@ export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps
         schedule();
       }
     },
+    onViewNavigatedHome: navigatedHome,
     onFocus(): void {
       if (!active) return;
       active.source.requestFull();
       // A refused focus list keeps (and extends) the backoff; a good one clears it.
-      const had = authFailures;
-      void refreshList('focus').then(() => {
-        if (authFailures !== had) schedule();
-      });
+      void refreshList('focus');
       schedule();
     },
     async onSettingsChanged(previous: OhSettingsLike, next: OhSettingsLike): Promise<void> {
