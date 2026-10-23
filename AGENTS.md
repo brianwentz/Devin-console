@@ -100,7 +100,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_CLOUD_SESSIONS` | test mode | Path to a JSON file shaped like `CloudListResult` — `{ sessions: CloudSession[], folders: string[], folderTotals: {}, nextCursor }` — makes the cloud sidebar data layer (`src/main/cloudSessions.ts`) skip the network and load the file at start and on every `cloudRefresh()`; unset in test mode → `cloud.status` is `'disabled'`. |
 | `AGENT_WORKSPACE_TEST_CLOUD_CACHE` | test mode | Path to a JSON file in `CloudCache` shape — `{version:1, tenantUrl, savedAt, sessions, folders, folderTotals}` — loaded as the cached list when no fixture file is set, leaving `cloud.status` `'connecting'` with `cached: true`. |
 | `AGENT_WORKSPACE_TEST_SESSIONS_OPEN` | test mode | `'1'`/`'0'` overrides `settings.sessions.open` at startup; `launchApp` sets `'0'` by default so legacy specs keep `devin.x === RAIL_WIDTH` — sidebar specs pass `'1'`. |
-| `AGENT_WORKSPACE_TEST_CLOUD_KEEPALIVE_MS` | test mode | Overrides `settings.sessions.keepAliveHours` for the pooled Cloud views — mirrors `AGENT_WORKSPACE_TEST_KEEPALIVE_MS` (tabs). |
+| `AGENT_WORKSPACE_TEST_CLOUD_KEEPALIVE_MS` | test mode | Overrides the idle keep-alive (`settings.sessions.keepAliveHours`, `openhands.keepAliveHours`) of every view pool (Cloud and OpenHands; `cloudKeepAliveMs` in `cloudKit/viewPool.ts`) — mirrors `AGENT_WORKSPACE_TEST_KEEPALIVE_MS` (tabs). |
 | `AGENT_WORKSPACE_TEST_CLAUDE_SDK` | test mode | An ESM module `loadSdk()` imports instead of the real SDK — `tests/fixtures/fakeClaudeSdk.ts` → `out/fixtures/fakeClaudeSdk.mjs` (`export *` real SDK + fake `query`; writes real-shaped jsonl into `CLAUDE_CONFIG_DIR/projects/<encoded cwd>/`; emits `message_start` per group). The fake reads `FAKE_CLAUDE_TOOL=1` (parks on `canUseTool`), `FAKE_CLAUDE_DELAY_MS` (stalls the deltas), `FAKE_CLAUDE_TWO_MESSAGES=1` (splits a turn into two API messages), `FAKE_CLAUDE_COST_USD` (`result.total_cost_usd`), `FAKE_CLAUDE_SPAWN=1` (when the caller passes `spawnClaudeCodeProcess` — remote hosts — the query runs it once with `[--fake-sdk-spawn]` and waits for the child; no local transcript is written). |
 | `AGENT_WORKSPACE_TEST_CLAUDE_NEW_CWD` | test mode | Replaces the folder `showOpenDialog` in `newSession(cwd|null)`. |
 | `AGENT_WORKSPACE_TEST_PICKER_CANCEL` | test mode | Every folder dialog routed through `src/main/dialogs.ts openFolderDialog` returns canceled immediately; the options are recorded for the `lastOpenDialogOptions()` test hook. The in-app remote folder prompt (`src/main/folderPrompt.ts promptRemoteFolder`) is cancelled the same way; its `{title, hostId, start, hosts}` are recorded for `lastFolderPrompt()`. |
@@ -334,12 +334,15 @@ variable that selects it.
   true — Claude, Devin Local). Devin: `notifier.prsKnown()` = a poll succeeded since start/`restart()` (which resets it), or no Devin token is stored
   (nothing to list). OpenHands: `core.gate()` is `closed` (no key, no matching cache, surface not entered — no OpenHands PRs to protect) or `open` and the
   current per-base tracker has listed (`tracker.listed()`); `pending` (start not settled) is unknown. So a provider that lists first (or a provider
-  whose list keeps failing) cannot wipe another provider's read/dismissed records; `reconcilePrRecords(…, prune)` is the pure model. prs.json unchanged.
+  whose list keeps failing) cannot wipe another provider's read/dismissed records — by design, while OpenHands lists keep failing (e.g. signed out with the
+  gate open) PR records are not pruned for ANY provider, so a dismissed PR that reopens stays dismissed and `prs.json` can grow until the next good list; `reconcilePrRecords(…, prune)` is the pure model. prs.json unchanged.
 - `ShellState.notifications`: `openPrCount` = visible (open ∧ not dismissed), `unreadPrCount` (the badge), `prsPanelOpen`. IPC
   `prs:list|markRead|markAllRead|remove|clear|open|panel` (`PrUrlArg`/`PrOpenArg`/`PrPanelArg`); `setPrsPanel` mirrors `setNotificationsPanel` and the two
   panels close each other. Log events `pr-read`/`pr-dismiss` (`{ all, count }`), `prs-panel`, `prs-save-error`.
 - PR titles: `src/main/prTitles.ts` resolves GitHub PR titles via `ses.fetch` on `persist:github` (10 min null / 6 h ok cache, 3 concurrent, `pr-title`
-  log event — never the title text); `src/core/prTitle.ts` parses/strips the `<title>` (pure). (Title+state cache extensions: see Claude → Pull requests.)
+  log event — never the title text); `src/core/prTitle.ts` parses/strips the `<title>` (pure). (Title+state cache extensions: see Claude → Pull requests.) Cache landings notify any number of listeners
+  (`prTitles.addChangeListener(fn)` → unsubscribe; debounced 150 ms; Claude PR tracking and the OpenHands runtime subscribe; a throwing listener logs
+  `pr-title-listener-error {code}`).
 
 ### Poller, identity & PR auto-open
 - The v3 poller only lists the token user's sessions: `notifier` always calls `GET /v3/self` (org-id override still wins) and passes `user_ids` to the
@@ -677,7 +680,7 @@ variable that selects it.
   migrate to `prs` on load; `recordPr` touches seenAt, `setPrState` reports `completed` exactly once on first merged|closed, `openPrsOf` = non-removed
   non-final newest-seenAt-first, `prCountsFor` feeds the row's `prs` badge counts via the snapshot overlay — reconcile only refills them on refresh).
 - `prTitles` (`src/main/prTitles.ts`) is now a title+state cache: `getInfo(url)`, `get` (title compat), `ensure(urls,{maxAgeMs})` (merged/closed final 6 h;
-  non-final default or caller maxAge), `parsePrState` on the same HTML, `seed()` for tests, debounced `onChange` + notifyShell; a fetch that fails or
+  non-final default or caller maxAge), `parsePrState` on the same HTML, `seed()` for tests, debounced multi-listener `addChangeListener` + notifyShell; a fetch that fails or
   can't parse a state keeps the previous one (never regresses known state to null) and `pr-title` logs `state`. It falls back to
   `gh pr view <url> --json state,isDraft,title` when the page fetch yields no state (`resolveGhCmd` via where/which cached 10 min;
   `pr-title {via:'page'|'gh'}`; test `AGENT_WORKSPACE_TEST_GH_CMD`).
@@ -844,8 +847,10 @@ variable that selects it.
 - Shell: `PROVIDER_UI` (`src/shell/providers.tsx`, typed against the React-free `PROVIDER_UI_KEYS` in `src/shell/providerKeys.ts`) holds the rail button,
   settings tab, analytics panel and source glyph per provider. `tests/unit/providerRegistry.test.ts` fails on any drift between descriptors, schemas and keys.
 - Main: `ProviderRuntime` (`src/main/providers/runtime.ts`, electron-free) = `start`/`dispose` + optional `onFocus`, `onSettingsChanged(previous, next)`,
-  `onPrPanelOpen`, `openPullRequests`, `openNotification`, `openSessionPr(sessionId, prUrl)`, `newSession`. `src/main/providers/index.ts` registers
-  `devinCloud`, `devinLocal`, `claude` in that order (wrappers delegate to the existing singletons); `disposeAll()` disposes in registration order and a
+  `onCredentialsChanged` (a stored credential was set/cleared), `onSurfaceEnter` (the surface just became active — `applyLayout`; Claude and OpenHands
+  implement it, `window.ts` has no per-provider branch), `onPrPanelOpen`, `openPullRequests`, `prsKnown` (false until this provider has listed its PRs —
+  gates PR-record pruning), `openNotification`, `openSessionPr(sessionId, prUrl)`, `newSession`, `usage` (see below). `src/main/providers/index.ts`
+  registers `devinCloud`, `devinLocal`, `claude`, `openhands` in that order (wrappers delegate to the existing singletons); `disposeAll()` disposes in registration order and a
   throwing `dispose` logs `provider-dispose-error {provider}` without stopping the rest. `runtimeFor(idOrSurface)` looks one up.
 - Usage: `ProviderRuntime.usage?: UsageSource` (`src/main/cloudKit/usage.ts`, electron-free) = `{ providerId, source, readings(), summary(),
   onChange(cb) }`; a `UsageReading` is `{ metric, account, percent, periodKey, stale, body }` (`stale` never alerts; `body` = the alert text) and
@@ -854,8 +859,10 @@ variable that selects it.
   `deriveUsageAlerts` inputs; `usageSummaryItems(sources)` flattens summaries. `devin-cloud`, `claude` and `openhands` provide one; a new usage metric also
   extends `PROVIDER_USAGE_METRICS` + `USAGE_METRIC_LABEL`.
 - Adding a provider: add the descriptor and extend the tuples in `providers.ts` (plus `ProviderId`); add a `PROVIDER_UI` + `PROVIDER_UI_KEYS` entry; add a
-  runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
-  prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
+  runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view) vs local kind (sidebar + chat/terminal) differ only in descriptor flags and
+  the runtime; the scope key is the descriptor's `scopePrefix` + id (`<surface>:`, e.g. `local:`, `claude:`, `openhands:`; Devin Cloud has none) and
+  `scopeFallback` is per descriptor — `'cloud'` falls back to the selected Cloud session (Devin Cloud, Devin Local, Claude), `'global'` to the GLOBAL tabs
+  (OpenHands). Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
   from `src/shared/ipc.ts`; run `npm run smoke:install` when a settings schema changes.
 - Adding a local ACP provider (A3): the Devin Local host (`DevinLocalHost`, `src/main/local/acpHost.ts`) takes an `AcpAgentSpec`
   (`src/core/acpAgentSpec.ts`, re-exported by `src/main/local/agentSpec.ts`): `providerId`, `label`, `args` (appended to the resolved binary), optional
@@ -869,7 +876,7 @@ variable that selects it.
 ## OpenHands
 
 Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallback:'global'`, source `openhands` (notifications/PR source enums accept it),
-`analyticsTab:null`, `usageMetrics:[]`. Code: `src/core/openhands.ts` (pure), `src/main/openhands/` (`source.ts`, `fetch.ts`, `runtimeCore.ts`, `views.ts`,
+`analyticsTab:'openhands'`, `usageMetrics:['openhands-quota']`. Code: `src/core/openhands.ts` (pure), `src/main/openhands/` (`source.ts`, `fetch.ts`, `runtimeCore.ts`, `views.ts`,
 `contextMenu.ts`), `src/main/providers/openhands.ts` (runtime wrapper), `src/main/openhandsConfig.ts` (effective base + ShellState slice),
 `src/shell/openhands/`, zod in `src/shared/ipc/openhands.ts`.
 
@@ -886,6 +893,8 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   (`guardedHandle`, reply `{ok}` only, input cleared after a save), stored in `secrets.json` (`SecretStore.get/setOpenHandsApiKey`, never in state/IPC/logs;
   test hook `secretsSetOpenHands`). `ShellState.openhandsApiKeySet` (presence only) and `ShellState.openhands.connection` feed
   `#openhandsConnectionStatus[data-status=idle|api-key|api-key-rejected|api-key-required|web-session|login-required|error]` (on the Settings → OpenHands tab).
+  `api-key-required` is never produced yet: it is reserved for the "cookie reuse is unsupported, an API key is needed" case and stays so until
+  `npm run openhands:probe` shows whether cookie auth works (the UI strings and the hint already handle it).
 - **Effective base URL**: `openhandsEffectiveBase(saved)` (`openhandsConfig.ts`, over `effectiveBaseUrl` in `src/core/openhands.ts`) is the single place it is
   computed (`openhandsBaseUrl()`, the runtime's `effective()` and the menu all call it). Test mode only, in order: `AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`
   alias of the saved value, then `AGENT_WORKSPACE_TEST_OPENHANDS_URL`, then the saved value — all in memory, never written to settings.json.
@@ -897,15 +906,18 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   `applyLayout`), (c) an `openhands-cache.json` whose tenant matches the current base URL exists (`cacheMatchesTenant`). Until then `ShellState.openhands`
   stays idle; once open the gate stays open for the run; test hook `openhandsRefresh()` opens it. Poll 1, every 10th poll, a focus, a mutation and a
   settings/key change list everything (a full list drops vanished conversations); the others send `updated_at__gte` = `nextCursor` and merge. Timer:
-  `pollSeconds` focused, 4x blurred (`AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS`); a tick while a list is in flight is skipped; a focus full list restarts it.
+  `pollSeconds` focused, 4x blurred (`AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS`); a tick while a list is in flight is skipped; a focus full list restarts it. While the server refuses the list (connection `login-required` /
+  `api-key-rejected`) the next tick is stretched x4 per consecutive refused list, capped at 16 min (`authBackoffMs`); it resets on a credentials change,
+  a surface entry and any list that comes back authenticated (a focus list included).
   Cache `userData/openhands-cache.json` (rows only, `tenantKey` = normalised base URL). A base URL change stops the old controller, awaits its queued cache
   writes (`drain()`), drops the cache and starts a new source with a fresh cursor. `ShellState.openhands` = `buildOpenHandsShellState(controller.snapshot(),
-  source.connection())`; a failed list shows as `lastError {op:'list'}`, the controller's own `lastError` carries mutations.
+  source.connection())` (incl. `lastSyncAt`, the controller's last successful list — the sidebar's "synced …" line); a failed list shows as `lastError {op:'list'}`, the controller's own `lastError` carries mutations.
 - **Transport** (`fetch.ts` `createOpenHandsFetch`): an API key → `net.fetch` with `Authorization: Bearer` and `credentials:'omit'`; no key → the
   `persist:openhands` session's cookies. Both use `redirect:'error'` (Electron 44's `'manual'` rejects with "Redirect was cancelled"); a redirect or a
   response URL outside the base origin is `redirect-refused` (connection `error`), never retried, key never re-sent. Key + 401 → re-read the key once,
-  still 401 → `api-key-rejected` with NO cookie fallback; 403 on the key path is also `api-key-rejected`, any other non-2xx `error`; no key + 401/403 twice →
-  `login-required`. Setting or clearing the key forces a full list.
+  still 401 → `api-key-rejected` with NO cookie fallback; a 403 on the key path is also `api-key-rejected` (mapped in `source.ts`), any other non-2xx
+  `error`; no key + 401/403 → `login-required` after ONE request (there is nothing to re-read on the cookie path). Setting or clearing the key forces a
+  full list.
 - **Views / partition** (`views.ts` = the provider config for the cloud-kit pool `src/main/cloudKit/viewPool.ts`): `providerId:'openhands'`, partition
   `persist:openhands` (never `persist:cloud`), `homeUrl` = the effective base, `keyForUrl` = `openhandsViewKey` (the 32-hex conversation id of
   `<base>/conversations/<id>`, `home` for any other page on the origin, null for a foreign origin), `ownsUrl` = same origin, limits
@@ -958,7 +970,9 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   transition runs one `onFinished(id)`: `GET /api/v1/conversation/<id>/events/search?limit=100&sort_order=TIMESTAMP_DESC` through the same gated fetch
   (param names research-derived, pending the live probe), body `{items}` or a bare array, each event's `JSON.stringify` scanned by
   `extractPullRequestUrls`; skipped while a scan for that id is in flight; event text is never logged or kept. Any change → `prTitles.ensure(new urls)` +
-  `prStore().reconcile(allOpenPullRequests())` + `notifyShell`. `openPullRequests()` → `SessionPrLink {source:'openhands'}` (merged/closed per the
+  `prStore().reconcile(allOpenPullRequests())` + `notifyShell`. States stay fresh like Claude's: after every successful list the tracker asks
+  `prTitles.ensure(non-final tracked urls, {maxAgeMs: 10 min})` (cache-gated, so cheap), `onPrPanelOpen` does the same, and the runtime's
+  `prTitles.addChangeListener` reconciles when a state lands — a merged/closed PR leaves `openPullRequests()`, the panel and the badge. `openPullRequests()` → `SessionPrLink {source:'openhands'}` (merged/closed per the
   `prTitles` state left out); `openSessionPr` / a notification with `prUrl` → `openhandsOpenSession(id)` + the PR tab in `openhands:<id>`.
 - **Usage** (B3): credits / daily quota / 30-day spend, the `openhands-quota` alert and the Analytics → OpenHands tab — see Analytics surface →
   OpenHands usage. The usage service is part of the gated runtime (`build` → `usage`); the tab's visibility opens the gate.
@@ -1091,6 +1105,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `pr-catch-up` | `{ count, lastGoodAgeMs }`. |
 | `pr-open` | PR opened from the panel. |
 | `pr-title` | never the title text; `state`, `{via:'page'\|'gh'}`. |
+| `pr-title-listener-error` | `{ code }` — a `prTitles` change listener threw (error class name only); the other listeners still ran. |
 | `poll-error` | `op` (`self\|list\|session`). |
 | `notifier-self` / `notifier-focus-poll` / `notifier-org-mismatch` | Poller identity/focus events — booleans/counts/durations only, never the user id. |
 | `identity-resolve` / `identity-rejected` / `identity-observe` / `identity-observe-error` / `identity-reset` / `identity-save-error` | Service-user identity resolution — booleans/counts/durations only, never the user id. |
