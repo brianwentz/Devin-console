@@ -126,6 +126,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Local host only (a `;`-separated `local=path` pair is also accepted; bare path = default) — a WSL host's account file is the distro's own `<home>/.claude.json`, read by its helper (`usage.accounts`); specs stage a second account by writing it under `FAKE_WSL_ROOT`. |
+| `AGENT_WORKSPACE_TEST_CHROME_USER_DATA` | test mode | Replaces the Chrome user-data dir the favorites reader uses (`src/core/bookmarksReader.ts chromeUserDataDir`) — point it at a copy of `tests/fixtures/chrome-user-data` (`Local State` + `Default/Bookmarks` + `Profile 1/Bookmarks`); never the real Chrome profile. |
 | `AGENT_WORKSPACE_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
 | `AGENT_WORKSPACE_PROBE_HOST` / `AGENT_WORKSPACE_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `AGENT_WORKSPACE_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
@@ -170,6 +171,14 @@ variable that selects it.
   fraction on load), `windowPlacements` (per-display-config window bounds/maximized), `layout.terminalOpen`/`layout.terminalHeight` (the dock's
   visibility is `terminalOpen ∧ dockSurface(surface)` — there is no per-surface opt-in key any more; `terminal.allSurfaces` was deleted in ux2 P0 and is
   ignored on load — since ux3 S6 it stays in the file as unknown data rather than being stripped), `prs.autoOpenTabs` (lazy background tab when a session gains a PR).
+- `favorites.chromeProfile` (`string | null`, default null = Chrome's last used profile; schema: `isValidProfileDir` — `Default` / `Profile N`) — Settings → Link Handling → Favorites
+  `#favoritesProfileSelect` (draft field `favoritesChromeProfile`, `DRAFT_TAB` 'links'); options come from `favorites:profiles` (guardedHandle, no payload →
+  `FavoritesProfilesReplySchema {profiles: {dir,name}[]}`; names shown only there, never logged); a configured dir Chrome no longer lists stays selected as
+  `<dir> (not found)`. Reader: pure `createBookmarksReader` (`src/core/bookmarksReader.ts`, injected read+stat only) wired to `fs/promises` `readFile`/`stat` by
+  `src/main/bookmarks.ts` (`bookmarksReader()`): user-data dir win32 `%LOCALAPPDATA%\Google\Chrome\User Data`, darwin `~/Library/Application Support/Google/Chrome`
+  (test mode `AGENT_WORKSPACE_TEST_CHROME_USER_DATA`); profile = the setting if listed in `Local State`, else `last_used` if listed, else `Default`; reads only
+  `Local State` + `<profile>/Bookmarks`, never writes; re-parses only on an mtime/size change (cache per file path); a partial/garbled file keeps the last good
+  result; `load()` → `ok {tree}` (empty tree included) | `missing` (no dir / Local State / profile / file) | `unreadable` (bad file, nothing cached).
 - `sessions.open`/`sessions.width`/`sessions.collapsedFolders` (Cloud session sidebar, below); `sessions.open` also drives the Settings checkbox
   `#sessionsColumnToggle` and applies to the `cloud`, `claude` and `local` surfaces (`computeBounds` reserves the column for all three);
   `sessions.maxLiveViews` (1..20, default 6) + `sessions.keepAliveHours` (0..168, default 24) — the Cloud view pool caps/idle TTL.
@@ -1113,6 +1122,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `window-activate` | `{ reason, quiet }` — window-bring-forward request via `activateWindow`; `quiet: true` means it showed without activating. |
 | `tabs-preload` | Visible scope's discarded tabs background-loaded. |
 | `tab-user-open` | `{ source: 'drop'\|'typed'\|'favorite', target: 'new'\|'current', kind }` + the url — `tabs:openUserUrl` accepted a user-supplied URL (`kind` = the `routeUrl` kind). |
+| `bookmarks-load` | `{ ok, count, ms, cached }` — one favorites read (`count` = url bookmarks in the tree, `cached` = served from the mtime/size cache or the last good tree); never names, URLs, profile dirs or paths. |
 | `tab-drop-types` | `{ types: string[] }` — MIME type names of a drag entering the tab row (≤32, each ≤128 chars); only with `AGENT_WORKSPACE_DEBUG_DROPS=1` in test mode / dev builds. Never the dragged values. |
 | `address-bar` | `{ open, mode: 'new'\|'current', source }` — `source` = `button\|shortcut\|enter\|escape\|blur` or an automatic close `pane-hidden\|surface\|scope`; never the URL. |
 | `rule-tab` / `rule-tab-background` | `{ruleId, ruleKind}` — never the pattern. |

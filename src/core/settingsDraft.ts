@@ -1,6 +1,7 @@
 import { normalizeBaseUrl } from './openhands';
 import { isAllowedAppUrl } from './sessions';
 import { validateLinkRule } from './linkRules';
+import { isValidProfileDir } from './chromeBookmarks';
 import type { ClaudePermissionMode, LinkRule, Settings, SettingsPatch } from '../shared/ipc';
 
 // Mirrors ClaudePermissionModeSchema (kept here so the shell bundle needs no
@@ -66,6 +67,8 @@ export interface SettingsDraft {
   userId: string;
   orgId: string;
   linkRules: LinkRule[];
+  // '' = Chrome's last used profile (null in settings).
+  favoritesChromeProfile: string;
 }
 
 export type DraftField = keyof SettingsDraft;
@@ -113,6 +116,7 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   userId: 'devin',
   orgId: 'devin',
   linkRules: 'links',
+  favoritesChromeProfile: 'links',
 };
 
 // Notifications whose fix is a Devin Cloud setting (token, user id) open
@@ -156,6 +160,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     userId: settings.notifications.userId,
     orgId: settings.notifications.orgId,
     linkRules: settings.routing.rules.map((rule) => ({ ...rule })),
+    favoritesChromeProfile: settings.favorites.chromeProfile ?? '',
   };
 }
 
@@ -199,6 +204,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     Number(draft.openhandsKeepAliveHours) !== Number(base.openhandsKeepAliveHours) ||
     draft.userId.trim() !== base.userId ||
     draft.orgId.trim() !== base.orgId ||
+    draft.favoritesChromeProfile !== base.favoritesChromeProfile ||
     draft.linkRules.length !== base.linkRules.length ||
     draft.linkRules.some((rule, index) => !linkRulesEqual(rule, base.linkRules[index]!))
   );
@@ -302,6 +308,10 @@ export function validateDraft(
   if (claudePickerFolder && !isAbsolutePickerPath(claudePickerFolder)) {
     errors.claudePickerFolder = 'Enter an absolute folder path';
   }
+  const chromeProfile = draft.favoritesChromeProfile;
+  if (chromeProfile && !isValidProfileDir(chromeProfile)) {
+    errors.favoritesChromeProfile = 'Choose a Chrome profile from the list';
+  }
   if (Object.keys(errors).length > 0 || openhandsBaseUrl === null) return { ok: false, errors };
   return {
     ok: true,
@@ -343,6 +353,7 @@ export function validateDraft(
         keepAliveHours: openhandsKeepAlive,
       },
       notifications: { userId: draft.userId.trim(), orgId: draft.orgId.trim() },
+      favorites: { chromeProfile: chromeProfile || null },
     },
   };
 }
@@ -375,6 +386,7 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'openhands.keepAliveHours': 'openhandsKeepAliveHours',
   'notifications.userId': 'userId',
   'notifications.orgId': 'orgId',
+  'favorites.chromeProfile': 'favoritesChromeProfile',
 };
 
 export function fieldErrorsFromIssues(

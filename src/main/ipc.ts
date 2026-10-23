@@ -37,6 +37,8 @@ import {
   OpenUserUrlArg,
   TabsDropTypesArg,
   AddressBarArg,
+  FavoritesProfilesReplySchema,
+  type FavoritesProfilesReply,
   type Settings,
   type SettingsCommitResult,
   type SettingsPatch,
@@ -56,6 +58,7 @@ import { handleLink, openUserUrl } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
 import { historyAction, navigationTarget, openAddressBarShortcut } from './shortcuts';
 import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, SessionReorderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
+import { bookmarksReader } from './bookmarks';
 import { debugDrops, state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
@@ -238,6 +241,14 @@ export function setupIpc(): void {
     const parsed = TabsDropTypesArg.safeParse(payload);
     if (!parsed.success) return;
     log('shell', 'tab-drop-types', { detail: { types: parsed.data.types } });
+  });
+  // Settings-only: Chrome profile names reach the shell's Settings page, never a log.
+  guardedHandle(IpcChannels.favoritesProfiles, async (): Promise<FavoritesProfilesReply> => {
+    const profiles = await bookmarksReader().profiles();
+    const parsed = FavoritesProfilesReplySchema.safeParse({
+      profiles: profiles.map((p) => ({ dir: p.dir, name: Array.from(p.name).slice(0, 256).join('') })),
+    });
+    return parsed.success ? parsed.data : { profiles: [] };
   });
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);

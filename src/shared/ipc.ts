@@ -3,6 +3,7 @@ import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } f
 import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
 import { normalizeBaseUrl } from '../core/openhands';
+import { isValidProfileDir } from '../core/chromeBookmarks';
 import {
   OpenHandsChannels,
   OpenHandsConnectionSchema,
@@ -68,6 +69,7 @@ export const IpcChannels = {
   tabsOpenUserUrl: 'tabs:openUserUrl',
   tabsAddressBar: 'tabs:addressBar',
   tabsDropTypes: 'tabs:dropTypes',
+  favoritesProfiles: 'favorites:profiles',
   navAction: 'nav:action',
   surfaceSet: 'surface:set',
   linkOpen: 'link:open',
@@ -303,6 +305,10 @@ const NotificationsFields = {
 const UsageFields = { devinPollMinutes: z.number().int().min(5).max(240) };
 // F1: open a background tab (in the session's scope) when the poller sees a new PR.
 const PrsFields = { autoOpenTabs: z.boolean() };
+// Chrome profile dir the favorites menu reads (null = Chrome's last used profile).
+const FavoritesFields = {
+  chromeProfile: z.string().refine(isValidProfileDir, 'must be a Chrome profile folder (Default or Profile N)').nullable(),
+};
 // ux3 S0: manual session order per section (path/folder key -> session ids).
 const SessionOrderSchema = z.record(
   z.string().max(1024),
@@ -608,6 +614,9 @@ export const SettingsObject = z.object({
   prs: z
     .object({ autoOpenTabs: PrsFields.autoOpenTabs.default(true) })
     .default({ autoOpenTabs: true }),
+  favorites: z
+    .object({ chromeProfile: FavoritesFields.chromeProfile.default(null) })
+    .default({ chromeProfile: null }),
   layout: z
     .object({
       terminalOpen: LayoutFields.terminalOpen.default(false),
@@ -719,6 +728,7 @@ export const SettingsPatchSchema = z.object({
     .partial()
     .optional(),
   prs: z.object(PrsFields).partial().optional(),
+  favorites: z.object(FavoritesFields).partial().optional(),
   local: z.object(LocalFields).partial().optional(),
   layout: z.object(LayoutFields).partial().optional(),
   terminal: z.object(TerminalFields).partial().optional(),
@@ -1158,6 +1168,10 @@ export const AddressBarArg = z.object({
 export const TabsDropTypesArg = z.object({
   types: z.array(z.string().max(128)).max(32),
 });
+// favorites:profiles — the user's Chrome profiles for Settings only (names never logged).
+export const ChromeProfileSchema = z.object({ dir: z.string().max(64), name: z.string().max(256) });
+export const FavoritesProfilesReplySchema = z.object({ profiles: z.array(ChromeProfileSchema).max(500) });
+export type FavoritesProfilesReply = z.infer<typeof FavoritesProfilesReplySchema>;
 export type OpenUserUrlReply =
   | { ok: true }
   | {

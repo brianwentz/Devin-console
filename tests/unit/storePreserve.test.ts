@@ -189,6 +189,22 @@ describe('SETTINGS_PRESERVE_SPEC tracks the zod schema', () => {
     expect(out.openhands.baseUrl).toBe('https://app.all-hands.dev');
   });
 
+  it('favorites is a structural block; an invalid stored chromeProfile is kept raw until touched', () => {
+    const raw = { favorites: { chromeProfile: 'Guest Profile', future: 1 } };
+    const { settings, dropped, invalid } = parseSettingsFile(raw);
+    expect(settings.favorites.chromeProfile).toBeNull();
+    expect(dropped).toEqual(['favorites.chromeProfile']);
+    const out = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect(out.favorites).toEqual({ chromeProfile: 'Guest Profile', future: 1 });
+    const touched = serializeSettingsFile(
+      raw,
+      { ...settings, favorites: { chromeProfile: 'Profile 1' } },
+      invalid,
+      new Set(settingsPatchPaths({ favorites: { chromeProfile: 'Profile 1' } })),
+    );
+    expect(touched.favorites).toEqual({ chromeProfile: 'Profile 1', future: 1 });
+  });
+
   it('a settings round-trip through the overlay keeps the file identical for a known file', () => {
     const settings = SettingsSchema.parse({ surface: 'local', claude: { model: 'opus' } });
     const raw = JSON.parse(JSON.stringify(settings));

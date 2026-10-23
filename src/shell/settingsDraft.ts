@@ -107,6 +107,7 @@ const FIELD_INPUT: Record<DraftField, string> = {
   userId: 'userIdInput',
   orgId: 'orgIdInput',
   linkRules: 'linkRuleAdd',
+  favoritesChromeProfile: 'favoritesProfileSelect',
 };
 
 function focusErrorField(errors: DraftErrors): void {

@@ -66,6 +66,7 @@ describe('draftFromSettings', () => {
         maxLiveViews: 3,
         keepAliveHours: 6,
       },
+      favorites: { chromeProfile: 'Profile 3' },
     });
     expect(draftFromSettings(custom)).toEqual({
       tenantUrl: 'https://tenant.example.com',
@@ -97,6 +98,7 @@ describe('draftFromSettings', () => {
       userId: 'user-1',
       orgId: 'org-2',
       linkRules: [{ id: 'r1', kind: 'prefix', pattern: 'https://x.example/', enabled: true }],
+      favoritesChromeProfile: 'Profile 3',
     });
   });
 });
@@ -259,6 +261,7 @@ describe('validateDraft', () => {
         keepAliveHours: 24,
       },
       notifications: { userId: 'u1', orgId: 'o1' },
+      favorites: { chromeProfile: null },
     });
   });
 
@@ -667,5 +670,53 @@ describe('openhands draft fields (B1 T20)', () => {
       collapsedRepos: [],
       sessionOrder: {},
     });
+  });
+});
+
+describe('favorites.chromeProfile draft field', () => {
+  it('maps null <-> "" and round-trips through the patch', () => {
+    expect(draftFromSettings(defaults).favoritesChromeProfile).toBe('');
+    const empty = validateDraft(draft());
+    expect(empty.ok).toBe(true);
+    if (!empty.ok) return;
+    expect(empty.patch.favorites).toEqual({ chromeProfile: null });
+    const result = validateDraft(draft({ favoritesChromeProfile: 'Profile 2' }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.patch.favorites).toEqual({ chromeProfile: 'Profile 2' });
+    const merged = mergeSettings(defaults, result.patch);
+    expect(merged.favorites.chromeProfile).toBe('Profile 2');
+    expect(isDraftDirty(draftFromSettings(merged), merged)).toBe(false);
+    expect(isDraftDirty(draft({ favoritesChromeProfile: 'Default' }), defaults)).toBe(true);
+  });
+
+  it('accepts Default', () => {
+    const result = validateDraft(draft({ favoritesChromeProfile: 'Default' }));
+    expect(result.ok && result.patch.favorites).toEqual({ chromeProfile: 'Default' });
+  });
+
+  it.each(['Guest Profile', 'System Profile', '../Default', 'Profile 0', 'profile 1'])(
+    'rejects %s and routes the error to the links tab',
+    (value) => {
+      const result = validateDraft(draft({ favoritesChromeProfile: value }));
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.favoritesChromeProfile).toBeDefined();
+      expect(DRAFT_TAB[firstErrorField(result.errors)!]).toBe('links');
+    },
+  );
+
+  it('the settings schema accepts null / a valid dir and rejects others', () => {
+    expect(SettingsSchema.parse({ favorites: { chromeProfile: 'Profile 1' } }).favorites.chromeProfile).toBe(
+      'Profile 1',
+    );
+    expect(SettingsSchema.parse({}).favorites).toEqual({ chromeProfile: null });
+    expect(SettingsSchema.safeParse({ favorites: { chromeProfile: 'Guest Profile' } }).success).toBe(false);
+  });
+
+  it('maps the zod issue path to the draft field', () => {
+    const { errors } = fieldErrorsFromIssues([{ path: ['favorites', 'chromeProfile'], message: 'x' }]);
+    expect(errors.favoritesChromeProfile).toBe('x');
+    expect(DRAFT_TAB.favoritesChromeProfile).toBe('links');
   });
 });

@@ -178,6 +178,9 @@ export async function launchApp(
       // host); hosts.ssh is empty unless a spec adds one.
       AGENT_WORKSPACE_TEST_SSH_CMD: `node ${join(process.cwd(), 'out/fixtures/fakeSsh.cjs')}`,
       FAKE_SSH_ROOT: join(profileWslRoot, 'ssh-root'),
+      // The favorites reader never sees the real Chrome profile: a missing dir by
+      // default; specs pass a copy of tests/fixtures/chrome-user-data.
+      AGENT_WORKSPACE_TEST_CHROME_USER_DATA: join(profileWslRoot, 'no-chrome'),
       ...extraEnv,
     },
   });
