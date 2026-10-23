@@ -24,6 +24,7 @@ test.afterAll(async () => {
 test.afterEach(() => {
   fixtures.openhands.setStatus('credits', 0);
   fixtures.openhands.setBody('quota', null);
+  fixtures.openhands.requireAuth('none');
 });
 
 async function launch(profile: string) {
@@ -58,17 +59,23 @@ test('Analytics -> OpenHands: gated fetch, cards, unavailable credits, one 80% a
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohusage-'));
   const logFile = join(profile, 'events.jsonl');
   const before = usageRequests().length;
+  const allBefore = fixtures.openhands.requests().length;
   let app = await launch(profile);
   try {
-    // No key, no cache, no OpenHands visit: the usage endpoints are never contacted.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    expect(usageRequests().length).toBe(before);
+    // No key, no cache, no OpenHands visit: the gate is closed (no source was
+    // built, so no usage service exists) and the OpenHands host sees nothing.
+    expect(await hook(app, 'openhandsState')).toBeNull();
+    expect(fixtures.openhands.requests().length).toBe(allBefore);
 
+    // Analytics on its default Devin tab is not an OpenHands action either.
     const shell = await shellPage(app);
     await shell.locator('#analyticsButton').click();
     await expect.poll(async () => (await state(app)).surface).toBe('analytics');
+    await expect(shell.locator('#analyticsTab-devin')).toHaveAttribute('aria-selected', 'true');
     await expect(shell.locator('#analyticsTab-openhands')).toHaveText('OpenHands');
-    expect(usageRequests().length).toBe(before);
+    expect(await hook(app, 'openhandsState')).toBeNull();
+    expect((await hook<{ credits: { state: string } }>(app, 'openhandsUsageState')).credits.state).toBe('pending');
+    expect(fixtures.openhands.requests().length).toBe(allBefore);
 
     // Opening the tab is the explicit OpenHands action: the gate opens.
     await shell.locator('#analyticsTab-openhands').click();
@@ -133,6 +140,43 @@ test('Analytics -> OpenHands: gated fetch, cards, unavailable credits, one 80% a
     await shell.locator('#analyticsButton').click();
     await expect(shell.locator('#analyticsTab-openhands')).toHaveAttribute('aria-selected', 'true');
     await expect(shell.locator('#openhandsAnalytics')).toBeVisible();
+  } finally {
+    await close(app);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+});
+
+test('signed out: the OpenHands tab shows the sign-in hint instead of Loading', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohusage-auth-'));
+  fixtures.openhands.requireAuth('cookie');
+  const app = await launch(profile);
+  try {
+    const shell = await shellPage(app);
+    await shell.locator('#analyticsButton').click();
+    await shell.locator('#analyticsTab-openhands').click();
+    await expect(shell.locator('#openhandsAnalytics')).toBeVisible();
+
+    await expect(shell.locator('#openhandsAnalyticsLogin')).toBeVisible();
+    await expect(shell.locator('#openhandsAnalyticsLogin')).toHaveText('Sign in to OpenHands to see usage');
+    for (const card of ['credits', 'quota', 'spend']) {
+      await expect(shell.locator(`[data-card=${card}]`)).toHaveAttribute('data-card-state', 'error');
+      await expect(shell.locator(`[data-card=${card}] [data-card-error]`)).toHaveAttribute(
+        'data-card-error',
+        'login-required',
+      );
+    }
+    await expect(shell.locator('[data-card=top]')).not.toHaveAttribute('data-card-state', 'pending');
+    await expect(shell.locator('#openhandsAnalytics')).not.toContainText('Loading');
+    await expect(shell.locator('#openhandsAnalyticsSummaryHint')).toHaveText('Sign in to OpenHands to see usage');
+    await expect(shell.locator('#openhandsUsageSummary')).not.toContainText('Usage unavailable');
+
+    // The state carries the auth reason (the 1 -> 16 min backoff on refused passes is unit-tested).
+    const usage = await hook<{ credits: { state: string; reason?: string } }>(app, 'openhandsUsageState');
+    expect(usage.credits).toEqual({ state: 'error', reason: 'login-required' });
+
+    // The hint takes the user to the OpenHands sign-in page (the sidebar banner's action).
+    await shell.locator('#openhandsAnalyticsLogin').click();
+    await expect.poll(async () => (await state(app)).surface).toBe('openhands');
   } finally {
     await close(app);
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });

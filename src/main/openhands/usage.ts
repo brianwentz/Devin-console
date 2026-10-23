@@ -5,7 +5,7 @@
 // is closed and a base URL change starts from empty cards.
 //
 // Cadence: 15 min, every 60 s while Analytics -> OpenHands is visible;
-// 429/5xx/network back off 1 -> 16 min. Logs `openhands-usage-fetch
+// 429/5xx/network and 401/403 (signed out, key rejected) back off 1 -> 16 min. Logs `openhands-usage-fetch
 // {endpoint, ok, status}` only — never bodies, org ids or amounts.
 
 import {
@@ -23,6 +23,7 @@ import {
   usageDelayMs,
   type Card,
   type OpenHandsUsageCards,
+  type UsageAuthReason,
 } from '../../core/openhandsUsage';
 import { USAGE_METRIC_LABEL } from '../../core/usageAlerts';
 import type { UsageReading, UsageSummaryItem } from '../cloudKit/usage';
@@ -102,11 +103,14 @@ export function createOpenHandsUsageService(deps: OpenHandsUsageDeps): OpenHands
   // A transport error (refused redirect, network) is "no response".
   const statusOf = (r: OpenHandsFetchResult): number =>
     r.error === 'redirect-refused' || r.error === 'network' ? 0 : r.status;
+  // The transport's auth verdict (cards show how to sign in).
+  const authOf = (r: OpenHandsFetchResult): UsageAuthReason | undefined =>
+    r.error === 'login-required' || r.error === 'api-key-rejected' ? r.error : undefined;
 
   const spend = async (prev: Card<number>, at: string): Promise<{ card: Card<number>; retry: boolean }> => {
     if (orgId === null) {
       const me = await call('me', '/api/v1/users/me');
-      if (statusOf(me) !== 200) return nextCard(prev, statusOf(me), null, at);
+      if (statusOf(me) !== 200) return nextCard(prev, statusOf(me), null, at, authOf(me));
       orgId = parseOrgId(me.body);
       // No org on this server/account: there is no my-usage to ask for
       // (unavailable, or an error keeping a spend known before — nextCard).
@@ -117,7 +121,13 @@ export function createOpenHandsUsageService(deps: OpenHandsUsageDeps): OpenHands
       `/api/organizations/${encodeURIComponent(orgId)}/conversations/my-usage?time_window=30d`,
     );
     if (statusOf(r) === 404) orgId = null; // re-resolve next pass (org changed)
-    return nextCard(prev, statusOf(r), statusOf(r) === 200 ? (parseMyUsage(r.body)?.totalCost ?? null) : null, at);
+    return nextCard(
+      prev,
+      statusOf(r),
+      statusOf(r) === 200 ? (parseMyUsage(r.body)?.totalCost ?? null) : null,
+      at,
+      authOf(r),
+    );
   };
 
   const run = async (): Promise<void> => {
@@ -129,8 +139,14 @@ export function createOpenHandsUsageService(deps: OpenHandsUsageDeps): OpenHands
       spend(cards.spend30d, at),
     ]);
     if (stopped) return;
-    const credits = nextCard(cards.credits, statusOf(c), statusOf(c) === 200 ? parseCredits(c.body) : null, at);
-    const quota = nextCard(cards.quota, statusOf(q), statusOf(q) === 200 ? parseQuota(q.body) : null, at);
+    const credits = nextCard(
+      cards.credits,
+      statusOf(c),
+      statusOf(c) === 200 ? parseCredits(c.body) : null,
+      at,
+      authOf(c),
+    );
+    const quota = nextCard(cards.quota, statusOf(q), statusOf(q) === 200 ? parseQuota(q.body) : null, at, authOf(q));
     cards = { credits: credits.card, quota: quota.card, spend30d: s.card };
     backoff = nextBackoffMs(backoff, credits.retry || quota.retry || s.retry);
     deps.onChange();

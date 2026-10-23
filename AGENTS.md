@@ -443,13 +443,17 @@ variable that selects it.
   `/api/v1/users/me` (`parseOrgId`, cached per service; none → spend `unavailable`) then
   `/api/organizations/<org>/conversations/my-usage?time_window=30d` (`parseMyUsage` → `total_spend`). Cards `Card<T>` =
   `pending | ok {value,fetchedAt} | unavailable | error {stale?}` (`nextCard`): 200 + parsed → ok, 200 unparsed → error keeping a known value (else unavailable), 404 / 503 → unavailable (no backoff for either),
-  429/5xx/no response → error keeping the last good value with backoff 1→16 min (`nextBackoffMs`), 401/403 → error without backoff. Cadence
+  429/5xx/no response and 401/403 → error keeping the last good value with backoff 1→16 min (`nextBackoffMs`); 401/403 also carry
+  `reason: 'login-required'|'api-key-rejected'` from the transport's `error`. Cadence
   `usageDelayMs`: 15 min, 60 s while the tab is visible (backoff only slows it); first poll 5 s after the gate opens, at once when the tab is visible.
-  The panel (`#openhandsAnalytics`, `[data-card=credits|quota|spend|top][data-card-state]` — `top` is `pending` until the conversation list is `ready` or cached, unavailable text `Not available on this server`, quota via
+  The panel (`#openhandsAnalytics`, `[data-card=credits|quota|spend|top][data-card-state]` — `top` is `ok` once the conversation list is `ready` or cached, `error` while signed out or the list failed, else `pending`;
+  `usageAuthHint(cards, connection)` → `#openhandsAnalyticsLogin` (opens the OpenHands home, like the sidebar's `#openhandsLogin`) or
+  `#openhandsAnalyticsApiKeyHint` (Settings → OpenHands) above the cards and `#openhandsAnalyticsSummaryHint` in the summary row, shared actions in
+  `src/shell/openhands/authActions.ts`; signed-out cards read `Not signed in`, never `Loading…`, unavailable text `Not available on this server`, quota via
   the shared `Gauge`) sends `openhands:usageVisible {visible}` on mount/unmount — showing it is an explicit OpenHands action: `core.onSurfaceEnter()` opens
   the gate (not the hosted pool). `openhands:usageRefresh` (invoke) also opens it. State rides `ShellState.usage.openhands` (`OpenHandsUsageStateSchema`,
   `openhandsUsageSnapshot()` in `openhandsConfig.ts`, `notifyShell` on change; `topByCost` = the listed conversations' `metrics.accumulated_cost`, top 5).
-  Alerts: metric `openhands-quota` (label "OpenHands daily quota"), account = base URL origin, periodKey = `resetsAt ?? <UTC date>`; a fresh ok quota
+  Alerts: metric `openhands-quota` (label "OpenHands daily quota"), account = base URL origin, periodKey = `resetsAt ?? <UTC date>`; each `build` publishes `[]` first (the old base's readings go); a fresh ok quota
   publishes into the runtime's `UsageFeed` (`openhandsRuntime.usage`, source `openhands`); `summary()` keeps a stale percent. A `usage` entry opens
   Analytics on `providerBySource(source).analyticsTab`. Log `openhands-usage-fetch {endpoint, ok, status}` only.
 - **Claude usage service** (`src/main/claude/usage.ts`, singleton `claudeUsage()`): pushes `ClaudeUsageState` on `claude:usage` (`createPushedStore`;

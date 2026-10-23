@@ -3,8 +3,8 @@ import type { Rect } from '../../core/layout';
 import { openhandsStatusLine } from '../../core/openhands';
 import type { CloudState, OpenHandsShellState } from '../../shared/ipc';
 import { SessionSidebar, type SessionSidebarActions } from '../components/SessionSidebar';
-import { useShellState, setSettingsTab } from '../store';
-import { requestSurface } from '../surface';
+import { useShellState } from '../store';
+import { openOpenHandsSettings, openOpenHandsSignIn } from './authActions';
 
 // Base ids whose OpenHands DOM id is not just `openhands<Id>`.
 const ID_ALIASES = { cloudRefresh: 'refresh', sessionSearch: 'filter' } as const;
@@ -27,11 +27,6 @@ function toCloudState(oh: OpenHandsShellState): CloudState {
     capabilities: oh.capabilities,
   };
 }
-
-const openSettingsTab = () => {
-  setSettingsTab('openhands');
-  void requestSurface('settings');
-};
 
 /**
  * OpenHands adapter: maps ShellState.openhands onto the capability-driven
@@ -82,7 +77,7 @@ export function OpenHandsSidebar({ rect }: { rect: Rect }) {
           id="openhandsLogin"
           type="button"
           className="mx-3 mb-1.5 px-2 h-6 rounded text-left text-[11px] text-[#6e9bd0] hover:text-[#9fc4ea] hover:bg-[#1a2735]"
-          onClick={() => window.agentworkspace.openhandsOpenHome()}
+          onClick={openOpenHandsSignIn}
         >
           Sign in to OpenHands
         </button>
@@ -92,7 +87,7 @@ export function OpenHandsSidebar({ rect }: { rect: Rect }) {
           id="openhandsApiKeyHint"
           type="button"
           className="mx-3 mb-1.5 px-2 h-6 rounded text-left text-[11px] text-[#e0a03c] hover:bg-[#1a2735]"
-          onClick={openSettingsTab}
+          onClick={openOpenHandsSettings}
         >
           {conn === 'api-key-rejected'
             ? 'API key rejected — update it in Settings'

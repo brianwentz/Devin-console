@@ -10,8 +10,10 @@ import {
   parseQuota,
   quotaReading,
   topByCost,
+  usageAuthHint,
   usageDelayMs,
   type Card,
+  type OpenHandsUsageCards,
 } from '../../src/core/openhandsUsage';
 import { createOpenHandsUsageService } from '../../src/main/openhands/usage';
 import type { OpenHandsFetchResult } from '../../src/main/openhands/fetch';
@@ -111,8 +113,43 @@ describe('openhands usage cards', () => {
     expect(nextCard<number>({ state: 'pending' }, 500, null, FETCHED).card).toEqual({ state: 'error' });
   });
 
-  it('401/403 -> error with stale, no backoff', () => {
-    expect(nextCard<number>(ok, 401, null, FETCHED)).toEqual({ card: { state: 'error', stale: 5 }, retry: false });
+  it('401/403 -> error with stale and the auth reason, backing off', () => {
+    expect(nextCard<number>(ok, 401, null, FETCHED, 'login-required')).toEqual({
+      card: { state: 'error', stale: 5, reason: 'login-required' },
+      retry: true,
+    });
+    expect(nextCard<number>({ state: 'pending' }, 403, null, FETCHED, 'api-key-rejected')).toEqual({
+      card: { state: 'error', reason: 'api-key-rejected' },
+      retry: true,
+    });
+    // No transport verdict: still an error that backs off, without a reason.
+    expect(nextCard<number>(ok, 401, null, FETCHED)).toEqual({ card: { state: 'error', stale: 5 }, retry: true });
+    // A reason only rides an auth status.
+    expect(nextCard<number>(ok, 500, null, FETCHED, 'login-required')).toEqual({
+      card: { state: 'error', stale: 5 },
+      retry: true,
+    });
+  });
+
+  it('usageAuthHint: connection or an auth-refused card; a rejected key wins', () => {
+    const pending: OpenHandsUsageCards = {
+      credits: { state: 'pending' },
+      quota: { state: 'pending' },
+      spend30d: { state: 'pending' },
+    };
+    const refused = (reason: 'login-required' | 'api-key-rejected'): OpenHandsUsageCards => ({
+      ...pending,
+      quota: { state: 'error', reason },
+    });
+    expect(usageAuthHint(pending, 'web-session')).toBeNull();
+    expect(usageAuthHint(pending, null)).toBeNull();
+    expect(usageAuthHint(pending, 'login-required')).toBe('login-required');
+    expect(usageAuthHint(pending, 'api-key-required')).toBe('api-key-required');
+    expect(usageAuthHint(pending, 'api-key-rejected')).toBe('api-key-rejected');
+    expect(usageAuthHint(refused('login-required'), 'idle')).toBe('login-required');
+    expect(usageAuthHint(refused('api-key-rejected'), 'login-required')).toBe('api-key-rejected');
+    // A plain 5xx error is not a sign-in problem.
+    expect(usageAuthHint({ ...pending, credits: { state: 'error' } }, 'web-session')).toBeNull();
   });
 
   it('backoff 1 -> 16 min, reset on success; delay = max(cadence, backoff)', () => {
@@ -313,6 +350,41 @@ describe('openhands usage service', () => {
       ok: false,
       status: 0,
     });
+  });
+
+  it('signed out: every card carries the auth reason and the pass backs off (no per-minute polling)', async () => {
+    const h = serviceHarness(
+      () => ({ status: 401, body: null, mode: 'web-session', error: 'login-required' }) as OpenHandsFetchResult,
+      { visible: true },
+    );
+    h.service.start();
+    await vi.waitFor(() => expect(h.service.cards().credits.state).toBe('error'));
+    expect(h.service.cards()).toEqual({
+      credits: { state: 'error', reason: 'login-required' },
+      quota: { state: 'error', reason: 'login-required' },
+      spend30d: { state: 'error', reason: 'login-required' },
+    });
+    expect(h.service.backoffMs()).toBe(60_000);
+    await h.service.refresh();
+    expect(h.service.backoffMs()).toBe(120_000);
+    // Visible, but the next pass waits for the backoff, not the 60 s cadence.
+    await vi.waitFor(() => expect(h.live().at(-1)?.ms).toBe(60_000));
+    h.service.visibilityChanged();
+    expect(h.live().at(-1)?.ms).toBe(120_000);
+    expect(h.published).toHaveLength(0);
+    h.service.stop();
+  });
+
+  it('a rejected API key is carried as api-key-rejected', async () => {
+    const h = serviceHarness(
+      (p) =>
+        p === '/api/billing/credits'
+          ? ({ status: 401, body: null, mode: 'api-key', error: 'api-key-rejected' } as OpenHandsFetchResult)
+          : happy(p),
+    );
+    await h.service.refresh();
+    expect(h.service.cards().credits).toEqual({ state: 'error', reason: 'api-key-rejected' });
+    expect(h.service.cards().quota.state).toBe('ok');
   });
 
   it('stop() while a pass is in flight: no card change, no publish, no timer afterwards', async () => {

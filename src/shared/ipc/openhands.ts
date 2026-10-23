@@ -81,7 +81,11 @@ const cardSchema = <T extends z.ZodTypeAny>(value: T) =>
     z.object({ state: z.literal('pending') }),
     z.object({ state: z.literal('ok'), value, fetchedAt: z.string() }),
     z.object({ state: z.literal('unavailable') }),
-    z.object({ state: z.literal('error'), stale: value.optional() }),
+    z.object({
+      state: z.literal('error'),
+      stale: value.optional(),
+      reason: z.enum(['login-required', 'api-key-rejected']).optional(),
+    }),
   ]);
 const QuotaValueSchema = z.object({ percent: z.number(), resetsAt: z.string().nullable() });
 export const OpenHandsUsageStateSchema = z.object({

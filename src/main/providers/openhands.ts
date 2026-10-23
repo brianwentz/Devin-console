@@ -152,6 +152,8 @@ function build(base: string) {
     sanitize: (message) => sanitizeMessage(message, knownKey ?? ''),
     onChange: () => notifyShell(),
   });
+  // A new base (or a reopened gate) starts with no readings: drop the old base's.
+  openhandsUsageFeed.publish([]);
   const usage = createOpenHandsUsageService({
     fetch: fetcher,
     baseUrl: () => base,

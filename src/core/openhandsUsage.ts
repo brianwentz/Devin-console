@@ -3,11 +3,14 @@
 // bodies (openhands-research.md §6), card outcomes, backoff and cadence.
 // No electron imports — src/main/openhands/usage.ts drives it.
 
+/** Why an endpoint refused us: not signed in (web session) / the stored API key was rejected. */
+export type UsageAuthReason = 'login-required' | 'api-key-rejected';
+
 export type Card<T> =
   | { state: 'pending' }
   | { state: 'ok'; value: T; fetchedAt: string }
   | { state: 'unavailable' }
-  | { state: 'error'; stale?: T | undefined };
+  | { state: 'error'; stale?: T | undefined; reason?: UsageAuthReason | undefined };
 
 export interface OpenHandsQuota {
   percent: number;
@@ -93,14 +96,17 @@ export function cardValue<T>(card: Card<T>): T | null {
  * good value is already known: then it is an error keeping that value (schema
  * drift must not blank a card), without backoff. 404/503 = not available on
  * this server (no backoff);
- * 429/5xx/network keep the last good value and back off; any other failure
- * (401/403 …) keeps it without backing off.
+ * 429/5xx/network and 401/403 keep the last good value and back off (a
+ * signed-out visible tab must not poll every minute); 401/403 also carry the
+ * auth `reason` so the tab can say how to sign in. Any other failure keeps
+ * the value without backing off.
  */
 export function nextCard<T>(
   prev: Card<T>,
   status: number,
   parsed: T | null,
   fetchedAt: string,
+  authReason?: UsageAuthReason,
 ): { card: Card<T>; retry: boolean } {
   if (status === 200 && parsed !== null) return { card: { state: 'ok', value: parsed, fetchedAt }, retry: false };
   const stale = okValue(prev);
@@ -108,8 +114,28 @@ export function nextCard<T>(
     return { card: stale === undefined ? { state: 'unavailable' } : { state: 'error', stale }, retry: false };
   }
   if (status === 404 || status === 503) return { card: { state: 'unavailable' }, retry: false };
-  const card: Card<T> = stale === undefined ? { state: 'error' } : { state: 'error', stale };
-  return { card, retry: status === 0 || status === 429 || status >= 500 };
+  const auth = status === 401 || status === 403;
+  const card: Card<T> = {
+    state: 'error',
+    ...(stale === undefined ? {} : { stale }),
+    ...(auth && authReason ? { reason: authReason } : {}),
+  };
+  return { card, retry: auth || status === 0 || status === 429 || status >= 500 };
+}
+
+export type UsageAuthHint = 'login-required' | 'api-key-rejected' | 'api-key-required';
+
+/**
+ * What the Analytics -> OpenHands tab should ask the user to do, if anything:
+ * from the source's connection (Settings status) or an auth-refused card.
+ * A rejected key wins over a missing web sign-in.
+ */
+export function usageAuthHint(cards: OpenHandsUsageCards, connection: string | null | undefined): UsageAuthHint | null {
+  const reasons = [cards.credits, cards.quota, cards.spend30d].map((c) => (c.state === 'error' ? c.reason : undefined));
+  if (connection === 'api-key-rejected' || reasons.includes('api-key-rejected')) return 'api-key-rejected';
+  if (connection === 'api-key-required') return 'api-key-required';
+  if (connection === 'login-required' || reasons.includes('login-required')) return 'login-required';
+  return null;
 }
 
 /** 1 -> 16 min exponential backoff while a retryable failure repeats; 0 after a clean pass. */
