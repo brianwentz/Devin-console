@@ -1,6 +1,6 @@
 // B1 T22: OpenHands hosted views, auth-origin routing, sidebar, rail and menus
 // against the fixture servers.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -13,6 +13,7 @@ const state = async (app: ElectronApplication) => (await publicState(app)) as un
 const ID1 = '0123456789abcdef0123456789abcd01';
 const ID2 = '0123456789abcdef0123456789abcd02';
 const ID3 = '0123456789abcdef0123456789abcd03';
+const FIXTURE_JSON = join(__dirname, '..', 'fixtures', 'openhands-conversations.json');
 
 let fixtures: FixtureServers;
 
@@ -94,6 +95,9 @@ test('rail button -> sidebar rows from the fixture; a row opens its conversation
     await expect(sidebar.locator('[data-session-id][data-status]')).toHaveCount(3);
     await expect(sidebar.locator(`[data-session-id="${ID1}"]`)).toHaveAttribute('data-status', 'running');
     await expect(sidebar.locator('[data-section-name="acme/web"]')).toHaveCount(1);
+    // The row without a repository sits in its own section, untitled.
+    await expect(sidebar.locator('[data-section-name="No repository"]')).toHaveCount(1);
+    await expect(sidebar.locator(`[data-session-id="${ID3}"]`)).toContainText('Untitled conversation');
     await expect(page.locator('#openhandsLogin')).toHaveCount(0);
 
     // Entering the surface showed the home view, in its own partition.
@@ -152,9 +156,12 @@ test('rail button -> sidebar rows from the fixture; a row opens its conversation
     await page.locator('#cloudButton').click();
     await expect.poll(async () => (await state(app)).surface).toBe('cloud');
 
-    // base URL change path: pooled pages are dropped and the home page reloaded.
+    // Base URL change while another surface is current: every pooled page is
+    // dropped (no off-surface reload); re-entering the surface opens home again.
     await hook(app, 'openhandsResetViews');
-    await expect.poll(async () => (await views(app)).map((v) => v.key)).toEqual(['home']);
+    await expect.poll(async () => views(app)).toEqual([]);
+    await page.locator('#openhandsButton').click();
+    await expect.poll(async () => (await activeView(app))?.key).toBe('home');
   } finally {
     await quit(app, profile);
   }
@@ -211,6 +218,7 @@ test('native menus: session items, header items, rename, copy id, open in browse
       .toBe(1);
     expect(fixtures.openhands.mutations().find((m) => m.op === 'rename')).toMatchObject({ id: ID2 });
     await expect(page.locator('#openhandsSessionRenameEdit')).toHaveCount(0);
+    await expect(row(ID2)).toContainText('Renamed by the sidebar');
 
     // Delete: confirm is auto-accepted in test mode.
     await row(ID3).click({ button: 'right' });
@@ -220,6 +228,7 @@ test('native menus: session items, header items, rename, copy id, open in browse
       .poll(() => fixtures.openhands.mutations().filter((m) => m.op === 'delete').length)
       .toBe(1);
     expect(fixtures.openhands.mutations().find((m) => m.op === 'delete')).toMatchObject({ id: ID3 });
+    await expect(row(ID3)).toHaveCount(0);
 
     // Header menu.
     await page.locator('#openhandsSessionsMenu').click();
@@ -240,6 +249,7 @@ test('native menus: session items, header items, rename, copy id, open in browse
     const events = JSON.stringify(await readEvents(join(profile, 'events.jsonl')));
     expect(events).not.toContain('Renamed by the sidebar');
   } finally {
+    fixtures.openhands.setConversations(JSON.parse(readFileSync(FIXTURE_JSON, 'utf8')));
     await quit(app, profile);
   }
 });

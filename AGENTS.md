@@ -118,7 +118,8 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro; also an extra remote-fs guard prefix — the app must never touch it Windows-side. |
 | `AGENT_WORKSPACE_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
-| `AGENT_WORKSPACE_TEST_OPENHANDS_URL` | test mode | Overrides `settings.openhands.baseUrl` in memory (never saved) via `effectiveBaseUrl` (`src/core/openhands.ts`) → `openhandsBaseUrl()` (`src/main/openhandsConfig.ts`, test hook `openhandsBaseUrl()`); http is allowed for loopback hosts only, an unusable value falls back to the saved URL. |
+| `AGENT_WORKSPACE_TEST_OPENHANDS_URL` | test mode | Overrides `settings.openhands.baseUrl` in memory (never saved) via `effectiveBaseUrl` (`src/core/openhands.ts`) → `openhandsEffectiveBase()` (`src/main/openhandsConfig.ts`, test hook `openhandsBaseUrl()`); http is allowed for loopback hosts only, an unusable value falls back to the saved URL. |
+| `AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP` | test mode | Comma-separated `https://from=<target>` pairs (`parseUrlAliases`; target https or loopback http): when the saved (normalised) base URL equals a `from`, the effective base is the target — wins over `AGENT_WORKSPACE_TEST_OPENHANDS_URL`. Lets an e2e type an https value into Settings → OpenHands and land on a fixture origin (`openhands.spec.ts` maps `https://alt.openhands.test` to `fixtures.openhandsAlt.url`). |
 | `AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS` | test mode | Overrides the OpenHands sessions poll interval (`settings.openhands.pollSeconds`; blurred polls still run at 4x it); `launchApp` sets `600000` and the fixture URL (`fixtures.openhands.url`) via `AGENT_WORKSPACE_TEST_OPENHANDS_URL` — specs opt into faster polling. |
 | `AGENT_WORKSPACE_TEST_OPENHANDS_AUTH_ORIGIN` | test mode | Comma-separated http(s) origins/prefixes appended to the OpenHands link-router `authOrigins` (`openHandsAuthOrigins(baseUrl, extra)`, `src/core/openhands.ts`) so a fixture login hop stays in the OpenHands view; `launchApp` sets it to `fixtures.openhands.authOrigin` (specs append e.g. `<githubUrl>/login`). The default list is research-derived, not live-verified — confirm it with `npm run openhands:probe` before merging (see Providers → OpenHands auth origins). |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
@@ -199,14 +200,7 @@ variable that selects it.
 - `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
   `claude.defaultWslDistro` where those are still absent, then deletes the old key; `main/settings.ts` spots it in the raw file, logs
   `settings-migrated {from:'hosts.defaultWslDistro'}` and re-saves once.
-- `openhands.{baseUrl, pollSeconds, maxLiveViews, keepAliveHours, collapsedRepos, sessionOrder}` (B1) — Settings → OpenHands: `baseUrl` (default
-  `https://app.all-hands.dev`; the schema refuses non-https, the draft stores it through `normalizeBaseUrl` — sub-path kept, trailing slash dropped;
-  `#openhandsBaseUrlInput`), `pollSeconds` int 10..600 = 30 (`#openhandsPollSecondsInput`), `maxLiveViews` int 1..20 = 4 (`#openhandsMaxLiveViewsInput`),
-  `keepAliveHours` int 0..168 = 24 (`#openhandsKeepAliveInput`); `collapsedRepos`/`sessionOrder` have no Settings UI. A structural block in
-  `SETTINGS_PRESERVE_SPEC`. The API key is not a setting: explicit `#openhandsApiKeyInput` + `#openhandsApiKeySave`/`#openhandsApiKeyClear` over
-  `openhands:apiKeySet {value}` / `openhands:apiKeyClear` (`src/shared/ipc/openhands.ts`, `guardedHandle`, reply `{ok}` only, input cleared after a
-  save); `ShellState.openhandsApiKeySet` (presence only, `SecretStore.hasOpenHandsApiKey()`) and `ShellState.openhands.connection` feed
-  `#openhandsConnectionStatus[data-status=idle|api-key|api-key-rejected|api-key-required|web-session|login-required|error]`.
+- `openhands.{baseUrl, pollSeconds, maxLiveViews, keepAliveHours, collapsedRepos, sessionOrder}` (B1) — Settings → OpenHands; details, ids and the API key (not a setting) under "OpenHands".
 - `notifications.userId` (manual user-id override for service-user tokens; `''` = detect automatically).
 - `routing.rules` (LinkRule `{id, kind: 'prefix'|'regex', pattern, enabled}`, max 100 — matched http(s) links open as GitHub-pane tabs; matcher in
   `src/core/linkRules.ts`, RouteKind `'rule'` ranks after github/tenant; gh-tab decisions reached via a rule log `rule-tab`/`rule-tab-background` with
@@ -823,63 +817,6 @@ variable that selects it.
   runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
   prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
   from `src/shared/ipc.ts`; run `npm run smoke:install` when a settings schema changes.
-- OpenHands (B1 T20 descriptor/settings, T21 runtime): `openhands` is `kind:'cloud'` with `scopeFallback:'global'` (no selection →
-  GLOBAL tabs, never the Devin Cloud session's) and source `openhands` (so the notifications/PR source enums accept it); `analyticsTab:null`,
-  `usageMetrics:[]` for now. `#openhandsButton` sits on the rail after `#claudeButton` (`src/shell/openhands/OpenHandsRailButton.tsx`); main keeps
-  `state.openhandsSessionId` (in the `syncScope` map; the GitHub tab scope is `openhands:<id>`, GLOBAL when none is selected).
-- OpenHands runtime (B1 T21, `src/main/providers/openhands.ts`, registered after claude, started after the shell `loadURL`): a
-  `CloudSessionsController` over the REST-poll source `src/main/openhands/source.ts` (`createOpenHandsSource`; capabilities
-  `{folders:'derived', archive:false, rename:true, delete:true, reorder:true}`; rows via `toCloudSession`, sections = repository, paging by
-  `listAllPages` (opaque `page_id`, 50-page cap → `PagingError`)). Poll 1, every 10th poll, a focus, a mutation and a settings/key change
-  list everything (a full list drops vanished conversations); the others send `updated_at__gte` = `nextCursor` and merge. The runtime owns the
-  timer (`pollSeconds` focused, 4x blurred, `AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS` in test mode); a tick while a list is in flight is skipped.
-  Cache `userData/openhands-cache.json` (rows only, `tenantKey` = normalised base URL; dropped on a base URL change, which also restarts the
-  source with a fresh cursor). `ShellState.openhands` is `buildOpenHandsShellState(controller.snapshot(), source.connection())`; a failed list
-  shows as `lastError {op:'list'}` (the controller's own `lastError` only carries mutations), `connection` follows the auth mode.
-- OpenHands opt-in gate (`src/main/openhands/runtimeCore.ts`, `createOpenHandsRuntimeCore`; the module singleton in `providers/openhands.ts` is a thin
-  wrapper): the OpenHands host is never contacted for a user who does not use OpenHands. No controller start, poll timer, focus refresh or request
-  happens until a gate opens — (a) an API key is stored (checked at start; `onCredentialsChanged` with a key set), (b) the openhands surface was entered
-  this run (optional `ProviderRuntime.onSurfaceEnter()`, called generically from `applyLayout` for the entered surface's runtime), (c) a
-  `openhands-cache.json` whose tenant matches the current base URL exists (`cacheMatchesTenant` = `parseCloudCacheValue`; another tenant's leftover
-  file does not count). Until then `ShellState.openhands` stays idle. Once open the gate stays open for the run; the test hook `openhandsRefresh()`
-  opens it. A focus full list restarts the poll timer; settings commits reschedule only on a `pollSeconds`/base URL change; a base URL change awaits
-  the old controller's queued cache writes (`CloudSessionsController.drain()`) before dropping the cache. On the key path a 403 list answer is
-  `api-key-rejected`, any other non-2xx list answer `error`.
-- OpenHands transport (`src/main/openhands/fetch.ts`, `createOpenHandsFetch`): an API key → `net.fetch` with `Authorization: Bearer` and
-  `credentials:'omit'`; no key → the `persist:openhands` session's cookies. Both use `redirect:'error'` (Electron 44's `'manual'` rejects with
-  "Redirect was cancelled"); any redirect rejection or a response URL outside the base origin is `redirect-refused` (connection `error`), never
-  retried, key never re-sent. Key + 401 → re-read the key once, still 401 → `api-key-rejected` with NO fallback to cookies; no key + 401/403 twice
-  → `login-required`. Setting or clearing the key (`onCredentialsChanged`) forces a full list. `Ctrl+N` on the OpenHands surface calls the
-  runtime's `newSession()` (surface stays `openhands`, then `showHome` → the pooled home view, reloaded) — it no longer opens a Devin Cloud session.
-- OpenHands hosted views (B1 T22): `src/main/openhands/views.ts` is the provider config for the cloud-kit view pool — `providerId:'openhands'`,
-  partition `persist:openhands` (never `persist:cloud`), `homeUrl` = the effective base URL, `keyForUrl` = `openhandsViewKey` (`src/core/openhands.ts`:
-  the 32-hex conversation id of `<base>/conversations/<id>`, `home` for any other page on the origin, null for a foreign origin), `ownsUrl` = same
-  origin, limits `openhands.maxLiveViews`/`keepAliveHours`; views get only `out/autofill-preload.cjs` (sandbox + contextIsolation). The pool is
-  registered eagerly at boot (`openhandsViews()`, after the Devin pool, so `pools()` lists it for permissions/autofill/cookie audit) but creates NO
-  view until the surface is entered (`onSurfaceEnter` → `openhandsShowHome()`) or a row is opened — no request before the opt-in. The OpenHands
-  surface shows the active pooled view in the main column exactly like Cloud (no shell Panel; `window.ts` iterates `allPoolViews()` /
-  `poolForSurface`). `openhands:open {id}` → `openhandsOpenSession` (URL rebuilt from the id, must round-trip `conversationIdFromUrl`) →
-  `pool.show(id)` + `state.openhandsSessionId`; the pool's `onActiveSession` hook keeps `state.openhandsSessionId` in step when the page navigates
-  (rekey). `setPermissions(session, 'openhands', 'persist:openhands')` mirrors Devin's (the pool is looked up once by partition; clipboard-sanitized-write
-  only, own origin). A base-URL change → `resetOpenHandsViews()` (pool reset, only when views exist) + the runtime's cache drop/new source.
-- OpenHands auth origins (B1 T22): `RouteProvider.authOrigins` (`src/core/linkRouter.ts`). A same-tab navigation whose source is that provider's own
-  view (`attachRouting(contents, 'openhands', 'openhands')` → RouteSource `'provider'` + `sourceProviderId`) to a URL that prefix-matches an entry
-  (`matchesAuthOrigin`: same origin, path equal/under the entry's path on a segment boundary — never host-wide) is `{kind:'in-place'}` instead of a
-  GitHub tab; new-window requests and other sources are unaffected. The list comes from `openHandsAuthOrigins(baseUrl, extra)`
-  (`routing.ts openhandsRouteProvider`): `https://auth.app.all-hands.dev` + `https://auth.all-hands.dev` when the base host is `app.all-hands.dev`,
-  always `https://github.com/login`, `/sessions`, `https://gitlab.com/oauth`, `/users/sign_in`, `https://bitbucket.org/site/oauth2`,
-  `/account/signin`; test mode appends `AGENT_WORKSPACE_TEST_OPENHANDS_AUTH_ORIGIN`. The list is RESEARCH-DERIVED (no live spike yet): run
-  `npm run openhands:probe` against a real account and update `OPENHANDS_IDP_AUTH_ORIGINS` from its evidence before merging.
-- OpenHands sidebar (B1 T22): `src/shell/openhands/OpenHandsSidebar.tsx` = `SessionSidebar` (`providerId='openhands'`, `idPrefix='openhands'`,
-  capabilities from `ShellState.openhands.capabilities`, `idAliases` for `#openhandsRefresh`/`#openhandsFilter`): `<section data-sidebar="openhands">`,
-  `#openhandsSessionNew`, `#openhandsRefresh`, `#openhandsFilter`, rows `[data-session-id][data-status]`, repository sections (derived, read-only;
-  `section || null`). Collapse/row order persist under `openhands.collapsedRepos` / `openhands.sessionOrder` (NOT `sessions.*`; `openhands:sessionReorder`
-  → `openhands-session-reorder`). `#openhandsLogin` (connection `login-required`) shows the home view (`openhands:openHome`); `#openhandsApiKeyHint`
-  (`api-key-required|api-key-rejected`) opens Settings → OpenHands. Native menus are built in main (`src/main/openhands/contextMenu.ts`,
-  `openhands:contextMenu`): session `rename` (answers `{action:'rename'}`; the shell shows the inline `#openhandsSessionRenameEdit` input →
-  `openhands:rename {id,title}` → controller `mutate`), `copy-id`, `open-in-browser`, `delete` (confirm dialog; auto-confirmed in test mode); header
-  `new-session`, `refresh`. In test mode the invoke stays open until `openhandsMenuClick(id)` (ids are the item ids above). IPC (all shell-only,
-  zod in `src/shared/ipc/openhands.ts`): `openhands:open|newSession|openHome|refresh|rename|sessionReorder|contextMenu`.
 - Adding a local ACP provider (A3): the Devin Local host (`DevinLocalHost`, `src/main/local/acpHost.ts`) takes an `AcpAgentSpec`
   (`src/core/acpAgentSpec.ts`, re-exported by `src/main/local/agentSpec.ts`): `providerId`, `label`, `args` (appended to the resolved binary), optional
   `modes`, and `resolveCommand(host)` → a binary argv, `{ full }` (a complete argv used verbatim — the test-mode `AGENT_WORKSPACE_LOCAL_AGENT_CMD`
@@ -888,6 +825,83 @@ variable that selects it.
   only spec: local = test override → `local.devinPath` → PATH, resolved once when the host starts; a WSL host = the probe's CLI path
   (`hosts.overrides[id].devinPath` wins inside the probe), read after `shellEnv(host, { explicit: true })` on each agent start. A new agent = a new spec,
   its descriptor and a `PROVIDER_UI` entry; spawn the external CLI (never fork Node), and the WSL routing / no-Windows-side-fs-on-`\\wsl.localhost` rules apply.
+
+## OpenHands
+
+Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallback:'global'`, source `openhands` (notifications/PR source enums accept it),
+`analyticsTab:null`, `usageMetrics:[]`. Code: `src/core/openhands.ts` (pure), `src/main/openhands/` (`source.ts`, `fetch.ts`, `runtimeCore.ts`, `views.ts`,
+`contextMenu.ts`), `src/main/providers/openhands.ts` (runtime wrapper), `src/main/openhandsConfig.ts` (effective base + ShellState slice),
+`src/shell/openhands/`, zod in `src/shared/ipc/openhands.ts`.
+
+- **Surface**: `#openhandsButton` sits on the rail after `#claudeButton` (`OpenHandsRailButton.tsx`). The main column is the active pooled view exactly like
+  Cloud (no shell Panel; `window.ts` iterates `allPoolViews()` / `poolForSurface`). `state.openhandsSessionId` (in the `syncScope` map) gives the GitHub tab
+  scope `openhands:<id>`, GLOBAL (`''`) when no conversation is open. `Ctrl+N` / `#openhandsSessionNew` → runtime `newSession()` → `showHome` (surface stays
+  `openhands`, home view reloaded; never opens a Devin Cloud session); `Ctrl+Shift+S` toggles the sessions column (`sidebarShortcut: true`).
+- **Settings** `openhands.{baseUrl, pollSeconds, maxLiveViews, keepAliveHours, collapsedRepos, sessionOrder}` — Settings → OpenHands: `baseUrl` (default
+  `https://app.all-hands.dev`; the schema refuses non-https, the draft stores it through `normalizeBaseUrl` — sub-path kept, trailing slash dropped;
+  `#openhandsBaseUrlInput`), `pollSeconds` int 10..600 = 30 (`#openhandsPollSecondsInput`), `maxLiveViews` int 1..20 = 4 (`#openhandsMaxLiveViewsInput`),
+  `keepAliveHours` int 0..168 = 24 (`#openhandsKeepAliveInput`); `collapsedRepos`/`sessionOrder` have no Settings UI (sidebar collapse / row drag →
+  `openhands:sessionReorder` → `openhands-session-reorder`; NOT `sessions.*`). A structural block in `SETTINGS_PRESERVE_SPEC`. The API key is not a
+  setting: explicit `#openhandsApiKeyInput` + `#openhandsApiKeySave`/`#openhandsApiKeyClear` over `openhands:apiKeySet {value}` / `openhands:apiKeyClear`
+  (`guardedHandle`, reply `{ok}` only, input cleared after a save), stored in `secrets.json` (`SecretStore.get/setOpenHandsApiKey`, never in state/IPC/logs;
+  test hook `secretsSetOpenHands`). `ShellState.openhandsApiKeySet` (presence only) and `ShellState.openhands.connection` feed
+  `#openhandsConnectionStatus[data-status=idle|api-key|api-key-rejected|api-key-required|web-session|login-required|error]` (on the Settings → OpenHands tab).
+- **Effective base URL**: `openhandsEffectiveBase(saved)` (`openhandsConfig.ts`, over `effectiveBaseUrl` in `src/core/openhands.ts`) is the single place it is
+  computed (`openhandsBaseUrl()`, the runtime's `effective()` and the menu all call it). Test mode only, in order: `AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`
+  alias of the saved value, then `AGENT_WORKSPACE_TEST_OPENHANDS_URL`, then the saved value — all in memory, never written to settings.json.
+- **Runtime + opt-in gate** (`runtimeCore.ts` `createOpenHandsRuntimeCore`, electron-free; the module singleton is a thin wrapper, started after the shell
+  `loadURL`): a `CloudSessionsController` over the REST-poll source `source.ts` (capabilities `{folders:'derived', archive:false, rename:true, delete:true,
+  reorder:true}`; rows via `toCloudSession`, sections = repository, paging `listAllPages` — opaque `page_id`, 50-page cap → `PagingError`). The OpenHands
+  host is never contacted for a user who does not use OpenHands: no controller start, poll timer, focus refresh or request until a gate opens — (a) an API
+  key is stored (at start, or `onCredentialsChanged`), (b) the openhands surface was entered this run (`ProviderRuntime.onSurfaceEnter()`, called from
+  `applyLayout`), (c) an `openhands-cache.json` whose tenant matches the current base URL exists (`cacheMatchesTenant`). Until then `ShellState.openhands`
+  stays idle; once open the gate stays open for the run; test hook `openhandsRefresh()` opens it. Poll 1, every 10th poll, a focus, a mutation and a
+  settings/key change list everything (a full list drops vanished conversations); the others send `updated_at__gte` = `nextCursor` and merge. Timer:
+  `pollSeconds` focused, 4x blurred (`AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS`); a tick while a list is in flight is skipped; a focus full list restarts it.
+  Cache `userData/openhands-cache.json` (rows only, `tenantKey` = normalised base URL). A base URL change stops the old controller, awaits its queued cache
+  writes (`drain()`), drops the cache and starts a new source with a fresh cursor. `ShellState.openhands` = `buildOpenHandsShellState(controller.snapshot(),
+  source.connection())`; a failed list shows as `lastError {op:'list'}`, the controller's own `lastError` carries mutations.
+- **Transport** (`fetch.ts` `createOpenHandsFetch`): an API key → `net.fetch` with `Authorization: Bearer` and `credentials:'omit'`; no key → the
+  `persist:openhands` session's cookies. Both use `redirect:'error'` (Electron 44's `'manual'` rejects with "Redirect was cancelled"); a redirect or a
+  response URL outside the base origin is `redirect-refused` (connection `error`), never retried, key never re-sent. Key + 401 → re-read the key once,
+  still 401 → `api-key-rejected` with NO cookie fallback; 403 on the key path is also `api-key-rejected`, any other non-2xx `error`; no key + 401/403 twice →
+  `login-required`. Setting or clearing the key forces a full list.
+- **Views / partition** (`views.ts` = the provider config for the cloud-kit pool `src/main/cloudKit/viewPool.ts`): `providerId:'openhands'`, partition
+  `persist:openhands` (never `persist:cloud`), `homeUrl` = the effective base, `keyForUrl` = `openhandsViewKey` (the 32-hex conversation id of
+  `<base>/conversations/<id>`, `home` for any other page on the origin, null for a foreign origin), `ownsUrl` = same origin, limits
+  `openhands.maxLiveViews`/`keepAliveHours`; views get only `out/autofill-preload.cjs` (sandbox + contextIsolation). The pool is registered eagerly at boot
+  but creates NO view until the surface is entered (`onSurfaceEnter` → `openhandsShowHome()`) or a row is opened. `openhands:open {id}` →
+  `openhandsOpenSession` (URL rebuilt from the id, must round-trip `conversationIdFromUrl`) → `pool.show(id)` + `state.openhandsSessionId`; the pool's
+  `onActiveSession` hook keeps it in step when the page navigates (rekey). `setPermissions(session, 'openhands', 'persist:openhands')` mirrors Devin's
+  (clipboard-sanitized-write only, own origin).
+- **Routing / auth origins**: `RouteProvider.authOrigins` (`src/core/linkRouter.ts`). A same-tab navigation whose source is the provider's own view
+  (`attachRouting(contents, 'openhands', 'openhands')` → RouteSource `'provider'` + `sourceProviderId`) to a URL that prefix-matches an entry
+  (`matchesAuthOrigin`: same origin, path equal/under the entry's on a segment boundary — never host-wide) is `{kind:'in-place'}` instead of a GitHub tab;
+  new-window requests and other sources are unaffected. The list is `openHandsAuthOrigins(baseUrl, extra)` (`routing.ts openhandsRouteProvider`):
+  `https://auth.app.all-hands.dev` + `https://auth.all-hands.dev` when the base host is `app.all-hands.dev`, always `https://github.com/login`, `/sessions`,
+  `https://gitlab.com/oauth`, `/users/sign_in`, `https://bitbucket.org/site/oauth2`, `/account/signin`; test mode appends
+  `AGENT_WORKSPACE_TEST_OPENHANDS_AUTH_ORIGIN`. The list is RESEARCH-DERIVED (no live spike yet): PENDING `npm run openhands:probe` against a real account —
+  update `OPENHANDS_IDP_AUTH_ORIGINS` from its evidence before merging.
+- **Sidebar** (`OpenHandsSidebar.tsx` = `SessionSidebar` with `providerId='openhands'`, `idPrefix='openhands'`, capabilities from
+  `ShellState.openhands.capabilities`, `idAliases` for `#openhandsRefresh`/`#openhandsFilter`): `<section data-sidebar="openhands">`, `#openhandsSessionNew`,
+  `#openhandsRefresh`, `#openhandsFilter`, rows `[data-session-id][data-status]` (`data-status` only when the prefix is non-empty — Devin DOM unchanged),
+  sections = repository (derived, read-only; `NO_REPOSITORY` = "No repository" for a null `section`, rows without a title read `UNTITLED` = "Untitled
+  conversation"). `#openhandsLogin` (connection `login-required`) shows the home view (`openhands:openHome`); `#openhandsApiKeyHint`
+  (`api-key-required|api-key-rejected`) opens Settings → OpenHands.
+- **Menus / mutations** (`contextMenu.ts`, `openhands:contextMenu`): session `rename` (answers `{action:'rename'}`; the shell shows the inline
+  `#openhandsSessionRenameEdit` → `openhands:rename {id,title}` → `openhandsRename` → `core.mutate`), `copy-id`, `open-in-browser`, `delete` (confirm
+  dialog, auto-confirmed in test mode → `openhandsDelete`); header `new-session`, `refresh`. In test mode the invoke stays open until `openhandsMenuClick(id)`.
+  Every id from the renderer is validated through `isConversationId`. IPC (shell-only): `openhands:open|newSession|openHome|refresh|rename|sessionReorder|contextMenu`.
+- **Delete of the open conversation**: `core.mutate` resolves true only when the server accepted the mutation (`CloudSessionsController.mutate` →
+  `Promise<boolean>`). Only then `openhandsForgetSession(id)`: if that view is active, home is shown first (no forced reload), `state.openhandsSessionId` → null
+  (tab scope falls back to GLOBAL), the pooled view is removed without a beforeunload negotiation (`ViewPool.remove`), `applyLayout`/`notifyShell`. A failed
+  delete (HTTP error) leaves the pool, scope and rows untouched and surfaces the controller's `lastError {op:'delete', message:'HTTP <n>'}`.
+- **Not connected**: `openhandsRename`/`openhandsDelete` while no gate is open make the core hold `{op, message:'not-connected'}` (`localError()`, calls
+  `onChange`); the ShellState snapshot overlays it as `openhands.lastError` (an idle state carrying it when there is no controller). Cleared when a gate
+  opens or the next mutation succeeds.
+- **Base URL change** (`onSettingsChanged` when the *effective* base differs): the core restarts as above and `resetOpenHandsViews()` runs — on the
+  OpenHands surface the pool resets to home on the new origin; on any other surface every pooled view is disposed (no off-surface request, scope →
+  GLOBAL) and entering the surface later shows home on the new origin. The idle sweep timer is restored after either path (`applyLimits()`).
 
 ## Conventions
 - `src/core/` is pure TS — no `electron` imports (unit-testable).
@@ -973,10 +987,10 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `remoteFsViolations()` | App `fs` calls on a WSL path the remote-fs guard saw since start (both modes); `launchApp` teardown asserts 0. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
 | `secretsSetOpenHands(value)` | Seed (string) or clear (`null`) the encrypted OpenHands API key in `secrets.json`; never returns it. |
-| `openhandsState()` / `openhandsRefresh()` | The `ShellState.openhands` snapshot (null before the runtime started) / force a full list (resolves when it finishes). Fixture: `fixtures.openhands` / `fixtures.openhandsAlt` in `tests/fixtures/http.ts` (`setConversations`, `setStatus`, `setEvents`, `requireAuth`, `setRedirect`, `mutations`, `lastAuthHeader`, `setLoginRedirect`, `requests`, `authOrigin`). |
-| `openhandsViewsInfo()` / `openhandsOpen(id)` / `openhandsResetViews()` | The OpenHands pool's `{key,url,active,loads,loading}` per view ([] until the surface is entered) / open a conversation like a row click / the base-URL-change reset (the https-only setting cannot flip to the http fixture). |
+| `openhandsState()` / `openhandsRefresh()` | The `ShellState.openhands` snapshot (null before a gate opened, unless a not-connected mutation error is held) / force a full list (resolves when it finishes). Fixture: `fixtures.openhands` / `fixtures.openhandsAlt` in `tests/fixtures/http.ts` (`setConversations`, `setStatus`, `setEvents`, `requireAuth`, `setRedirect`, `mutations`, `lastAuthHeader`, `setLoginRedirect`, `requests`, `authOrigin`). |
+| `openhandsViewsInfo()` / `openhandsOpen(id)` / `openhandsResetViews()` | The OpenHands pool's `{key,url,active,loads,loading}` per view ([] until the surface is entered) / open a conversation like a row click / the base-URL-change reset — pools reset to home on the OpenHands surface, disposed (`[]`) on any other; the real path is Settings + `AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`. |
 | `openhandsMenuItems()` / `openhandsMenuClick(id)` / `openhandsMutations()` | Described items of the open OpenHands native menu / click one (resolves the open `openhands:contextMenu` invoke → `{action}`) / recorded sidebar actions `{op,payload}` (`copy-id`, `open-in-browser`, `rename`, `delete`, `refresh`, `new-session`; ids only, never titles). |
-| `openhandsBaseUrl()` | The effective OpenHands base URL (`AGENT_WORKSPACE_TEST_OPENHANDS_URL` wins over the setting). |
+| `openhandsBaseUrl()` | The effective OpenHands base URL (`AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`, then `_URL`, win over the setting). |
 
 ## Log events
 
@@ -1009,7 +1023,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `cloud-org-change` | `{reason}`, no ids. |
 | `cloud-mutate` | `{op,ok,status}` only. |
 | `cloud-session-reorder` | `{ section: 'folder'\|'pinned'\|'recent'\|'participated', count }` — row drag in the Cloud sidebar persisted to `sessions.sessionOrder` (app-local, no server op). |
-| `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only, plus `provider` (the pool's providerId). |
+| `cloud-view-show\|create\|rekey\|duplicate\|discard\|discard-cancelled\|crashed` | kinds/counts/ids only, plus `provider` (the pool's providerId); `discard` `reason` = `idle\|cap\|switch\|removed` (`removed` = the view of a deleted OpenHands conversation, `ViewPool.remove`). |
 | `pr-read` / `pr-dismiss` | `{ all, count }`. |
 | `prs-panel` / `prs-save-error` | PR panel open/close, store write failure. |
 | `pr-auto-open` | `detail.source` = `local-chat\|local-terminal\|claude-chat\|claude-terminal\|claude-hook` or the poller; `catchUp` for ledger catch-up. |
@@ -1042,7 +1056,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `openhands-mutate` | `{ op: 'rename'\|'delete', ok, status }`. |
 | `openhands-auth` | `{ mode: 'api-key'\|'web-session', ok }` — logged when the (mode, ok) pair changes; the key is never logged. |
 | `openhands-open` | `{ sessionId }` (conversation id) or `{ found: false }` — a sidebar row opened its pooled view. |
-| `openhands-views-reset` | No detail — base URL change dropped the pooled OpenHands views. |
+| `openhands-views-reset` | No detail — base URL change reset (on the surface) or disposed (off it) the pooled OpenHands views. |
 | `openhands-delete-confirm` | `{ confirmed }` — the delete confirm dialog's answer (auto-confirmed in test mode). |
 | `openhands-session-reorder` | `{ section: 'recent'\|'pinned'\|'repo', count }` — row drag in the OpenHands sidebar persisted to `openhands.sessionOrder`. |
 | `openhands-stop-error` | `{ code }` (error class name only) — stopping the OpenHands sessions controller threw during a base-URL restart or dispose; teardown continues. |
