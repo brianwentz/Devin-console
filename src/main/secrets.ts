@@ -39,6 +39,7 @@ export class SecretStore {
   private openhandsKey: string | null = null;
   // Fields written by this run; any other field is carried through verbatim.
   private readonly touched = new Set<SecretField>();
+  private writeChain: Promise<void> = Promise.resolve();
   private loaded = false;
   private usingSyncFallback = false;
 
@@ -139,7 +140,8 @@ export class SecretStore {
     // this launch so an ordinary Keychain hiccup deletes nothing.
     if (failed.length > 0 && process.platform === 'darwin' && migrationRan()) {
       try {
-        const remaining: Record<string, unknown> = { ...file };
+        // Re-read: a re-encrypt above may have rewritten a field's ciphertext.
+        const remaining: Record<string, unknown> = { ...this.readFile() };
         for (const field of failed) delete remaining[field];
         if (SECRET_FIELDS.some((field) => typeof remaining[field] === 'string')) {
           this.writeFile(remaining as SecretsFile);
@@ -204,7 +206,18 @@ export class SecretStore {
     log('shell', 'secrets-openhands-set', { detail: { ok: true } });
   }
 
-  private async persist(): Promise<void> {
+  // Persists run strictly one after another: each reads the file, encrypts,
+  // then writes, so an interleaved pair could otherwise write a stale read.
+  private persist(): Promise<void> {
+    const run = this.writeChain.then(() => this.persistNow());
+    this.writeChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async persistNow(): Promise<void> {
+    // Claim the pending fields up front; a failed write puts them back.
+    const pending = new Set(this.touched);
+    this.touched.clear();
     // Start from the file as it is so unknown fields and fields this run did
     // not touch (e.g. one that failed to decrypt) come back out unchanged.
     const value: Record<string, unknown> = { ...this.readFile() };
@@ -213,10 +226,15 @@ export class SecretStore {
       openhandsApiKey: this.openhandsKey,
     };
     for (const field of SECRET_FIELDS) {
-      if (!this.touched.has(field)) continue;
+      if (!pending.has(field)) continue;
       const plain = memory[field];
-      if (plain === null) delete value[field];
-      else value[field] = (await this.encrypt(plain)).toString('base64');
+      try {
+        if (plain === null) delete value[field];
+        else value[field] = (await this.encrypt(plain)).toString('base64');
+      } catch (error) {
+        for (const f of pending) this.touched.add(f);
+        throw error;
+      }
     }
     try {
       if (SECRET_FIELDS.every((field) => typeof value[field] !== 'string')) {
@@ -224,9 +242,8 @@ export class SecretStore {
       } else {
         this.writeFile(value as SecretsFile);
       }
-      // The file now holds this run's values; later writes of the other field carry them over.
-      this.touched.clear();
     } catch (error) {
+      for (const f of pending) this.touched.add(f);
       log('shell', 'secrets-write-failed', { detail: { message: String(error) } });
       throw new SecretStoreError('Could not write the secrets file.');
     }

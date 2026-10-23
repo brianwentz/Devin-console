@@ -727,6 +727,11 @@ test('secrets.json keeps devinPat and openhandsApiKey independent', async () => 
     );
   const secrets = () => JSON.parse(readFileSync(join(profile, 'secrets.json'), 'utf8'));
 
+  // A Devin token on a fresh profile writes exactly the pre-change keys.
+  await hook('setPat', 'devin-pat-0');
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'version']);
+  await hook('clearPat');
+
   await hook('secretsSetOpenHands', 'oh-key-1');
   expect(Object.keys(secrets()).sort()).toEqual(['openhandsApiKey', 'version']);
   const ohBlob = secrets().openhandsApiKey as string;
@@ -748,6 +753,15 @@ test('secrets.json keeps devinPat and openhandsApiKey independent', async () => 
   await hook('secretsSetOpenHands', null);
   expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'version']);
   expect(secrets().devinPat).toBe(patBlob);
+
+  // Concurrent writes of both fields must both reach the disk.
+  await hook('clearPat');
+  await hook('secretsSetOpenHands', null);
+  await app.evaluate(async () => {
+    const hooks = (globalThis as any).__agentworkspace;
+    await Promise.all([hooks.setPat('devin-pat-3'), hooks.secretsSetOpenHands('oh-key-3')]);
+  });
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'openhandsApiKey', 'version']);
 
   await quit(app, profile);
 });
