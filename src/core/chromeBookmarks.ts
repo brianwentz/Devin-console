@@ -63,6 +63,8 @@ export function parseChromeBookmarks(json: unknown): BookmarkTree | null {
 function safeUrl(raw: string): URL | null {
   try {
     const u = new URL(raw);
+    // normalizeUserUrl refuses credentials in a URL, so listing one would be a dead item.
+    if (u.username || u.password) return null;
     return u.protocol === 'http:' || u.protocol === 'https:' ? u : null;
   } catch {
     return null;

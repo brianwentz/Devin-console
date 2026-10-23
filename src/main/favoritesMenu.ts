@@ -110,6 +110,8 @@ export async function popupFavoritesMenu(x: number, y: number): Promise<{ action
     if (state.windowRef) menu.popup({ ...opts, window: state.windowRef });
     else menu.popup(opts);
   });
+  // Test-seam semantics only: on Windows the popup callback can fire before the
+  // item's click, so this reply may be null; the shell ignores it either way.
   return { action };
 }
 

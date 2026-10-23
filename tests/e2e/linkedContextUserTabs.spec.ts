@@ -299,6 +299,48 @@ test('a Devin tenant URL goes to the Cloud surface; pane toggle, surface switch 
   }
 });
 
+test('an OpenHands URL typed in the bar goes to the OpenHands surface without a pane tab', async () => {
+  const launched = await launch();
+  const { app, shell } = launched;
+  const input = shell.locator('#tabAddressBarInput');
+  try {
+    await openSession(app, 'A');
+    await shell.locator('#tabNew').click();
+    await expect(input).toBeFocused();
+    await input.fill(`${fixtures.openhands.url}/conversations/0123456789abcdef0123456789abcd0e`);
+    await input.press('Enter');
+    await expect.poll(async () => (await state(app)).surface).toBe('openhands');
+    await expect(shell.locator('#tabAddressBar')).toHaveCount(0);
+    expect((await state(app)).tabs.tabs).toHaveLength(0);
+  } finally {
+    await dispose(launched);
+  }
+});
+
+test('Ctrl+L to a URL already open in another tab focuses that tab instead of duplicating it', async () => {
+  const launched = await launch();
+  const { app, shell } = launched;
+  const input = shell.locator('#tabAddressBarInput');
+  try {
+    await openSession(app, 'A');
+    const first = `${fixtures.githubUrl}/page/dedupe-a`;
+    const second = `${fixtures.githubUrl}/page/dedupe-b`;
+    const firstId = await openTab(app, first);
+    await openTab(app, second);
+    await waitForTabCount(app, 2);
+    await expect.poll(async () => (await visibleTabs(app)).activeId).not.toBe(firstId);
+
+    await shortcut(app, 'L', second);
+    await expect.poll(() => addressBar(app)).toEqual({ open: true, mode: 'current' });
+    await input.fill(first);
+    await input.press('Enter');
+    await expect.poll(async () => (await visibleTabs(app)).activeId).toBe(firstId);
+    expect((await state(app)).tabs.tabs.map((tab) => tab.url).sort()).toEqual([first, second]);
+  } finally {
+    await dispose(launched);
+  }
+});
+
 test('Ctrl+L / Ctrl+T inside the terminal dock reach the pty and never open the bar or the pane', async () => {
   const launched = await launch(undefined, {
     AGENT_WORKSPACE_TEST_TERMINAL_CMD: 'node out/fixtures/fakePty.cjs',

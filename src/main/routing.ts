@@ -103,10 +103,11 @@ function openGitHubTab(url: string, background: boolean): string | undefined {
 }
 
 // Navigate the Cloud view (also used by the scope menu — F7).
-export function loadInDevinView(url: string): void {
-  if (!state.cloudViewsRef) return;
+export function loadInDevinView(url: string): boolean {
+  if (!state.cloudViewsRef) return false;
   state.surface = 'cloud';
   cloudViews().show(keyForUrl(url, state.tenantUrl), url);
+  return true;
 }
 
 // Apply a LinkRouter decision. Returns the decision so callers can preventDefault etc.
@@ -157,7 +158,12 @@ export function applyDecision(
       recordDecision(view, event, rawUrl, 'allow-in-view');
       break;
     case 'devin':
-      loadInDevinView(rawUrl);
+      if (!loadInDevinView(rawUrl)) {
+        // No Cloud view pool yet: nothing was applied, so report a deny.
+        recordDecision(view, event, rawUrl, 'deny');
+        result = { kind: 'deny' };
+        break;
+      }
       recordDecision(view, event, rawUrl, 'devin');
       applyLayout();
       break;
@@ -201,7 +207,7 @@ export function openUserUrl(
   if (kind === 'deny' || kind === 'mailto') return { ok: false, reason: 'scheme' };
 
   if (kind === 'devin' || kind === 'provider') {
-    const applied = applyDecision(url, 'shell', 'tab-user-open', 'navigate');
+    const applied = applyDecision(url, 'shell', 'user-url-route', 'navigate');
     if (applied.kind === 'deny') return { ok: false, reason: 'unavailable' };
     log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
     return { ok: true };

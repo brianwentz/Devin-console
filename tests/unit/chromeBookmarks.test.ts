@@ -80,6 +80,17 @@ describe('buildFavoritesMenu', () => {
     expect(menu).toEqual([{ kind: 'url', label: 'ok', url: 'https://ok.test/' }]);
   });
 
+  it('drops urls carrying a username or password', () => {
+    const menu = buildFavoritesMenu(
+      tree([
+        u('user', 'https://me@example.com/'),
+        u('pass', 'https://me:secret@example.com/'),
+        u('ok', 'https://ok.test/'),
+      ]),
+    );
+    expect(menu).toEqual([{ kind: 'url', label: 'ok', url: 'https://ok.test/' }]);
+  });
+
   it('keeps the 3-deep link from the fixture', () => {
     const menu = buildFavoritesMenu(parseChromeBookmarks(load('Profile 1/Bookmarks'))!);
     const deep = folderOf(folderOf(folderOf(menu, 'Work').children, 'Projects').children, 'Deep');

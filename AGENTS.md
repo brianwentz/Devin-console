@@ -1068,12 +1068,13 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 
 | Hook | Purpose |
 |---|---|
-| `ipcProbe()` | IPC guard probe; also reports `pooled` (whether a non-active pooled view passes `fromHostedView`); `ipcProbe(webContentsId?)` probes exactly that pooled view and returns its webContents id (null when none). |
+| `ipcProbe(id?)` | IPC guard probe; also reports `pooled` (whether a non-active pooled view passes `fromHostedView`); `ipcProbe(webContentsId)` probes exactly that pooled view (take the id from `cloudViewLoadUrl`). |
 | `clipboardWrite` / `clipboardRead` | Wrap Electron's clipboard. |
 | `setSessionsOpen(v)` / `getSessionsBounds()` | Toggle / measure the Cloud session sidebar. |
 | `cloudState()` / `cloudRefresh()` | Cloud sidebar snapshot / force a list (reloads the fixture file). |
 | `cloudMenuItems` / `cloudMenuClick` / `cloudMutations()` | Cloud context-menu descriptions, click an item, read the fake backend's recorded ops. |
 | `cloudNewSession(folder)` / `cloudNoteHomeNavigation(id)` | Drive the new-session pending-folder watch. |
+| `cloudViewLoadUrl(key, url)` | Load a URL in a pooled view; returns that view's webContents id (null when no such view) for `ipcProbe(id)`. |
 | `cloudViewsInfo()` / `cloudShow(id)` / `cloudPrefetchHook(id)` / `cloudIdleSweep()` / `setCloudKeepAliveMs(ms)` | Cloud view pool inspection and control. |
 | `getAnalyticsBounds` | Analytics view bounds. |
 | `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume` | Updater simulation (no network in test mode). |
@@ -1130,6 +1131,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `window-quiet` | `{ opacity: 0, skipTaskbar: true }` — test-mode quiet launch applied. |
 | `window-activate` | `{ reason, quiet }` — window-bring-forward request via `activateWindow`; `quiet: true` means it showed without activating. |
 | `tabs-preload` | Visible scope's discarded tabs background-loaded. |
+| `user-url-route` | `{url, decision}` — `openUserUrl` sent a Devin/provider URL through `applyDecision` (`decision` = `devin`\|`provider`\|`deny`); the single `tab-user-open` record follows for the accepted action. |
 | `tab-user-open` | `{ source: 'drop'\|'typed'\|'favorite', target: 'new'\|'current', kind }` + the url — `tabs:openUserUrl` accepted a user-supplied URL (`kind` = the `routeUrl` kind). |
 | `bookmarks-load` | `{ ok, count, ms, cached }` — one favorites read (`count` = url bookmarks in the tree, `cached` = served from the mtime/size cache or the last good tree); never names, URLs, profile dirs or paths. |
 | `tab-drop-types` | `{ types: string[] }` — MIME type names of a drag entering the tab row (≤32, each ≤128 chars); only with `AGENT_WORKSPACE_DEBUG_DROPS=1` in test mode / dev builds. Never the dragged values. |
