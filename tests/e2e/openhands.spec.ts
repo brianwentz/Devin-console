@@ -74,6 +74,8 @@ const views = (app: ElectronApplication) => hook<ViewInfo[]>(app, 'openhandsView
 const activeView = async (app: ElectronApplication) => (await views(app)).find((v) => v.active);
 
 const inActiveView = async (app: ElectronApplication, expr: string) => {
+  // The view's url is empty until its first navigation commits.
+  await expect.poll(async () => (await activeView(app))?.url).toMatch(/^http/);
   const url = (await activeView(app))!.url;
   return app.evaluate(
     async ({ webContents }, [script, target]) => {
@@ -293,7 +295,9 @@ test('changing the base URL in Settings drops every pooled view; the surface the
       .poll(async () => (await state(app)).openhands.sessions.map((s) => s.id).sort())
       .toEqual([ALT1, ALT2]);
     await expect.poll(async () => (await activeView(app))?.key).toBe('home');
-    expect((await activeView(app))!.url.startsWith(fixtures.openhandsAlt.url)).toBe(true);
+    await expect
+      .poll(async () => (await activeView(app))?.url.startsWith(fixtures.openhandsAlt.url))
+      .toBe(true);
     const rows = await sidebar
       .locator('[data-session-id]')
       .evaluateAll((els) => els.map((el) => el.getAttribute('data-session-id')));
