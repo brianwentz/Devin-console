@@ -5,6 +5,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/smoke',
   testMatch: '**/*.spec.ts',
+  globalSetup: './tests/support/globalTemp.ts',
   timeout: 180_000,
   expect: { timeout: 15_000 },
   workers: 1,

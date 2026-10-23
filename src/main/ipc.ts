@@ -21,6 +21,12 @@ import {
   SettingsFlushDoneArg,
   SettingsPatchSchema,
   SettingsSchema,
+  OpenHandsApiKeySetArg,
+  OpenHandsContextMenuArg,
+  OpenHandsOpenArg,
+  OpenHandsUsageVisibleArg,
+  OpenHandsRenameArg,
+  OpenHandsSessionReorderArg,
   SetPatArg,
   SurfaceArg,
   TabIdArg,
@@ -50,8 +56,16 @@ import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolder
 import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
-import { claudeSessions } from './claude/sessions';
-import { cloudKeepAliveMs, cloudViews } from './cloudViews';
+import { runtimeFor, runtimes } from './providers';
+import {
+  openhandsContextMenu,
+  openhandsRename,
+  openhandsUiRefresh,
+  openhandsUsageRefresh,
+  openhandsUsageVisible,
+} from './providers/openhands';
+import { openhandsOpenSession, openhandsShowHome } from './openhands/views';
+import { cloudViews } from './cloudViews';
 import {
   applyLayout,
   beginDrag,
@@ -84,8 +98,8 @@ export function applySettingsPatch(patch: SettingsPatch): Settings {
   const previousTenant = state.settings!.current.tenantUrl;
   const previousSettings = state.settings!.current;
   const next: Settings = state.settings!.merge(patch);
-  notifier.onSettingsChanged(previousSettings, next);
-  claudeSessions().onSettingsChanged(previousSettings, next);
+  for (const runtime of runtimes()) runtime.onSettingsChanged?.(previousSettings, next);
+  // Stays named to keep today's order: after the Claude fan-out.
   devinUsage().onSettingsChanged(previousSettings, next);
   if (next.pane.open !== state.paneOpen) setPaneOpen(next.pane.open, 'settings');
   // Skip layout churn on the quit-flush path — it sits inside the settings
@@ -98,10 +112,7 @@ export function applySettingsPatch(patch: SettingsPatch): Settings {
   state.surface = next.surface;
   state.tabManager?.setKeepAliveMs(keepAliveMs(next.tabs.keepAliveHours));
   state.tabManager?.setMaxLiveTabs(next.tabs.maxLiveTabs);
-  cloudViews().setLimits({
-    maxLiveViews: next.sessions.maxLiveViews,
-    keepAliveMs: cloudKeepAliveMs(next.sessions.keepAliveHours),
-  });
+  cloudViews().applyLimits(); // sessions.maxLiveViews / keepAliveHours
   if (next.tenantUrl !== previousTenant) {
     state.tenantUrl = next.tenantUrl;
     log('shell', 'tenant-changed', { url: next.tenantUrl });
@@ -350,6 +361,47 @@ export function setupIpc(): void {
     const parsed = CloudNewSessionArg.safeParse(payload);
     if (parsed.success) cloudSessions().newSession(parsed.data.folder);
   });
+  // OpenHands sidebar (ids only; titles are never logged).
+  guardedOn(IpcChannels.openhandsOpen, (_event, payload: unknown) => {
+    const parsed = OpenHandsOpenArg.safeParse(payload);
+    if (parsed.success) openhandsOpenSession(parsed.data.id);
+  });
+  guardedOn(IpcChannels.openhandsNewSession, () => void runtimeFor('openhands')?.newSession?.());
+  guardedOn(IpcChannels.openhandsOpenHome, () => openhandsShowHome({ focus: true }));
+  guardedOn(IpcChannels.openhandsRefresh, () => void openhandsUiRefresh());
+  // Analytics -> OpenHands tab: visibility (opens the gate) and Refresh.
+  guardedOn(IpcChannels.openhandsUsageVisible, (_event, payload: unknown) => {
+    const parsed = OpenHandsUsageVisibleArg.safeParse(payload);
+    if (parsed.success) openhandsUsageVisible(parsed.data.visible);
+  });
+  guardedHandle(IpcChannels.openhandsUsageRefresh, async () => {
+    await openhandsUsageRefresh();
+    return null;
+  });
+  guardedOn(IpcChannels.openhandsRename, (_event, payload: unknown) => {
+    const parsed = OpenHandsRenameArg.safeParse(payload);
+    if (parsed.success) void openhandsRename(parsed.data.id, parsed.data.title);
+  });
+  guardedOn(IpcChannels.openhandsSessionReorder, (_event, payload: unknown) => {
+    const parsed = OpenHandsSessionReorderArg.safeParse(payload);
+    if (!parsed.success) return;
+    const { section, ids } = parsed.data;
+    const current = state.settings?.current.openhands.sessionOrder ?? {};
+    state.settings?.merge({ openhands: { sessionOrder: { ...current, [section]: ids } } });
+    log('shell', 'openhands-session-reorder', {
+      detail: { section: section === 'recent' || section === 'pinned' ? section : 'repo', count: ids.length },
+    });
+  });
+  guardedHandle(IpcChannels.openhandsContextMenu, (_event, payload: unknown) => {
+    const parsed = OpenHandsContextMenuArg.safeParse(payload);
+    if (!parsed.success) return { action: null };
+    return openhandsContextMenu({
+      kind: parsed.data.kind,
+      x: parsed.data.x,
+      y: parsed.data.y,
+      ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
+    });
+  });
   // Credentials: never log IPC payloads (they may carry secrets).
   guardedHandle(IpcChannels.credentialsList, () => state.credentials?.list() ?? []);
   guardedHandle(IpcChannels.credentialsSave, async (_event, payload: unknown) => {
@@ -420,6 +472,32 @@ function setupExtrasIpc(): void {
       return { ok: false, error: error instanceof Error ? error.message : 'Could not clear token.' };
     }
     notifier.restart('pat-cleared');
+    return { ok: true };
+  });
+  // OpenHands API key: replies carry `{ ok }` only; the key is never logged
+  // or echoed (SecretStore logs presence only). notifyShell refreshes
+  // ShellState.openhandsApiKeySet.
+  guardedHandle(IpcChannels.openhandsApiKeySet, async (_event, arg: unknown) => {
+    const parsed = OpenHandsApiKeySetArg.safeParse(arg);
+    if (!parsed.success || !state.secrets) return { ok: false };
+    try {
+      await state.secrets.setOpenHandsApiKey(parsed.data.value);
+    } catch {
+      return { ok: false };
+    }
+    runtimeFor('openhands')?.onCredentialsChanged?.();
+    notifyShell();
+    return { ok: true };
+  });
+  guardedHandle(IpcChannels.openhandsApiKeyClear, async () => {
+    if (!state.secrets) return { ok: false };
+    try {
+      await state.secrets.setOpenHandsApiKey(null);
+    } catch {
+      return { ok: false };
+    }
+    runtimeFor('openhands')?.onCredentialsChanged?.();
+    notifyShell();
     return { ok: true };
   });
   guardedHandle(IpcChannels.prsList, () => openPrs());

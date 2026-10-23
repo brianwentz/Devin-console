@@ -16,7 +16,7 @@ import { setupDownloads } from './downloads';
 import { setupIpc } from './ipc';
 import { setupLocal, localHost } from './local/ipc';
 import { setupClaude } from './claude/ipc';
-import { claudeHost } from './claude/host';
+import { disposeAll, runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
 import { hosts } from './hosts';
 import { claudeUsage } from './claude/usage';
@@ -26,9 +26,11 @@ import { log, logFile } from './log';
 import { setPermissions } from './permissions';
 import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
-import { cloudKeepAliveMs, cloudViews } from './cloudViews';
+import { cloudViews } from './cloudViews';
+import { openhandsViews } from './openhands/views';
+import { allPoolViews } from './cloudKit/pools';
 import { SettingsStore } from './settings';
-import { CLAUDE_SCOPE_PREFIX } from '../core/tabModel';
+import { providerBySurface } from '../core/providers';
 import { fixtureOrigins, quiet, state, testMode } from './state';
 import { registerTestHooks } from './testHooks';
 import { keepAliveMs, TabManager } from './tabs';
@@ -185,19 +187,12 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     } catch {
       // best effort at shutdown
     }
-    localHost()?.dispose();
-    // Claude teardown must never block or abort the quit sequence — a slow
-    // consumer close or a failure here would skip the settings snapshot below.
-    try {
-      await Promise.race([
-        claudeHost()?.dispose(),
-        new Promise((resolve) => setTimeout(resolve, 2_000)),
-      ]);
-    } catch (error) {
-      log('shell', 'claude-dispose-error', {
-        detail: { message: error instanceof Error ? error.message : String(error) },
-      });
-    }
+    // Local host dispose then the Claude host dispose (2 s race), in
+    // registration order; each failure is logged and never aborts the quit.
+    await disposeAll();
+    // Not grouped into the runtimes' dispose(): devinUsage sits between the
+    // Claude host and claudeUsage in today's order, and these three share one
+    // try/catch.
     try {
       devinUsage().dispose();
       claudeUsage().dispose();
@@ -228,14 +223,14 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     }
     const contents = [
       state.shellView?.webContents,
-      ...cloudViews().views().map((view) => view.webContents),
+      ...allPoolViews().map((view) => view.webContents),
       state.analyticsView?.webContents,
       ...(state.tabManager?.getViews().map((view) => view.webContents) ?? []),
     ].filter((item): item is Electron.WebContents => Boolean(item && !item.isDestroyed()));
     const before = webContents.getAllWebContents().length;
     log('shell', 'window-close-start', { detail: { webContentsCount: before } });
     state.tabManager?.dispose();
-    for (const view of cloudViews().views()) detachView(view);
+    for (const view of allPoolViews()) detachView(view);
     detachView(state.analyticsView);
     detachView(state.shellView);
     for (const item of contents) {
@@ -303,7 +298,9 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
 async function createWindow(): Promise<void> {
   state.settings = new SettingsStore(userData);
   notificationStore(userData);
-  usageAlertStore(userData);
+  // Subscribed to every runtime's usage now, before any service can publish
+  // (Devin's refresh() is callable before its start()); nothing is fetched here.
+  usageAlertStore(userData).subscribe(runtimes().map((runtime) => runtime.usage));
   prStore(userData);
   prLedger(userData);
   identityResolver(userData, testMode);
@@ -325,8 +322,9 @@ async function createWindow(): Promise<void> {
   terminalHost.onChange = notifyShell;
   terminalHost.onPullRequestUrl = (url, target) => {
     if (target.source === 'claude-terminal') {
-      const sessionId = target.scope.startsWith(CLAUDE_SCOPE_PREFIX)
-        ? target.scope.slice(CLAUDE_SCOPE_PREFIX.length)
+      const prefix = providerBySurface('claude')!.scopePrefix;
+      const sessionId = target.scope.startsWith(prefix)
+        ? target.scope.slice(prefix.length)
         : target.scope;
       claudeSessions().recordPr(sessionId, url, 'terminal');
     }
@@ -351,7 +349,9 @@ async function createWindow(): Promise<void> {
 
   const devinSession = session.fromPartition('persist:cloud');
   const githubSession = session.fromPartition('persist:github');
-  setPermissions(devinSession, 'devin');
+  const openhandsSession = session.fromPartition('persist:openhands');
+  setPermissions(devinSession, 'devin', 'persist:cloud');
+  setPermissions(openhandsSession, 'openhands', 'persist:openhands');
   setPermissions(githubSession, 'gh:session');
   setupDownloads(githubSession);
 
@@ -418,10 +418,13 @@ async function createWindow(): Promise<void> {
   // Pooled Cloud views replace the single devinView — init creates the 'home'
   // view (keyed by the session URL it currently shows) and loads the tenant.
   cloudViews().init(state.tenantUrl);
-  cloudViews().setLimits({
-    maxLiveViews: saved.sessions.maxLiveViews,
-    keepAliveMs: cloudKeepAliveMs(saved.sessions.keepAliveHours),
-  });
+  cloudViews().applyLimits(); // sessions.maxLiveViews / keepAliveHours
+  // Registered now (not on first use) so pools() lists it for permissions,
+  // autofill and the cookie audit; it creates no view — so no request —
+  // until the user enters the OpenHands surface.
+  openhandsViews().applyLimits(); // openhands.maxLiveViews / keepAliveHours
+  // Stays named: it runs pre-loadURL, before TabManager creation, so it can't
+  // join the post-loadURL runtime start loop without reordering.
   cloudSessions().start();
 
   state.tabManager = new TabManager({
@@ -456,8 +459,7 @@ async function createWindow(): Promise<void> {
   state.windowRef.on('resize', applyLayout);
   // Re-poll immediately on focus while the poller is in error (backoff drop).
   state.windowRef.on('focus', () => {
-    notifier.onWindowFocus();
-    claudeSessions().onWindowFocus();
+    for (const runtime of runtimes()) runtime.onFocus?.();
     hosts().onWindowFocus();
     updateOnWindowFocus();
   });
@@ -497,12 +499,14 @@ async function createWindow(): Promise<void> {
   state.tabManager.preloadVisibleScope();
   applyLayout();
   await state.shellView.webContents.loadURL('app://shell/index.html');
-  devinUsage().start();
   // Eager start so usage alerts don't depend on visiting the Analytics tab
-  // (the hidden cadence is already 10 min).
-  claudeUsage().start();
+  // (the hidden cadence is already 10 min). devin-cloud then claude; Local
+  // agents autostart from setupLocal()/acpHost.
+  for (const runtime of runtimes()) runtime.start();
   registerTestHooks();
   startCookieAudit();
+  // Stays named after startCookieAudit: moving it into the cloud start would
+  // run it before registerTestHooks()/startCookieAudit().
   notifier.start();
   log('shell', 'window-created', {
     url: state.tenantUrl,

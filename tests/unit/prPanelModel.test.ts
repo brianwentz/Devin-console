@@ -37,6 +37,21 @@ describe('reconcilePrRecords', () => {
       { url: 'u4', firstSeenAt: 400, readAt: null, dismissedAt: null },
     ]);
   });
+
+  it('prune=false keeps a dismissed record that is not in the open list, and still adds new ones', () => {
+    const records: PrRecord[] = [{ url: 'devin', firstSeenAt: 100, readAt: 150, dismissedAt: 200 }];
+    const next = reconcilePrRecords(records, [link('oh')], 400, false);
+    expect(next).toEqual([
+      { url: 'devin', firstSeenAt: 100, readAt: 150, dismissedAt: 200 },
+      { url: 'oh', firstSeenAt: 400, readAt: null, dismissedAt: null },
+    ]);
+  });
+
+  it('prune=true (the default) drops it', () => {
+    const records: PrRecord[] = [{ url: 'devin', firstSeenAt: 100, readAt: 150, dismissedAt: 200 }];
+    expect(reconcilePrRecords(records, [link('oh')], 400, true).map((r) => r.url)).toEqual(['oh']);
+    expect(reconcilePrRecords(records, [link('oh')], 400).map((r) => r.url)).toEqual(['oh']);
+  });
 });
 
 describe('markPrRead / markAllPrsRead', () => {

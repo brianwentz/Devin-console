@@ -1,9 +1,10 @@
 import { app } from 'electron';
-import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx } from '../core/layout';
+import { clampPaneWidth, dockSurface, fractionFromPx, paneWidthPx, sidebarShortcutSurface } from '../core/layout';
 import { newSessionUrl } from '../core/sessions';
 import { HOME_KEY } from '../core/viewPool';
-import { claudeSessions } from './claude/sessions';
+import { runtimeFor } from './providers';
 import { cloudViews } from './cloudViews';
+import { poolForSurface } from './cloudKit/pools';
 import { log } from './log';
 import { state, testMode, type ViewName } from './state';
 import { applyLayout, cancelDrag, focusContents, setPaneOpen, setSessionsOpen } from './window';
@@ -29,7 +30,7 @@ export function navigationTarget(): Electron.WebContents | null {
     (state.paneOpen ? state.tabManager?.activeWebContents : null) ??
     (state.surface === 'analytics'
       ? state.analyticsView?.webContents
-      : state.devinView?.webContents) ??
+      : (poolForSurface(state.surface)?.activeView() ?? state.devinView)?.webContents) ??
     null
   );
 }
@@ -40,7 +41,7 @@ export function focusVisibleContents(contents: Electron.WebContents | null): voi
     state.paneOpen && !state.paneCollapsed && contents === state.tabManager?.activeWebContents;
   if (
     contents === state.shellView?.webContents ||
-    (state.surface === 'cloud' && contents === state.devinView?.webContents) ||
+    contents === poolForSurface(state.surface)?.activeView()?.webContents ||
     (state.surface === 'analytics' && contents === state.analyticsView?.webContents) ||
     visibleTab
   ) {
@@ -80,7 +81,7 @@ export function handleShortcut(
     setPaneOpen(!state.paneOpen, 'shortcut');
     focusVisibleContents(contents);
     handled = true;
-  } else if (ctrl && input.shift && key === 's' && (state.surface === 'cloud' || state.surface === 'claude')) {
+  } else if (ctrl && input.shift && key === 's' && sidebarShortcutSurface(state.surface)) {
     setSessionsOpen(!state.sessionsOpen, 'shortcut');
     focusVisibleContents(contents);
     handled = true;
@@ -112,12 +113,11 @@ export function handleShortcut(
     historyAction('reload', contents);
     handled = true;
   } else if (ctrl && !input.shift && !input.alt && key === 'n') {
-    if (state.surface === 'claude') {
-      // A new Claude chat session (cwd picker / test env var).
-      void claudeSessions().newSession(null);
-    } else {
-      openNewSession();
-    }
+    // devin-local has no newSession and Settings/Analytics have no runtime, so
+    // they fall back to the Cloud new session exactly as before.
+    const newSession =
+      runtimeFor(state.surface)?.newSession ?? runtimeFor('devin-cloud')?.newSession;
+    void newSession?.();
     handled = true;
   } else if (ctrl && !input.alt && key === '`' && dockSurface(state.surface)) {
     // Off dock surfaces (Settings/Analytics) the shortcut is a no-op, matching

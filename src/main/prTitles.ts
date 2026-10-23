@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { session } from 'electron';
 import { routeUrl } from '../core/linkRouter';
+import { createListenerSet } from '../core/listenerSet';
 import { parsePrState, parsePrTitle, type PrState } from '../core/prTitle';
 import { log } from './log';
 import { testMode } from './state';
@@ -65,8 +66,11 @@ class PrTitleCache {
   private inFlight = new Set<string>();
   private queue: string[] = [];
   private changeTimer: NodeJS.Timeout | null = null;
-  /** Single subscription — Claude sessions wire cache landings to setPrState. */
-  onChange: (() => void) | null = null;
+  private listeners = createListenerSet((error) =>
+    log('shell', 'pr-title-listener-error', {
+      detail: { code: error instanceof Error ? error.name : 'unknown' },
+    }),
+  );
   /** Per-URL gh override: Claude PR tracking resolves the session's host so
    * `gh pr view` runs where the session runs (null → local gh). */
   ghResolver:
@@ -105,6 +109,11 @@ class PrTitleCache {
     this.pump();
   }
 
+  /** Cache landings (debounced 150 ms): Claude feeds setPrState, OpenHands reconciles. Returns the unsubscribe. */
+  addChangeListener(listener: () => void): () => void {
+    return this.listeners.add(listener);
+  }
+
   // Test-mode seed: an e2e can flip a URL's state without a real GitHub fetch.
   seed(url: string, info: PrInfo): void {
     this.cache.set(url, { ...info, fetchedAt: Date.now() });
@@ -127,7 +136,7 @@ class PrTitleCache {
     if (this.changeTimer) clearTimeout(this.changeTimer);
     this.changeTimer = setTimeout(() => {
       this.changeTimer = null;
-      this.onChange?.();
+      this.listeners.emit();
       notifyShell();
     }, 150);
     this.changeTimer.unref?.();

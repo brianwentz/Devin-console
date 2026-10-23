@@ -107,6 +107,8 @@ test('credential vault saves, autofills, and keeps secrets out of logs', async (
     expect(audit.map((entry) => entry.partition).sort()).toEqual([
       'persist:cloud',
       'persist:github',
+      // The OpenHands view pool is registered at boot and cookieAudit iterates every pool.
+      'persist:openhands',
     ]);
     for (const entry of audit) {
       for (const cookie of entry.cookies) {

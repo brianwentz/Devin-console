@@ -181,6 +181,14 @@ describe('SETTINGS_PRESERVE_SPEC tracks the zod schema', () => {
     check(SettingsObject.shape as Record<string, z.ZodType>, SETTINGS_PRESERVE_SPEC, '');
   });
 
+  it('openhands is a structural block: unknown keys inside it survive a save (B1 T20)', () => {
+    const settings = SettingsSchema.parse({});
+    const raw = { ...JSON.parse(JSON.stringify(settings)), openhands: { ...settings.openhands, future: 1 } };
+    const out = overlayKnown(raw, settings, SETTINGS_PRESERVE_SPEC) as { openhands: Record<string, unknown> };
+    expect(out.openhands.future).toBe(1);
+    expect(out.openhands.baseUrl).toBe('https://app.all-hands.dev');
+  });
+
   it('a settings round-trip through the overlay keeps the file identical for a known file', () => {
     const settings = SettingsSchema.parse({ surface: 'local', claude: { model: 'opus' } });
     const raw = JSON.parse(JSON.stringify(settings));

@@ -11,8 +11,9 @@ import type { TabManager } from './tabs';
 import type { CloudViewPool } from './cloudViews';
 import type { DevinSession } from '../core/devinApi';
 import type { SecretStore } from './secrets';
+import type { ProviderViewName } from '../core/providers';
 
-export type ViewName = 'shell' | 'devin' | 'cloud' | 'analytics' | 'local' | 'claude' | 'host' | `gh:${string}`;
+export type ViewName = 'shell' | 'devin' | 'analytics' | 'host' | ProviderViewName | `gh:${string}`;
 
 export const testMode = process.env.AGENT_WORKSPACE_TEST === '1';
 /**
@@ -62,6 +63,8 @@ export const state = {
   localSessionId: null as string | null,
   // Selected Claude Code session (the sidebar sets it via claude:open).
   claudeSessionId: null as string | null,
+  // Selected OpenHands conversation (set once the OpenHands sidebar lands).
+  openhandsSessionId: null as string | null,
   dragStartFraction: DEFAULT_PANE_FRACTION,
   dragLastX: 0,
   dragTimer: null as NodeJS.Timeout | null,

@@ -28,6 +28,9 @@ export interface FixtureServers {
     setUsageLimit(body: unknown | null): void;
     setUsageStatus(n: number): void;
   };
+  // OpenHands Cloud fixtures (two origins; see createOpenHandsFixture).
+  openhands: OpenHandsFixture;
+  openhandsAlt: OpenHandsFixture;
   close: () => Promise<void>;
 }
 
@@ -262,6 +265,275 @@ function heavyBody(label: string): string {
     );
   }
   return `<title>GitHub fixture: heavy ${label}</title><h1>heavy ${label}</h1><table>${rows.join('')}</table>`;
+}
+
+// OpenHands Cloud fixture (REST /api/v1). Two instances share this factory:
+// `openhands` and `openhandsAlt` (second origin: base-URL-change and
+// cross-origin-redirect target) — each with its own login-hop `authOrigin`.
+export type OpenHandsEndpoint = 'search' | 'patch' | 'delete' | 'events' | 'credits' | 'quota' | 'usage' | 'me';
+// Endpoints whose 200 body a spec can replace (null restores the default).
+export type OpenHandsBodyEndpoint = 'credits' | 'quota' | 'usage' | 'me';
+
+export interface OpenHandsFixture {
+  url: string;
+  authOrigin: string;
+  setConversations(items: unknown[]): void;
+  // 0 clears the override.
+  setStatus(endpoint: OpenHandsEndpoint, n: number): void;
+  setEvents(id: string, events: unknown[]): void;
+  setBody(endpoint: OpenHandsBodyEndpoint, body: unknown): void;
+  requireAuth(mode: 'cookie' | 'bearer' | 'none'): void;
+  // null clears; the endpoint answers 302 to `location`.
+  setRedirect(endpoint: OpenHandsEndpoint, location: string | null): void;
+  mutations(): { op: 'rename' | 'delete'; id: string; body?: unknown }[];
+  lastAuthHeader(): string | null;
+  // `/` 302s to <authOrigin>/auth, which 302s back to /login.
+  setLoginRedirect(on: boolean): void;
+  requests(): { path: string; authorization: string | null }[];
+  close(): Promise<void>;
+}
+
+async function createOpenHandsFixture(): Promise<OpenHandsFixture> {
+  let conversations: Record<string, unknown>[] = JSON.parse(
+    readFileSync(join(__dirname, 'openhands-conversations.json'), 'utf8'),
+  ) as Record<string, unknown>[];
+  const statuses = new Map<OpenHandsEndpoint, number>();
+  const redirects = new Map<OpenHandsEndpoint, string>();
+  const events = new Map<string, unknown[]>();
+  const bodies = new Map<OpenHandsBodyEndpoint, unknown>();
+  const mutationLog: { op: 'rename' | 'delete'; id: string; body?: unknown }[] = [];
+  const requestLog: { path: string; authorization: string | null }[] = [];
+  let auth: 'cookie' | 'bearer' | 'none' = 'none';
+  let lastAuth: string | null = null;
+  let loginRedirect = false;
+  let url = '';
+  let authOrigin = '';
+
+  const stamp = (c: Record<string, unknown>): number =>
+    Date.parse(String(c.updated_at ?? c.created_at ?? '')) || 0;
+  const json = (response: ServerResponse, status: number, body: unknown) => {
+    response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    response.end(JSON.stringify(body));
+  };
+  const readBody = (request: IncomingMessage): Promise<unknown> =>
+    new Promise((resolve) => {
+      let raw = '';
+      request.on('data', (chunk) => (raw += String(chunk)));
+      request.on('end', () => {
+        try {
+          resolve(raw ? JSON.parse(raw) : undefined);
+        } catch {
+          resolve(undefined);
+        }
+      });
+    });
+
+  const server = createServer((request, response) => {
+    const u = new URL(request.url ?? '/', url || 'http://fixture');
+    const authorization = request.headers.authorization ?? null;
+    requestLog.push({ path: u.pathname + u.search, authorization });
+    if (authorization !== null) lastAuth = authorization;
+    const method = request.method ?? 'GET';
+    const p = u.pathname;
+
+    if (p === '/login') {
+      response.setHeader('set-cookie', 'openhands_auth=test; Path=/');
+      html(response, '<title>OpenHands fixture login</title><main>logged in</main>');
+      return;
+    }
+    if (p === '/') {
+      if (loginRedirect) {
+        redirect(response, `${authOrigin}/auth`);
+        return;
+      }
+      html(response, '<title>OpenHands fixture home</title><main id="ohHome">OpenHands</main>');
+      return;
+    }
+    const page = /^\/conversations\/([^/]+)$/.exec(p);
+    if (page) {
+      html(response, `<title>OpenHands fixture conversation ${page[1]}</title><main>conversation ${page[1]}</main>`);
+      return;
+    }
+    if (!p.startsWith('/api/')) {
+      html(response, '<title>not found</title>', 404);
+      return;
+    }
+
+    let endpoint: OpenHandsEndpoint | null = null;
+    const item = /^\/api\/v1\/app-conversations\/([^/]+)$/.exec(p);
+    const eventsMatch = /^\/api\/v1\/conversation\/([^/]+)\/events\/search$/.exec(p);
+    if (p === '/api/v1/app-conversations/search' && method === 'GET') endpoint = 'search';
+    else if (item && method === 'PATCH') endpoint = 'patch';
+    else if (item && method === 'DELETE') endpoint = 'delete';
+    else if (eventsMatch && method === 'GET') endpoint = 'events';
+    else if (p === '/api/billing/credits') endpoint = 'credits';
+    else if (p === '/api/quota/status') endpoint = 'quota';
+    else if (/^\/api\/organizations\/[^/]+\/conversations\/my-usage$/.test(p)) endpoint = 'usage';
+    else if (p === '/api/v1/users/me') endpoint = 'me';
+    if (!endpoint) {
+      json(response, 404, { error: 'not-found' });
+      return;
+    }
+
+    if (auth === 'bearer' && !/^Bearer .+/.test(authorization ?? '')) {
+      json(response, 401, { error: 'unauthorized' });
+      return;
+    }
+    if (auth === 'cookie' && !(request.headers.cookie ?? '').includes('openhands_auth=test')) {
+      json(response, 401, { error: 'unauthorized' });
+      return;
+    }
+    const to = redirects.get(endpoint);
+    if (to) {
+      redirect(response, to);
+      return;
+    }
+    const forced = statuses.get(endpoint);
+    if (forced) {
+      json(response, forced, { error: 'forced' });
+      return;
+    }
+
+    const route = endpoint;
+    void (async () => {
+      switch (route) {
+        case 'search': {
+          const since = u.searchParams.get('updated_at__gte');
+          const sinceMs = since ? Date.parse(since) : null;
+          const all = conversations
+            .filter((c) => sinceMs === null || stamp(c) >= sinceMs)
+            .sort((a, b) => stamp(b) - stamp(a));
+          const limit = Math.max(1, Number(u.searchParams.get('limit') ?? '100') || 100);
+          const pageId = u.searchParams.get('page_id');
+          const offset = pageId && /^p\d+$/.test(pageId) ? Number(pageId.slice(1)) : 0;
+          json(response, 200, {
+            items: all.slice(offset, offset + limit),
+            next_page_id: offset + limit < all.length ? `p${offset + limit}` : null,
+          });
+          return;
+        }
+        case 'patch': {
+          const id = decodeURIComponent(item![1]!);
+          const body = await readBody(request);
+          mutationLog.push({ op: 'rename', id, body });
+          const target = conversations.find((c) => c.id === id);
+          if (!target) {
+            json(response, 404, { error: 'not-found' });
+            return;
+          }
+          const title = (body as { title?: unknown } | undefined)?.title;
+          if (typeof title === 'string') target.title = title;
+          target.updated_at = new Date().toISOString();
+          json(response, 200, target);
+          return;
+        }
+        case 'delete': {
+          const id = decodeURIComponent(item![1]!);
+          mutationLog.push({ op: 'delete', id });
+          const before = conversations.length;
+          conversations = conversations.filter((c) => c.id !== id);
+          const removed = before !== conversations.length;
+          json(response, removed ? 200 : 404, removed ? true : { error: 'not-found' });
+          return;
+        }
+        case 'events':
+          json(response, 200, { items: events.get(decodeURIComponent(eventsMatch![1]!)) ?? [], next_page_id: null });
+          return;
+        // Billing / usage bodies follow the research shapes (§6).
+        case 'credits':
+          json(response, 200, bodies.get('credits') ?? { credits: '12.34' });
+          return;
+        case 'quota':
+          json(
+            response,
+            200,
+            bodies.get('quota') ?? {
+              daily_limit: 10,
+              used_today: 3,
+              remaining: 7,
+              reset_at: '2026-10-24T00:00:00Z',
+              work_email: null,
+              work_email_verified: false,
+              latest_request_status: null,
+              latest_request_requested_limit: null,
+            },
+          );
+          return;
+        case 'usage':
+          json(
+            response,
+            200,
+            bodies.get('usage') ?? {
+              total_spend: 4.2,
+              previous_period_spend: 1.1,
+              daily_spend: [],
+              model_usage: [],
+              recent_usage: [],
+            },
+          );
+          return;
+        case 'me':
+          json(response, 200, bodies.get('me') ?? { org_id: 'org-fixture', org_name: 'Fixture org', role: 'member' });
+          return;
+      }
+    })();
+  });
+
+  const authServer = createServer((request, response) => {
+    const u = new URL(request.url ?? '/', authOrigin || 'http://fixture');
+    if (u.pathname === '/auth') {
+      redirect(response, `${url}/login`);
+      return;
+    }
+    html(response, '<title>OpenHands fixture auth</title>');
+  });
+
+  const [port, authPort] = await Promise.all([listen(server), listen(authServer)]);
+  url = `http://127.0.0.1:${port}`;
+  authOrigin = `http://localhost:${authPort}`;
+
+  return {
+    url,
+    authOrigin,
+    setConversations: (items) => {
+      conversations = items.map((c) => ({ ...(c as Record<string, unknown>) }));
+    },
+    setStatus: (endpoint, n) => {
+      if (n) statuses.set(endpoint, n);
+      else statuses.delete(endpoint);
+    },
+    setEvents: (id, list) => {
+      events.set(id, list);
+    },
+    setBody: (endpoint, body) => {
+      if (body === null) bodies.delete(endpoint);
+      else bodies.set(endpoint, body);
+    },
+    requireAuth: (mode) => {
+      auth = mode;
+    },
+    setRedirect: (endpoint, location) => {
+      if (location) redirects.set(endpoint, location);
+      else redirects.delete(endpoint);
+    },
+    mutations: () => mutationLog.map((m) => ({ ...m })),
+    lastAuthHeader: () => lastAuth,
+    setLoginRedirect: (on) => {
+      loginRedirect = on;
+    },
+    requests: () => requestLog.map((r) => ({ ...r })),
+    close: async () => {
+      await Promise.all(
+        [server, authServer].map(
+          (s) =>
+            new Promise<void>((resolve, reject) => {
+              s.closeAllConnections();
+              s.close((error) => (error ? reject(error) : resolve()));
+            }),
+        ),
+      );
+    },
+  };
 }
 
 export async function startFixtureServers(): Promise<FixtureServers> {
@@ -548,6 +820,8 @@ export async function startFixtureServers(): Promise<FixtureServers> {
   githubAltUrl = `http://localhost:${githubAltPort}`;
   idpUrl = `http://localhost:${idpPort}`;
   const apiUrl = `http://127.0.0.1:${apiPort}`;
+  const openhands = await createOpenHandsFixture();
+  const openhandsAlt = await createOpenHandsFixture();
 
   return {
     devinUrl,
@@ -572,7 +846,11 @@ export async function startFixtureServers(): Promise<FixtureServers> {
         usageStatus = n;
       },
     },
+    openhands,
+    openhandsAlt,
     close: async () => {
+      await openhands.close();
+      await openhandsAlt.close();
       await Promise.all(
         [devin, github, githubAlt, idp, api].map(
           (server) =>

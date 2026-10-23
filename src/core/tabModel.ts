@@ -1,4 +1,5 @@
 import type { Surface } from '../shared/ipc';
+import { providerBySurface, type ProviderDescriptor } from './providers';
 
 export interface BrowserTab {
   id: string;
@@ -19,32 +20,37 @@ export const GLOBAL = '';
 
 // Local (Devin CLI) sessions get their own GitHub tab scope, namespaced so a
 // local session id can never collide with a Cloud session id.
-export const LOCAL_SCOPE_PREFIX = 'local:';
-
 export function localScope(sessionId: string): string {
-  return `${LOCAL_SCOPE_PREFIX}${sessionId}`;
+  return providerScope('local', sessionId);
 }
 
 // Claude Code sessions get their own GitHub tab scope, namespaced like the
 // local one so ids can never collide across sources.
-export const CLAUDE_SCOPE_PREFIX = 'claude:';
-
 export function claudeScope(sessionId: string): string {
-  return `${CLAUDE_SCOPE_PREFIX}${sessionId}`;
+  return providerScope('claude', sessionId);
 }
 
-// The scope the tab strip currently serves: the selected local session on the
-// Local surface, the selected Claude session on the Claude surface, else the
-// Cloud session (GLOBAL outside any session).
+// Scope key of a provider session: the descriptor's scopePrefix + the id.
+export function providerScope(surface: Surface, sessionId: string): string {
+  return `${providerBySurface(surface)?.scopePrefix ?? ''}${sessionId}`;
+}
+
+type ScopeDescriptor = Pick<ProviderDescriptor, 'scopePrefix' | 'scopeFallback'>;
+
+// The scope the tab strip currently serves: the selected session of the
+// current surface (prefixed per provider), else the surface's fallback - the
+// Cloud session (GLOBAL outside any session) unless the provider says 'global'.
+// `sessions` is keyed by surface id; `lookup` is injectable for tests.
 export function effectiveScope(
   surface: Surface,
-  cloudSessionId: string | null,
-  localSessionId: string | null,
-  claudeSessionId: string | null,
+  sessions: Partial<Record<string, string | null>>,
+  lookup: (surface: string) => ScopeDescriptor | undefined = providerBySurface,
 ): string {
-  if (surface === 'local' && localSessionId) return localScope(localSessionId);
-  if (surface === 'claude' && claudeSessionId) return claudeScope(claudeSessionId);
-  return cloudSessionId ?? GLOBAL;
+  const descriptor = lookup(surface);
+  const id = descriptor ? sessions[surface] : null;
+  if (descriptor && id) return `${descriptor.scopePrefix}${id}`;
+  if (descriptor?.scopeFallback === 'global') return GLOBAL;
+  return sessions.cloud ?? GLOBAL;
 }
 
 export function scopeOf(tab: Pick<BrowserTab, 'originSessionId'>): string {

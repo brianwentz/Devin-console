@@ -6,6 +6,7 @@ import {
   pickIdle,
   type PoolEntryInfo,
 } from '../../src/core/viewPool';
+import { devinOwnsUrl, devinViewKey } from '../../src/core/cloudKit/devinViews';
 
 const TENANT = 'https://tenant.example.com';
 
@@ -68,5 +69,41 @@ describe('pickIdle', () => {
       entry({ key: 'loading', lastActiveAt: 0, loading: true }),
     ];
     expect(pickIdle(entries, 1000, now)).toEqual(['idle']);
+  });
+});
+
+// Devin's ViewPoolConfig keying/ownership (src/main/cloudViews.ts wires these
+// to state.tenantUrl): a foreign origin is not the pool's — null, not 'home'.
+describe('Devin view-pool config helpers', () => {
+  const T = 'https://t';
+
+  it('keys session URLs by id, tenant pages as home, foreign origins as null', () => {
+    expect(devinViewKey('https://t/sessions/abc', T)).toBe('abc');
+    expect(devinViewKey('https://t/', T)).toBe(HOME_KEY);
+    expect(devinViewKey('https://t', T)).toBe('home');
+    expect(devinViewKey('https://t/settings/my-analytics', T)).toBe(HOME_KEY);
+    expect(devinViewKey('https://T/sessions/abc?x=1#y', T)).toBe('abc');
+    expect(devinViewKey('https://other.example.com/sessions/abc', T)).toBeNull();
+    expect(devinViewKey('https://other.example.com/', T)).toBeNull();
+    expect(devinViewKey('not a url', T)).toBeNull();
+    expect(devinViewKey('https://t/sessions/abc', 'not a url')).toBeNull();
+  });
+
+  it('agrees with keyForUrl wherever it does not return null', () => {
+    for (const url of ['https://t/sessions/abc', 'https://t/', 'https://t/x/y']) {
+      expect(devinViewKey(url, T)).toBe(keyForUrl(url, T));
+    }
+  });
+
+  it('owns only URLs on the tenant origin', () => {
+    expect(devinOwnsUrl('https://t/sessions/abc', T)).toBe(true);
+    expect(devinOwnsUrl('https://t/', T)).toBe(true);
+    expect(devinOwnsUrl('https://T/anything', T)).toBe(true);
+    expect(devinOwnsUrl('https://other.example.com/sessions/abc', T)).toBe(false);
+    expect(devinOwnsUrl('https://t.evil.com/', T)).toBe(false);
+    expect(devinOwnsUrl('http://t/', T)).toBe(false);
+    expect(devinOwnsUrl('https://t:8443/', T)).toBe(false);
+    expect(devinOwnsUrl('not a url', T)).toBe(false);
+    expect(devinOwnsUrl('https://t/', 'not a url')).toBe(false);
   });
 });

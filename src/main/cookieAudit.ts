@@ -1,4 +1,5 @@
 import { session } from 'electron';
+import { pools } from './cloudKit/pools';
 import { log } from './log';
 
 export interface CookieAuditEntry {
@@ -21,7 +22,7 @@ export interface CookieAuditResult {
 // Never include cookie values — metadata only.
 export async function auditCookies(): Promise<CookieAuditResult[]> {
   const results: CookieAuditResult[] = [];
-  for (const partition of ['persist:cloud', 'persist:github']) {
+  for (const partition of [...pools().map((p) => p.config.partition), 'persist:github']) {
     try {
       const cookies = await session.fromPartition(partition).cookies.get({});
       const result: CookieAuditResult = {

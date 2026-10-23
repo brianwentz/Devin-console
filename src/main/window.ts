@@ -11,26 +11,29 @@ import {
   MIN_DEVIN_WIDTH,
   paneToggleWindowWidth,
   RAIL_WIDTH,
+  sessionsColumnSurface,
   SPLITTER_WIDTH,
   type LayoutState,
   type Rect,
   type WindowBounds,
 } from '../core/layout';
 import { unreadPrCount, visiblePrs } from '../core/prPanelModel';
-import { usageLevel, USAGE_METRIC_LABEL, type UsageMetric } from '../core/usageAlerts';
+import { usageLevel } from '../core/usageAlerts';
 import { effectiveScope } from '../core/tabModel';
 import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
 
 import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
-import { claudeUsage } from './claude/usage';
+import { usageSummaryItems } from './cloudKit/usage';
 import { devinUsage } from './devinUsage';
+import { runtimeFor, runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
-import { cloudViews } from './cloudViews';
+import { allPoolViews, poolForSurface } from './cloudKit/pools';
 import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
 import { notificationsUnread } from './notifications';
+import { openhandsSnapshot, openhandsUsageSnapshot } from './openhandsConfig';
 import { allOpenPullRequests, prStore } from './prs';
 import { quiet, state } from './state';
 import { updateState } from './updater';
@@ -110,8 +113,8 @@ export function layoutState(): LayoutState {
     paneFraction: state.paneFraction,
     terminalOpen: terminalVisible(),
     terminalHeight: state.terminalHeight,
-    // The sessions column only occupies space on the Cloud surface.
-    sessionsOpen: state.sessionsOpen && (state.surface === 'cloud' || state.surface === 'claude'),
+    // The sessions column occupies space on every provider surface.
+    sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
     sessionsWidth: state.sessionsWidth,
     analyticsTabs: state.surface === 'analytics',
   };
@@ -134,41 +137,18 @@ export function setSessionsOpen(open: boolean, source: string): void {
   log('shell', 'sessions-panel', { detail: { open, source } });
 }
 
-// Rail badge + summary inputs: the Devin monthly percent plus each non-stale
-// Claude account's session/weekly limits. Reading claudeUsage().state is safe
-// before start — the getter returns the initial state without starting the
-// service.
+// Rail badge + summary inputs: every runtime's usage summary items in runtime
+// order (devin-cloud's monthly percent, then each non-stale Claude account's
+// session/weekly limits, then the OpenHands daily quota). `devin` stays the raw
+// Devin metric state; `openhands` carries the Analytics -> OpenHands cards.
 function usageSummary(): ShellState['usage'] {
-  const items: { metric: string; accountKey: string; label: string; percent: number }[] = [];
-  const devin = devinUsage().state;
-  if (devin.percent !== null) {
-    items.push({
-      metric: 'devin-monthly',
-      accountKey: '',
-      label: USAGE_METRIC_LABEL['devin-monthly'],
-      percent: devin.percent,
-    });
-  }
-  for (const account of claudeUsage().state.accounts) {
-    if (account.stale) continue;
-    const accountKey = account.email ?? `host:${account.hosts[0] ?? ''}`;
-    for (const limit of account.limits) {
-      const metric: UsageMetric | null =
-        limit.kind === 'session'
-          ? 'claude-session'
-          : limit.kind === 'weekly_all'
-            ? 'claude-weekly'
-            : null;
-      if (!metric) continue;
-      items.push({
-        metric,
-        accountKey,
-        label: `${USAGE_METRIC_LABEL[metric]}${account.email ? ` (${account.email})` : ''}`,
-        percent: limit.percent,
-      });
-    }
-  }
-  return { level: usageLevel(items.map((item) => item.percent)), items, devin };
+  const items = usageSummaryItems(runtimes().map((runtime) => runtime.usage));
+  return {
+    level: usageLevel(items.map((item) => item.percent)),
+    items,
+    devin: devinUsage().state,
+    openhands: openhandsUsageSnapshot(),
+  };
 }
 
 export function publicState(): ShellState {
@@ -183,6 +163,8 @@ export function publicState(): ShellState {
     currentSessionId: state.currentSessionId,
     localSessionId: state.localSessionId,
     claudeSessionId: state.claudeSessionId,
+    openhandsSessionId: state.openhandsSessionId,
+    openhandsApiKeySet: state.secrets?.hasOpenHandsApiKey() ?? false,
     settings: state.settings?.current ?? SettingsSchema.parse({}),
     tabs: state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 },
     credentials: state.credentials?.list() ?? [],
@@ -216,6 +198,7 @@ export function publicState(): ShellState {
     usage: usageSummary(),
     cloud: cloudSessions().snapshot(),
     claude: claudeSessions().snapshot(),
+    openhands: openhandsSnapshot(),
     update: updateState(),
     terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
@@ -337,8 +320,8 @@ export function lowerShell(): void {
   const { windowRef, shellView, analyticsView, tabManager } = state;
   if (!windowRef || !shellView) return;
   shellView.setBackgroundColor('#111827');
-  const pooled = cloudViews().views();
-  const active = cloudViews().activeView();
+  const pooled = allPoolViews();
+  const active = poolForSurface(state.surface)?.activeView() ?? null;
   const children = [...windowRef.contentView.children];
   for (const child of children) {
     if (
@@ -351,32 +334,39 @@ export function lowerShell(): void {
     }
   }
   windowRef.contentView.addChildView(shellView, 0);
-  if (state.surface === 'cloud' && active) windowRef.contentView.addChildView(active);
+  if (active) windowRef.contentView.addChildView(active);
   if (analyticsHostedVisible() && analyticsView)
     windowRef.contentView.addChildView(analyticsView);
   if (state.paneOpen && !state.paneCollapsed) addAtTop(tabManager?.activeView ?? null);
 }
 
-// The tab strip's scope follows the visible surface: the selected local
-// session on Local, else the Cloud session. setScope is a no-op when unchanged,
+// The tab strip's scope follows the visible surface: the selected session of
+// that surface (Cloud, Local, Claude, OpenHands; the registry's scopeFallback
+// covers surfaces without one). setScope is a no-op when unchanged,
 // so running it from applyLayout covers every surface/selection change without
 // each caller having to know about scopes.
 export function syncScope(): void {
   state.tabManager?.setScope(
-    effectiveScope(state.surface, state.currentSessionId, state.localSessionId, state.claudeSessionId),
+    effectiveScope(state.surface, {
+      cloud: state.currentSessionId,
+      local: state.localSessionId,
+      claude: state.claudeSessionId,
+      openhands: state.openhandsSessionId,
+    }),
   );
 }
 
 // Shared geometry for applyLayout and the live drag resize in moveDrag.
 function applyBounds(bounds: WindowBounds, size: { width: number; height: number }): void {
-  const { shellView, devinView, tabManager } = state;
+  const { shellView, tabManager } = state;
   state.paneCollapsed = bounds.paneCollapsed;
   state.sessionsCollapsed = bounds.sessionsCollapsed;
   shellView?.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
   // Only the ACTIVE pooled view is laid out/attached; every other pooled view
   // gets zero bounds and stays detached.
-  for (const view of cloudViews().views()) {
-    if (view === devinView && state.surface === 'cloud') {
+  const visible = poolForSurface(state.surface)?.activeView() ?? null;
+  for (const view of allPoolViews()) {
+    if (view === visible) {
       view.setBounds(nativeBounds(bounds.devin));
     } else {
       view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -403,15 +393,16 @@ export function applyLayout(): void {
   // Every surface change lands here, whichever path set state.surface.
   if (state.surface !== layoutSurface) {
     layoutSurface = state.surface;
-    if (layoutSurface === 'claude') claudeSessions().onSurfaceEnter();
+    runtimeFor(layoutSurface)?.onSurfaceEnter?.();
   }
   syncScope();
   const bounds = computeBounds(windowRef.getContentBounds(), layoutState());
   applyBounds(bounds, windowRef.getContentBounds());
   if (!state.dragging) {
     ensureShellBottom();
-    for (const view of cloudViews().views()) {
-      if (view === devinView && state.surface === 'cloud') ensureAttached(view);
+    const visible = poolForSurface(state.surface)?.activeView() ?? null;
+    for (const view of allPoolViews()) {
+      if (view === visible) ensureAttached(view);
       else detachView(view);
     }
     if (analyticsHostedVisible()) ensureAttached(state.analyticsView);
@@ -459,7 +450,7 @@ export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
   if (axis === 's' &&
     (!state.sessionsOpen ||
       state.sessionsCollapsed ||
-      (state.surface !== 'cloud' && state.surface !== 'claude')))
+      !sessionsColumnSurface(state.surface)))
     return;
   state.dragging = true;
   state.dragAxis = axis;
@@ -535,7 +526,7 @@ export function setPrsPanel(open: boolean): void {
   if (open) raiseShell();
   // Refresh recorded Claude PR states while the panel is open (10 min cadence
   // also runs on its own timer while focused).
-  if (open) claudeSessions().refreshPrStates('panel');
+  if (open) for (const runtime of runtimes()) runtime.onPrPanelOpen?.();
   else if (!overlayOpen()) lowerShell();
   applyLayout();
   log('shell', 'prs-panel', { detail: { open } });

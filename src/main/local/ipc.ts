@@ -30,6 +30,7 @@ import { applyLayout } from '../window';
 import { localScope } from '../../core/tabModel';
 import { DevinLocalHost } from './acpHost';
 import { LocalContextMenu } from './contextMenu';
+import { createDevinSpec } from './devinSpec';
 import { renameWorkspace, reorderWorkspaces } from '../../core/workspaceTree';
 import { autoOpenLocalPr } from './prAutoOpen';
 import { getLocalState, publicLocalState } from './localState';
@@ -60,9 +61,12 @@ export function setupLocal(): void {
   const settings = state.settings;
   host = new DevinLocalHost({
     userData: app.getPath('userData'),
-    appPath: app.getAppPath(),
     testMode,
-    devinPathOverride: settings?.current.local.devinPath ?? null,
+    spec: createDevinSpec({
+      testMode,
+      appPath: app.getAppPath(),
+      devinPathOverride: settings?.current.local.devinPath ?? null,
+    }),
     workspaces: settings?.current.workspaces ?? [],
     onWorkspacesChanged: (workspaces) => {
       state.settings?.merge({ workspaces });

@@ -1,7 +1,7 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import {
   ClientSideConnection,
@@ -55,6 +55,7 @@ import {
 import type { LocalSessionSummary } from '../../shared/ipc';
 import { log } from '../log';
 import { hosts } from '../hosts';
+import { fullCommand, spawnCommand, type AcpAgentSpec } from './agentSpec';
 import { getLocalState, replaceLocalState, update } from './localState';
 
 const INITIALIZE_TIMEOUT_MS = 60_000;
@@ -169,29 +170,15 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number, operation: st
   });
 }
 
-// Resolve the `devin` executable: explicit override, else PATH lookup via
-// `where` (Windows) / `which` (POSIX). Returns null when nothing is found.
-export function resolveDevinPath(override: string | null | undefined): string | null {
-  if (override) return existsSync(override) ? override : null;
-  const lookup = process.platform === 'win32' ? 'where.exe' : 'which';
-  try {
-    const result = spawnSync(lookup, ['devin'], { encoding: 'utf8', windowsHide: true });
-    if (result.status !== 0) return null;
-    const first = result.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-    return first && existsSync(first) ? first : null;
-  } catch {
-    return null;
-  }
-}
+// Moved to devinSpec.ts; re-exported for hosts/identity/terminalHost.
+export { resolveDevinPath } from './devinSpec';
 
 export interface DevinLocalHostOptions {
   userData: string;
-  appPath: string;
   testMode: boolean;
-  devinPathOverride: string | null | undefined;
+  /** The agent this host runs (`createDevinSpec` in production): command
+   *  resolution per exec host, ACP args, fallback modes. */
+  spec: AcpAgentSpec;
   workspaces: string[];
   onWorkspacesChanged: (workspaces: string[]) => void;
   // Called with each never-before-seen PR URL found in agent output (chat
@@ -211,15 +198,39 @@ export class DevinLocalHost {
   private indexRaw: unknown = undefined;
   private workspaces: string[];
   private readonly linkScanners = new Map<string, LinkScanner>();
-  private readonly command: HostCommand | null;
+  private readonly spec: AcpAgentSpec;
+  // The local agent command, resolved once at start (a `local.devinPath`
+  // change needs an app restart). null until `commandReady` settles.
+  private command: HostCommand | null = null;
+  private commandResolved = false;
+  private readonly commandReady: Promise<void>;
   private disposed = false;
 
   constructor(private readonly options: DevinLocalHostOptions) {
+    this.spec = options.spec;
     this.indexFile = join(options.userData, 'local-sessions.json');
     this.workspaces = [...options.workspaces];
-    this.command = this.resolveCommand();
     this.index = this.loadIndex();
-    replaceLocalState(emptyLocalState(this.command ? this.command.file : null));
+    // Pushes are coalesced on setImmediate, so this placeholder is never
+    // published: the resolution below settles in a microtask first.
+    replaceLocalState(emptyLocalState(null));
+    // Never rejects: startConfigured/ensureAgent await it (a throw there would
+    // wedge every agent start, where before it surfaced from the constructor).
+    this.commandReady = this.resolveLocalCommand().catch(() => undefined);
+  }
+
+  private async resolveLocalCommand(): Promise<void> {
+    let argv: string[] | null = null;
+    try {
+      argv = fullCommand(this.spec, await this.spec.resolveCommand(LOCAL_HOST.id));
+    } catch {
+      argv = null;
+    }
+    const [file, ...args] = argv ?? [];
+    this.command = file ? { file, args } : null;
+    this.commandResolved = true;
+    const cliPath = this.command ? this.command.file : null;
+    update((state) => ({ ...state, cliPath, installGuidance: emptyLocalState(cliPath).installGuidance }));
     for (const workspace of this.workspaces) {
       update((state) =>
         upsertAgent(state, workspace, {
@@ -235,24 +246,6 @@ export class DevinLocalHost {
         workspaces: this.workspaces.length,
       },
     });
-  }
-
-  // The production path spawns the external `devin` binary (RunAsNode is fused
-  // off, so we never fork Node). A full command override exists only in test mode.
-  private resolveCommand(): HostCommand | null {
-    const testCommand = this.options.testMode ? process.env.AGENT_WORKSPACE_LOCAL_AGENT_CMD : undefined;
-    if (testCommand) {
-      const [file, ...args] = testCommand.split(/\s+/).filter(Boolean);
-      if (!file) return null;
-      const resolvedArgs = args.map((arg) => {
-        if (isAbsolute(arg)) return arg;
-        const candidate = resolve(this.options.appPath, arg);
-        return existsSync(candidate) ? candidate : arg;
-      });
-      return { file, args: resolvedArgs };
-    }
-    const devinPath = resolveDevinPath(this.options.devinPathOverride);
-    return devinPath ? { file: devinPath, args: ['acp'] } : null;
   }
 
   get cliPath(): string | null {
@@ -293,8 +286,10 @@ export class DevinLocalHost {
       this.workspaces.push(normalized);
       this.options.onWorkspacesChanged(this.listWorkspaces());
     }
+    // Before the local command settles the resolution registers every
+    // workspace itself (this one included).
     update((state) =>
-      state.agents[normalized]
+      !this.commandResolved || state.agents[normalized]
         ? state
         : upsertAgent(state, normalized, {
             status: this.command ? 'stopped' : 'missing-cli',
@@ -345,6 +340,7 @@ export class DevinLocalHost {
     if (this.disposed) return;
     void hosts()
       .whenEnumerated()
+      .then(() => this.commandReady)
       .then(() => {
         if (this.disposed) return;
         // Materialise the enabled hosts so hostById() resolves UNC paths.
@@ -379,11 +375,12 @@ export class DevinLocalHost {
 
   async ensureAgent(workspace: string): Promise<AgentHandle> {
     if (this.disposed) throw new Error('local host disposed');
+    await this.commandReady;
     const execHost = this.hostFor(workspace);
     if (isWslHost(execHost)) {
-      // Prime probe + env capture before checking devin presence.
+      // Prime probe + env capture before checking CLI presence.
       await hosts().shellEnv(execHost, { explicit: true });
-      if (!hosts().status(execHost.id)?.devin.path) {
+      if (!fullCommand(this.spec, await this.spec.resolveCommand(execHost.id))) {
         const message = `${execHost.distro}: ${INSTALL_GUIDANCE}`;
         update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: message }));
         throw new Error(message);
@@ -444,9 +441,21 @@ export class DevinLocalHost {
       // Through `wsl.exe -d D --cd <linux ws> -e /usr/bin/env …` so the agent
       // runs inside the distro with the captured shell env.
       await hosts().shellEnv(execHost, { explicit: true });
+      // ensureAgent is the missing-cli gate; restartAgent (terminal handoff)
+      // skips it, and a transient probe miss must not fail the spawn — fall
+      // back to the spec's default binary on the distro PATH.
+      const argv = spawnCommand(this.spec, await this.spec.resolveCommand(execHost.id));
+      if (!argv) {
+        // Only a spec without a defaultBinary gets here.
+        const message = `${execHost.distro}: ${INSTALL_GUIDANCE}`;
+        handle.ready = null;
+        update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: message }));
+        throw new Error(message);
+      }
+      const [file, ...args] = argv;
       child = hosts().spawnOn(execHost, {
-        file: hosts().status(execHost.id)?.devin.path ?? 'devin',
-        args: ['acp'],
+        file: file!,
+        args,
         cwd: hosts().hostPath(execHost, workspace),
       });
     } else {

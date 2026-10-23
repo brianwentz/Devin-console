@@ -1,10 +1,12 @@
-// Inline folder-name editor shared by create and rename.
+// Inline name editor shared by folder create/rename and session rename.
 export function FolderNameInput({
+  id = 'sessionFolderEdit',
   initial = '',
   placeholder,
   onCommit,
   onCancel,
 }: {
+  id?: string;
   initial?: string;
   placeholder: string;
   onCommit: (name: string) => void;
@@ -12,7 +14,7 @@ export function FolderNameInput({
 }) {
   return (
     <input
-      id="sessionFolderEdit"
+      id={id}
       type="text"
       autoFocus
       defaultValue={initial}

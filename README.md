@@ -1,6 +1,6 @@
 # Agent Workspace
 
-Agent Workspace is a desktop client for Windows and macOS (Apple Silicon) that puts your coding agents in one window: Devin Cloud sessions from your tenant, Devin Local and Claude Code sessions on local or WSL folders, a tabbed Linked Context pane that catches every link and PR a session produces, a terminal dock, PR and notification panels, usage analytics with limit alerts, and saved SSO logins — with layout and sessions remembered across restarts.
+Agent Workspace is a desktop client for Windows and macOS (Apple Silicon) that puts your coding agents in one window: Devin Cloud sessions from your tenant, OpenHands Cloud conversations, Devin Local and Claude Code sessions on local or WSL folders, a tabbed Linked Context pane that catches every link and PR a session produces, a terminal dock, PR and notification panels, usage analytics with limit alerts, and saved SSO logins — with layout and sessions remembered across restarts.
 
 ## Install
 
@@ -47,7 +47,19 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Devin**.
-- The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals include your WSL distros, counted inside each distro.
+- **OpenHands** conversations live on their own rail button — see [OpenHands](#openhands) below; its settings are under **Settings → OpenHands**.
+- The **Analytics** rail button shows your Devin ACU usage, Claude plan limits and — on its **OpenHands** tab — your OpenHands credits, today's sandbox quota, the last 30 days' spend and the most expensive conversations; the rail dot warns at 50 %/80 % of a limit (the OpenHands daily quota included, with a notification that opens that tab). Claude token totals include your WSL distros, counted inside each distro.
+
+## OpenHands
+
+The OpenHands rail button shows your OpenHands Cloud (or self-hosted) conversations in the session column and the OpenHands page in the main column. Nothing contacts OpenHands until you open the surface or save an API key.
+
+- **Signing in**: log in on the OpenHands page itself (sign-in hops to GitHub, GitLab or Bitbucket stay inside the view instead of opening a tab) and the app lists your conversations through that web sign-in — or save an **OpenHands API key** under **Settings → OpenHands** (stored encrypted and never shown again; it takes precedence over the web sign-in). The line under the key shows how the app is connected, and a hint above the list takes you to the right place when sign-in or the key is missing. OpenHands keeps its own browser profile, so its sign-in is never shared with Devin Cloud.
+- **The session column** groups conversations by repository; ones started without a repository are under **No repository**, and conversations without a title read **Untitled conversation**. Right-click a conversation to rename it, copy its ID, open it in your browser or delete it. When a conversation starts waiting for your confirmation, finishes or hits an error, it shows up in the notification center (and the banner) with the OpenHands icon, following the same on/off switches as other notifications; conversations that already existed when the app started or when you changed the URL do not produce a burst of notifications. Deleting the conversation that is open returns you to the OpenHands home page, and its Linked Context tabs close; if OpenHands is not connected yet, a rename or delete shows an error instead of doing nothing.
+- **Pull requests** a conversation opened show up in the PR panel with the OpenHands icon, like Devin and Claude PRs; a PR that appears while the app is running (including one the agent mentions when a conversation finishes) opens as a background tab in that conversation's Linked Context (unless auto-open is switched off), and opening a PR from the panel switches to that conversation.
+- The **+** button (and `Ctrl+N`) shows the OpenHands home page, where new conversations start; `Ctrl+Shift+S` hides or shows the session column.
+- **Usage**: **Analytics → OpenHands** shows the remaining credits, today's sandbox quota, the last 30 days' spend and your most expensive conversations; a card reads *Not available on this server* where the server has no billing (typical for self-hosted). Opening that tab counts as using OpenHands (it connects); the figures refresh every minute while it is open and every 15 minutes otherwise, and reaching 50 % / 80 % of the daily quota raises a usage notification.
+- **Settings → OpenHands** also holds the **OpenHands URL** (https only, a sub-path is allowed), how often to check for conversation updates (10–600 seconds), how many conversations stay loaded (1–20) and how long hidden ones stay live (0–168 hours). Changing the URL closes the loaded pages and lists the new server's conversations.
 
 ## Running sessions in WSL
 
@@ -77,7 +89,7 @@ Claude Code sessions can also run on another machine you reach over SSH (a Linux
 
 ## Where things live
 
-`%APPDATA%\agent-workspace\` on Windows, `~/Library/Application Support/agent-workspace/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (API token, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar pin/archive/removed state and recorded PRs), `claude-hooks.json` (hook listener port + bearer token, mode 0600), `claude-usage-cache.json` (usage fetch caches + transcript-scan offsets), `events.jsonl` (the event log), and the two browser profiles (`persist:cloud`, `persist:github`). Uninstalling removes the app; delete this folder to remove all data.
+`%APPDATA%\agent-workspace\` on Windows, `~/Library/Application Support/agent-workspace/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (Devin API token and OpenHands API key, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar pin/archive/removed state and recorded PRs), `claude-hooks.json` (hook listener port + bearer token, mode 0600), `claude-usage-cache.json` (usage fetch caches + transcript-scan offsets), `openhands-cache.json` (the last OpenHands conversation list, so the sidebar renders at once), `events.jsonl` (the event log), and the browser profiles (`persist:cloud`, `persist:github`, `persist:openhands`). Uninstalling removes the app; delete this folder to remove all data.
 
 Claude session transcripts stay where Claude Code keeps them (`~/.claude/projects/`). The one Claude config file the app edits is `~/.claude/settings.json` (on this PC and in WSL distros — never on an SSH host, except to remove a hook block an earlier version left there), and only when *Report Claude Code sessions started from other terminals* is on: the original is copied once to `~/.claude/settings.json.agent-workspace.bak` before the hook block is added, and the block is removed again when the toggle is turned off.
 
@@ -94,8 +106,9 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
-| `Ctrl+N` | New Devin session |
-| `` Ctrl+` `` | Toggle terminal dock (Cloud, Local and Claude surfaces; inert on Settings and Analytics) |
+| `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; the OpenHands home page) |
+| `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |
+| `` Ctrl+` `` | Toggle terminal dock (Cloud, Local, Claude and OpenHands surfaces; inert on Settings and Analytics) |
 | `Ctrl+Enter` | Send the message in a Devin Local or Claude chat composer (`Enter` inserts a newline) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the focused view |
 

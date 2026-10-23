@@ -25,6 +25,7 @@ import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
+import { allPoolViews } from './cloudKit/pools';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -45,6 +46,16 @@ import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 import { hosts } from './hosts';
+import { openhandsBaseUrl, openhandsUsageSnapshot } from './openhandsConfig';
+import {
+  openhandsMenuClick,
+  openhandsMenuItems,
+  openhandsMutations,
+  openhandsRefresh,
+  openhandsState,
+  openhandsUsageRefresh,
+} from './providers/openhands';
+import { openhandsOpenSession, openhandsViewsInfo, resetOpenHandsViews } from './openhands/views';
 import { remoteFsViolationCount } from './remoteFsGuard';
 
 export function registerTestHooks(): void {
@@ -160,8 +171,7 @@ export function registerTestHooks(): void {
       ipcProbe: () => {
         // A pooled NON-active Cloud view — must still pass the hosted-view
         // guard (a detached view's webContents is just as privileged).
-        const pooled = cloudViews()
-          .views()
+        const pooled = allPoolViews()
           .map((v) => v.webContents)
           .find((wc) => wc !== state.devinView?.webContents);
         return {
@@ -224,6 +234,26 @@ export function registerTestHooks(): void {
         notifier.restart('test-clear-pat');
       },
       hasPat: () => state.secrets?.hasPat() ?? false,
+      // Task 14: seed/clear the OpenHands API key (never returns it).
+      secretsSetOpenHands: async (value: string | null) => {
+        await state.secrets?.setOpenHandsApiKey(value);
+      },
+      // B1 T20: effective OpenHands base URL (AGENT_WORKSPACE_TEST_OPENHANDS_URL wins).
+      openhandsBaseUrl: () => openhandsBaseUrl(),
+      // B1 T21: OpenHands sidebar snapshot / force a full list (resolves when it finishes).
+      openhandsState: () => openhandsState(),
+      openhandsRefresh: () => openhandsRefresh(),
+      // Analytics -> OpenHands usage cards; refresh opens the gate and resolves after one pass.
+      openhandsUsageState: () => openhandsUsageSnapshot(),
+      openhandsUsageRefresh: () => openhandsUsageRefresh(),
+      // B1 T22: hosted views, menus and the recorded sidebar actions.
+      openhandsViewsInfo: () => openhandsViewsInfo(),
+      openhandsOpen: (id: string) => openhandsOpenSession(id),
+      // Test-only shortcut for the base-URL-change reset (the real path: Settings + AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP).
+      openhandsResetViews: () => resetOpenHandsViews(),
+      openhandsMenuItems: () => openhandsMenuItems(),
+      openhandsMenuClick: (id: string) => openhandsMenuClick(id), // returns {action}
+      openhandsMutations: () => openhandsMutations(),
       pollNow: () => notifier.pollNow(),
       // Cloud session sidebar data layer.
       cloudState: () => cloudSessions().snapshot(),

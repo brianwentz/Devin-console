@@ -1,4 +1,5 @@
 import type { Surface } from '../shared/ipc';
+import { providerBySurface } from './providers';
 
 export interface Size {
   width: number;
@@ -60,12 +61,23 @@ export const MIN_TERMINAL_HEIGHT = 120;
 export const TERMINAL_RESERVED_MAIN = 200;
 
 // The terminal dock belongs to the work surfaces only: it is laid out (and
-// Ctrl+` / the rail toggle act) on Cloud, Local and Claude, never on Settings or
+// Ctrl+` / the rail toggle act) on every provider surface (Cloud, Local, Claude, OpenHands), never on Settings or
 // Analytics. `layout.terminalOpen` persists across a visit to an off-surface —
 // this predicate gates visibility, not the stored preference. Single source of
 // truth for main (native view bounds), App (shell DOM) and Rail (button state).
 export function dockSurface(surface: Surface): boolean {
-  return surface === 'cloud' || surface === 'local' || surface === 'claude';
+  return providerBySurface(surface)?.dock ?? false;
+}
+
+// The Cloud/Local/Claude session column: reserved by computeBounds, shown by
+// App and draggable (Splitter + beginDrag) on every provider surface.
+export function sessionsColumnSurface(surface: Surface): boolean {
+  return providerBySurface(surface)?.sessionsColumn ?? false;
+}
+
+// Ctrl+Shift+S toggles the sessions column - not offered on Local.
+export function sidebarShortcutSurface(surface: Surface): boolean {
+  return providerBySurface(surface)?.sidebarShortcut ?? false;
 }
 
 export function clampTerminalHeight(height: number, windowHeight: number): number {

@@ -1,6 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Ellipsis, Plus, RefreshCw, SquarePen } from 'lucide-react';
-import type { CloudSessionState, CloudState } from '../../shared/ipc';
+import type { CloudContextMenuRequest, CloudSessionState, CloudState } from '../../shared/ipc';
+import type { CloudSourceCapabilities } from '../../core/cloudKit/capabilities';
+import { prefixedId, sidebarListData } from '../../core/cloudKit/sidebar';
 import {
   addFolder,
   buildSessionTree,
@@ -10,7 +12,6 @@ import {
   type CloudListData,
 } from '../../core/sessionTree';
 import type { Rect } from '../../core/layout';
-import { useShellState } from '../store';
 import { relativeTime } from './relativeTime';
 import { sessionRowClass } from './sessionRowStyles';
 import { FolderNameInput } from './sidebar/FolderNameInput';
@@ -69,7 +70,7 @@ function statusText(cloud: CloudState): string {
 
 // Hovering a row for 300 ms prefetches the session's pooled view so a click
 // lands on an already-loaded page.
-function usePrefetch(): {
+function usePrefetch(prefetchSession: (id: string) => void): {
   onEnter: (id: string) => void;
   onLeave: () => void;
 } {
@@ -85,29 +86,83 @@ function usePrefetch(): {
       cancel();
       timer.current = setTimeout(() => {
         timer.current = null;
-        window.agentworkspace.cloudPrefetch(id);
+        prefetchSession(id);
       }, 300);
     },
     onLeave: cancel,
   };
 }
 
-export function SessionSidebar({ rect }: { rect: Rect }) {
-  const state = useShellState();
-  const prefetch = usePrefetch();
+/** What the sidebar renders — the provider adapter maps its own state onto this. */
+export interface SessionSidebarState {
+  cloud: CloudState;
+  collapsedFolders: string[];
+  sessionOrder: Record<string, string[]>;
+  currentSessionId: string | null;
+}
+
+/** Everything the sidebar sends back to main — one provider's IPC surface. */
+export interface SessionSidebarActions {
+  open: (id: string) => void;
+  prefetch: (id: string) => void;
+  copyLink: (id: string) => void;
+  newSession: (folder: string | null) => void;
+  refresh: () => void;
+  loadMore: (folder: string) => void;
+  contextMenu: (request: CloudContextMenuRequest) => Promise<{ action: string | null }>;
+  /** Inline session rename (providers whose capabilities.rename is true). */
+  sessionRename?: (id: string, title: string) => void;
+  folderCreate: (name: string) => void;
+  folderRename: (oldName: string, newName: string) => void;
+  folderReorder: (names: string[]) => void;
+  sessionMove: (id: string, folder: string | null) => void;
+  sessionReorder: (section: string, ids: string[]) => void;
+  setCollapsedFolders: (names: string[]) => void;
+}
+
+export interface SessionSidebarProps {
+  rect: Rect;
+  providerId: string;
+  /** '' keeps the original DOM ids (Devin); else ids become `<prefix><Id>`. */
+  idPrefix: string;
+  capabilities: CloudSourceCapabilities;
+  state: SessionSidebarState;
+  actions: SessionSidebarActions;
+  /** Base id -> id suffix for prefixed ids that are not just `<prefix><Id>`
+   * (OpenHands: cloudRefresh -> openhandsRefresh, sessionSearch -> openhandsFilter). */
+  idAliases?: Partial<Record<string, string>>;
+  /** Status line override (e.g. provider-specific sign-in text). */
+  statusText?: (cloud: CloudState) => string | undefined;
+  /** Rows under the status line (login / API-key hints). */
+  banner?: ReactNode;
+}
+
+export function SessionSidebar({
+  rect,
+  providerId,
+  idPrefix,
+  capabilities,
+  state,
+  actions,
+  idAliases,
+  statusText: statusTextOverride,
+  banner,
+}: SessionSidebarProps) {
+  const prefetch = usePrefetch(actions.prefetch);
+  const pid = (id: string) => prefixedId(idPrefix, idAliases?.[id] ?? id);
+  const serverFolders = capabilities.folders === 'server';
   const [query, setQuery] = useState('');
   const [collapsedChildren, setCollapsedChildren] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<
-    { kind: 'create'; pendingSessionId?: string } | { kind: 'rename'; name: string } | null
+    | { kind: 'create'; pendingSessionId?: string }
+    | { kind: 'rename'; name: string }
+    | { kind: 'rename-session'; id: string }
+    | null
   >(null);
-  const { registerRow, onKeyDown } = useRowKeyboardNav((id) =>
-    window.agentworkspace.cloudCopyLink(id),
-  );
+  const { registerRow, onKeyDown } = useRowKeyboardNav((id) => actions.copyLink(id));
 
-  const cloud = state!.cloud;
+  const { cloud, collapsedFolders, sessionOrder, currentSessionId } = state;
   const liveIds = useMemo(() => new Set(cloud.liveSessionIds), [cloud.liveSessionIds]);
-  const collapsedFolders = state!.settings.sessions.collapsedFolders;
-  const sessionOrder = state!.settings.sessions.sessionOrder;
 
   const cloudData = useMemo<CloudListData & { sessionOrder: Record<string, string[]> }>(
     () => ({
@@ -127,15 +182,14 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     sessionOrder,
   ]);
   const data = useMemo<CloudListData>(
-    () => ({
-      ...baseData,
-      sessions: baseData.sessions.filter((s) => cloud.showArchived || !s.isArchived),
-    }),
-    [baseData, cloud.showArchived],
+    () => sidebarListData(baseData, capabilities, cloud.showArchived),
+    [baseData, capabilities, cloud.showArchived],
   );
+  // Only server folders are user folders (rename/reorder/move targets);
+  // derived sections are read-only grouping.
   const userFolderNames = useMemo(
-    () => data.folders.filter(isEditableFolder),
-    [data.folders],
+    () => (serverFolders ? data.folders.filter(isEditableFolder) : []),
+    [data.folders, serverFolders],
   );
 
   const createFolder = (name: string, pendingSessionId?: string) => {
@@ -143,40 +197,64 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       const next = addFolder(d, name);
       return pendingSessionId ? moveSession(next, pendingSessionId, name) : next;
     });
-    window.agentworkspace.cloudFolderCreate(name);
-    if (pendingSessionId) window.agentworkspace.cloudSessionMove(pendingSessionId, name);
+    actions.folderCreate(name);
+    if (pendingSessionId) actions.sessionMove(pendingSessionId, name);
   };
   const renameFolderTo = (oldName: string, newName: string) => {
     applyOptimistic((d) => renameFolder(d, oldName, newName));
-    window.agentworkspace.cloudFolderRename(oldName, newName);
+    actions.folderRename(oldName, newName);
   };
   const moveSessionTo = (id: string, folder: string | null) => {
     applyOptimistic((d) => moveSession(d, id, folder));
-    window.agentworkspace.cloudSessionMove(id, folder);
+    actions.sessionMove(id, folder);
   };
   const reorderTo = (names: string[]) => {
     applyOptimistic((d) => reorderFolders(d, names));
-    window.agentworkspace.cloudFolderReorder(names);
+    actions.folderReorder(names);
   };
   const reorderSessionsTo = (section: string, ids: string[]) => {
     applyOptimistic((d) => ({
       ...d,
       sessionOrder: { ...d.sessionOrder, [section]: ids },
     }));
-    window.agentworkspace.cloudSessionReorder(section, ids);
+    actions.sessionReorder(section, ids);
   };
 
   const sessionMenu = async (sessionId: string, x: number, y: number) => {
-    const { action } = await window.agentworkspace.cloudContextMenu({
+    const { action } = await actions.contextMenu({
       kind: 'session',
       sessionId,
       x,
       y,
     });
     if (action === 'new-folder') setEditing({ kind: 'create', pendingSessionId: sessionId });
+    else if (action === 'rename') setEditing({ kind: 'rename-session', id: sessionId });
   };
+  const renameSessionTo = (id: string, title: string) => {
+    applyOptimistic((d) => ({
+      ...d,
+      sessions: d.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
+    }));
+    actions.sessionRename?.(id, title);
+  };
+  // The row's place in the list while it is being renamed.
+  const sessionEditor = (s: CloudSessionState) => (
+    <div key={s.id} className="px-1 py-1">
+      <FolderNameInput
+        id={pid('sessionRenameEdit')}
+        initial={s.title}
+        placeholder="Session name"
+        onCommit={(title) => {
+          renameSessionTo(s.id, title);
+          setEditing(null);
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    </div>
+  );
+  const renamingId = editing?.kind === 'rename-session' ? editing.id : null;
   const folderMenu = async (name: string, x: number, y: number) => {
-    const { action } = await window.agentworkspace.cloudContextMenu({
+    const { action } = await actions.contextMenu({
       kind: 'folder',
       name,
       x,
@@ -185,7 +263,6 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     if (action === 'rename') setEditing({ kind: 'rename', name });
   };
 
-  const currentSessionId = state!.currentSessionId;
   const tree = useMemo(
     () =>
       buildSessionTree(data, {
@@ -200,7 +277,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
     const next = collapsedFolders.includes(name)
       ? collapsedFolders.filter((f) => f !== name)
       : [...collapsedFolders, name];
-    void window.agentworkspace.setSettings({ sessions: { collapsedFolders: next } });
+    actions.setCollapsedFolders(next);
   };
 
   const toggleChildren = (id: string) => {
@@ -220,6 +297,8 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       'data-pr-merged': s.prs.merged,
       'data-archived': s.isArchived,
       'data-live': liveIds.has(s.id),
+      // Prefixed (non-Devin) sidebars also expose the raw status (ShellState row status).
+      ...(idPrefix ? { 'data-status': s.status } : {}),
     }),
     leading: (s: CloudSessionState) => (
       <span className="w-[18px] h-[18px] shrink-0 flex items-center justify-center">
@@ -240,7 +319,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       variant === 'tree'
         ? `session-row ${s.isArchived ? 'opacity-50' : ''} flex-1 min-w-0 flex items-center ${sessionRowClass} text-left text-[#c9d4e3] hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[current=true]:bg-[#1f2f42] data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`
         : `${s.isArchived ? 'opacity-50 ' : ''}w-full flex items-center ${sessionRowClass} text-left hover:bg-[#1a2735] focus:bg-[#1f2f42] focus:outline-none data-[live=true]:border-l-2 data-[live=true]:border-l-[#3d5a80]`,
-    onOpen: (id: string) => window.agentworkspace.cloudOpen(id),
+    onOpen: (id: string) => actions.open(id),
     prefetch,
     hasChildren: (node: { session: CloudSessionState; children: unknown[] }) =>
       node.children.length > 0 || node.session.directChildrenCount > 0,
@@ -253,8 +332,8 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
 
   return (
     <section
-      id="sessionsPanel"
-      data-sidebar="cloud"
+      id={pid('sessionsPanel')}
+      data-sidebar={providerId === 'devin-cloud' ? 'cloud' : providerId}
       className="shell-chrome absolute flex flex-col bg-[#0d141d] border-r border-[#1e2a38] text-[#c9d4e3]"
       style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
       onKeyDown={onKeyDown}
@@ -262,43 +341,45 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <span className="text-[13px] font-semibold flex-1">Sessions</span>
         <button
-          id="sessionNew"
+          id={pid('sessionNew')}
           type="button"
           aria-label="New session"
           title="New session"
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
-          onClick={() => window.agentworkspace.cloudNewSession(null)}
+          onClick={() => actions.newSession(null)}
         >
           <SquarePen size={13} />
         </button>
+        {serverFolders && (
+          <button
+            id={pid('sessionFolderNew')}
+            type="button"
+            aria-label="New folder"
+            title="New folder"
+            className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
+            onClick={() => setEditing({ kind: 'create' })}
+          >
+            <Plus size={13} />
+          </button>
+        )}
         <button
-          id="sessionFolderNew"
-          type="button"
-          aria-label="New folder"
-          title="New folder"
-          className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
-          onClick={() => setEditing({ kind: 'create' })}
-        >
-          <Plus size={13} />
-        </button>
-        <button
-          id="cloudRefresh"
+          id={pid('cloudRefresh')}
           type="button"
           aria-label="Refresh sessions"
           title="Refresh"
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
-          onClick={() => window.agentworkspace.cloudRefresh()}
+          onClick={() => actions.refresh()}
         >
           <RefreshCw size={13} className={cloud.status === 'connecting' ? 'animate-spin' : ''} />
         </button>
         <button
-          id="sessionsMenu"
+          id={pid('sessionsMenu')}
           type="button"
           aria-label="Sessions options"
           title="More"
           className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#1a2735] text-[#8b9bb0] hover:text-[#c9d4e3]"
           onClick={(e) =>
-            void window.agentworkspace.cloudContextMenu({
+            void actions.contextMenu({
               kind: 'header',
               x: e.clientX,
               y: e.clientY,
@@ -309,17 +390,18 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
         </button>
       </div>
       <div
-        id="cloudStatus"
+        id={pid('cloudStatus')}
         data-cloud-status={cloud.status}
         data-cloud-cached={cloud.cached}
         className="px-3 pb-1.5 text-[11px] text-[#8b9bb0] truncate"
         title={cloud.status === 'error' ? (cloud.error ?? '') : undefined}
       >
-        {statusText(cloud)}
+        {statusTextOverride?.(cloud) ?? statusText(cloud)}
       </div>
+      {banner}
       {cloud.lastError && (
         <div
-          id="sessionsError"
+          id={pid('sessionsError')}
           className="px-3 pb-1.5 text-[11px] text-[#e0a03c] truncate"
         >
           Couldn't {OP_LABELS[cloud.lastError.op] ?? cloud.lastError.op} ·{' '}
@@ -328,7 +410,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
       )}
       <div className="px-3 pb-2">
         <input
-          id="sessionSearch"
+          id={pid('sessionSearch')}
           type="text"
           placeholder="Filter sessions"
           value={query}
@@ -341,17 +423,21 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
           filtered.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No matches</div>
           ) : (
-            filtered.map((s) => (
+            filtered.map((s) =>
+              s.id === renamingId ? (
+                sessionEditor(s)
+              ) : (
               <SessionRowButton
                 key={s.id}
                 s={s}
                 depth={0}
-                current={s.id === state!.currentSessionId}
+                current={s.id === currentSessionId}
                 registerRow={registerRow}
                 opts={rowOpts}
                 onMenu={(id, x, y) => void sessionMenu(id, x, y)}
               />
-            ))
+              ),
+            )
           )
         ) : tree.sections.length === 0 && cloud.status === 'ready' ? (
           <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No sessions yet</div>
@@ -368,26 +454,27 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
                 }}
                 onRenameCancel={() => setEditing(null)}
                 onToggle={toggleFolder}
-                onMenu={(name, x, y) => void folderMenu(name, x, y)}
+                onMenu={(name, x, y) => {
+                  if (serverFolders) void folderMenu(name, x, y);
+                }}
                 onMove={moveSessionTo}
                 onReorder={reorderTo}
-                reorderable={userFolderNames.length > 1}
-                onNewInFolder={(name) => window.agentworkspace.cloudNewSession(name)}
+                moveDisabled={!serverFolders}
+                reorderable={serverFolders && userFolderNames.length > 1}
+                {...(serverFolders
+                  ? { onNewInFolder: (name: string) => actions.newSession(name) }
+                  : {})}
               />
               {!sectionItem.collapsed && (
                 <>
                   {sectionItem.nodes.length === 0 ? (
                     <div className="pl-6 py-1 text-[11px] text-[#5c6b80]">No sessions</div>
                   ) : (
-                    sectionItem.nodes.map((node) => (
-                      <ReorderableRow
-                        key={node.session.id}
-                        section={sectionItem.name}
-                        sessionId={node.session.id}
-                        rootIds={sectionItem.nodes.map((n) => n.session.id)}
-                        onReorder={reorderSessionsTo}
-                      >
+                    sectionItem.nodes.map((node) => {
+                      if (node.session.id === renamingId) return sessionEditor(node.session);
+                      const row = (
                         <SessionRow
+                          key={node.session.id}
                           node={node}
                           collapsedChildren={collapsedChildren}
                           onToggleChildren={toggleChildren}
@@ -395,15 +482,29 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
                           opts={rowOpts}
                           onMenu={(id, x, y) => void sessionMenu(id, x, y)}
                         />
-                      </ReorderableRow>
-                    ))
+                      );
+                      // No reorder → the bare row (no drop-indicator wrapper).
+                      return capabilities.reorder ? (
+                        <ReorderableRow
+                          key={node.session.id}
+                          section={sectionItem.name}
+                          sessionId={node.session.id}
+                          rootIds={sectionItem.nodes.map((n) => n.session.id)}
+                          onReorder={reorderSessionsTo}
+                        >
+                          {row}
+                        </ReorderableRow>
+                      ) : (
+                        row
+                      );
+                    })
                   )}
                   {sectionItem.hasMore && (
                     <button
                       type="button"
                       data-load-more={sectionItem.name}
                       className="w-full pl-6 py-1 text-left text-[11px] text-[#6e9bd0] hover:text-[#9fc4ea]"
-                      onClick={() => window.agentworkspace.cloudLoadMore(sectionItem.name)}
+                      onClick={() => actions.loadMore(sectionItem.name)}
                     >
                       Show more
                     </button>
@@ -413,7 +514,7 @@ export function SessionSidebar({ rect }: { rect: Rect }) {
             </div>
           ))
         )}
-        {editing?.kind === 'create' && (
+        {serverFolders && editing?.kind === 'create' && (
           <div className="px-1 py-1">
             <FolderNameInput
               placeholder="New folder name"

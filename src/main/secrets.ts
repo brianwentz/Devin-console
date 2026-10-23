@@ -14,8 +14,11 @@ import { migrationRan } from './migrate';
 const SecretsFileSchema = z.object({
   version: z.literal(1),
   devinPat: z.string().optional(),
-});
+  openhandsApiKey: z.string().optional(),
+}).passthrough();
 type SecretsFile = z.infer<typeof SecretsFileSchema>;
+type SecretField = 'devinPat' | 'openhandsApiKey';
+const SECRET_FIELDS: SecretField[] = ['devinPat', 'openhandsApiKey'];
 
 export class SecretStoreError extends Error {
   constructor(message: string) {
@@ -33,6 +36,10 @@ type AsyncSafeStorage = Electron.SafeStorage & {
 export class SecretStore {
   readonly file: string;
   private pat: string | null = null;
+  private openhandsKey: string | null = null;
+  // Fields written by this run; any other field is carried through verbatim.
+  private readonly touched = new Set<SecretField>();
+  private writeChain: Promise<void> = Promise.resolve();
   private loaded = false;
   private usingSyncFallback = false;
 
@@ -97,38 +104,57 @@ export class SecretStore {
     renameSync(temporary, this.file);
   }
 
-  // Decrypt the stored PAT into memory. Idempotent.
+  // Decrypt the stored secrets into memory. Idempotent.
   async load(): Promise<void> {
     if (this.loaded) return;
     this.loaded = true;
     const file = this.readFile();
-    if (!file.devinPat) return;
+    if (!file.devinPat && !file.openhandsApiKey) return;
     if (!(await this.encryptionAvailable())) {
       log('shell', 'secrets-load-skipped', { detail: { reason: 'encryption unavailable' } });
       return;
     }
-    try {
-      const { result, shouldReEncrypt } = await this.decrypt(Buffer.from(file.devinPat, 'base64'));
-      this.pat = result;
-      log('shell', 'secrets-loaded', { detail: { hasPat: true, shouldReEncrypt } });
-      if (shouldReEncrypt) await this.persist();
-    } catch (error) {
-      log('shell', 'secrets-decrypt-failed', { detail: { message: String(error) } });
-      // §3.3: on darwin the safeStorage key is keyed by app name, so a
-      // migrated profile's secrets.json can never decrypt — drop it. Gated on
-      // the migration having run this launch so an ordinary Keychain hiccup
-      // deletes nothing.
-      if (process.platform === 'darwin' && migrationRan()) {
-        try {
-          rmSync(this.file, { force: true });
-        } catch {
-          // best-effort
+    const failed: SecretField[] = [];
+    let reEncrypt = false;
+    for (const field of SECRET_FIELDS) {
+      const blob = file[field];
+      if (!blob) continue;
+      try {
+        const { result, shouldReEncrypt } = await this.decrypt(Buffer.from(blob, 'base64'));
+        if (field === 'devinPat') this.pat = result;
+        else this.openhandsKey = result;
+        if (shouldReEncrypt) {
+          reEncrypt = true;
+          this.touched.add(field);
         }
-        log('shell', 'profile-migrated-secrets-reset', { detail: { file: this.file } });
-        // Lazy: keeps this store importable without the window/notifications
-        // graph (unit tests, early startup).
-        void import('./notifications.js').then((m) => m.notifyMigratedSecretsReset());
+        log('shell', 'secrets-loaded', { detail: { field, shouldReEncrypt } });
+      } catch (error) {
+        failed.push(field);
+        log('shell', 'secrets-decrypt-failed', { detail: { field, message: String(error) } });
       }
+    }
+    if (reEncrypt) await this.persist();
+    // §3.3: on darwin the safeStorage key is keyed by app name, so a
+    // migrated profile's secret can never decrypt — drop it (per field; the
+    // file goes when nothing else is left). Gated on the migration having run
+    // this launch so an ordinary Keychain hiccup deletes nothing.
+    if (failed.length > 0 && process.platform === 'darwin' && migrationRan()) {
+      try {
+        // Re-read: a re-encrypt above may have rewritten a field's ciphertext.
+        const remaining: Record<string, unknown> = { ...this.readFile() };
+        for (const field of failed) delete remaining[field];
+        if (SECRET_FIELDS.some((field) => typeof remaining[field] === 'string')) {
+          this.writeFile(remaining as SecretsFile);
+        } else {
+          rmSync(this.file, { force: true });
+        }
+      } catch {
+        // best-effort
+      }
+      log('shell', 'profile-migrated-secrets-reset', { detail: { file: this.file } });
+      // Lazy: keeps this store importable without the window/notifications
+      // graph (unit tests, early startup).
+      void import('./notifications.js').then((m) => m.notifyMigratedSecretsReset());
     }
   }
 
@@ -146,14 +172,16 @@ export class SecretStore {
       throw new SecretStoreError('OS encryption is unavailable; token not stored.');
     }
     this.pat = pat;
+    this.touched.add('devinPat');
     await this.persist();
     log('shell', 'secrets-pat-set', { detail: { length: pat.length } });
   }
 
   async clearPat(): Promise<void> {
     this.pat = null;
+    this.touched.add('devinPat');
     try {
-      if (existsSync(this.file)) rmSync(this.file);
+      await this.persist();
     } catch (error) {
       log('shell', 'secrets-clear-failed', { detail: { message: String(error) } });
       throw new SecretStoreError('Could not delete the secrets file.');
@@ -161,15 +189,74 @@ export class SecretStore {
     log('shell', 'secrets-pat-cleared');
   }
 
-  private async persist(): Promise<void> {
-    const value: SecretsFile = { version: 1 };
-    if (this.pat !== null) {
-      const encrypted = await this.encrypt(this.pat);
-      value.devinPat = encrypted.toString('base64');
+  // Presence only (ShellState.openhandsApiKeySet) — false until load() ran.
+  hasOpenHandsApiKey(): boolean {
+    return this.openhandsKey !== null;
+  }
+
+  // Main-process only. Never send the result over IPC or into the log.
+  async getOpenHandsApiKey(): Promise<string | null> {
+    await this.load();
+    return this.openhandsKey;
+  }
+
+  async setOpenHandsApiKey(value: string | null): Promise<void> {
+    await this.load();
+    if (value !== null && !(await this.encryptionAvailable())) {
+      throw new SecretStoreError('OS encryption is unavailable; key not stored.');
+    }
+    const previous = this.openhandsKey;
+    this.openhandsKey = value;
+    this.touched.add('openhandsApiKey');
+    try {
+      await this.persist();
+    } catch (error) {
+      // Memory must not claim a key (or its removal) that never reached disk.
+      this.openhandsKey = previous;
+      this.touched.delete('openhandsApiKey');
+      throw error;
+    }
+    log('shell', 'secrets-openhands-set', { detail: { ok: true } });
+  }
+
+  // Persists run strictly one after another: each reads the file, encrypts,
+  // then writes, so an interleaved pair could otherwise write a stale read.
+  private persist(): Promise<void> {
+    const run = this.writeChain.then(() => this.persistNow());
+    this.writeChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async persistNow(): Promise<void> {
+    // Claim the pending fields up front; a failed write puts them back.
+    const pending = new Set(this.touched);
+    this.touched.clear();
+    // Start from the file as it is so unknown fields and fields this run did
+    // not touch (e.g. one that failed to decrypt) come back out unchanged.
+    const value: Record<string, unknown> = { ...this.readFile() };
+    const memory: Record<SecretField, string | null> = {
+      devinPat: this.pat,
+      openhandsApiKey: this.openhandsKey,
+    };
+    for (const field of SECRET_FIELDS) {
+      if (!pending.has(field)) continue;
+      const plain = memory[field];
+      try {
+        if (plain === null) delete value[field];
+        else value[field] = (await this.encrypt(plain)).toString('base64');
+      } catch (error) {
+        for (const f of pending) this.touched.add(f);
+        throw error;
+      }
     }
     try {
-      this.writeFile(value);
+      if (SECRET_FIELDS.every((field) => typeof value[field] !== 'string')) {
+        rmSync(this.file, { force: true });
+      } else {
+        this.writeFile(value as SecretsFile);
+      }
     } catch (error) {
+      for (const f of pending) this.touched.add(f);
       log('shell', 'secrets-write-failed', { detail: { message: String(error) } });
       throw new SecretStoreError('Could not write the secrets file.');
     }

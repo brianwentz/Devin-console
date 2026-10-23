@@ -1,6 +1,8 @@
 import { notificationStore } from './notifications';
 import { allOpenPullRequests } from './prs';
-import { deriveNotifications } from '../core/notificationModel';
+import { deriveNotifications, type AppNotification } from '../core/notificationModel';
+import { providerBySource } from '../core/providers';
+import { runtimeFor } from './providers';
 import { DevinApiClient, DevinApiError, sanitizeMessage } from '../core/devinApi';
 import {
   ACTIVE_POLL_MS,
@@ -92,6 +94,8 @@ class Notifier {
   private pollAgain = false;
   private pendingSessionId: string | null = null;
   private generation = 0;
+  // A poll succeeded since start/restart: state.apiSessions is authoritative.
+  private listedThisRun = false;
   private notBefore = 0;
 
   start(): void {
@@ -117,6 +121,15 @@ class Notifier {
     log('shell', 'notifier-stop', { detail: { reason } });
   }
 
+  // PR panel pruning gate (ProviderRuntime.prsKnown): the open-PR list is
+  // authoritative after a successful poll since start/restart. With no token
+  // there are no Devin PRs to list (state.apiSessions stays empty), so a
+  // missing token counts as known — otherwise a Claude/OpenHands-only user
+  // would never prune.
+  prsKnown(): boolean {
+    return this.listedThisRun || !(state.secrets?.getPat() ?? null);
+  }
+
   // Token or settings changed: forget cached org/snapshot and poll again now.
   restart(reason: string): void {
     this.stop(reason);
@@ -132,6 +145,7 @@ class Notifier {
     this.pendingSessionId = null;
     this.failures = 0;
     this.notBefore = 0;
+    this.listedThisRun = false;
     state.apiSessions = [];
     state.notifications = {
       lastPollAt: null,
@@ -365,6 +379,7 @@ class Notifier {
       // (single-page) list — a partial page can't prove absence.
       const previousSessions = state.apiSessions;
       state.apiSessions = sessions;
+      this.listedThisRun = true;
       prStore().reconcile(allOpenPullRequests(), Date.now());
       for (const scope of archivedScopes(previousSessions, sessions, !page.hasNextPage)) {
         void state.tabManager?.closeScope(scope).then(() => {
@@ -522,8 +537,9 @@ export function openPr(sessionId: string, url: string): void {
   prStore().markRead(url);
   setPrsPanel(false);
   const entry = allOpenPullRequests().find((pr) => pr.url === url);
-  if (entry?.source === 'claude') {
-    openClaudeSessionPr(sessionId, url);
+  const runtime = entry?.source ? runtimeFor(providerBySource(entry.source)?.id ?? '') : undefined;
+  if (runtime?.openSessionPr) {
+    runtime.openSessionPr(sessionId, url);
     return;
   }
   openSessionPr(sessionId, url);
@@ -531,7 +547,7 @@ export function openPr(sessionId: string, url: string): void {
 
 // Claude PR / notification routing: select the session on the claude surface,
 // then open the PR in its `claude:<id>` tab scope (openSessionPr's analogue).
-function openClaudeSessionPr(sessionId: string, prUrl?: string): void {
+export function openClaudeSessionPr(sessionId: string, prUrl?: string): void {
   state.surface = 'claude';
   claudeSessions().open(sessionId);
   applyLayout();
@@ -578,8 +594,9 @@ export function openNotification(id: string): void {
     return;
   }
   if (entry.kind === 'usage') {
+    // The tab of the provider that raised it (Devin when the source has none).
     state.settings?.merge({
-      analytics: { tab: entry.source === 'claude' ? 'claude' : 'devin' },
+      analytics: { tab: providerBySource(entry.source ?? 'devin')?.analyticsTab ?? 'devin' },
     });
     state.surface = 'analytics';
     refreshAnalyticsView();
@@ -587,12 +604,15 @@ export function openNotification(id: string): void {
     activateWindow('notification-open');
     return;
   }
-  // Claude entries select the session on the Claude surface; a PR opens in
-  // the session's `claude:<id>` tab scope like openSessionPr does for Devin.
-  if (entry.source === 'claude' && entry.sessionId) {
-    openClaudeSessionPr(entry.sessionId, entry.prUrl);
-    return;
-  }
+  // Entries with no/unknown source keep the Devin default; a Claude entry
+  // without a sessionId falls through to it exactly as before.
+  const runtime = runtimeFor(providerBySource(entry.source ?? 'devin')?.id ?? 'devin-cloud');
+  if (runtime?.openNotification?.(entry)) return;
+  openDevinNotification(entry);
+}
+
+// The Devin (Cloud) tail of openNotification.
+export function openDevinNotification(entry: AppNotification): void {
   if (entry.sessionId && entry.prUrl) {
     openSessionPr(entry.sessionId, entry.prUrl);
     return;

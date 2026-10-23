@@ -9,10 +9,9 @@ import {
   reconcilePrRecords,
   type PrRecord,
 } from '../core/prPanelModel';
-import { openPullRequests, type SessionPrLink } from '../core/notifyModel';
-import { claudeSessions } from './claude/sessions';
+import type { SessionPrLink } from '../core/notifyModel';
+import { allPrsKnown, runtimes } from './providers';
 import { log } from './log';
-import { state } from './state';
 import { notifyShell } from './window';
 
 const PrRecordSchema = z.object({
@@ -48,8 +47,11 @@ export class PrStore {
     return this.list;
   }
 
-  reconcile(open: readonly SessionPrLink[], now: number): void {
-    const next = reconcilePrRecords(this.list, open, now);
+  // New open PRs always get a record; records of PRs no longer open are only
+  // dropped once every provider has listed this run (`prune`), so a provider
+  // that has not listed yet cannot lose its read/dismissed state.
+  reconcile(open: readonly SessionPrLink[], now: number, prune = allPrsKnown()): void {
+    const next = reconcilePrRecords(this.list, open, now, prune);
     if (JSON.stringify(next) === JSON.stringify(this.list)) return;
     this.list = next;
     this.persist();
@@ -131,10 +133,7 @@ export function prStore(userData?: string): PrStore {
 // The merged open-PR list: Devin session PRs from the poller plus Claude
 // session PRs recorded in the Claude registry (works with no Devin token).
 export function allOpenPullRequests(): SessionPrLink[] {
-  return [
-    ...openPullRequests(state.apiSessions),
-    ...claudeSessions().claudeOpenPullRequests(),
-  ];
+  return runtimes().flatMap((r) => r.openPullRequests?.() ?? []);
 }
 
 export function prsFlush(): void {

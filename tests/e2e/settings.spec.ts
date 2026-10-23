@@ -52,7 +52,7 @@ const selectedTab = (app: ElectronApplication) =>
 const hasEl = (app: ElectronApplication, id: string) =>
   shell(app, `Boolean(document.getElementById('${id}'))`);
 
-test('settings has seven tabs and switches panels', async () => {
+test('settings has eight tabs and switches panels', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
@@ -66,13 +66,13 @@ test('settings has seven tabs and switches panels', async () => {
           `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.dataset.settingsTab).join(',')`,
         ),
       )
-      .toBe('general,devin,claude,links,passwords,notifications,updates');
+      .toBe('general,devin,claude,openhands,links,passwords,notifications,updates');
     expect(
       await shell(
         app,
         `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.textContent).join('|')`,
       ),
-    ).toBe('General|Devin|Claude Code|Link Handling|Passwords|Notifications|Updates');
+    ).toBe('General|Devin|Claude Code|OpenHands|Link Handling|Passwords|Notifications|Updates');
     expect(await selectedTab(app)).toBe('general');
     // General keeps the hosts, sessions column and shell rows; the GitHub tab
     // pool moved to Link Handling and the Cloud rows to Devin.
@@ -711,4 +711,57 @@ test('settings.json keeps unknown keys and an invalid untouched value across a r
   const repaired = events.find((e) => e.event === 'settings-repaired');
   expect((repaired?.detail as any)).toMatchObject({ dropped: ['claude.showArchived'], preserved: true });
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+});
+
+// Task 14: the OpenHands API key is a sibling secret field — writing or
+// clearing one never touches the other. The test only checks which base64
+// fields are present in secrets.json; it never decrypts them.
+test('secrets.json keeps devinPat and openhandsApiKey independent', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-secrets-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile);
+  const hook = (name: string, ...args: unknown[]) =>
+    app.evaluate(
+      async (_electron, [n, a]) => (globalThis as any).__agentworkspace[n as string](...(a as unknown[])),
+      [name, args] as [string, unknown[]],
+    );
+  const secrets = () => JSON.parse(readFileSync(join(profile, 'secrets.json'), 'utf8'));
+
+  // A Devin token on a fresh profile writes exactly the pre-change keys.
+  await hook('setPat', 'devin-pat-0');
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'version']);
+  await hook('clearPat');
+
+  await hook('secretsSetOpenHands', 'oh-key-1');
+  expect(Object.keys(secrets()).sort()).toEqual(['openhandsApiKey', 'version']);
+  const ohBlob = secrets().openhandsApiKey as string;
+  expect(ohBlob.length).toBeGreaterThan(0);
+
+  // Saving the Devin token leaves the OpenHands key unchanged.
+  await hook('setPat', 'devin-pat-1');
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'openhandsApiKey', 'version']);
+  expect(secrets().openhandsApiKey).toBe(ohBlob);
+
+  // Clearing the Devin token leaves the OpenHands key in place.
+  await hook('clearPat');
+  expect(Object.keys(secrets()).sort()).toEqual(['openhandsApiKey', 'version']);
+  expect(secrets().openhandsApiKey).toBe(ohBlob);
+
+  // Reverse: clearing the OpenHands key leaves the Devin token in place.
+  await hook('setPat', 'devin-pat-2');
+  const patBlob = secrets().devinPat as string;
+  await hook('secretsSetOpenHands', null);
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'version']);
+  expect(secrets().devinPat).toBe(patBlob);
+
+  // Concurrent writes of both fields must both reach the disk.
+  await hook('clearPat');
+  await hook('secretsSetOpenHands', null);
+  await app.evaluate(async () => {
+    const hooks = (globalThis as any).__agentworkspace;
+    await Promise.all([hooks.setPat('devin-pat-3'), hooks.secretsSetOpenHands('oh-key-3')]);
+  });
+  expect(Object.keys(secrets()).sort()).toEqual(['devinPat', 'openhandsApiKey', 'version']);
+
+  await quit(app, profile);
 });

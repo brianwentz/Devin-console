@@ -4,7 +4,9 @@ import type { SessionPrLink } from './notifyModel';
 // unread (every PR starts unread, including ones on the first poll);
 // `dismissedAt !== null` hides it from the panel/badge for as long as the PR
 // stays open. Records are dropped when the URL leaves the open list, so a
-// reopened PR shows again.
+// reopened PR shows again — but only with `prune` (the caller passes false
+// while some provider has not listed its PRs yet this run, so an absent URL
+// proves nothing).
 export interface PrRecord {
   url: string;
   firstSeenAt: number;
@@ -16,9 +18,10 @@ export function reconcilePrRecords(
   records: readonly PrRecord[],
   open: readonly SessionPrLink[],
   now: number,
+  prune = true,
 ): PrRecord[] {
   const openUrls = new Set(open.map((pr) => pr.url));
-  const kept = records.filter((record) => openUrls.has(record.url));
+  const kept = prune ? records.filter((record) => openUrls.has(record.url)) : [...records];
   const known = new Set(kept.map((record) => record.url));
   const added = open
     .filter((pr) => !known.has(pr.url))

@@ -3,6 +3,7 @@ import type { AppNotification } from '../core/notificationModel';
 import type { CredentialEntry } from '../core/credentials';
 import {
   IpcChannels,
+  type CloudContextMenuRequest,
   type LocalContextMenuRequest,
   type LocalContextMenuResult,
   SurfaceSchema,
@@ -19,6 +20,9 @@ import {
   type ReleaseNotesReply,
   type LocalSessionSummary,
   type LocalStatePublic,
+  type OpenHandsApiKeyResult,
+  type OpenHandsContextMenuRequest,
+  type OpenHandsContextMenuResult,
   type ScopeSummary,
   type Settings,
   type SettingsCommitResult,
@@ -350,6 +354,37 @@ const api = {
   setPat: (pat: string) =>
     ipcRenderer.invoke(IpcChannels.secretsSetPat, { pat }) as Promise<SecretResult>,
   clearPat: () => ipcRenderer.invoke(IpcChannels.secretsClearPat) as Promise<SecretResult>,
+  // OpenHands API key: write-only from the shell; replies carry `{ ok }` only.
+  openhandsApiKeySet: (value: string) =>
+    ipcRenderer.invoke(IpcChannels.openhandsApiKeySet, { value }) as Promise<OpenHandsApiKeyResult>,
+  openhandsApiKeyClear: () =>
+    ipcRenderer.invoke(IpcChannels.openhandsApiKeyClear) as Promise<OpenHandsApiKeyResult>,
+  // OpenHands sidebar (ids only).
+  openhandsOpen: (id: string) => {
+    if (isString(id) && id.length >= 1 && id.length <= 128) {
+      ipcRenderer.send(IpcChannels.openhandsOpen, { id });
+    }
+  },
+  openhandsNewSession: () => ipcRenderer.send(IpcChannels.openhandsNewSession),
+  openhandsOpenHome: () => ipcRenderer.send(IpcChannels.openhandsOpenHome),
+  openhandsRefresh: () => ipcRenderer.send(IpcChannels.openhandsRefresh),
+  // Analytics -> OpenHands tab.
+  openhandsUsageVisible: (visible: boolean) =>
+    ipcRenderer.send(IpcChannels.openhandsUsageVisible, { visible: visible === true }),
+  openhandsUsageRefresh: () => ipcRenderer.invoke(IpcChannels.openhandsUsageRefresh) as Promise<null>,
+  openhandsRename: (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (isString(id) && id.length <= 128 && trimmed.length >= 1 && trimmed.length <= 200) {
+      ipcRenderer.send(IpcChannels.openhandsRename, { id, title: trimmed });
+    }
+  },
+  openhandsSessionReorder: (section: string, ids: string[]) => {
+    if (isString(section) && Array.isArray(ids)) {
+      ipcRenderer.send(IpcChannels.openhandsSessionReorder, { section, ids });
+    }
+  },
+  openhandsContextMenu: (request: OpenHandsContextMenuRequest) =>
+    ipcRenderer.invoke(IpcChannels.openhandsContextMenu, request) as Promise<OpenHandsContextMenuResult>,
   listPrs: () => ipcRenderer.invoke(IpcChannels.prsList) as Promise<SessionPr[]>,
   prsMarkRead: (url: string) => ipcRenderer.send(IpcChannels.prsMarkRead, { url }),
   prsMarkAllRead: () => ipcRenderer.send(IpcChannels.prsMarkAllRead),
@@ -432,13 +467,7 @@ const api = {
       ipcRenderer.send(IpcChannels.cloudCopyLink, { sessionId });
     }
   },
-  cloudContextMenu: (request: {
-    kind: 'session' | 'folder' | 'header';
-    sessionId?: string;
-    name?: string;
-    x: number;
-    y: number;
-  }) =>
+  cloudContextMenu: (request: CloudContextMenuRequest) =>
     ipcRenderer.invoke(IpcChannels.cloudContextMenu, request) as Promise<{
       action: 'rename' | 'new-folder' | null;
     }>,

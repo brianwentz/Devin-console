@@ -8,7 +8,7 @@ import {
   IpcChannels,
 } from '../shared/ipc';
 import { guardedOn, hostedHandle, hostedOn } from './ipcGuard';
-import { cloudViews } from './cloudViews';
+import { allPoolViews, pools } from './cloudKit/pools';
 import { log } from './log';
 import { fixtureOrigins, state, testMode } from './state';
 import { applyLayout, lowerShell, notifyShell, overlayOpen, raiseShell } from './window';
@@ -92,17 +92,17 @@ export function disposeAutofill(): void {
 export function closeAutofillOverlaysForInactiveTabs(): void {
   // Only the ACTIVE pooled Cloud view counts as live — overlays anchored to a
   // pooled background view are stale.
-  const devin = state.devinView?.webContents ?? null;
-  const active = state.tabManager?.activeWebContents ?? null;
-  const stale = (sender: Electron.WebContents) => sender !== devin && sender !== active;
+  const live = new Set<Electron.WebContents | null>(
+    pools().map((p) => p.activeView()?.webContents ?? null),
+  );
+  live.add(state.tabManager?.activeWebContents ?? null);
+  const stale = (sender: Electron.WebContents) => !live.has(sender);
   if (state.autofillPicker && stale(state.autofillPicker.sender)) closeAutofillPicker();
   if (state.autofillPrompt && stale(state.autofillPrompt.sender)) closeAutofillPrompt();
 }
 
 function senderView(sender: Electron.WebContents): Electron.WebContentsView | null {
-  const pooled = cloudViews()
-    .views()
-    .find((v) => v.webContents === sender);
+  const pooled = allPoolViews().find((v) => v.webContents === sender);
   if (pooled) return pooled;
   return state.tabManager?.getViews().find((v) => v.webContents === sender) ?? null;
 }

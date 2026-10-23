@@ -13,7 +13,7 @@ export type PublicState = {
   sessionsOpen: boolean;
   sessionsWidth: number;
   sessionsCollapsed: boolean;
-  surface: 'cloud' | 'local' | 'settings' | 'analytics';
+  surface: string;
   currentSessionId: string | null;
   localSessionId: string | null;
   credentials: Array<{
@@ -154,6 +154,11 @@ export async function launchApp(
       // opt into faster polling.
       AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL: fixtures.devinUsageUrl,
       AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS: '600000',
+      // OpenHands: fixture base URL; slow default cadence - specs opt in.
+      AGENT_WORKSPACE_TEST_OPENHANDS_URL: fixtures.openhands.url,
+      AGENT_WORKSPACE_TEST_OPENHANDS_POLL_MS: '600000',
+      // The fixture's login-hop origin (link router authOrigins, test mode only).
+      AGENT_WORKSPACE_TEST_OPENHANDS_AUTH_ORIGIN: fixtures.openhands.authOrigin,
       AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE: join(
         process.cwd(),
         'tests/fixtures/claude-account.json',
