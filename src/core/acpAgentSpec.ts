@@ -28,6 +28,12 @@ export interface AcpAgentSpec {
   args: readonly string[];
   /** Fallback session-mode list for the default-mode select. */
   modes?: readonly AcpMode[];
+  /**
+   * Binary spawned on a remote (WSL) host when `resolveCommand` comes back
+   * null at spawn time — the probe can miss a CLI transiently. Only the
+   * pre-start presence check reports `missing-cli`; the spawn falls back.
+   */
+  defaultBinary?: string;
 }
 
 /** The argv to spawn, or null when nothing was resolved (pure). */
@@ -38,10 +44,22 @@ export function fullCommand(spec: Pick<AcpAgentSpec, 'args'>, resolved: AgentCom
   return 'full' in resolved ? [...base] : [...base, ...spec.args];
 }
 
+/**
+ * The argv a spawn uses: the resolved command, else `defaultBinary` + args,
+ * else null (pure).
+ */
+export function spawnCommand(
+  spec: Pick<AcpAgentSpec, 'args' | 'defaultBinary'>,
+  resolved: AgentCommand | null,
+): string[] | null {
+  return fullCommand(spec, resolved) ?? (spec.defaultBinary ? fullCommand(spec, [spec.defaultBinary]) : null);
+}
+
 /** Devin Local's static half; `createDevinSpec` (main) adds `resolveCommand`. */
 export const DEVIN_ACP_SPEC: Omit<AcpAgentSpec, 'resolveCommand'> = {
   providerId: 'devin-local',
   label: 'Devin Local',
   args: ['acp'],
   modes: DEVIN_LOCAL_MODES,
+  defaultBinary: 'devin',
 };

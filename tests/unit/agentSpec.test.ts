@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEVIN_ACP_SPEC, fullCommand, type AcpAgentSpec } from '../../src/core/acpAgentSpec';
+import { DEVIN_ACP_SPEC, fullCommand, spawnCommand, type AcpAgentSpec } from '../../src/core/acpAgentSpec';
 import { DEVIN_LOCAL_MODES } from '../../src/core/settingsDraft';
 
 const devinSpec: AcpAgentSpec = { ...DEVIN_ACP_SPEC, resolveCommand: async () => ['devin'] };
@@ -39,6 +39,14 @@ describe('AcpAgentSpec / fullCommand', () => {
     expect(fullCommand(missing, await missing.resolveCommand('wsl:Fake'))).toBeNull();
     expect(fullCommand(devinSpec, [])).toBeNull();
     expect(fullCommand(devinSpec, { full: [] })).toBeNull();
+  });
+
+  it('spawnCommand: resolved wins; null falls back to defaultBinary + args; no default → null', () => {
+    expect(DEVIN_ACP_SPEC.defaultBinary).toBe('devin');
+    expect(spawnCommand(devinSpec, ['/usr/bin/devin'])).toEqual(['/usr/bin/devin', 'acp']);
+    expect(spawnCommand(devinSpec, { full: ['node', 'x.cjs'] })).toEqual(['node', 'x.cjs']);
+    expect(spawnCommand(devinSpec, null)).toEqual(['devin', 'acp']);
+    expect(spawnCommand({ args: ['--acp'] }, null)).toBeNull();
   });
 
   it('does not mutate the resolved command or the spec args', () => {

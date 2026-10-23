@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -55,7 +55,7 @@ import {
 import type { LocalSessionSummary } from '../../shared/ipc';
 import { log } from '../log';
 import { hosts } from '../hosts';
-import { fullCommand, type AcpAgentSpec } from './agentSpec';
+import { fullCommand, spawnCommand, type AcpAgentSpec } from './agentSpec';
 import { getLocalState, replaceLocalState, update } from './localState';
 
 const INITIALIZE_TIMEOUT_MS = 60_000;
@@ -170,23 +170,8 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number, operation: st
   });
 }
 
-// Resolve the `devin` executable: explicit override, else PATH lookup via
-// `where` (Windows) / `which` (POSIX). Returns null when nothing is found.
-export function resolveDevinPath(override: string | null | undefined): string | null {
-  if (override) return existsSync(override) ? override : null;
-  const lookup = process.platform === 'win32' ? 'where.exe' : 'which';
-  try {
-    const result = spawnSync(lookup, ['devin'], { encoding: 'utf8', windowsHide: true });
-    if (result.status !== 0) return null;
-    const first = result.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-    return first && existsSync(first) ? first : null;
-  } catch {
-    return null;
-  }
-}
+// Moved to devinSpec.ts; re-exported for hosts/identity/terminalHost.
+export { resolveDevinPath } from './devinSpec';
 
 export interface DevinLocalHostOptions {
   userData: string;
@@ -456,9 +441,12 @@ export class DevinLocalHost {
       // Through `wsl.exe -d D --cd <linux ws> -e /usr/bin/env …` so the agent
       // runs inside the distro with the captured shell env.
       await hosts().shellEnv(execHost, { explicit: true });
-      const argv = fullCommand(this.spec, await this.spec.resolveCommand(execHost.id));
+      // ensureAgent is the missing-cli gate; restartAgent (terminal handoff)
+      // skips it, and a transient probe miss must not fail the spawn — fall
+      // back to the spec's default binary on the distro PATH.
+      const argv = spawnCommand(this.spec, await this.spec.resolveCommand(execHost.id));
       if (!argv) {
-        // The probe lost the CLI since ensureAgent checked it.
+        // Only a spec without a defaultBinary gets here.
         const message = `${execHost.distro}: ${INSTALL_GUIDANCE}`;
         handle.ready = null;
         update((state) => upsertAgent(state, workspace, { status: 'missing-cli', error: message }));

@@ -807,7 +807,8 @@ variable that selects it.
 - Adding a local ACP provider (A3): the Devin Local host (`DevinLocalHost`, `src/main/local/acpHost.ts`) takes an `AcpAgentSpec`
   (`src/core/acpAgentSpec.ts`, re-exported by `src/main/local/agentSpec.ts`): `providerId`, `label`, `args` (appended to the resolved binary), optional
   `modes`, and `resolveCommand(host)` → a binary argv, `{ full }` (a complete argv used verbatim — the test-mode `AGENT_WORKSPACE_LOCAL_AGENT_CMD`
-  override) or null (`missing-cli`); pure `fullCommand(spec, resolved)` builds the spawn argv. `createDevinSpec` (`src/main/local/devinSpec.ts`) is the
+  override) or null (`missing-cli`, gated in `ensureAgent` only); pure `fullCommand(spec, resolved)` builds the argv, and the WSL spawn uses
+  `spawnCommand` — a null resolve falls back to `defaultBinary` (`'devin'`) + args, so a transient probe miss never fails a restart. `createDevinSpec` (`src/main/local/devinSpec.ts`) is the
   only spec: local = test override → `local.devinPath` → PATH, resolved once when the host starts; a WSL host = the probe's CLI path
   (`hosts.overrides[id].devinPath` wins inside the probe), read after `shellEnv(host, { explicit: true })` on each agent start. A new agent = a new spec,
   its descriptor and a `PROVIDER_UI` entry; spawn the external CLI (never fork Node), and the WSL routing / no-Windows-side-fs-on-`\\wsl.localhost` rules apply.
