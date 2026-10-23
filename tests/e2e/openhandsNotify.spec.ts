@@ -211,3 +211,37 @@ test('an OpenHands list before the first Devin poll keeps Devin PR records; prun
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   }
 });
+
+// Final review fix: a tracked OpenHands PR that is merged leaves the PR panel
+// and the badge without waiting for the conversation to go away.
+test('a merged OpenHands PR leaves the PR panel and the badge', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohn-'));
+  const logFile = join(profile, 'events.jsonl');
+  fixtures.openhands.setConversations([conv(ID1, 'running', '2026-10-20T10:00:00Z', { pr_number: [7] })]);
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+  });
+  const row = `document.querySelector('#prsPanel [data-pr-url="${PR7}"]') !== null`;
+  try {
+    await expect
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
+      .toBe(true);
+    await hook(app, 'prTitlesSeed', PR7, { title: 'Ship it', state: 'open' });
+    const page = await shellPage(app);
+    await page.locator('#openhandsButton').click();
+    await expect.poll(async () => (await state(app)).surface).toBe('openhands');
+    await hook(app, 'openhandsRefresh');
+    await expect.poll(async () => (await state(app)).notifications.openPrCount).toBe(1);
+    await evaluateInShell(app, `window.agentworkspace.prsPanel(true)`);
+    await expect.poll(async () => evaluateInShell(app, row)).toBe(true);
+
+    await hook(app, 'prTitlesSeed', PR7, { title: 'Ship it', state: 'merged' });
+    await hook(app, 'openhandsRefresh');
+    await expect.poll(async () => evaluateInShell(app, row)).toBe(false);
+    await expect.poll(async () => (await state(app)).notifications.openPrCount).toBe(0);
+  } finally {
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+});

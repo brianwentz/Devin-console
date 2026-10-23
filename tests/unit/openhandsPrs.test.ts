@@ -224,3 +224,68 @@ describe('openhands PR tracker: listed()', () => {
     expect(tracker.listed()).toBe(false);
   });
 });
+
+describe('openhands PR tracker: state refresh', () => {
+  it('every list re-ensures the tracked non-final PR urls', () => {
+    const states = new Map<string, string>();
+    const ensureStates = vi.fn();
+    const tracker = createOpenHandsPrTracker({
+      fetch: vi.fn(async () => ok({ items: [] })),
+      autoOpen: vi.fn(),
+      onChange: vi.fn(),
+      log: vi.fn(),
+      stateOf: (url) => states.get(url) ?? null,
+      ensureStates,
+    });
+    tracker.onRows([row(A, [pr(1), pr(2)]), row(B, [pr(3)])]);
+    expect(ensureStates).toHaveBeenLastCalledWith(expect.arrayContaining([pr(1), pr(2), pr(3)]));
+    expect(ensureStates.mock.calls.at(-1)![0]).toHaveLength(3);
+    // No row change, still re-ensured; a merged URL is no longer asked for.
+    states.set(pr(2), 'merged');
+    tracker.onRows([row(A, [pr(1), pr(2)]), row(B, [pr(3)])]);
+    expect(ensureStates).toHaveBeenCalledTimes(2);
+    expect(ensureStates.mock.calls.at(-1)![0]).toEqual(expect.arrayContaining([pr(1), pr(3)]));
+    expect(ensureStates.mock.calls.at(-1)![0]).not.toContain(pr(2));
+  });
+
+  it('a state flip to merged drops the url from the open list; refreshStates re-ensures on demand', () => {
+    const states = new Map<string, string>();
+    const ensureStates = vi.fn();
+    const tracker = createOpenHandsPrTracker({
+      fetch: vi.fn(async () => ok({ items: [] })),
+      autoOpen: vi.fn(),
+      onChange: vi.fn(),
+      log: vi.fn(),
+      stateOf: (url) => states.get(url) ?? null,
+      ensureStates,
+    });
+    tracker.onRows([row(A, [pr(1)])]);
+    expect(tracker.openPullRequests().map((p) => p.url)).toEqual([pr(1)]);
+    states.set(pr(1), 'merged');
+    expect(tracker.openPullRequests()).toEqual([]);
+    expect(tracker.hasPullRequests()).toBe(true);
+    ensureStates.mockClear();
+    tracker.refreshStates();
+    expect(ensureStates).not.toHaveBeenCalled();
+    states.delete(pr(1));
+    tracker.refreshStates();
+    expect(ensureStates).toHaveBeenCalledWith([pr(1)]);
+  });
+
+  it('a stopped tracker asks for nothing', () => {
+    const ensureStates = vi.fn();
+    const tracker = createOpenHandsPrTracker({
+      fetch: vi.fn(async () => ok({ items: [] })),
+      autoOpen: vi.fn(),
+      onChange: vi.fn(),
+      log: vi.fn(),
+      ensureStates,
+    });
+    tracker.onRows([row(A, [pr(1)])]);
+    ensureStates.mockClear();
+    tracker.stop();
+    tracker.refreshStates();
+    tracker.onRows([row(A, [pr(1)])]);
+    expect(ensureStates).not.toHaveBeenCalled();
+  });
+});

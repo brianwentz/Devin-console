@@ -29,6 +29,8 @@ export interface OpenHandsPrTrackerDeps {
   onChange(added: string[]): void;
   /** Known PR state (prTitles cache); merged/closed are left out. */
   stateOf?(url: string): string | null;
+  /** Re-fetch the states of non-final tracked PR URLs (the prTitles cache gates how often). */
+  ensureStates?(urls: string[]): void;
   log(event: string, detail: Record<string, unknown>): void;
 }
 
@@ -36,6 +38,10 @@ export interface OpenHandsPrTracker {
   onRows(rows: readonly OhRow[]): void;
   onFinished(id: string): Promise<void>;
   openPullRequests(): SessionPrLink[];
+  /** Re-ensure the state of every tracked non-final PR (after a list, PR panel open). */
+  refreshStates(): void;
+  /** Any PR URL (open or final) is tracked. */
+  hasPullRequests(): boolean;
   /** The first rows arrived (and the tracker is not stopped). */
   listed(): boolean;
   stop(): void;
@@ -88,6 +94,33 @@ export function createOpenHandsPrTracker(deps: OpenHandsPrTrackerDeps): OpenHand
     if (openTabs) for (const url of added) deps.autoOpen(url, id);
   };
 
+  const listOpen = (): SessionPrLink[] => {
+    const out: SessionPrLink[] = [];
+    const ordered = [...conversations.entries()].sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+    for (const [id, conv] of ordered) {
+      for (const url of [...conv.urls].reverse()) {
+        const prState = deps.stateOf?.(url) ?? null;
+        if (prState === 'merged' || prState === 'closed') continue;
+        out.push({
+          sessionId: id,
+          sessionTitle: conv.title.trim() || UNTITLED,
+          ref: prTitle(url),
+          url,
+          state: prState,
+          source: 'openhands',
+        });
+      }
+    }
+    return out;
+  };
+
+  const openUrls = (): string[] => [...new Set(listOpen().map((pr) => pr.url))];
+  const refreshStates = (): void => {
+    if (stopped) return;
+    const urls = openUrls();
+    if (urls.length > 0) deps.ensureStates?.(urls);
+  };
+
   return {
     onRows(rows) {
       if (stopped) return;
@@ -118,6 +151,7 @@ export function createOpenHandsPrTracker(deps: OpenHandsPrTrackerDeps): OpenHand
         if (conv.urls.size > 0) changed = true;
       }
       if (changed) deps.onChange(added);
+      refreshStates();
     },
 
     async onFinished(id) {
@@ -156,24 +190,11 @@ export function createOpenHandsPrTracker(deps: OpenHandsPrTrackerDeps): OpenHand
       }
     },
 
-    openPullRequests() {
-      const out: SessionPrLink[] = [];
-      const ordered = [...conversations.entries()].sort((a, b) => b[1].updatedAt - a[1].updatedAt);
-      for (const [id, conv] of ordered) {
-        for (const url of [...conv.urls].reverse()) {
-          const prState = deps.stateOf?.(url) ?? null;
-          if (prState === 'merged' || prState === 'closed') continue;
-          out.push({
-            sessionId: id,
-            sessionTitle: conv.title.trim() || UNTITLED,
-            ref: prTitle(url),
-            url,
-            state: prState,
-            source: 'openhands',
-          });
-        }
-      }
-      return out;
+    openPullRequests: () => listOpen(),
+    refreshStates,
+    hasPullRequests() {
+      for (const conv of conversations.values()) if (conv.urls.size > 0) return true;
+      return false;
     },
 
     listed: () => baselined && !stopped,

@@ -90,6 +90,10 @@ const unrefTimer = (fn: () => void, ms: number) => {
 // PR panel + auto-open: one tracker per base URL (built with its source), so a
 // base change drops the old origin's PRs and starts a fresh baseline.
 let prTracker: OpenHandsPrTracker | null = null;
+let unsubscribePrTitles: (() => void) | null = null;
+// Same cadence as Claude's refreshPrStates: a tracked non-final PR's state is
+// re-fetched at most every 10 min (the prTitles cache gates the rest).
+const PR_STATE_REFRESH_MS = 10 * 60_000;
 
 function reconcilePrs(): void {
   try {
@@ -120,11 +124,18 @@ function build(base: string) {
       reconcilePrs();
     },
     stateOf: (url) => prTitles.getInfo(url)?.state ?? null,
+    ensureStates: (urls) => prTitles.ensure(urls, { maxAgeMs: PR_STATE_REFRESH_MS }),
     log: (event, detail) => log('shell', event, { detail }),
   });
   const previous = prTracker;
   previous?.stop();
   prTracker = tracker;
+  // A state landing in the title cache (merged/closed) drops the PR from the
+  // panel + badge; prStore.reconcile honours the prsKnown pruning gate.
+  unsubscribePrTitles?.();
+  unsubscribePrTitles = prTitles.addChangeListener(() => {
+    if (prTracker === tracker && tracker.hasPullRequests()) reconcilePrs();
+  });
   if (previous) reconcilePrs();
   const source = createOpenHandsSource({
     fetch: fetcher,
@@ -232,7 +243,12 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
     setOpenHandsUsageSource(usageState);
     void core.start();
   },
+  onPrPanelOpen() {
+    prTracker?.refreshStates();
+  },
   dispose: () => {
+    unsubscribePrTitles?.();
+    unsubscribePrTitles = null;
     prTracker?.stop();
     return core.dispose();
   },
