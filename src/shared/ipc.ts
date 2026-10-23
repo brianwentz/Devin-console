@@ -65,6 +65,7 @@ export const IpcChannels = {
   tabsListScopes: 'tabs:listScopes',
   tabsReloadMenu: 'tabs:reloadMenu',
   tabsTabMenu: 'tabs:tabMenu',
+  tabsOpenUserUrl: 'tabs:openUserUrl',
   navAction: 'nav:action',
   surfaceSet: 'surface:set',
   linkOpen: 'link:open',
@@ -1135,6 +1136,12 @@ export const CredentialRevealSchema = z.object({ id: z.string().min(1) });
 
 export const TabsCloseScopeArg = z.object({ scope: z.string() });
 export const TabsReloadMenuArg = z.object({ x: z.number(), y: z.number() });
+export const OpenUserUrlArg = z.object({
+  url: z.string().max(8192),
+  source: z.enum(['drop', 'typed', 'favorite']),
+  target: z.enum(['new', 'current']),
+});
+export type OpenUserUrlReply = { ok: true } | { ok: false; reason: string };
 export const TabsTabMenuArg = z.object({ id: z.string(), x: z.number(), y: z.number() });
 export interface ScopeSummary {
   scope: string;

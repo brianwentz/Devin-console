@@ -10,6 +10,8 @@ import {
 } from '../core/linkRouter';
 import { compileLinkRules, matchLinkRule, type CompiledRule } from '../core/linkRules';
 import type { LinkRule } from '../shared/ipc';
+import { normalizeUserUrl } from '../core/userUrl';
+import type { OpenUserUrlReply } from '../shared/ipc';
 import { log } from './log';
 import { allowExternalEnabled } from './settings';
 import { fixtureOrigins, state, testMode, type ViewName } from './state';
@@ -182,6 +184,38 @@ export function applyDecision(
       break;
   }
   return result ?? decision;
+}
+
+// Single entry point for a URL the user supplied (address bar, drop, favorite).
+// Devin/provider URLs load in their own view like a shell link; everything else
+// — including URLs a link would send to the system browser — becomes a pane tab.
+export function openUserUrl(
+  rawUrl: string,
+  source: 'drop' | 'typed' | 'favorite',
+  target: 'new' | 'current',
+): OpenUserUrlReply {
+  const normalized = normalizeUserUrl(rawUrl);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason };
+  const url = normalized.url;
+  const kind = routeUrl(url, routeContext());
+  if (kind === 'deny' || kind === 'mailto') return { ok: false, reason: 'scheme' };
+  log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
+
+  if (kind === 'devin' || kind === 'provider') {
+    applyDecision(url, 'shell', 'tab-user-open', 'navigate');
+    return { ok: true };
+  }
+
+  setPaneOpen(true, 'user-url');
+  const manager = state.tabManager;
+  if (!manager) return { ok: false, reason: 'unavailable' };
+  if (target === 'current' && manager.navigateActive(url)) {
+    applyLayout();
+    return { ok: true };
+  }
+  manager.open(url, { originSessionId: manager.currentScope });
+  applyLayout();
+  return { ok: true };
 }
 
 function popupDisposition(details: Electron.HandlerDetails): RouteDisposition {

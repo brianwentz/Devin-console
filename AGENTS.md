@@ -307,6 +307,10 @@ variable that selects it.
   does not composite and whites the window, so the overlay raise there is opaque).
 
 ### GitHub tabs
+- `tabs:openUserUrl` (guardedHandle, `OpenUserUrlArg {url, source: drop|typed|favorite, target: new|current}`) is the one entry point for user-supplied URLs:
+  `normalizeUserUrl` (`src/core/userUrl.ts`: bare hosts get https, localhost/IP literals http, non-http(s) schemes rejected) then `openUserUrl` in `src/main/routing.ts`.
+  Devin/provider URLs go through `applyDecision` (their own view); every other kind — including `external` — opens a pane tab (`target:'current'` →
+  `TabManager.navigateActive`); `deny`/`mailto` → `{ok:false, reason:'scheme'}`. Logs `tab-user-open`.
 - `tabs-preload` event: on scope switch/launch the visible scope's discarded tabs are background-loaded (150 ms stagger); the live cap
   (`tabs.maxLiveTabs`) and idle discard apply to hidden scopes only — the visible scope's tabs are exempt.
 
@@ -1038,6 +1042,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `cloudViewsInfo()` / `cloudShow(id)` / `cloudPrefetchHook(id)` / `cloudIdleSweep()` / `setCloudKeepAliveMs(ms)` | Cloud view pool inspection and control. |
 | `getAnalyticsBounds` | Analytics view bounds. |
 | `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume` | Updater simulation (no network in test mode). |
+| `openUserUrl(url, source, target)` | Calls `routing.ts openUserUrl` (the `tabs:openUserUrl` handler's body); returns `{ok:true}` or `{ok:false, reason}`. |
 | `localDeleteSession` / `localDeleteWorkspaceSessions` | Devin Local single / bulk delete. |
 | `localMenuItems` / `localMenuClick(id)` | Local sidebar context-menu descriptions (test mode describes instead of popping), resolve the open `local:contextMenu` invoke by item id → `{action}`. |
 | `claudeState` / `claudeRefresh` / `claudeSelect` | Claude sidebar snapshot / refresh / select a session. |
@@ -1088,6 +1093,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `window-quiet` | `{ opacity: 0, skipTaskbar: true }` — test-mode quiet launch applied. |
 | `window-activate` | `{ reason, quiet }` — window-bring-forward request via `activateWindow`; `quiet: true` means it showed without activating. |
 | `tabs-preload` | Visible scope's discarded tabs background-loaded. |
+| `tab-user-open` | `{ source: 'drop'\|'typed'\|'favorite', target: 'new'\|'current', kind }` + the url — `tabs:openUserUrl` accepted a user-supplied URL (`kind` = the `routeUrl` kind). |
 | `rule-tab` / `rule-tab-background` | `{ruleId, ruleKind}` — never the pattern. |
 | `cloud-token` | fixed `reason` ('view-not-ready'\|'no-devindebug'\|'login-required'\|'timeout'\|'error'). |
 | `cloud-connect` | `{ok:false, reason:'timeout'}` when CONNECTING for 20 s. |

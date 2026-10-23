@@ -34,6 +34,7 @@ import {
   TabsCloseScopeArg,
   TabsReloadMenuArg,
   TabsTabMenuArg,
+  OpenUserUrlArg,
   type Settings,
   type SettingsCommitResult,
   type SettingsPatch,
@@ -49,7 +50,7 @@ import { log } from './log';
 import { badgeIconSize, notificationStore } from './notifications';
 import { notifier, openNotification, openPr, openPrs } from './notifier';
 import { prStore } from './prs';
-import { handleLink } from './routing';
+import { handleLink, openUserUrl } from './routing';
 import { checkForUpdatesNow, hasDownloadedUpdate, installUpdate, releaseNotesReply } from './updater';
 import { historyAction, navigationTarget } from './shortcuts';
 import { BadgeRenderedSchema, CloudContextMenuArg, CloudCopyLinkArg, CloudFolderCreateArg, CloudFolderDeleteArg, CloudFolderRenameArg, CloudFolderReorderArg, CloudNewSessionArg, CloudSessionArchiveArg, CloudSessionMoveArg, CloudShowArchivedArg, DialogPickFolderArg, SessionReorderArg, NotificationIdArg, NotificationPanelArg, PrOpenArg, PrPanelArg, PrUrlArg, UpdateCheckArg } from '../shared/ipc';
@@ -214,6 +215,11 @@ export function setupIpc(): void {
       x: Math.round(parsed.data.x),
       y: Math.round(parsed.data.y),
     });
+  });
+  guardedHandle(IpcChannels.tabsOpenUserUrl, (_event, payload: unknown) => {
+    const parsed = OpenUserUrlArg.safeParse(payload);
+    if (!parsed.success) return { ok: false, reason: 'invalid' };
+    return openUserUrl(parsed.data.url, parsed.data.source, parsed.data.target);
   });
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);

@@ -283,6 +283,14 @@ const api = {
   closeScope: (scope: string) => {
     if (typeof scope === 'string') ipcRenderer.send(IpcChannels.tabsCloseScope, { scope });
   },
+  openUserUrl: (arg: {
+    url: string;
+    source: 'drop' | 'typed' | 'favorite';
+    target: 'new' | 'current';
+  }) =>
+    ipcRenderer.invoke(IpcChannels.tabsOpenUserUrl, arg) as Promise<
+      { ok: true } | { ok: false; reason: string }
+    >,
   openReloadMenu: (x: number, y: number) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {
       ipcRenderer.send(IpcChannels.tabsReloadMenu, { x, y });

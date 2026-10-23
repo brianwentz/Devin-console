@@ -20,7 +20,7 @@ import {
   updateOnResume,
   updateOnWindowFocus,
 } from './updater';
-import { handleLink } from './routing';
+import { handleLink, openUserUrl } from './routing';
 import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
@@ -285,6 +285,8 @@ export function registerTestHooks(): void {
       simulateUpdateAvailable: (version: string) => updateAvailable(version),
       simulateUpdateFocus: () => updateOnWindowFocus(),
       simulateUpdateResume: () => updateOnResume(),
+      openUserUrl: (url: string, source: 'drop' | 'typed' | 'favorite', target: 'new' | 'current') =>
+        openUserUrl(url, source, target),
       panelOpen: () => state.notificationsPanelOpen,
       // Service-user identity resolution (never the raw user id).
       identity: () => identityResolver().current(),

@@ -796,6 +796,23 @@ export class TabManager {
     this.onChange();
   }
 
+  // Point the active tab at `url` (address bar / favorites with target 'current').
+  // A discarded tab only records the url; its view loads it when recreated.
+  navigateActive(url: string): boolean {
+    const id = this.activeId;
+    const entry = id ? this.entries.get(id) : undefined;
+    if (!id || !entry) return false;
+    this.updateUrl(id, url);
+    entry.loading = true;
+    const contents = entry.view?.webContents;
+    if (contents && !contents.isDestroyed()) {
+      contents.loadURL(url).catch((error: unknown) => {
+        this.log('load-error', { id, message: String(error) }, url);
+      });
+    }
+    return true;
+  }
+
   updateUrl(tabId: string, url: string): void {
     const entry = this.entries.get(tabId);
     if (!entry) return;
