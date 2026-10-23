@@ -1,6 +1,6 @@
 {
   "name": "agent-workspace",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Agent Workspace desktop client",
   "author": "brianwentz",
