@@ -5,11 +5,19 @@ import { effectiveBaseUrl } from '../core/openhands';
 import { OPENHANDS_DEFAULT_BASE_URL, type OpenHandsShellState } from '../shared/ipc';
 import { state, testMode } from './state';
 
-// Settings value, unless AGENT_WORKSPACE_TEST_OPENHANDS_URL (test mode only)
-// overrides it in memory — never written back to settings.json.
+// Settings value, unless AGENT_WORKSPACE_TEST_OPENHANDS_URL / _URL_MAP (test
+// mode only) override it in memory - never written back to settings.json.
+// The single place the effective base is computed.
+export function openhandsEffectiveBase(saved: string | undefined): string {
+  return effectiveBaseUrl(
+    saved ?? OPENHANDS_DEFAULT_BASE_URL,
+    testMode ? process.env.AGENT_WORKSPACE_TEST_OPENHANDS_URL : undefined,
+    testMode ? process.env.AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP : undefined,
+  );
+}
+
 export function openhandsBaseUrl(): string {
-  const saved = state.settings?.current.openhands.baseUrl ?? OPENHANDS_DEFAULT_BASE_URL;
-  return effectiveBaseUrl(saved, testMode ? process.env.AGENT_WORKSPACE_TEST_OPENHANDS_URL : undefined);
+  return openhandsEffectiveBase(state.settings?.current.openhands.baseUrl);
 }
 
 const INITIAL_STATE: OpenHandsShellState = {
@@ -28,13 +36,18 @@ export function setOpenHandsSnapshotSource(fn: (() => OpenHandsShellState | null
   snapshotSource = fn;
 }
 
-export function openhandsSnapshot(): OpenHandsShellState {
-  const live = snapshotSource?.();
-  if (live) return live;
+// Static idle state, optionally carrying a runtime-local error (rename/delete
+// with no gate open) so it is visible before any controller exists.
+export function idleOpenHandsState(lastError: OpenHandsShellState['lastError'] = null): OpenHandsShellState {
   return {
     ...INITIAL_STATE,
     sessions: [],
     folders: [],
+    lastError,
     capabilities: { ...INITIAL_STATE.capabilities },
   };
+}
+
+export function openhandsSnapshot(): OpenHandsShellState {
+  return snapshotSource?.() ?? idleOpenHandsState();
 }

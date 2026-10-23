@@ -16,7 +16,7 @@ import { log } from '../log';
 import { openhandsBaseUrl } from '../openhandsConfig';
 import { attachRouting } from '../routing';
 import { state } from '../state';
-import { applyLayout, focusContents } from '../window';
+import { applyLayout, focusContents, notifyShell } from '../window';
 
 export const OPENHANDS_PROVIDER_ID = 'openhands';
 export const OPENHANDS_PARTITION = 'persist:openhands';
@@ -84,13 +84,34 @@ export function openhandsOpenSession(id: string): boolean {
   return true;
 }
 
+// A conversation was deleted on the server: drop its pooled view and any
+// claim that it is the open conversation. When it was the active view the
+// home page takes over first (no reload — it shows whatever it had).
+export function openhandsForgetSession(id: string): void {
+  const pool = poolFor(OPENHANDS_PROVIDER_ID);
+  if (pool?.activeKey() === id) pool.show(HOME_KEY, openhandsBaseUrl());
+  if (state.openhandsSessionId === id) state.openhandsSessionId = null;
+  pool?.remove(id);
+  applyLayout();
+  notifyShell();
+}
+
 // Base URL changed: the pooled pages belong to the old origin. Nothing was
-// opened yet (no views) -> nothing to reset, and no request is made.
+// opened yet (no views) -> nothing to reset, and no request is made. On the
+// OpenHands surface home reloads on the new origin; elsewhere every view is
+// dropped (no off-surface request) and re-entering the surface opens home.
 export function resetOpenHandsViews(): void {
   const pool = poolFor(OPENHANDS_PROVIDER_ID);
   if (!pool || pool.views().length === 0) return;
   state.openhandsSessionId = null;
-  pool.reset(openhandsBaseUrl());
+  if (state.surface === 'openhands') {
+    pool.reset(openhandsBaseUrl());
+  } else {
+    pool.dispose();
+    applyLayout();
+  }
+  // dispose() stopped the idle sweep; show() would not restart it.
+  pool.applyLimits();
   log('shell', 'openhands-views-reset', { detail: {} });
 }
 

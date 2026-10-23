@@ -19,7 +19,8 @@ export interface CoreController {
   start(): Promise<void>;
   stop(): void;
   refresh(reason: RefreshReason): Promise<void>;
-  mutate(op: CloudMutation): Promise<void>;
+  /** Resolves true when the server accepted the mutation. */
+  mutate(op: CloudMutation): Promise<boolean>;
   snapshot(): CloudState;
   /** Resolves when queued cache writes have settled. */
   drain(): Promise<void>;
@@ -72,6 +73,8 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
   let disposed = false;
   let opened = false;
   let surfaceEntered = false;
+  // Rename/delete asked for while no gate is open: surfaced as lastError.
+  let local: { op: 'rename' | 'delete'; message: string } | null = null;
 
   const clearTimer = (): void => {
     if (timer !== null) deps.clearTimer(timer);
@@ -116,6 +119,7 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
   const open = (): void => {
     if (opened || disposed || !started) return;
     opened = true;
+    local = null;
     startActive();
   };
 
@@ -178,11 +182,20 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
     snapshot(): { state: CloudState; connection: OpenHandsConnection } | null {
       return active ? { state: active.controller.snapshot(), connection: active.source.connection() } : null;
     },
-    /** One rename/delete on the active source; false when no gate is open. */
+    /** One rename/delete on the active source; true only when the server accepted it. */
     async mutate(op: CloudMutation): Promise<boolean> {
-      if (disposed || !active) return false;
-      await active.controller.mutate(op);
-      return true;
+      if (disposed || !active) {
+        local = { op: op.op, message: 'not-connected' };
+        deps.onChange();
+        return false;
+      }
+      const ok = await active.controller.mutate(op);
+      if (ok) local = null;
+      return ok;
+    },
+    /** Error of a mutation refused because no gate is open (null otherwise). */
+    localError(): { op: 'rename' | 'delete'; message: string } | null {
+      return local;
     },
     /** Test hook: open the gate, force a full list. */
     async forceRefresh(): Promise<void> {

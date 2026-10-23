@@ -5,6 +5,7 @@ import {
   conversationIdFromUrl,
   conversationUrl,
   effectiveBaseUrl,
+  parseUrlAliases,
   listAllPages,
   mapStatus,
   mergeRows,
@@ -272,5 +273,29 @@ describe('effectiveBaseUrl (AGENT_WORKSPACE_TEST_OPENHANDS_URL)', () => {
   it('ignores a non-localhost http or invalid override', () => {
     expect(effectiveBaseUrl(saved, 'http://evil.test')).toBe(saved);
     expect(effectiveBaseUrl(saved, 'not a url')).toBe(saved);
+  });
+});
+
+describe('AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP', () => {
+  it('parses https=target pairs, normalised, skipping junk', () => {
+    const map = parseUrlAliases(
+      'https://alt.test/=http://127.0.0.1:4000/, junk ,https://b.test=https://c.test/x/,http://nothttps.test=http://127.0.0.1:1,https://e.test=http://evil.test',
+    );
+    expect([...map]).toEqual([
+      ['https://alt.test', 'http://127.0.0.1:4000'],
+      ['https://b.test', 'https://c.test/x'],
+    ]);
+    expect(parseUrlAliases(undefined).size).toBe(0);
+    expect(parseUrlAliases('').size).toBe(0);
+  });
+  it('maps a matching saved URL, winning over the plain override', () => {
+    const map = 'https://alt.test=http://127.0.0.1:4000';
+    expect(effectiveBaseUrl('https://alt.test/', 'http://127.0.0.1:1', map)).toBe('http://127.0.0.1:4000');
+    expect(effectiveBaseUrl('https://alt.test', undefined, map)).toBe('http://127.0.0.1:4000');
+  });
+  it('falls through to the override / saved value on no match', () => {
+    const map = 'https://alt.test=http://127.0.0.1:4000';
+    expect(effectiveBaseUrl('https://other.test', 'http://127.0.0.1:1', map)).toBe('http://127.0.0.1:1');
+    expect(effectiveBaseUrl('https://other.test', undefined, map)).toBe('https://other.test');
   });
 });

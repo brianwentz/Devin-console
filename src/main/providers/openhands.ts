@@ -8,7 +8,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, net, session, webContents } from 'electron';
 import { sanitizeMessage } from '../../core/devinApi';
-import { effectiveBaseUrl, isConversationId, normalizeBaseUrl } from '../../core/openhands';
+import { isConversationId, normalizeBaseUrl } from '../../core/openhands';
 import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
 import type { CloudCache } from '../../core/cloudCache';
@@ -22,8 +22,13 @@ import {
   type OhSettingsLike,
 } from '../openhands/runtimeCore';
 import { buildOpenHandsShellState, createOpenHandsSource } from '../openhands/source';
-import { openhandsShowHome, openhandsViews, resetOpenHandsViews } from '../openhands/views';
-import { setOpenHandsSnapshotSource } from '../openhandsConfig';
+import {
+  openhandsForgetSession,
+  openhandsShowHome,
+  openhandsViews,
+  resetOpenHandsViews,
+} from '../openhands/views';
+import { idleOpenHandsState, openhandsEffectiveBase, setOpenHandsSnapshotSource } from '../openhandsConfig';
 import { state, testMode } from '../state';
 import { notifyShell } from '../window';
 import type { ProviderRuntime } from './runtime';
@@ -34,11 +39,7 @@ let knownKey: string | null = null;
 
 const cachePath = (): string => join(app.getPath('userData'), 'openhands-cache.json');
 const tenantKey = (base: string): string => normalizeBaseUrl(base, true) ?? base;
-const effective = (saved: string | undefined): string =>
-  effectiveBaseUrl(
-    saved ?? 'https://app.all-hands.dev',
-    testMode ? process.env.AGENT_WORKSPACE_TEST_OPENHANDS_URL : undefined,
-  );
+const effective = openhandsEffectiveBase;
 
 async function readCacheFile(): Promise<unknown> {
   try {
@@ -107,14 +108,24 @@ const core = createOpenHandsRuntimeCore({
   log: (event, detail) => log('shell', event, { detail }),
 });
 
-function snapshot() {
+// Live controller state only (null before a gate opens).
+function liveSnapshot() {
   const live = core.snapshot();
   return live ? buildOpenHandsShellState(live.state, live.connection) : null;
 }
 
+// ShellState slice: the live state, or an idle one carrying the error of a
+// rename/delete that found no gate open.
+function snapshot() {
+  const live = liveSnapshot();
+  const local = core.localError();
+  if (live) return live.lastError || !local ? live : { ...live, lastError: local };
+  return local ? idleOpenHandsState(local) : null;
+}
+
 const menu = new OpenHandsContextMenu({
-  titleOf: (id) => snapshot()?.sessions.find((s) => s.id === id)?.title,
-  capabilities: () => snapshot()?.capabilities ?? { rename: false, delete: false },
+  titleOf: (id) => liveSnapshot()?.sessions.find((s) => s.id === id)?.title,
+  capabilities: () => liveSnapshot()?.capabilities ?? { rename: false, delete: false },
   baseUrl: () => effective(state.settings?.current.openhands.baseUrl),
   newSession: () => void openhandsRuntime.newSession?.(),
   refresh: () => void openhandsRefresh(),
@@ -182,7 +193,8 @@ export async function openhandsRename(id: string, title: string): Promise<void> 
 }
 export async function openhandsDelete(id: string): Promise<void> {
   if (!validId(id)) return;
-  await core.mutate({ op: 'delete', id });
+  // Only a server-accepted delete touches the pool; a failure changes nothing.
+  if (await core.mutate({ op: 'delete', id })) openhandsForgetSession(id);
 }
 // Sidebar refresh button.
 export function openhandsUiRefresh(): Promise<void> {

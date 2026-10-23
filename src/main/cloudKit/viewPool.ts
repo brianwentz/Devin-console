@@ -355,6 +355,23 @@ export class ViewPool {
     return true;
   }
 
+  // Key of the active view (null when none).
+  activeKey(): string | null {
+    return this.active?.key ?? null;
+  }
+
+  // Drops a non-active view at once, without the beforeunload negotiation —
+  // for a page whose content no longer exists (deleted conversation).
+  remove(key: string): boolean {
+    const entry = this.entries.get(key);
+    if (!entry || entry === this.active) return false;
+    this.entries.delete(key);
+    detachView(entry.view);
+    if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
+    this.log('cloud-view-discard', { kind: kindOf(key), sessionId: sid(key), reason: 'removed' });
+    return true;
+  }
+
   runIdleSweep(reason: 'idle' | 'switch' = 'idle'): void {
     const now = Date.now();
     const keys =

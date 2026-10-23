@@ -245,7 +245,7 @@ export function registerTestHooks(): void {
       // B1 T22: hosted views, menus and the recorded sidebar actions.
       openhandsViewsInfo: () => openhandsViewsInfo(),
       openhandsOpen: (id: string) => openhandsOpenSession(id),
-      // The base-URL-change path (the https-only setting cannot flip to the http fixture).
+      // Test-only shortcut for the base-URL-change reset (the real path: Settings + AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP).
       openhandsResetViews: () => resetOpenHandsViews(),
       openhandsMenuItems: () => openhandsMenuItems(),
       openhandsMenuClick: (id: string) => openhandsMenuClick(id), // returns {action}

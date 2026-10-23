@@ -38,18 +38,44 @@ export function normalizeBaseUrl(raw: string, allowHttp = false): string | null 
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-// The base URL the app talks to: a test-mode override (AGENT_WORKSPACE_TEST_OPENHANDS_URL,
-// http allowed for loopback only) wins over the saved setting; an unusable
-// override falls back to the saved value.
-export function effectiveBaseUrl(saved: string, override: string | undefined): string {
-  if (!override) return saved;
+// Loopback http or https target of a test-mode override/alias; null when unusable.
+function overrideTarget(raw: string): string | null {
   let loopback = false;
   try {
-    loopback = LOOPBACK_HOSTS.has(new URL(override.trim()).hostname);
+    loopback = LOOPBACK_HOSTS.has(new URL(raw.trim()).hostname);
   } catch {
-    return saved;
+    return null;
   }
-  return normalizeBaseUrl(override, loopback) ?? saved;
+  return normalizeBaseUrl(raw, loopback);
+}
+
+// AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP: comma-separated `https://from=<target>`
+// pairs (target https or loopback http). Settings only accept https, so a test
+// types the `from` value and the app talks to the fixture behind it.
+export function parseUrlAliases(raw: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const pair of (raw ?? '').split(',')) {
+    const at = pair.indexOf('=');
+    if (at < 0) continue;
+    const from = normalizeBaseUrl(pair.slice(0, at));
+    const to = overrideTarget(pair.slice(at + 1));
+    if (from && to) map.set(from, to);
+  }
+  return map;
+}
+
+// The base URL the app talks to: a test-mode alias of the saved value
+// (AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP) wins, then a test-mode override
+// (AGENT_WORKSPACE_TEST_OPENHANDS_URL, http allowed for loopback only), then
+// the saved setting; an unusable override falls back to the saved value.
+export function effectiveBaseUrl(saved: string, override: string | undefined, aliases?: string): string {
+  if (aliases) {
+    const savedKey = normalizeBaseUrl(saved);
+    const alias = savedKey ? parseUrlAliases(aliases).get(savedKey) : undefined;
+    if (alias) return alias;
+  }
+  if (!override) return saved;
+  return overrideTarget(override) ?? saved;
 }
 
 export function apiUrl(base: string, path: string, query?: Record<string, string | number | undefined>): string {

@@ -138,9 +138,11 @@ export class CloudSessionsController {
     return this.running;
   }
 
-  // Never rejects; a failure lands in `lastError`.
-  async mutate(op: CloudMutation): Promise<void> {
-    if (this.stopped) return;
+  // Never rejects; a failure lands in `lastError`. Resolves true only when the
+  // server accepted the mutation (the list refresh that follows is not awaited
+  // for the verdict).
+  async mutate(op: CloudMutation): Promise<boolean> {
+    if (this.stopped) return false;
     const caps = this.source.capabilities;
     const allowed = op.op === 'rename' ? caps.rename : caps.delete;
     if (!allowed || !this.source.mutate) {
@@ -153,19 +155,19 @@ export class CloudSessionsController {
       });
       this.lastError = { op: op.op, message: 'unsupported' };
       this.emit();
-      return;
+      return false;
     }
     let result: { ok: boolean; status: number };
     try {
       result = await this.source.mutate(op);
     } catch (error) {
-      if (this.stopped) return;
+      if (this.stopped) return false;
       this.opts.log('cloud-sessions-mutate', { provider: this.providerId, op: op.op, ok: false, status: 0 });
       this.lastError = { op: op.op, message: this.clean(error) };
       this.emit();
-      return;
+      return false;
     }
-    if (this.stopped) return;
+    if (this.stopped) return false;
     this.opts.log('cloud-sessions-mutate', {
       provider: this.providerId,
       op: op.op,
@@ -175,9 +177,10 @@ export class CloudSessionsController {
     if (!result.ok) {
       this.lastError = { op: op.op, message: `HTTP ${result.status}` };
       this.emit();
-      return;
+      return false;
     }
     await this.refresh('mutate');
+    return true;
   }
 
   // --- internals ----------------------------------------------------------

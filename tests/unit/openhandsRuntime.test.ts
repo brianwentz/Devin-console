@@ -9,7 +9,8 @@ import {
 
 const settings = (baseUrl: string, pollSeconds = 30): OhSettingsLike => ({ openhands: { baseUrl, pollSeconds } });
 
-function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean } = {}) {
+function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; mutateOk?: boolean } = {}) {
+  let changes = 0;
   let base = 'https://a.test';
   let poll = 30;
   const built: { base: string; source: CoreSource & { listing: boolean }; controller: CoreController }[] = [];
@@ -45,6 +46,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean } = {
         }),
         mutate: vi.fn(async (op: { op: string }) => {
           calls.push(`mutate:${op.op}`);
+          return opts.mutateOk ?? true;
         }),
       };
       built.push({ base: b, source, controller });
@@ -64,7 +66,9 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean } = {
       (h as { cleared: boolean }).cleared = true;
     },
     focused: () => opts.focused ?? true,
-    onChange: () => {},
+    onChange: () => {
+      changes++;
+    },
     log: () => {},
   });
   const live = () => timers.filter((t) => !t.cleared);
@@ -73,6 +77,7 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean } = {
     built,
     timers,
     calls,
+    changes: () => changes,
     live,
     setBase: (b: string) => (base = b),
     setPoll: (n: number) => (poll = n),
@@ -214,6 +219,31 @@ describe('mutate', () => {
     await h.core.start();
     await expect(h.core.mutate({ op: 'rename', id: 'x', title: 't' })).resolves.toBe(true);
     expect(h.calls).toContain('mutate:rename');
+  });
+
+  it('is false when the controller reports a failed mutation', async () => {
+    const h = harness({ key: true, mutateOk: false });
+    await h.core.start();
+    await expect(h.core.mutate({ op: 'delete', id: 'x' })).resolves.toBe(false);
+  });
+
+  it('with no gate open holds a not-connected error and notifies', async () => {
+    const h = harness();
+    await h.core.start();
+    expect(h.core.localError()).toBeNull();
+    await h.core.mutate({ op: 'rename', id: 'x', title: 't' });
+    expect(h.core.localError()).toEqual({ op: 'rename', message: 'not-connected' });
+    expect(h.changes()).toBe(1);
+    await h.core.mutate({ op: 'delete', id: 'x' });
+    expect(h.core.localError()).toEqual({ op: 'delete', message: 'not-connected' });
+  });
+
+  it('clears the not-connected error when the gate opens', async () => {
+    const h = harness();
+    await h.core.start();
+    await h.core.mutate({ op: 'delete', id: 'x' });
+    h.core.onSurfaceEnter();
+    expect(h.core.localError()).toBeNull();
   });
 });
 
