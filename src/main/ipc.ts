@@ -22,6 +22,10 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   OpenHandsApiKeySetArg,
+  OpenHandsContextMenuArg,
+  OpenHandsOpenArg,
+  OpenHandsRenameArg,
+  OpenHandsSessionReorderArg,
   SetPatArg,
   SurfaceArg,
   TabIdArg,
@@ -52,6 +56,12 @@ import { state } from './state';
 import { keepAliveMs } from './tabs';
 import { cloudSessions } from './cloudSessions';
 import { runtimeFor, runtimes } from './providers';
+import {
+  openhandsContextMenu,
+  openhandsRename,
+  openhandsUiRefresh,
+} from './providers/openhands';
+import { openhandsOpenSession, openhandsShowHome } from './openhands/views';
 import { cloudViews } from './cloudViews';
 import {
   applyLayout,
@@ -347,6 +357,38 @@ export function setupIpc(): void {
   guardedOn(IpcChannels.cloudNewSession, (_event, payload: unknown) => {
     const parsed = CloudNewSessionArg.safeParse(payload);
     if (parsed.success) cloudSessions().newSession(parsed.data.folder);
+  });
+  // OpenHands sidebar (ids only; titles are never logged).
+  guardedOn(IpcChannels.openhandsOpen, (_event, payload: unknown) => {
+    const parsed = OpenHandsOpenArg.safeParse(payload);
+    if (parsed.success) openhandsOpenSession(parsed.data.id);
+  });
+  guardedOn(IpcChannels.openhandsNewSession, () => void runtimeFor('openhands')?.newSession?.());
+  guardedOn(IpcChannels.openhandsOpenHome, () => openhandsShowHome({ focus: true }));
+  guardedOn(IpcChannels.openhandsRefresh, () => void openhandsUiRefresh());
+  guardedOn(IpcChannels.openhandsRename, (_event, payload: unknown) => {
+    const parsed = OpenHandsRenameArg.safeParse(payload);
+    if (parsed.success) void openhandsRename(parsed.data.id, parsed.data.title);
+  });
+  guardedOn(IpcChannels.openhandsSessionReorder, (_event, payload: unknown) => {
+    const parsed = OpenHandsSessionReorderArg.safeParse(payload);
+    if (!parsed.success) return;
+    const { section, ids } = parsed.data;
+    const current = state.settings?.current.openhands.sessionOrder ?? {};
+    state.settings?.merge({ openhands: { sessionOrder: { ...current, [section]: ids } } });
+    log('shell', 'openhands-session-reorder', {
+      detail: { section: section === 'recent' || section === 'pinned' ? section : 'repo', count: ids.length },
+    });
+  });
+  guardedHandle(IpcChannels.openhandsContextMenu, (_event, payload: unknown) => {
+    const parsed = OpenHandsContextMenuArg.safeParse(payload);
+    if (!parsed.success) return { action: null };
+    return openhandsContextMenu({
+      kind: parsed.data.kind,
+      x: parsed.data.x,
+      y: parsed.data.y,
+      ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
+    });
   });
   // Credentials: never log IPC payloads (they may carry secrets).
   guardedHandle(IpcChannels.credentialsList, () => state.credentials?.list() ?? []);

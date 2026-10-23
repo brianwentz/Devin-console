@@ -2,6 +2,7 @@
 // pool registers itself on first use (src/main/cloudViews.ts cloudViews()).
 
 import { providerBySurface } from '../../core/providers';
+import type { WebContentsView } from 'electron';
 import type { ViewPool } from './viewPool';
 
 const registry: ViewPool[] = [];
@@ -17,6 +18,11 @@ export function registerPool(pool: ViewPool): void {
 
 export function pools(): readonly ViewPool[] {
   return registry;
+}
+
+// Every pooled view across all providers (attached or not).
+export function allPoolViews(): WebContentsView[] {
+  return registry.flatMap((p) => p.views());
 }
 
 export function poolFor(providerId: string): ViewPool | undefined {

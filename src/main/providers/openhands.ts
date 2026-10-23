@@ -9,10 +9,12 @@ import { join } from 'node:path';
 import { app, net, session, webContents } from 'electron';
 import { sanitizeMessage } from '../../core/devinApi';
 import { effectiveBaseUrl, normalizeBaseUrl } from '../../core/openhands';
+import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
 import type { CloudCache } from '../../core/cloudCache';
 import { CloudSessionsController } from '../cloudKit/sessionsController';
 import { log } from '../log';
+import { OpenHandsContextMenu } from '../openhands/contextMenu';
 import { createOpenHandsFetch } from '../openhands/fetch';
 import {
   cacheMatchesTenant,
@@ -20,9 +22,10 @@ import {
   type OhSettingsLike,
 } from '../openhands/runtimeCore';
 import { buildOpenHandsShellState, createOpenHandsSource } from '../openhands/source';
+import { openhandsShowHome, openhandsViews, resetOpenHandsViews } from '../openhands/views';
 import { setOpenHandsSnapshotSource } from '../openhandsConfig';
 import { state, testMode } from '../state';
-import { applyLayout, notifyShell } from '../window';
+import { notifyShell } from '../window';
 import type { ProviderRuntime } from './runtime';
 
 const PARTITION = 'persist:openhands';
@@ -109,6 +112,15 @@ function snapshot() {
   return live ? buildOpenHandsShellState(live.state, live.connection) : null;
 }
 
+const menu = new OpenHandsContextMenu({
+  titleOf: (id) => snapshot()?.sessions.find((s) => s.id === id)?.title,
+  capabilities: () => snapshot()?.capabilities ?? { rename: false, delete: false },
+  baseUrl: () => effective(state.settings?.current.openhands.baseUrl),
+  newSession: () => void openhandsRuntime.newSession?.(),
+  refresh: () => void openhandsRefresh(),
+  remove: (id) => openhandsDelete(id),
+});
+
 export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   descriptor: providerById('openhands'),
   start() {
@@ -121,6 +133,16 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   },
   onSettingsChanged(previous, next) {
     void core.onSettingsChanged(previous, next);
+    // The pooled pages belong to the old origin: drop them (cache + source
+    // are handled by the core above).
+    if (effective(previous.openhands.baseUrl) !== effective(next.openhands.baseUrl)) {
+      resetOpenHandsViews();
+    }
+    const was = previous.openhands;
+    const now = next.openhands;
+    if (was.maxLiveViews !== now.maxLiveViews || was.keepAliveHours !== now.keepAliveHours) {
+      openhandsViews().applyLimits();
+    }
   },
   onCredentialsChanged() {
     void (async () => {
@@ -130,14 +152,38 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   },
   onSurfaceEnter() {
     core.onSurfaceEnter();
+    // The pool opens no view until the user is here (no request before that).
+    if (!openhandsViews().activeView()) openhandsShowHome();
   },
+  // Ctrl+N / the sidebar '+': the OpenHands home page (its composer).
+  showHome: () => openhandsShowHome({ reload: true, focus: true }),
   async newSession() {
-    state.surface = 'openhands';
-    applyLayout();
-    notifyShell();
+    menu.record('new-session');
     openhandsRuntime.showHome?.();
+    notifyShell();
   },
 };
+
+// Sidebar actions (src/main/ipc.ts) and test hooks.
+export function openhandsContextMenu(arg: OpenHandsContextMenuRequest) {
+  return menu.show(arg);
+}
+export const openhandsMenuItems = () => menu.menuItems();
+export const openhandsMenuClick = (id: string) => menu.clickItem(id);
+export const openhandsMutations = () => menu.mutationLog();
+
+export async function openhandsRename(id: string, title: string): Promise<void> {
+  menu.record('rename', { id });
+  await core.mutate({ op: 'rename', id, title });
+}
+export async function openhandsDelete(id: string): Promise<void> {
+  await core.mutate({ op: 'delete', id });
+}
+// Sidebar refresh button.
+export function openhandsUiRefresh(): Promise<void> {
+  menu.record('refresh');
+  return core.forceRefresh();
+}
 
 // Test hooks (src/main/testHooks.ts). Refresh opens the gate.
 export const openhandsState = snapshot;

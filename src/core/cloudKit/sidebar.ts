@@ -31,7 +31,7 @@ export function sidebarListData<
       return {
         ...data,
         folders: [],
-        sessions: visible.map((s) => ({ ...s, folder: s.section ?? null })),
+        sessions: visible.map((s) => ({ ...s, folder: s.section || null })),
       };
     case 'none':
       return {

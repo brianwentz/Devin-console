@@ -258,3 +258,124 @@ export function toCloudSession(row: OhRow, baseUrl: string): CloudSessionState {
     cost: row.cost,
   };
 }
+
+// --- hosted view pool keying + ownership (src/main/openhands/views.ts) -------
+
+function parseUrl(raw: string): URL | null {
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+// True only for URLs on the base URL's origin (scheme + host + port).
+export function openhandsOwnsUrl(url: string, baseUrl: string): boolean {
+  const parsed = parseUrl(url);
+  const base = parseUrl(baseUrl);
+  return !!parsed && !!base && parsed.origin === base.origin;
+}
+
+// Pool key for a URL: the conversation id for `<base>/conversations/<id>`,
+// 'home' for any other page on the origin, null for a foreign origin (or an
+// unparseable URL).
+export function openhandsViewKey(url: string, baseUrl: string): string | null {
+  const parsed = parseUrl(url);
+  const base = parseUrl(baseUrl);
+  if (!parsed || !base || parsed.origin !== base.origin) return null;
+  return conversationIdFromUrl(base.href, parsed.href) ?? 'home';
+}
+
+// --- auth origins (link routing) --------------------------------------------
+//
+// Login hops an OpenHands view may follow in place. RESEARCH-DERIVED defaults,
+// not yet confirmed against a live session: run `npm run openhands:probe`
+// (B0) and update this list from its evidence before merging.
+
+export const OPENHANDS_IDP_AUTH_ORIGINS: readonly string[] = [
+  'https://github.com/login',
+  'https://github.com/sessions',
+  'https://gitlab.com/oauth',
+  'https://gitlab.com/users/sign_in',
+  'https://bitbucket.org/site/oauth2',
+  'https://bitbucket.org/account/signin',
+];
+
+const ALL_HANDS_APP_HOST = 'app.all-hands.dev';
+const ALL_HANDS_AUTH_ORIGINS: readonly string[] = [
+  'https://auth.app.all-hands.dev',
+  'https://auth.all-hands.dev',
+];
+
+// Prefixes (origin, optionally + path) for `RouteProvider.authOrigins`:
+// the hosted service's own auth hosts when `baseUrl` is app.all-hands.dev,
+// then the git IdPs. `extra` (test mode fixture origins) is appended.
+export function openHandsAuthOrigins(baseUrl: string, extra: readonly string[] = []): string[] {
+  const base = parseUrl(baseUrl);
+  const own = base?.hostname.toLowerCase() === ALL_HANDS_APP_HOST ? ALL_HANDS_AUTH_ORIGINS : [];
+  return [...new Set([...own, ...OPENHANDS_IDP_AUTH_ORIGINS, ...extra])];
+}
+
+// `AGENT_WORKSPACE_TEST_OPENHANDS_AUTH_ORIGIN`: comma-separated http(s) origins/prefixes.
+export function parseExtraAuthOrigins(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => {
+      const url = parseUrl(part);
+      return url !== null && (url.protocol === 'https:' || url.protocol === 'http:');
+    });
+}
+
+// --- sidebar context menu (src/main/openhands/contextMenu.ts) ---------------
+
+export type OpenHandsMenuId =
+  | 'new-session'
+  | 'refresh'
+  | 'rename'
+  | 'copy-id'
+  | 'open-in-browser'
+  | 'delete';
+export type OpenHandsMenuEntry = { id: OpenHandsMenuId; label: string } | 'separator';
+
+// The items a native menu offers, gated by what the source advertises.
+export function openhandsMenuEntries(
+  kind: 'session' | 'header',
+  caps: { rename: boolean; delete: boolean },
+): OpenHandsMenuEntry[] {
+  if (kind === 'header') {
+    return [
+      { id: 'new-session', label: 'New session' },
+      { id: 'refresh', label: 'Refresh' },
+    ];
+  }
+  const entries: OpenHandsMenuEntry[] = [];
+  if (caps.rename) entries.push({ id: 'rename', label: 'Rename…' });
+  entries.push(
+    { id: 'copy-id', label: 'Copy session ID' },
+    { id: 'open-in-browser', label: 'Open in browser' },
+  );
+  if (caps.delete) entries.push('separator', { id: 'delete', label: 'Delete…' });
+  return entries;
+}
+
+// Sidebar status line for the states the generic Devin-worded text does not
+// fit; undefined = use the default ('Connecting…', 'synced …').
+export function openhandsStatusLine(
+  status: 'idle' | 'connecting' | 'ready' | 'error',
+  connection: string,
+): string | undefined {
+  if (status === 'idle') return 'Not connected yet';
+  if (status !== 'error') return undefined;
+  switch (connection) {
+    case 'login-required':
+      return 'Sign in to OpenHands to load sessions';
+    case 'api-key-required':
+      return 'OpenHands needs an API key to load sessions';
+    case 'api-key-rejected':
+      return 'OpenHands rejected the API key';
+    default:
+      return "Couldn't load OpenHands sessions";
+  }
+}

@@ -1,6 +1,6 @@
 # Agent Workspace
 
-Agent Workspace is a desktop client for Windows and macOS (Apple Silicon) that puts your coding agents in one window: Devin Cloud sessions from your tenant, Devin Local and Claude Code sessions on local or WSL folders, a tabbed Linked Context pane that catches every link and PR a session produces, a terminal dock, PR and notification panels, usage analytics with limit alerts, and saved SSO logins — with layout and sessions remembered across restarts.
+Agent Workspace is a desktop client for Windows and macOS (Apple Silicon) that puts your coding agents in one window: Devin Cloud sessions from your tenant, OpenHands Cloud conversations, Devin Local and Claude Code sessions on local or WSL folders, a tabbed Linked Context pane that catches every link and PR a session produces, a terminal dock, PR and notification panels, usage analytics with limit alerts, and saved SSO logins — with layout and sessions remembered across restarts.
 
 ## Install
 
@@ -47,7 +47,7 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Devin**.
-- **Settings → OpenHands** configures the OpenHands Cloud connection: **OpenHands URL** (OpenHands Cloud by default, or your own server — https only, a sub-path is allowed), an optional **OpenHands API key** (Save / Clear; stored encrypted and never shown again — without one the app uses your OpenHands web sign-in), how often to check for conversation updates (10–600 seconds), how many conversations stay loaded (1–20) and how long hidden ones stay live (0–168 hours). The line under the key shows how the app is connected. The OpenHands rail button opens the OpenHands surface; its conversation list arrives in a later release.
+- **Settings → OpenHands** configures the OpenHands Cloud connection: **OpenHands URL** (OpenHands Cloud by default, or your own server — https only, a sub-path is allowed), an optional **OpenHands API key** (Save / Clear; stored encrypted and never shown again — without one the app uses your OpenHands web sign-in), how often to check for conversation updates (10–600 seconds), how many conversations stay loaded (1–20) and how long hidden ones stay live (0–168 hours). The line under the key shows how the app is connected. The OpenHands rail button opens the OpenHands surface: your conversations are listed in the session column, grouped by repository (right-click a conversation to rename it, copy its ID, open it in your browser or delete it), and picking one shows it in the main column. The home page behind the **+** button is where new conversations start. Sign-in hops to GitHub, GitLab or Bitbucket stay inside the OpenHands view instead of opening a tab. If sign-in or the API key is missing, a hint above the list takes you to the right place.
 - The **Analytics** rail button shows your Devin ACU usage and Claude plan limits; the rail dot warns at 50 %/80 % of a limit. Claude token totals include your WSL distros, counted inside each distro.
 
 ## Running sessions in WSL
@@ -95,7 +95,7 @@ On macOS, `Cmd` works everywhere `Ctrl` is listed (`Ctrl` works too).
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous GitHub tab |
 | `Ctrl+W` | Close the active GitHub tab |
 | `Alt+←` / `Alt+→`, `Ctrl+R` / `F5` | Back / forward / reload in the focused view |
-| `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; stays on OpenHands) |
+| `Ctrl+N` | New session on the current surface (Devin Cloud by default; Claude; the OpenHands home page) |
 | `Ctrl+Shift+S` | Show / hide the sessions column (Cloud, Claude and OpenHands) |
 | `` Ctrl+` `` | Toggle terminal dock (Cloud, Local and Claude surfaces; inert on Settings and Analytics) |
 | `Ctrl+Enter` | Send the message in a Devin Local or Claude chat composer (`Enter` inserts a newline) |

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Ellipsis, Plus, RefreshCw, SquarePen } from 'lucide-react';
 import type { CloudContextMenuRequest, CloudSessionState, CloudState } from '../../shared/ipc';
 import type { CloudSourceCapabilities } from '../../core/cloudKit/capabilities';
@@ -110,6 +110,8 @@ export interface SessionSidebarActions {
   refresh: () => void;
   loadMore: (folder: string) => void;
   contextMenu: (request: CloudContextMenuRequest) => Promise<{ action: string | null }>;
+  /** Inline session rename (providers whose capabilities.rename is true). */
+  sessionRename?: (id: string, title: string) => void;
   folderCreate: (name: string) => void;
   folderRename: (oldName: string, newName: string) => void;
   folderReorder: (names: string[]) => void;
@@ -126,6 +128,13 @@ export interface SessionSidebarProps {
   capabilities: CloudSourceCapabilities;
   state: SessionSidebarState;
   actions: SessionSidebarActions;
+  /** Base id -> id suffix for prefixed ids that are not just `<prefix><Id>`
+   * (OpenHands: cloudRefresh -> openhandsRefresh, sessionSearch -> openhandsFilter). */
+  idAliases?: Partial<Record<string, string>>;
+  /** Status line override (e.g. provider-specific sign-in text). */
+  statusText?: (cloud: CloudState) => string | undefined;
+  /** Rows under the status line (login / API-key hints). */
+  banner?: ReactNode;
 }
 
 export function SessionSidebar({
@@ -135,14 +144,20 @@ export function SessionSidebar({
   capabilities,
   state,
   actions,
+  idAliases,
+  statusText: statusTextOverride,
+  banner,
 }: SessionSidebarProps) {
   const prefetch = usePrefetch(actions.prefetch);
-  const pid = (id: string) => prefixedId(idPrefix, id);
+  const pid = (id: string) => prefixedId(idPrefix, idAliases?.[id] ?? id);
   const serverFolders = capabilities.folders === 'server';
   const [query, setQuery] = useState('');
   const [collapsedChildren, setCollapsedChildren] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<
-    { kind: 'create'; pendingSessionId?: string } | { kind: 'rename'; name: string } | null
+    | { kind: 'create'; pendingSessionId?: string }
+    | { kind: 'rename'; name: string }
+    | { kind: 'rename-session'; id: string }
+    | null
   >(null);
   const { registerRow, onKeyDown } = useRowKeyboardNav((id) => actions.copyLink(id));
 
@@ -213,7 +228,31 @@ export function SessionSidebar({
       y,
     });
     if (action === 'new-folder') setEditing({ kind: 'create', pendingSessionId: sessionId });
+    else if (action === 'rename') setEditing({ kind: 'rename-session', id: sessionId });
   };
+  const renameSessionTo = (id: string, title: string) => {
+    applyOptimistic((d) => ({
+      ...d,
+      sessions: d.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
+    }));
+    actions.sessionRename?.(id, title);
+  };
+  // The row's place in the list while it is being renamed.
+  const sessionEditor = (s: CloudSessionState) => (
+    <div key={s.id} className="px-1 py-1">
+      <FolderNameInput
+        id={pid('sessionRenameEdit')}
+        initial={s.title}
+        placeholder="Session name"
+        onCommit={(title) => {
+          renameSessionTo(s.id, title);
+          setEditing(null);
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    </div>
+  );
+  const renamingId = editing?.kind === 'rename-session' ? editing.id : null;
   const folderMenu = async (name: string, x: number, y: number) => {
     const { action } = await actions.contextMenu({
       kind: 'folder',
@@ -258,6 +297,8 @@ export function SessionSidebar({
       'data-pr-merged': s.prs.merged,
       'data-archived': s.isArchived,
       'data-live': liveIds.has(s.id),
+      // Prefixed (non-Devin) sidebars also expose the raw status (ShellState row status).
+      ...(idPrefix ? { 'data-status': s.status } : {}),
     }),
     leading: (s: CloudSessionState) => (
       <span className="w-[18px] h-[18px] shrink-0 flex items-center justify-center">
@@ -355,8 +396,9 @@ export function SessionSidebar({
         className="px-3 pb-1.5 text-[11px] text-[#8b9bb0] truncate"
         title={cloud.status === 'error' ? (cloud.error ?? '') : undefined}
       >
-        {statusText(cloud)}
+        {statusTextOverride?.(cloud) ?? statusText(cloud)}
       </div>
+      {banner}
       {cloud.lastError && (
         <div
           id={pid('sessionsError')}
@@ -381,7 +423,10 @@ export function SessionSidebar({
           filtered.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No matches</div>
           ) : (
-            filtered.map((s) => (
+            filtered.map((s) =>
+              s.id === renamingId ? (
+                sessionEditor(s)
+              ) : (
               <SessionRowButton
                 key={s.id}
                 s={s}
@@ -391,7 +436,8 @@ export function SessionSidebar({
                 opts={rowOpts}
                 onMenu={(id, x, y) => void sessionMenu(id, x, y)}
               />
-            ))
+              ),
+            )
           )
         ) : tree.sections.length === 0 && cloud.status === 'ready' ? (
           <div className="px-2 py-3 text-[12px] text-[#5c6b80]">No sessions yet</div>
@@ -425,6 +471,7 @@ export function SessionSidebar({
                     <div className="pl-6 py-1 text-[11px] text-[#5c6b80]">No sessions</div>
                   ) : (
                     sectionItem.nodes.map((node) => {
+                      if (node.session.id === renamingId) return sessionEditor(node.session);
                       const row = (
                         <SessionRow
                           key={node.session.id}

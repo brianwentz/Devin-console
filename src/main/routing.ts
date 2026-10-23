@@ -12,9 +12,11 @@ import { compileLinkRules, matchLinkRule, type CompiledRule } from '../core/link
 import type { LinkRule } from '../shared/ipc';
 import { log } from './log';
 import { allowExternalEnabled } from './settings';
-import { fixtureOrigins, state, type ViewName } from './state';
+import { fixtureOrigins, state, testMode, type ViewName } from './state';
+import { openhandsBaseUrl } from './openhandsConfig';
 import { GLOBAL } from '../core/tabModel';
 import { keyForUrl } from '../core/viewPool';
+import { openHandsAuthOrigins, parseExtraAuthOrigins } from '../core/openhands';
 import { surfaceForProvider } from '../core/providers';
 import { poolFor } from './cloudKit/pools';
 import { cloudViews } from './cloudViews';
@@ -26,6 +28,17 @@ import { handleShortcut } from './shortcuts';
 let lastRules: readonly LinkRule[] | null = null;
 let lastCompiled: readonly CompiledRule[] = [];
 
+// OpenHands' own view may follow its login hops (see core/openhands.ts
+// OPENHANDS_IDP_AUTH_ORIGINS) in place. The fixture's auth origin is added in
+// test mode only.
+function openhandsRouteProvider(): NonNullable<RouteContext['providers']>[number] {
+  const base = openhandsBaseUrl();
+  const extra = testMode
+    ? parseExtraAuthOrigins(process.env.AGENT_WORKSPACE_TEST_OPENHANDS_AUTH_ORIGIN)
+    : [];
+  return { providerId: 'openhands', origin: base, authOrigins: openHandsAuthOrigins(base, extra) };
+}
+
 export function routeContext(): RouteContext {
   const rules = state.settings?.current.routing.rules ?? [];
   if (rules !== lastRules) {
@@ -34,7 +47,10 @@ export function routeContext(): RouteContext {
   }
   return {
     tenantUrl: state.tenantUrl,
-    providers: [{ providerId: DEVIN_PROVIDER_ID, origin: state.tenantUrl }],
+    providers: [
+      { providerId: DEVIN_PROVIDER_ID, origin: state.tenantUrl },
+      openhandsRouteProvider(),
+    ],
     githubOrigins: fixtureOrigins,
     rules: lastCompiled,
   };
@@ -173,21 +189,28 @@ function popupDisposition(details: Electron.HandlerDetails): RouteDisposition {
   return details.disposition === 'background-tab' ? 'background' : 'new-window';
 }
 
-export function attachRouting(webContents: Electron.WebContents, view: ViewName): void {
+// `providerId`: the hosted provider whose pool owns this view (absent for the
+// Devin Cloud view, shell and GitHub tabs) — it makes the view's navigations
+// 'provider'-sourced so the provider's auth origins apply.
+export function attachRouting(
+  webContents: Electron.WebContents,
+  view: ViewName,
+  providerId?: string,
+): void {
   webContents.setWindowOpenHandler((details) => {
-    applyDecision(details.url, view, 'window-open', popupDisposition(details));
+    applyDecision(details.url, view, 'window-open', popupDisposition(details), providerId);
     // Never create a BrowserWindow: every popup is routed by the LinkRouter.
     return { action: 'deny' };
   });
 
   webContents.on('will-navigate', (event, url) => {
-    const decision = route(url, sourceOf(view), 'navigate', routeContext());
+    const decision = route(url, sourceOf(view, providerId), 'navigate', routeContext(), providerId);
     if (decision.kind === 'in-place') {
       recordDecision(view, 'will-navigate', url, 'allow-in-view');
       return;
     }
     event.preventDefault();
-    applyDecision(url, view, 'will-navigate', 'navigate');
+    applyDecision(url, view, 'will-navigate', 'navigate', providerId);
   });
 
   webContents.on('will-frame-navigate', (event) => {

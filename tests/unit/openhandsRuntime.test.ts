@@ -43,6 +43,9 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean } = {
         drain: vi.fn(async () => {
           calls.push('drain');
         }),
+        mutate: vi.fn(async (op: { op: string }) => {
+          calls.push(`mutate:${op.op}`);
+        }),
       };
       built.push({ base: b, source, controller });
       return { source, controller };
@@ -195,6 +198,22 @@ describe('openhands runtime core', () => {
     expect(h.live()).toHaveLength(0);
     h.core.onSurfaceEnter();
     expect(h.built).toHaveLength(1);
+  });
+});
+
+describe('mutate', () => {
+  it('is a no-op (false) before any gate opens', async () => {
+    const h = harness();
+    await h.core.start();
+    await expect(h.core.mutate({ op: 'delete', id: 'x' })).resolves.toBe(false);
+    expect(h.built).toHaveLength(0);
+  });
+
+  it('delegates to the active controller once open', async () => {
+    const h = harness({ key: true });
+    await h.core.start();
+    await expect(h.core.mutate({ op: 'rename', id: 'x', title: 't' })).resolves.toBe(true);
+    expect(h.calls).toContain('mutate:rename');
   });
 });
 

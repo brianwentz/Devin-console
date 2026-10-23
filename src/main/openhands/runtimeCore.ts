@@ -10,6 +10,7 @@
 
 import { parseCloudCacheValue } from '../../core/cloudCache';
 import type { CloudState, OpenHandsConnection } from '../../shared/ipc';
+import type { CloudMutation } from '../cloudKit/source';
 
 export type RefreshReason = 'start' | 'poll' | 'focus' | 'full' | 'mutate' | 'settings' | 'test';
 const BLURRED_FACTOR = 4;
@@ -18,6 +19,7 @@ export interface CoreController {
   start(): Promise<void>;
   stop(): void;
   refresh(reason: RefreshReason): Promise<void>;
+  mutate(op: CloudMutation): Promise<void>;
   snapshot(): CloudState;
   /** Resolves when queued cache writes have settled. */
   drain(): Promise<void>;
@@ -175,6 +177,12 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
     },
     snapshot(): { state: CloudState; connection: OpenHandsConnection } | null {
       return active ? { state: active.controller.snapshot(), connection: active.source.connection() } : null;
+    },
+    /** One rename/delete on the active source; false when no gate is open. */
+    async mutate(op: CloudMutation): Promise<boolean> {
+      if (disposed || !active) return false;
+      await active.controller.mutate(op);
+      return true;
     },
     /** Test hook: open the gate, force a full list. */
     async forceRefresh(): Promise<void> {

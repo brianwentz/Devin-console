@@ -29,6 +29,10 @@ export const DEVIN_PROVIDER_ID = 'devin-cloud';
 export interface RouteProvider {
   providerId: string;
   origin: string;
+  // Login-hop prefixes (origin, optionally + path) a same-tab navigation from
+  // this provider's own view may follow in place instead of being split off
+  // into a GitHub tab (e.g. an OAuth hop through github.com/login).
+  authOrigins?: readonly string[];
 }
 
 export interface RouteContext {
@@ -50,6 +54,33 @@ function normalizeHost(hostname: string): string {
 export function isGitHubHost(hostname: string): boolean {
   const host = normalizeHost(hostname);
   return hostMatches(host, 'github.com') || hostMatches(host, 'githubusercontent.com');
+}
+
+// True when `rawUrl` is on the same origin (scheme + host + port) as one of
+// `authOrigins` and its path equals / lies under that entry's path (segment
+// boundary: '/login' matches '/login' and '/login/x', never '/loginx'). Never
+// host-wide: an entry with a path only covers that path.
+export function matchesAuthOrigin(rawUrl: string, authOrigins: readonly string[]): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  for (const entry of authOrigins) {
+    let auth: URL;
+    try {
+      auth = new URL(entry);
+    } catch {
+      continue;
+    }
+    if (url.origin.toLowerCase() !== auth.origin.toLowerCase()) continue;
+    const prefix = auth.pathname.replace(/\/+$/, '');
+    if (prefix === '' || url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function sameHostAndPort(a: URL, b: URL): boolean {
@@ -141,6 +172,13 @@ export function route(
   const hosted =
     source === 'devin' || source === 'github' || source === 'analytics' || source === 'provider';
   if (disposition === 'navigate' && hosted) {
+    // A provider view's own login hops (IdP / SSO pages) stay in the view.
+    if (source === 'provider' && sourceProviderId) {
+      const own = context.providers?.find((p) => p.providerId === sourceProviderId);
+      if (own?.authOrigins && matchesAuthOrigin(rawUrl, own.authOrigins)) {
+        return { kind: 'in-place' };
+      }
+    }
     if (
       (kind === 'github' || kind === 'rule') &&
       (source === 'devin' || source === 'analytics' || source === 'provider')

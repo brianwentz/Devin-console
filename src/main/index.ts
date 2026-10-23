@@ -27,7 +27,8 @@ import { setPermissions } from './permissions';
 import { installProtocol } from './protocol';
 import { cloudSessions } from './cloudSessions';
 import { cloudViews } from './cloudViews';
-import { pools } from './cloudKit/pools';
+import { openhandsViews } from './openhands/views';
+import { allPoolViews } from './cloudKit/pools';
 import { SettingsStore } from './settings';
 import { providerBySurface } from '../core/providers';
 import { fixtureOrigins, quiet, state, testMode } from './state';
@@ -222,14 +223,14 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     }
     const contents = [
       state.shellView?.webContents,
-      ...pools().flatMap((p) => p.views()).map((view) => view.webContents),
+      ...allPoolViews().map((view) => view.webContents),
       state.analyticsView?.webContents,
       ...(state.tabManager?.getViews().map((view) => view.webContents) ?? []),
     ].filter((item): item is Electron.WebContents => Boolean(item && !item.isDestroyed()));
     const before = webContents.getAllWebContents().length;
     log('shell', 'window-close-start', { detail: { webContentsCount: before } });
     state.tabManager?.dispose();
-    for (const view of pools().flatMap((p) => p.views())) detachView(view);
+    for (const view of allPoolViews()) detachView(view);
     detachView(state.analyticsView);
     detachView(state.shellView);
     for (const item of contents) {
@@ -346,7 +347,9 @@ async function createWindow(): Promise<void> {
 
   const devinSession = session.fromPartition('persist:cloud');
   const githubSession = session.fromPartition('persist:github');
-  setPermissions(devinSession, 'devin');
+  const openhandsSession = session.fromPartition('persist:openhands');
+  setPermissions(devinSession, 'devin', 'persist:cloud');
+  setPermissions(openhandsSession, 'openhands', 'persist:openhands');
   setPermissions(githubSession, 'gh:session');
   setupDownloads(githubSession);
 
@@ -414,6 +417,10 @@ async function createWindow(): Promise<void> {
   // view (keyed by the session URL it currently shows) and loads the tenant.
   cloudViews().init(state.tenantUrl);
   cloudViews().applyLimits(); // sessions.maxLiveViews / keepAliveHours
+  // Registered now (not on first use) so pools() lists it for permissions,
+  // autofill and the cookie audit; it creates no view — so no request —
+  // until the user enters the OpenHands surface.
+  openhandsViews().applyLimits(); // openhands.maxLiveViews / keepAliveHours
   // Stays named: it runs pre-loadURL, before TabManager creation, so it can't
   // join the post-loadURL runtime start loop without reordering.
   cloudSessions().start();

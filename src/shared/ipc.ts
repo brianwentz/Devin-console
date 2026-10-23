@@ -3,7 +3,12 @@ import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } f
 import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
 import { normalizeBaseUrl } from '../core/openhands';
-import { OpenHandsChannels, OpenHandsConnectionSchema, OpenHandsStatusSchema } from './ipc/openhands';
+import {
+  OpenHandsChannels,
+  OpenHandsConnectionSchema,
+  OpenHandsSidebarChannels,
+  OpenHandsStatusSchema,
+} from './ipc/openhands';
 
 export * from './ipc/openhands';
 import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
@@ -216,6 +221,7 @@ export const IpcChannels = {
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
   ...OpenHandsChannels,
+  ...OpenHandsSidebarChannels,
 } as const;
 
 export const BadgeRenderSchema = z.object({

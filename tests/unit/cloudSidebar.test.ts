@@ -128,6 +128,18 @@ describe('sidebarListData', () => {
     expect(tree.sections[0]!.nodes.map((n) => n.session.id)).toEqual(['z', 'x']);
   });
 
+  it('derived folders: an empty section string does not create a blank folder', () => {
+    const derived = {
+      sessions: [row({ id: 'e', section: '', updatedAt: 2 }), row({ id: 'r', section: 'repo', updatedAt: 1 })],
+      folders: [],
+      folderTotals: {},
+    };
+    const out = sidebarListData(derived, DERIVED, false);
+    expect(out.sessions.find((s) => s.id === 'e')!.folder).toBeNull();
+    const tree = buildSessionTree(out, { collapsedFolders: [], currentSessionId: null });
+    expect(tree.sections.map((s) => s.name)).toEqual(['repo', 'recent']);
+  });
+
   it('no folders: every row lands in recent', () => {
     const out = sidebarListData(data, { ...DERIVED, folders: 'none' }, false);
     expect(out.folders).toEqual([]);

@@ -30,3 +30,39 @@ export type OpenHandsConnection = z.infer<typeof OpenHandsConnectionSchema>;
 
 export const OpenHandsStatusSchema = z.enum(['idle', 'connecting', 'ready', 'error']);
 export type OpenHandsStatus = z.infer<typeof OpenHandsStatusSchema>;
+
+// Sidebar -> main (all shell-only, guarded). Ids are conversation ids (never logged with titles).
+export const OpenHandsSidebarChannels = {
+  openhandsOpen: 'openhands:open',
+  openhandsNewSession: 'openhands:newSession',
+  openhandsOpenHome: 'openhands:openHome',
+  openhandsRefresh: 'openhands:refresh',
+  openhandsRename: 'openhands:rename',
+  openhandsSessionReorder: 'openhands:sessionReorder',
+  openhandsContextMenu: 'openhands:contextMenu',
+} as const;
+
+const OpenHandsSessionId = z.string().min(1).max(128);
+export const OpenHandsOpenArg = z.object({ id: OpenHandsSessionId });
+export const OpenHandsRenameArg = z.object({
+  id: OpenHandsSessionId,
+  title: z.string().trim().min(1).max(200),
+});
+export const OpenHandsSessionReorderArg = z.object({
+  section: z.string().max(1024),
+  ids: z.array(z.string().max(128)).max(500),
+});
+export const OpenHandsContextMenuArg = z.object({
+  kind: z.enum(['session', 'header']),
+  sessionId: OpenHandsSessionId.optional(),
+  x: z.number().finite(),
+  y: z.number().finite(),
+});
+export type OpenHandsContextMenuRequest = {
+  kind: 'session' | 'header';
+  sessionId?: string;
+  x: number;
+  y: number;
+};
+// `rename` is completed in the shell (inline input); everything else runs in main.
+export type OpenHandsContextMenuResult = { action: 'rename' | null };

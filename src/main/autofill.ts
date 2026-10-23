@@ -8,7 +8,7 @@ import {
   IpcChannels,
 } from '../shared/ipc';
 import { guardedOn, hostedHandle, hostedOn } from './ipcGuard';
-import { pools } from './cloudKit/pools';
+import { allPoolViews, pools } from './cloudKit/pools';
 import { log } from './log';
 import { fixtureOrigins, state, testMode } from './state';
 import { applyLayout, lowerShell, notifyShell, overlayOpen, raiseShell } from './window';
@@ -102,9 +102,7 @@ export function closeAutofillOverlaysForInactiveTabs(): void {
 }
 
 function senderView(sender: Electron.WebContents): Electron.WebContentsView | null {
-  const pooled = pools()
-    .flatMap((p) => p.views())
-    .find((v) => v.webContents === sender);
+  const pooled = allPoolViews().find((v) => v.webContents === sender);
   if (pooled) return pooled;
   return state.tabManager?.getViews().find((v) => v.webContents === sender) ?? null;
 }

@@ -25,7 +25,7 @@ import { copyTabAddress, reloadCurrentScope } from './ipc';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
-import { pools } from './cloudKit/pools';
+import { allPoolViews } from './cloudKit/pools';
 import { state, testMode } from './state';
 import {
   applyLayout,
@@ -47,7 +47,14 @@ import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 import { hosts } from './hosts';
 import { openhandsBaseUrl } from './openhandsConfig';
-import { openhandsRefresh, openhandsState } from './providers/openhands';
+import {
+  openhandsMenuClick,
+  openhandsMenuItems,
+  openhandsMutations,
+  openhandsRefresh,
+  openhandsState,
+} from './providers/openhands';
+import { openhandsOpenSession, openhandsViewsInfo, resetOpenHandsViews } from './openhands/views';
 import { remoteFsViolationCount } from './remoteFsGuard';
 
 export function registerTestHooks(): void {
@@ -163,8 +170,7 @@ export function registerTestHooks(): void {
       ipcProbe: () => {
         // A pooled NON-active Cloud view — must still pass the hosted-view
         // guard (a detached view's webContents is just as privileged).
-        const pooled = pools()
-          .flatMap((p) => p.views())
+        const pooled = allPoolViews()
           .map((v) => v.webContents)
           .find((wc) => wc !== state.devinView?.webContents);
         return {
@@ -236,6 +242,14 @@ export function registerTestHooks(): void {
       // B1 T21: OpenHands sidebar snapshot / force a full list (resolves when it finishes).
       openhandsState: () => openhandsState(),
       openhandsRefresh: () => openhandsRefresh(),
+      // B1 T22: hosted views, menus and the recorded sidebar actions.
+      openhandsViewsInfo: () => openhandsViewsInfo(),
+      openhandsOpen: (id: string) => openhandsOpenSession(id),
+      // The base-URL-change path (the https-only setting cannot flip to the http fixture).
+      openhandsResetViews: () => resetOpenHandsViews(),
+      openhandsMenuItems: () => openhandsMenuItems(),
+      openhandsMenuClick: (id: string) => openhandsMenuClick(id), // returns {action}
+      openhandsMutations: () => openhandsMutations(),
       pollNow: () => notifier.pollNow(),
       // Cloud session sidebar data layer.
       cloudState: () => cloudSessions().snapshot(),

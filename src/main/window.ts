@@ -28,7 +28,7 @@ import { claudeUsage } from './claude/usage';
 import { devinUsage } from './devinUsage';
 import { runtimeFor, runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
-import { pools, poolForSurface } from './cloudKit/pools';
+import { allPoolViews, poolForSurface } from './cloudKit/pools';
 import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
@@ -343,7 +343,7 @@ export function lowerShell(): void {
   const { windowRef, shellView, analyticsView, tabManager } = state;
   if (!windowRef || !shellView) return;
   shellView.setBackgroundColor('#111827');
-  const pooled = pools().flatMap((p) => p.views());
+  const pooled = allPoolViews();
   const active = poolForSurface(state.surface)?.activeView() ?? null;
   const children = [...windowRef.contentView.children];
   for (const child of children) {
@@ -387,7 +387,7 @@ function applyBounds(bounds: WindowBounds, size: { width: number; height: number
   // Only the ACTIVE pooled view is laid out/attached; every other pooled view
   // gets zero bounds and stays detached.
   const visible = poolForSurface(state.surface)?.activeView() ?? null;
-  for (const view of pools().flatMap((p) => p.views())) {
+  for (const view of allPoolViews()) {
     if (view === visible) {
       view.setBounds(nativeBounds(bounds.devin));
     } else {
@@ -424,7 +424,7 @@ export function applyLayout(): void {
   if (!state.dragging) {
     ensureShellBottom();
     const visible = poolForSurface(state.surface)?.activeView() ?? null;
-    for (const view of pools().flatMap((p) => p.views())) {
+    for (const view of allPoolViews()) {
       if (view === visible) ensureAttached(view);
       else detachView(view);
     }

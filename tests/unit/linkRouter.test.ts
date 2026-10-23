@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  matchesAuthOrigin,
   route,
   routeUrl,
   type RouteDecision,
@@ -321,5 +322,104 @@ describe('provider-owned origins', () => {
       kind: 'provider',
       providerId: 'y',
     });
+  });
+});
+
+describe('provider auth origins', () => {
+  const authContext = {
+    tenantUrl: 'https://cloudbeds.devinenterprise.com',
+    providers: [
+      { providerId: 'devin-cloud', origin: 'https://cloudbeds.devinenterprise.com' },
+      {
+        providerId: 'openhands',
+        origin: 'https://oh.test',
+        authOrigins: ['https://login.oh.test', 'https://github.com/login/oauth'],
+      },
+    ],
+  };
+  const AUTHORIZE = 'https://github.com/login/oauth/authorize?x=1';
+
+  it('keeps a same-tab navigation from the provider view to an auth origin in place', () => {
+    expect(route(AUTHORIZE, 'provider', 'navigate', authContext, 'openhands')).toEqual({
+      kind: 'in-place',
+    });
+    expect(route('https://login.oh.test/sso', 'provider', 'navigate', authContext, 'openhands')).toEqual({
+      kind: 'in-place',
+    });
+  });
+
+  it('keeps today\'s decision for the same URL from the Devin view', () => {
+    expect(route(AUTHORIZE, 'devin', 'navigate', authContext)).toEqual({
+      kind: 'gh-tab',
+      background: false,
+    });
+  });
+
+  it('does not exempt other GitHub URLs (prefix match, not host-wide)', () => {
+    expect(route('https://github.com/o/r/pull/1', 'provider', 'navigate', authContext, 'openhands')).toEqual({
+      kind: 'gh-tab',
+      background: false,
+    });
+  });
+
+  it('respects the path boundary and the host', () => {
+    for (const url of [
+      'https://github.com/login/oauthx',
+      'http://github.com/login/oauth/authorize',
+    ]) {
+      expect(route(url, 'provider', 'navigate', authContext, 'openhands')).not.toEqual({
+        kind: 'in-place',
+      });
+    }
+  });
+
+  it('only applies to the provider that declares the origin', () => {
+    const other = {
+      ...authContext,
+      providers: [...authContext.providers, { providerId: 'y', origin: 'https://y.test' }],
+    };
+    expect(route(AUTHORIZE, 'provider', 'navigate', other, 'y')).toEqual({
+      kind: 'gh-tab',
+      background: false,
+    });
+  });
+
+  it('does not affect new-window requests', () => {
+    expect(route(AUTHORIZE, 'provider', 'new-window', authContext, 'openhands')).toEqual({
+      kind: 'gh-tab',
+      background: false,
+    });
+    expect(route(AUTHORIZE, 'provider', 'background', authContext, 'openhands')).toEqual({
+      kind: 'gh-tab',
+      background: true,
+    });
+  });
+});
+
+describe('matchesAuthOrigin', () => {
+  const origins = ['https://github.com/login', 'https://login.oh.test'];
+  it('matches the origin itself, a deeper path and a query', () => {
+    expect(matchesAuthOrigin('https://github.com/login', origins)).toBe(true);
+    expect(matchesAuthOrigin('https://github.com/login?return_to=x', origins)).toBe(true);
+    expect(matchesAuthOrigin('https://github.com/login/oauth/authorize', origins)).toBe(true);
+    expect(matchesAuthOrigin('https://GitHub.com/login/device', origins)).toBe(true);
+    expect(matchesAuthOrigin('https://login.oh.test/anything/at/all', origins)).toBe(true);
+  });
+
+  it('never matches host-wide, across a path boundary or another host/scheme/port', () => {
+    for (const url of [
+      'https://github.com/o/r',
+      'https://github.com/loginevil',
+      'https://github.com.evil/login',
+      'https://evil.github.com/login',
+      'http://github.com/login',
+      'https://github.com:8443/login',
+      'https://login.oh.test.evil/x',
+      'not a url',
+    ]) {
+      expect(matchesAuthOrigin(url, origins)).toBe(false);
+    }
+    expect(matchesAuthOrigin('https://github.com/login', [])).toBe(false);
+    expect(matchesAuthOrigin('https://github.com/login', ['nope'])).toBe(false);
   });
 });

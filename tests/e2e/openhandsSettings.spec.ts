@@ -42,21 +42,29 @@ const hasEl = (app: ElectronApplication, id: string) =>
 const attr = (app: ElectronApplication, id: string, name: string) =>
   shell(app, `document.getElementById('${id}')?.getAttribute('${name}') ?? null`);
 
-test('the openhands rail button switches to a placeholder surface with GLOBAL tabs', async () => {
+test('the openhands rail button switches to the hosted-view surface with GLOBAL tabs', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-openhands-'));
   const app = await launch(profile, join(profile, 'events.jsonl'));
   try {
     await expect.poll(async () => hasEl(app, 'openhandsButton')).toBe(true);
     await shell(app, `document.getElementById('openhandsButton').click()`);
     await expect.poll(async () => (await state(app)).surface).toBe('openhands');
-    await expect.poll(async () => hasEl(app, 'openhandsPanel')).toBe(true);
+    // The placeholder panel is gone: the main column is the pooled hosted view.
+    await expect.poll(async () => hasEl(app, 'openhandsPanel')).toBe(false);
+    await expect
+      .poll(async () =>
+        app.evaluate(() =>
+          (globalThis as any).__agentworkspace.openhandsViewsInfo().some((v: { active: boolean }) => v.active),
+        ),
+      )
+      .toBe(true);
     const s = await state(app);
     expect(s.tabs.scope).toBe('');
     // The runtime (T21) lists the fixture over the cookie path (no key set).
     await expect.poll(async () => (await state(app)).openhands.status).toBe('ready');
     expect((await state(app)).openhands).toMatchObject({ connection: 'web-session' });
     expect(await attr(app, 'openhandsButton', 'aria-pressed')).toBe('true');
-    // Back to Cloud works (no hosted OpenHands view was attached).
+    // Back to Cloud works.
     await shell(app, `document.getElementById('cloudButton').click()`);
     await expect.poll(async () => (await state(app)).surface).toBe('cloud');
   } finally {
