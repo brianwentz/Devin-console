@@ -24,32 +24,33 @@ const EMPTY = 'No bookmarks';
 
 type Template = Electron.MenuItemConstructorOptions;
 
-let pendingAction: FavoritesMenuAction = null;
+// Bumped per open: a load that finishes after a newer open started is dropped.
+let generation = 0;
 // Test mode only.
 const pendingItems = new Map<string, Template>();
 let pendingDesc: FavoritesMenuItemDesc[] | null = null;
 let pendingResolve: ((result: { action: FavoritesMenuAction }) => void) | null = null;
 
-function toTemplate(nodes: FavoritesMenuNode[]): Template[] {
+function toTemplate(nodes: FavoritesMenuNode[], onOpen: () => void): Template[] {
   return nodes.map((node): Template => {
-    if (node.kind === 'folder') return { label: node.label, submenu: toTemplate(node.children) };
+    if (node.kind === 'folder') return { label: node.label, submenu: toTemplate(node.children, onOpen) };
     if (node.kind === 'more') return { label: node.label, enabled: false };
     const url = node.url;
     return {
       label: node.label,
       click: () => {
-        pendingAction = 'open';
+        onOpen();
         openUserUrl(url, 'favorite', 'new');
       },
     };
   });
 }
 
-export function favoritesMenuTemplate(result: BookmarksLoadResult): Template[] {
+export function favoritesMenuTemplate(result: BookmarksLoadResult, onOpen: () => void = () => {}): Template[] {
   if (result.state === 'missing') return [{ label: NOT_FOUND, enabled: false }];
   if (result.state === 'unreadable') return [{ label: UNREADABLE, enabled: false }];
   const nodes = buildFavoritesMenu(result.tree);
-  return nodes.length > 0 ? toTemplate(nodes) : [{ label: EMPTY, enabled: false }];
+  return nodes.length > 0 ? toTemplate(nodes, onOpen) : [{ label: EMPTY, enabled: false }];
 }
 
 function describe(list: Template[]): FavoritesMenuItemDesc[] {
@@ -70,14 +71,19 @@ function settlePending(action: FavoritesMenuAction): void {
 }
 
 export async function popupFavoritesMenu(x: number, y: number): Promise<{ action: FavoritesMenuAction }> {
-  pendingAction = null;
-  // Test mode: the description is cleared until this open's load lands.
-  if (testMode) pendingDesc = null;
+  const mine = ++generation;
+  // A second open replaces a menu still open (a native popup closes first); the
+  // previous invoke settles now and the description is cleared until this load lands.
+  if (testMode) settlePending(null);
+  // Per open, so overlapping opens cannot overwrite each other's reply.
+  let action: FavoritesMenuAction = null;
   // Re-loaded on every open: the profile is the one configured at click time.
-  const items = favoritesMenuTemplate(await bookmarksReader().load());
+  const loaded = await bookmarksReader().load();
+  if (mine !== generation) return { action: null };
+  const items = favoritesMenuTemplate(loaded, () => {
+    action = 'open';
+  });
   if (testMode) {
-    // A second open replaces a menu still open (a native popup closes first).
-    settlePending(null);
     let n = 0;
     const assign = (list: Template[]): void =>
       list.forEach((item) => {
@@ -104,7 +110,7 @@ export async function popupFavoritesMenu(x: number, y: number): Promise<{ action
     if (state.windowRef) menu.popup({ ...opts, window: state.windowRef });
     else menu.popup(opts);
   });
-  return { action: pendingAction };
+  return { action };
 }
 
 // Test hooks.
@@ -116,8 +122,6 @@ export function favoritesMenuClick(id: string): { action: FavoritesMenuAction } 
   const item = pendingItems.get(id);
   if (!item?.click || item.enabled === false) return { action: null };
   item.click({} as Electron.MenuItem, state.windowRef!, {} as Electron.KeyboardEvent);
-  const action = pendingAction;
-  pendingAction = null;
-  settlePending(action);
-  return { action };
+  settlePending('open');
+  return { action: 'open' };
 }

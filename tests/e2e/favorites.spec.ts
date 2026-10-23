@@ -231,6 +231,7 @@ test('without Chrome the menu is a single disabled "Chrome bookmarks not found"'
     // A disabled item does nothing and leaves the menu open.
     const reply = await launched.app.evaluate(() => (globalThis as G).__agentworkspace.favoritesMenuClick('m0'));
     expect(reply.action).toBeNull();
+    expect(await menuItems(launched.app)).not.toBeNull();
     expect((await state(launched.app)).tabs.tabs).toHaveLength(0);
   } finally {
     await dispose(launched);

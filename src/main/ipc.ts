@@ -245,13 +245,13 @@ export function setupIpc(): void {
     if (!parsed.success) return;
     log('shell', 'tab-drop-types', { detail: { types: parsed.data.types } });
   });
-  // Settings-only: Chrome profile names reach the shell's Settings page, never a log.
   // Native: the menu paints above the hosted views, so the shell is never raised.
   guardedHandle(IpcChannels.tabsFavoritesMenu, async (_event, payload: unknown): Promise<FavoritesMenuReply> => {
     const parsed = FavoritesMenuArg.safeParse(payload);
     if (!parsed.success) return { action: null };
     return popupFavoritesMenu(parsed.data.x, parsed.data.y);
   });
+  // Settings-only: Chrome profile names reach the shell's Settings page, never a log.
   guardedHandle(IpcChannels.favoritesProfiles, async (): Promise<FavoritesProfilesReply> => {
     const profiles = await bookmarksReader().profiles();
     const parsed = FavoritesProfilesReplySchema.safeParse({

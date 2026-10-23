@@ -7,6 +7,7 @@ const INTERNAL_TYPES = [SESSION_MIME, FOLDER_MIME];
 
 // Ordered by preference: browsers put the link in text/uri-list, selected text
 // in text/plain; `URL` is the legacy IE/Edge name some sources still set.
+// `URL` is rarely reachable in Chromium: setData('URL') is normalised to text/uri-list.
 const URL_TYPES = ['text/uri-list', 'text/plain', 'URL'];
 
 const MAX_TYPES = 32;

@@ -63,6 +63,11 @@ describe('normalizeUserUrl', () => {
     expect(ok('192.168.1.1:8080')).toBe('http://192.168.1.1:8080/');
   });
 
+  it('treats every IPv6 literal as http', () => {
+    expect(ok('[::1]:3000')).toBe('http://[::1]:3000/');
+    expect(ok('[2001:db8::1]')).toBe('http://[2001:db8::1]/');
+  });
+
   it('rejects bare numbers and non-canonical hosts', () => {
     for (const raw of ['42', '1.2.3', '0x7f.1', '999.1.1.1']) {
       expect(reason(raw)).toBe('not-a-url');

@@ -3,6 +3,8 @@ import type { Rect } from '../../core/layout';
 import type { AddressBarMode, OpenUserUrlReply } from '../../shared/ipc';
 import { USER_URL_REASON_TEXT } from '../userUrlText';
 
+const GENERIC_ERROR = "Couldn't open that address";
+
 interface AddressBarProps {
   rect: Rect;
   mode: AddressBarMode;
@@ -34,17 +36,19 @@ export function AddressBar({ rect, mode, activeUrl }: AddressBarProps) {
     if (pending.current) return;
     pending.current = true;
     blurredWhilePending.current = false;
-    let reply: OpenUserUrlReply;
+    let reply: OpenUserUrlReply | null = null;
     try {
       reply = await window.agentworkspace.openUserUrl({
         url: value,
         source: 'typed',
         target: mode,
       });
+    } catch {
+      // A rejected invoke: fall through to the generic error below.
     } finally {
       pending.current = false;
     }
-    if (reply.ok) {
+    if (reply?.ok) {
       window.agentworkspace.setAddressBar({ open: false, source: 'enter' });
       return;
     }
@@ -52,7 +56,7 @@ export function AddressBar({ rect, mode, activeUrl }: AddressBarProps) {
       window.agentworkspace.setAddressBar({ open: false, source: 'blur' });
       return;
     }
-    setError(USER_URL_REASON_TEXT[reply.reason]);
+    setError(reply ? USER_URL_REASON_TEXT[reply.reason] : GENERIC_ERROR);
   };
 
   return (

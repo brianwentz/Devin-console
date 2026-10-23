@@ -428,6 +428,11 @@ test('a link dragged over the tab row shows the drop hint; sidebar drags and pla
     await expect(hint).toHaveText('Only http and https addresses can open here');
     expect((await state(app)).tabs.tabs).toHaveLength(0);
 
+    // A file: link is refused by main too.
+    await drag(app, 'drop', { 'text/uri-list': 'file:///etc/passwd' });
+    await expect(hint).toHaveText('Only http and https addresses can open here');
+    expect((await state(app)).tabs.tabs).toHaveLength(0);
+
     // The diagnostic stays off without AGENT_WORKSPACE_DEBUG_DROPS.
     expect((await readEvents(logFile)).some((e) => e.event === 'tab-drop-types')).toBe(false);
   } finally {
@@ -526,6 +531,11 @@ test('a dropped link opens in the current scope on every surface; a duplicate fo
     // dropUrl), MIME type names only — never the dropped values.
     const diagnostics = (await readEvents(logFile)).filter((e) => e.event === 'tab-drop-types');
     expect(diagnostics).toHaveLength(6);
+    const opens = (await readEvents(logFile)).filter(
+      (e) => e.event === 'tab-user-open' && (e.detail as { source?: string }).source === 'drop',
+    );
+    expect(opens.length).toBeGreaterThanOrEqual(1);
+    for (const event of opens) expect(event.detail).toMatchObject({ source: 'drop', target: 'new' });
     for (const event of diagnostics) expect(event.detail).toEqual({ types: ['text/uri-list'] });
     for (const event of diagnostics) expect(JSON.stringify(event)).not.toContain('/page/');
   } finally {
