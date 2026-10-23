@@ -33,7 +33,8 @@ function OpenHandsApiKeyField() {
     void window.agentworkspace
       .openhandsApiKeySet(key)
       .then((result) => {
-        setValue('');
+        // Cleared after a successful save; a failure keeps what was typed.
+        if (result.ok) setValue('');
         setMessage(
           result.ok
             ? { kind: 'ok', text: 'API key stored (encrypted).' }
