@@ -13,16 +13,16 @@ import {
 
 describe('provider registry', () => {
   it('exposes literal tuples for enums', () => {
-    expect([...PROVIDER_SURFACES]).toEqual(['cloud', 'local', 'claude']);
-    expect([...PROVIDER_SOURCES]).toEqual(['devin', 'claude']);
+    expect([...PROVIDER_SURFACES]).toEqual(['cloud', 'local', 'claude', 'openhands']);
+    expect([...PROVIDER_SOURCES]).toEqual(['devin', 'claude', 'openhands']);
     expect([...PROVIDER_ANALYTICS_TABS]).toEqual(['devin', 'claude']);
     expect([...PROVIDER_USAGE_METRICS]).toEqual(['devin-monthly', 'claude-session', 'claude-weekly']);
   });
 
   it('keeps rail order and matches the tuples', () => {
-    expect(PROVIDERS.map((p) => p.id)).toEqual(['devin-cloud', 'devin-local', 'claude']);
+    expect(PROVIDERS.map((p) => p.id)).toEqual(['devin-cloud', 'devin-local', 'claude', 'openhands']);
     expect(PROVIDERS.map((p) => p.surface)).toEqual([...PROVIDER_SURFACES]);
-    expect(PROVIDERS.map((p) => p.label)).toEqual(['Cloud', 'Local', 'Claude']);
+    expect(PROVIDERS.map((p) => p.label)).toEqual(['Cloud', 'Local', 'Claude', 'OpenHands']);
   });
 
   it('describes devin-cloud', () => {
@@ -64,6 +64,29 @@ describe('provider registry', () => {
       analyticsTab: 'claude',
       usageMetrics: ['claude-session', 'claude-weekly'],
     });
+  });
+
+  it('describes openhands', () => {
+    expect(providerById('openhands')).toEqual({
+      id: 'openhands',
+      kind: 'cloud',
+      surface: 'openhands',
+      label: 'OpenHands',
+      railId: 'openhandsButton',
+      viewName: 'openhands',
+      scopePrefix: 'openhands:',
+      scopeFallback: 'global',
+      source: 'openhands',
+      settingsTab: 'openhands',
+      analyticsTab: null,
+      usageMetrics: [],
+      dock: true,
+      sessionsColumn: true,
+      newSessionShortcut: true,
+      sidebarShortcut: true,
+    });
+    expect(providerBySource('openhands')?.id).toBe('openhands');
+    expect(providerBySurface('openhands')?.id).toBe('openhands');
   });
 
   it('looks providers up', () => {

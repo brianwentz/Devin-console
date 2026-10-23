@@ -4,6 +4,7 @@ import {
   apiUrl,
   conversationIdFromUrl,
   conversationUrl,
+  effectiveBaseUrl,
   listAllPages,
   mapStatus,
   mergeRows,
@@ -254,5 +255,22 @@ describe('toCloudSession', () => {
     expect(s.prs.open).toBe(1);
     const idle = toCloudSession(row({ status: 'idle' }), 'https://corp');
     expect(CloudSessionSchema.parse(idle).status).toBe('idle');
+  });
+});
+
+describe('effectiveBaseUrl (AGENT_WORKSPACE_TEST_OPENHANDS_URL)', () => {
+  const saved = 'https://app.all-hands.dev';
+  it('keeps the saved URL without an override', () => {
+    expect(effectiveBaseUrl(saved, undefined)).toBe(saved);
+    expect(effectiveBaseUrl(saved, '')).toBe(saved);
+  });
+  it('accepts an https override and localhost http, normalised', () => {
+    expect(effectiveBaseUrl(saved, 'https://oh.test/x/')).toBe('https://oh.test/x');
+    expect(effectiveBaseUrl(saved, 'http://127.0.0.1:4567/')).toBe('http://127.0.0.1:4567');
+    expect(effectiveBaseUrl(saved, 'http://localhost:9')).toBe('http://localhost:9');
+  });
+  it('ignores a non-localhost http or invalid override', () => {
+    expect(effectiveBaseUrl(saved, 'http://evil.test')).toBe(saved);
+    expect(effectiveBaseUrl(saved, 'not a url')).toBe(saved);
   });
 });

@@ -20,6 +20,7 @@ import {
   type ReleaseNotesReply,
   type LocalSessionSummary,
   type LocalStatePublic,
+  type OpenHandsApiKeyResult,
   type ScopeSummary,
   type Settings,
   type SettingsCommitResult,
@@ -351,6 +352,11 @@ const api = {
   setPat: (pat: string) =>
     ipcRenderer.invoke(IpcChannels.secretsSetPat, { pat }) as Promise<SecretResult>,
   clearPat: () => ipcRenderer.invoke(IpcChannels.secretsClearPat) as Promise<SecretResult>,
+  // OpenHands API key: write-only from the shell; replies carry `{ ok }` only.
+  openhandsApiKeySet: (value: string) =>
+    ipcRenderer.invoke(IpcChannels.openhandsApiKeySet, { value }) as Promise<OpenHandsApiKeyResult>,
+  openhandsApiKeyClear: () =>
+    ipcRenderer.invoke(IpcChannels.openhandsApiKeyClear) as Promise<OpenHandsApiKeyResult>,
   listPrs: () => ipcRenderer.invoke(IpcChannels.prsList) as Promise<SessionPr[]>,
   prsMarkRead: (url: string) => ipcRenderer.send(IpcChannels.prsMarkRead, { url }),
   prsMarkAllRead: () => ipcRenderer.send(IpcChannels.prsMarkAllRead),

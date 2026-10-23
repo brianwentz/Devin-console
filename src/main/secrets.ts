@@ -189,6 +189,11 @@ export class SecretStore {
     log('shell', 'secrets-pat-cleared');
   }
 
+  // Presence only (ShellState.openhandsApiKeySet) — false until load() ran.
+  hasOpenHandsApiKey(): boolean {
+    return this.openhandsKey !== null;
+  }
+
   // Main-process only. Never send the result over IPC or into the log.
   async getOpenHandsApiKey(): Promise<string | null> {
     await this.load();

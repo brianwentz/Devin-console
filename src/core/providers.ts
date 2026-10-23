@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { SettingsTabId } from './settingsDraft';
 
-export type ProviderId = 'devin-cloud' | 'devin-local' | 'claude';
+export type ProviderId = 'devin-cloud' | 'devin-local' | 'claude' | 'openhands';
 
-export const PROVIDER_SURFACES = ['cloud', 'local', 'claude'] as const;
-export const PROVIDER_SOURCES = ['devin', 'claude'] as const;
-export const PROVIDER_VIEW_NAMES = ['cloud', 'local', 'claude'] as const;
+export const PROVIDER_SURFACES = ['cloud', 'local', 'claude', 'openhands'] as const;
+export const PROVIDER_SOURCES = ['devin', 'claude', 'openhands'] as const;
+export const PROVIDER_VIEW_NAMES = ['cloud', 'local', 'claude', 'openhands'] as const;
 export const PROVIDER_ANALYTICS_TABS = ['devin', 'claude'] as const;
 export const PROVIDER_USAGE_METRICS = ['devin-monthly', 'claude-session', 'claude-weekly'] as const;
 
@@ -33,7 +33,7 @@ export interface ProviderDescriptor {
   sidebarShortcut: boolean;
 }
 
-/** Rail order: devin-cloud, devin-local, claude. */
+/** Rail order: devin-cloud, devin-local, claude, openhands. */
 export const PROVIDERS: readonly ProviderDescriptor[] = [
   {
     id: 'devin-cloud',
@@ -84,6 +84,25 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
     settingsTab: 'claude',
     analyticsTab: 'claude',
     usageMetrics: ['claude-session', 'claude-weekly'],
+    dock: true,
+    sessionsColumn: true,
+    newSessionShortcut: true,
+    sidebarShortcut: true,
+  },
+  {
+    // OpenHands Cloud: no selection -> GLOBAL tabs, never the Devin Cloud session's.
+    id: 'openhands',
+    kind: 'cloud',
+    surface: 'openhands',
+    label: 'OpenHands',
+    railId: 'openhandsButton',
+    viewName: 'openhands',
+    scopePrefix: 'openhands:',
+    scopeFallback: 'global',
+    source: 'openhands',
+    settingsTab: 'openhands',
+    analyticsTab: null,
+    usageMetrics: [],
     dock: true,
     sessionsColumn: true,
     newSessionShortcut: true,

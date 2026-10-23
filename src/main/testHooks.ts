@@ -46,6 +46,7 @@ import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 import { hosts } from './hosts';
+import { openhandsBaseUrl } from './openhandsConfig';
 import { remoteFsViolationCount } from './remoteFsGuard';
 
 export function registerTestHooks(): void {
@@ -229,6 +230,8 @@ export function registerTestHooks(): void {
       secretsSetOpenHands: async (value: string | null) => {
         await state.secrets?.setOpenHandsApiKey(value);
       },
+      // B1 T20: effective OpenHands base URL (AGENT_WORKSPACE_TEST_OPENHANDS_URL wins).
+      openhandsBaseUrl: () => openhandsBaseUrl(),
       pollNow: () => notifier.pollNow(),
       // Cloud session sidebar data layer.
       cloudState: () => cloudSessions().snapshot(),

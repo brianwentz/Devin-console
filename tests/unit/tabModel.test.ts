@@ -391,6 +391,12 @@ describe('pickDiscardCandidates', () => {
     expect(effectiveScope('cloud', { cloud: null, local: 'l1' })).toBe(GLOBAL);
   });
 
+  it('effectiveScope on openhands: own prefix, GLOBAL (never the Cloud session) without a selection', () => {
+    expect(effectiveScope('openhands', { cloud: 'c1', openhands: null })).toBe(GLOBAL);
+    expect(effectiveScope('openhands', { cloud: 'c1' })).toBe(GLOBAL);
+    expect(effectiveScope('openhands', { openhands: 'abc' })).toBe('openhands:abc');
+  });
+
   it("effectiveScope honours scopeFallback 'global' (injected descriptor lookup)", () => {
     const lookup = () => ({ scopePrefix: 'x:', scopeFallback: 'global' as const });
     expect(effectiveScope('analytics', { cloud: 'c1', analytics: 'i1' }, lookup)).toBe('x:i1');

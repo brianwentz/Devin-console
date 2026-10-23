@@ -60,6 +60,12 @@ describe('draftFromSettings', () => {
         defaultWslDistro: 'Ubuntu-24.04',
         pickerFolder: '/home/u/ws',
       },
+      openhands: {
+        baseUrl: 'https://oh.example.com/app',
+        pollSeconds: 45,
+        maxLiveViews: 3,
+        keepAliveHours: 6,
+      },
     });
     expect(draftFromSettings(custom)).toEqual({
       tenantUrl: 'https://tenant.example.com',
@@ -84,6 +90,10 @@ describe('draftFromSettings', () => {
       claudeMaxLiveAgents: '2',
       claudeDefaultWslDistro: 'Ubuntu-24.04',
       claudePickerFolder: '/home/u/ws',
+      openhandsBaseUrl: 'https://oh.example.com/app',
+      openhandsPollSeconds: '45',
+      openhandsMaxLiveViews: '3',
+      openhandsKeepAliveHours: '6',
       userId: 'user-1',
       orgId: 'org-2',
       linkRules: [{ id: 'r1', kind: 'prefix', pattern: 'https://x.example/', enabled: true }],
@@ -242,6 +252,12 @@ describe('validateDraft', () => {
         defaultWslDistro: null,
         pickerFolder: null,
       },
+      openhands: {
+        baseUrl: 'https://app.all-hands.dev',
+        pollSeconds: 30,
+        maxLiveViews: 4,
+        keepAliveHours: 24,
+      },
       notifications: { userId: 'u1', orgId: 'o1' },
     });
   });
@@ -368,6 +384,7 @@ describe('DRAFT_TAB / firstErrorField', () => {
       'general',
       'devin',
       'claude',
+      'openhands',
       'links',
       'passwords',
       'notifications',
@@ -540,7 +557,7 @@ describe('provider registry shell lists (A1 T5)', () => {
   });
 
   it('both devin providers share the devin tab', () => {
-    const tabs = PROVIDERS.filter((p) => p.id !== 'claude').map((p) => p.settingsTab);
+    const tabs = PROVIDERS.filter((p) => p.id.startsWith('devin-')).map((p) => p.settingsTab);
     expect(tabs).toEqual(['devin', 'devin']);
   });
 
@@ -554,5 +571,100 @@ describe('provider registry shell lists (A1 T5)', () => {
     expect(PROVIDER_UI_KEYS['devin-cloud']).toEqual({ analyticsPanel: true, sourceGlyph: false });
     expect(PROVIDER_UI_KEYS['devin-local']).toEqual({ analyticsPanel: false, sourceGlyph: false });
     expect(PROVIDER_UI_KEYS.claude).toEqual({ analyticsPanel: true, sourceGlyph: true });
+    expect(PROVIDER_UI_KEYS.openhands).toEqual({ analyticsPanel: false, sourceGlyph: false });
+  });
+});
+
+describe('openhands draft fields (B1 T20)', () => {
+  it('maps settings <-> draft and round-trips through the patch', () => {
+    const d = draftFromSettings(defaults);
+    expect(d.openhandsBaseUrl).toBe('https://app.all-hands.dev');
+    expect(d.openhandsPollSeconds).toBe('30');
+    expect(d.openhandsMaxLiveViews).toBe('4');
+    expect(d.openhandsKeepAliveHours).toBe('24');
+    const result = validateDraft(
+      draft({
+        openhandsBaseUrl: 'https://oh.example.com',
+        openhandsPollSeconds: '60',
+        openhandsMaxLiveViews: '2',
+        openhandsKeepAliveHours: '0',
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.patch.openhands).toEqual({
+      baseUrl: 'https://oh.example.com',
+      pollSeconds: 60,
+      maxLiveViews: 2,
+      keepAliveHours: 0,
+    });
+    const merged = mergeSettings(defaults, result.patch);
+    expect(merged.openhands.baseUrl).toBe('https://oh.example.com');
+    expect(merged.openhands.pollSeconds).toBe(60);
+    expect(merged.openhands.collapsedRepos).toEqual([]);
+    expect(isDraftDirty(draftFromSettings(merged), merged)).toBe(false);
+  });
+
+  it('rejects a non-https base URL and routes the error to the openhands tab', () => {
+    const result = validateDraft(draft({ openhandsBaseUrl: 'http://x' }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.openhandsBaseUrl).toBeDefined();
+    expect(DRAFT_TAB[firstErrorField(result.errors)!]).toBe('openhands');
+  });
+
+  it('accepts a sub-path base URL and stores it normalised', () => {
+    const result = validateDraft(draft({ openhandsBaseUrl: 'https://corp/openhands/' }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.patch.openhands?.baseUrl).toBe('https://corp/openhands');
+    expect(isDraftDirty(draft({ openhandsBaseUrl: ' https://app.all-hands.dev ' }), defaults)).toBe(
+      false,
+    );
+    expect(isDraftDirty(draft({ openhandsBaseUrl: 'https://corp/openhands/' }), defaults)).toBe(true);
+  });
+
+  it.each([
+    ['openhandsPollSeconds', '5'],
+    ['openhandsPollSeconds', '601'],
+    ['openhandsPollSeconds', '30.5'],
+    ['openhandsMaxLiveViews', '0'],
+    ['openhandsMaxLiveViews', '21'],
+    ['openhandsKeepAliveHours', '-1'],
+    ['openhandsKeepAliveHours', '169'],
+    ['openhandsKeepAliveHours', '1.5'],
+  ] as const)('rejects %s = %s', (field, value) => {
+    const result = validateDraft(draft({ [field]: value }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[field]).toBeDefined();
+    expect(DRAFT_TAB[field]).toBe('openhands');
+  });
+
+  it('maps openhands zod issue paths to draft fields', () => {
+    const { errors } = fieldErrorsFromIssues([
+      { path: ['openhands', 'baseUrl'], message: 'a' },
+      { path: ['openhands', 'pollSeconds'], message: 'b' },
+      { path: ['openhands', 'maxLiveViews'], message: 'c' },
+      { path: ['openhands', 'keepAliveHours'], message: 'd' },
+    ]);
+    expect(errors).toMatchObject({
+      openhandsBaseUrl: 'a',
+      openhandsPollSeconds: 'b',
+      openhandsMaxLiveViews: 'c',
+      openhandsKeepAliveHours: 'd',
+    });
+  });
+
+  it('the settings schema has the openhands block and refuses a non-https base URL', () => {
+    expect(SettingsSchema.safeParse({ openhands: { baseUrl: 'http://x' } }).success).toBe(false);
+    expect(SettingsSchema.parse({}).openhands).toEqual({
+      baseUrl: 'https://app.all-hands.dev',
+      pollSeconds: 30,
+      maxLiveViews: 4,
+      keepAliveHours: 24,
+      collapsedRepos: [],
+      sessionOrder: {},
+    });
   });
 });

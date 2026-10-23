@@ -118,6 +118,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_WSL_UNC_ROOT` | test mode | Replaces the `\\wsl.localhost\<distro>` prefix for path mapping (`toWindowsPath`-derived paths, `pathHostId`) so a plain temp dir stands in for a distro; also an extra remote-fs guard prefix — the app must never touch it Windows-side. |
 | `AGENT_WORKSPACE_TEST_QUIET` | test mode | `'0'` opts out of quiet mode: by default test launches run the window invisible (opacity 0, skip-taskbar, `showInactive`, `disable-features=CalculateNativeWinOcclusion` + `disable-renderer-backgrounding`) and bring-forward/focus calls go through `window.ts activateWindow`/`focusContents` instead of `show()/focus()`. `npm run test:e2e:headed` sets `'0'`. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_USAGE_URL` | test mode | Replaces `https://api.anthropic.com/api/oauth/usage` for the usage service — `tests/fixtures/http.ts` `GET /api/oauth/usage` returns `FAKE_USAGE_STATUS` (default 200) + `FAKE_USAGE_JSON` (default `tests/fixtures/claude-usage.json`); `launchApp` sets it to `fixtures.claudeUsageUrl`. |
+| `AGENT_WORKSPACE_TEST_OPENHANDS_URL` | test mode | Overrides `settings.openhands.baseUrl` in memory (never saved) via `effectiveBaseUrl` (`src/core/openhands.ts`) → `openhandsBaseUrl()` (`src/main/openhandsConfig.ts`, test hook `openhandsBaseUrl()`); http is allowed for loopback hosts only, an unusable value falls back to the saved URL. |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_URL` | test mode | Replaces `<tenant>/api/personal-analytics/usage-limit` for the Devin usage service — the devin fixture serves it with `FAKE_DEVIN_USAGE_STATUS` (default 200) + `FAKE_DEVIN_USAGE_JSON` (default `tests/fixtures/devin-usage-limit.json`); `launchApp` sets it to `fixtures.devinUsageUrl` and `fixtures.devin.setUsageLimit(body|null)`/`setUsageStatus(n)` override at runtime. Unset in test mode → the service stays `idle` and never fetches (identity is stubbed `{token:'test',orgId:'test'}` only when the URL is set). |
 | `AGENT_WORKSPACE_TEST_DEVIN_USAGE_POLL_MS` | test mode | Poll interval for the Devin usage service; `launchApp` sets `600000` — specs opt into faster polling. |
 | `AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Local host only (a `;`-separated `local=path` pair is also accepted; bare path = default) — a WSL host's account file is the distro's own `<home>/.claude.json`, read by its helper (`usage.accounts`); specs stage a second account by writing it under `FAKE_WSL_ROOT`. |
@@ -196,6 +197,14 @@ variable that selects it.
 - `hosts.defaultWslDistro` is gone: `migrateSettingsRaw` (`src/core/settings.ts`) copies a non-empty value into `local.defaultWslDistro` and
   `claude.defaultWslDistro` where those are still absent, then deletes the old key; `main/settings.ts` spots it in the raw file, logs
   `settings-migrated {from:'hosts.defaultWslDistro'}` and re-saves once.
+- `openhands.{baseUrl, pollSeconds, maxLiveViews, keepAliveHours, collapsedRepos, sessionOrder}` (B1) — Settings → OpenHands: `baseUrl` (default
+  `https://app.all-hands.dev`; the schema refuses non-https, the draft stores it through `normalizeBaseUrl` — sub-path kept, trailing slash dropped;
+  `#openhandsBaseUrlInput`), `pollSeconds` int 10..600 = 30 (`#openhandsPollSecondsInput`), `maxLiveViews` int 1..20 = 4 (`#openhandsMaxLiveViewsInput`),
+  `keepAliveHours` int 0..168 = 24 (`#openhandsKeepAliveInput`); `collapsedRepos`/`sessionOrder` have no Settings UI. A structural block in
+  `SETTINGS_PRESERVE_SPEC`. The API key is not a setting: explicit `#openhandsApiKeyInput` + `#openhandsApiKeySave`/`#openhandsApiKeyClear` over
+  `openhands:apiKeySet {value}` / `openhands:apiKeyClear` (`src/shared/ipc/openhands.ts`, `guardedHandle`, reply `{ok}` only, input cleared after a
+  save); `ShellState.openhandsApiKeySet` (presence only, `SecretStore.hasOpenHandsApiKey()`) and `ShellState.openhands.connection` feed
+  `#openhandsConnectionStatus[data-status=idle|api-key|api-key-rejected|api-key-required|web-session|login-required|error]`.
 - `notifications.userId` (manual user-id override for service-user tokens; `''` = detect automatically).
 - `routing.rules` (LinkRule `{id, kind: 'prefix'|'regex', pattern, enabled}`, max 100 — matched http(s) links open as GitHub-pane tabs; matcher in
   `src/core/linkRules.ts`, RouteKind `'rule'` ranks after github/tenant; gh-tab decisions reached via a rule log `rule-tab`/`rule-tab-background` with
@@ -390,7 +399,7 @@ variable that selects it.
   `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume`.
 
 ### Settings page
-- Seven tabs (`#settingsTabs` tablist, `[data-settings-tab=general|devin|claude|links|passwords|notifications|updates]`, `#settingsPanel-<id>` tabpanel)
+- Eight tabs (`#settingsTabs` tablist, `[data-settings-tab=general|devin|claude|openhands|links|passwords|notifications|updates]`, `#settingsPanel-<id>` tabpanel)
   — active tab is shell-only state in `src/shell/store.ts` (`useSettingsTab`/`setSettingsTab`); `SettingsTabId`, the id list `SETTINGS_TAB_ORDER` + the field → tab map `DRAFT_TAB` in
   `src/core/settingsDraft.ts` route a validation error to the tab holding the field. The `links` "Link Handling" tab (`LinksTab.tsx`, `#linkRulesList`
   rows `[data-rule-id][data-rule-invalid]`, `#linkRuleAdd`, `#linkRuleTestInput`/`#linkRuleTestResult`) also hosts the `#allowExternalInput` "Open
@@ -798,7 +807,7 @@ variable that selects it.
 
 ## Providers
 
-- Registry `src/core/providers.ts` (pure): `PROVIDERS` descriptors (`devin-cloud`, `devin-local`, `claude`; rail order) + the derived tuples
+- Registry `src/core/providers.ts` (pure): `PROVIDERS` descriptors (`devin-cloud`, `devin-local`, `claude`, `openhands`; rail order) + the derived tuples
   `PROVIDER_SURFACES|SOURCES|VIEW_NAMES|ANALYTICS_TABS|USAGE_METRICS`; `NotificationSourceSchema`/`UsageMetricSchema` and `SurfaceSchema`
   (`[...PROVIDER_SURFACES,'settings','analytics']`) are built from them, as are the `layout.ts` predicates (`dockSurface`, sessions column, shortcuts) and
   `effectiveScope` / `providerScope` in `tabModel.ts`. `providerById` throws on an unknown id; `providerBySurface|Source` return undefined.
@@ -812,6 +821,12 @@ variable that selects it.
   runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
   prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them
   from `src/shared/ipc.ts`; run `npm run smoke:install` when a settings schema changes.
+- OpenHands (B1 T20 — descriptor, settings and Settings tab only): `openhands` is `kind:'cloud'` with `scopeFallback:'global'` (no selection →
+  GLOBAL tabs, never the Devin Cloud session's) and source `openhands` (so the notifications/PR source enums accept it); `analyticsTab:null`,
+  `usageMetrics:[]` for now. No runtime is registered and no view pool exists yet: the surface renders the `#openhandsPanel` placeholder and
+  `#openhandsButton` on the rail, main keeps `state.openhandsSessionId` (in the `syncScope` map) and `ShellState.openhands`
+  (`OpenHandsShellStateSchema`: `status, cached, sessions, folders, lastError, connection, capabilities`) is the static idle value from
+  `openhandsSnapshot()` (`src/main/openhandsConfig.ts`). `Ctrl+N` there still falls back to the Cloud new session.
 - Adding a local ACP provider (A3): the Devin Local host (`DevinLocalHost`, `src/main/local/acpHost.ts`) takes an `AcpAgentSpec`
   (`src/core/acpAgentSpec.ts`, re-exported by `src/main/local/agentSpec.ts`): `providerId`, `label`, `args` (appended to the resolved binary), optional
   `modes`, and `resolveCommand(host)` → a binary argv, `{ full }` (a complete argv used verbatim — the test-mode `AGENT_WORKSPACE_LOCAL_AGENT_CMD`
@@ -905,6 +920,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `remoteFsViolations()` | App `fs` calls on a WSL path the remote-fs guard saw since start (both modes); `launchApp` teardown asserts 0. |
 | `shutdownState` | Reads `state.shutdownComplete`. |
 | `secretsSetOpenHands(value)` | Seed (string) or clear (`null`) the encrypted OpenHands API key in `secrets.json`; never returns it. |
+| `openhandsBaseUrl()` | The effective OpenHands base URL (`AGENT_WORKSPACE_TEST_OPENHANDS_URL` wins over the setting). |
 
 ## Log events
 

@@ -373,11 +373,12 @@ describe('deriveNotifications ownerUserId', () => {
 });
 
 describe('provider-derived source enum', () => {
-  it('NotificationSourceSchema accepts exactly devin and claude', () => {
+  it('NotificationSourceSchema accepts exactly devin, claude and openhands', () => {
     expect(NotificationSourceSchema.safeParse('claude').success).toBe(true);
     expect(NotificationSourceSchema.safeParse('devin').success).toBe(true);
+    expect(NotificationSourceSchema.safeParse('openhands').success).toBe(true);
     expect(NotificationSourceSchema.safeParse('local').success).toBe(false);
-    expect(NotificationSourceSchema.options).toEqual(['devin', 'claude']);
+    expect(NotificationSourceSchema.options).toEqual(['devin', 'claude', 'openhands']);
   });
   it('itemKey defaults the source to devin', () => {
     expect(itemKey({ kind: 'waiting', sessionId: 's1' } as never)).toBe('session:devin:s1');

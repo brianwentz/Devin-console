@@ -1,3 +1,4 @@
+import { normalizeBaseUrl } from './openhands';
 import { isAllowedAppUrl } from './sessions';
 import { validateLinkRule } from './linkRules';
 import type { ClaudePermissionMode, LinkRule, Settings, SettingsPatch } from '../shared/ipc';
@@ -58,6 +59,10 @@ export interface SettingsDraft {
   claudeMaxLiveAgents: string;
   claudeDefaultWslDistro: string;
   claudePickerFolder: string;
+  openhandsBaseUrl: string;
+  openhandsPollSeconds: string;
+  openhandsMaxLiveViews: string;
+  openhandsKeepAliveHours: string;
   userId: string;
   orgId: string;
   linkRules: LinkRule[];
@@ -69,6 +74,7 @@ export const SETTINGS_TAB_ORDER = [
   'general',
   'devin',
   'claude',
+  'openhands',
   'links',
   'passwords',
   'notifications',
@@ -100,6 +106,10 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   claudeMaxLiveAgents: 'claude',
   claudeDefaultWslDistro: 'claude',
   claudePickerFolder: 'claude',
+  openhandsBaseUrl: 'openhands',
+  openhandsPollSeconds: 'openhands',
+  openhandsMaxLiveViews: 'openhands',
+  openhandsKeepAliveHours: 'openhands',
   userId: 'devin',
   orgId: 'devin',
   linkRules: 'links',
@@ -139,6 +149,10 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     claudeMaxLiveAgents: String(settings.claude.maxLiveAgents),
     claudeDefaultWslDistro: settings.claude.defaultWslDistro ?? '',
     claudePickerFolder: settings.claude.pickerFolder ?? '',
+    openhandsBaseUrl: settings.openhands.baseUrl,
+    openhandsPollSeconds: String(settings.openhands.pollSeconds),
+    openhandsMaxLiveViews: String(settings.openhands.maxLiveViews),
+    openhandsKeepAliveHours: String(settings.openhands.keepAliveHours),
     userId: settings.notifications.userId,
     orgId: settings.notifications.orgId,
     linkRules: settings.routing.rules.map((rule) => ({ ...rule })),
@@ -179,6 +193,10 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     Number(draft.claudeMaxLiveAgents) !== Number(base.claudeMaxLiveAgents) ||
     draft.claudeDefaultWslDistro !== base.claudeDefaultWslDistro ||
     draft.claudePickerFolder.trim() !== base.claudePickerFolder ||
+    draft.openhandsBaseUrl.trim() !== base.openhandsBaseUrl ||
+    Number(draft.openhandsPollSeconds) !== Number(base.openhandsPollSeconds) ||
+    Number(draft.openhandsMaxLiveViews) !== Number(base.openhandsMaxLiveViews) ||
+    Number(draft.openhandsKeepAliveHours) !== Number(base.openhandsKeepAliveHours) ||
     draft.userId.trim() !== base.userId ||
     draft.orgId.trim() !== base.orgId ||
     draft.linkRules.length !== base.linkRules.length ||
@@ -256,6 +274,26 @@ export function validateDraft(
       break;
     }
   }
+  // https only (sub-path allowed); stored normalised (no trailing slash).
+  const openhandsBaseUrl = normalizeBaseUrl(draft.openhandsBaseUrl);
+  if (openhandsBaseUrl === null) {
+    errors.openhandsBaseUrl = 'OpenHands URL must be an https URL';
+  }
+  const openhandsPoll = Number(draft.openhandsPollSeconds);
+  if (!Number.isInteger(openhandsPoll) || openhandsPoll < 10 || openhandsPoll > 600) {
+    errors.openhandsPollSeconds =
+      'OpenHands check interval must be a whole number between 10 and 600 seconds';
+  }
+  const openhandsMaxLive = Number(draft.openhandsMaxLiveViews);
+  if (!Number.isInteger(openhandsMaxLive) || openhandsMaxLive < 1 || openhandsMaxLive > 20) {
+    errors.openhandsMaxLiveViews =
+      'OpenHands conversations kept loaded must be a whole number between 1 and 20';
+  }
+  const openhandsKeepAlive = Number(draft.openhandsKeepAliveHours);
+  if (!Number.isInteger(openhandsKeepAlive) || openhandsKeepAlive < 0 || openhandsKeepAlive > 168) {
+    errors.openhandsKeepAliveHours =
+      'Keep hidden OpenHands conversations live for must be a whole number between 0 and 168 hours';
+  }
   const localPickerFolder = draft.localPickerFolder.trim();
   const claudePickerFolder = draft.claudePickerFolder.trim();
   if (localPickerFolder && !isAbsolutePickerPath(localPickerFolder)) {
@@ -264,7 +302,7 @@ export function validateDraft(
   if (claudePickerFolder && !isAbsolutePickerPath(claudePickerFolder)) {
     errors.claudePickerFolder = 'Enter an absolute folder path';
   }
-  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  if (Object.keys(errors).length > 0 || openhandsBaseUrl === null) return { ok: false, errors };
   return {
     ok: true,
     patch: {
@@ -298,6 +336,12 @@ export function validateDraft(
         defaultWslDistro: draft.claudeDefaultWslDistro || null,
         pickerFolder: claudePickerFolder || null,
       },
+      openhands: {
+        baseUrl: openhandsBaseUrl,
+        pollSeconds: openhandsPoll,
+        maxLiveViews: openhandsMaxLive,
+        keepAliveHours: openhandsKeepAlive,
+      },
       notifications: { userId: draft.userId.trim(), orgId: draft.orgId.trim() },
     },
   };
@@ -325,6 +369,10 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'claude.keepAliveMinutes': 'claudeKeepAliveMinutes',
   'claude.maxLiveAgents': 'claudeMaxLiveAgents',
   'claude.defaultWslDistro': 'claudeDefaultWslDistro',
+  'openhands.baseUrl': 'openhandsBaseUrl',
+  'openhands.pollSeconds': 'openhandsPollSeconds',
+  'openhands.maxLiveViews': 'openhandsMaxLiveViews',
+  'openhands.keepAliveHours': 'openhandsKeepAliveHours',
   'notifications.userId': 'userId',
   'notifications.orgId': 'orgId',
 };

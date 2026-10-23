@@ -2,6 +2,10 @@ import { z } from 'zod';
 import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
 import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
+import { normalizeBaseUrl } from '../core/openhands';
+import { OpenHandsChannels, OpenHandsConnectionSchema, OpenHandsStatusSchema } from './ipc/openhands';
+
+export * from './ipc/openhands';
 import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
 
 // Execution hosts: 'local' is this machine, 'wsl:<distro>' runs inside WSL,
@@ -211,6 +215,7 @@ export const IpcChannels = {
   // Taskbar badge: main asks the shell to render, the shell sends back a PNG.
   badgeRender: 'badge:render',
   badgeRendered: 'badge:rendered',
+  ...OpenHandsChannels,
 } as const;
 
 export const BadgeRenderSchema = z.object({
@@ -348,6 +353,17 @@ const ClaudeFields = {
   // ux3 S3: where Claude's folder pickers open (null = distro default).
   pickerFolder: z.string().max(1024).nullable(),
 };
+// OpenHands Cloud (B1): base URL (https only, sub-path allowed — stored
+// normalised by the Settings draft), poll cadence and the view pool limits.
+const OpenHandsFields = {
+  baseUrl: z.string().max(2048).refine((value) => normalizeBaseUrl(value) !== null, 'must be an https URL'),
+  pollSeconds: z.number().int().min(10).max(600),
+  maxLiveViews: z.number().int().min(1).max(20),
+  keepAliveHours: z.number().int().min(0).max(168),
+  collapsedRepos: z.array(z.string().max(1024)).max(200),
+  sessionOrder: SessionOrderSchema,
+};
+export const OPENHANDS_DEFAULT_BASE_URL = 'https://app.all-hands.dev';
 const TerminalFields = {
   // Optional command line override for dock shells ('' = Windows Terminal
   // default profile, else PowerShell).
@@ -649,6 +665,23 @@ export const SettingsObject = z.object({
       sessionOrder: {},
       pickerFolder: null,
     }),
+  openhands: z
+    .object({
+      baseUrl: OpenHandsFields.baseUrl.default(OPENHANDS_DEFAULT_BASE_URL),
+      pollSeconds: OpenHandsFields.pollSeconds.default(30),
+      maxLiveViews: OpenHandsFields.maxLiveViews.default(4),
+      keepAliveHours: OpenHandsFields.keepAliveHours.default(24),
+      collapsedRepos: OpenHandsFields.collapsedRepos.default([]),
+      sessionOrder: OpenHandsFields.sessionOrder.default({}),
+    })
+    .default({
+      baseUrl: OPENHANDS_DEFAULT_BASE_URL,
+      pollSeconds: 30,
+      maxLiveViews: 4,
+      keepAliveHours: 24,
+      collapsedRepos: [],
+      sessionOrder: {},
+    }),
   hosts: z
     .object({
       wslEnabled: HostsFields.wslEnabled.default(true),
@@ -681,6 +714,7 @@ export const SettingsPatchSchema = z.object({
   usage: z.object(UsageFields).partial().optional(),
   sessions: z.object(SessionsFields).partial().optional(),
   claude: z.object(ClaudeFields).partial().optional(),
+  openhands: z.object(OpenHandsFields).partial().optional(),
   hosts: z.object({ ...HostsFields, ssh: SshHostListPatchSchema }).partial().optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
@@ -804,6 +838,19 @@ export const CloudStateSchema = z.object({
   capabilities: CloudSourceCapabilitiesSchema,
 });
 export type CloudState = z.infer<typeof CloudStateSchema>;
+
+// ShellState.openhands — field names mirror CloudState where the shared
+// SessionSidebar reads them. Never carries the API key (only `connection`).
+export const OpenHandsShellStateSchema = z.object({
+  status: OpenHandsStatusSchema,
+  cached: z.boolean(),
+  sessions: z.array(CloudSessionSchema),
+  folders: z.array(z.string()),
+  lastError: z.object({ op: z.string(), message: z.string() }).nullable(),
+  connection: OpenHandsConnectionSchema,
+  capabilities: CloudSourceCapabilitiesSchema,
+});
+export type OpenHandsShellState = z.infer<typeof OpenHandsShellStateSchema>;
 
 // Claude Code sessions (local ~/.claude registry + SDK store).
 // A `claude --bg` background agent as listed by `claude agents --json --all`.
@@ -1030,6 +1077,10 @@ export const ShellStateSchema = z.object({
   cloud: CloudStateSchema,
   claude: ClaudeStateSchema,
   claudeSessionId: z.string().nullable(),
+  openhands: OpenHandsShellStateSchema,
+  openhandsSessionId: z.string().nullable(),
+  // Whether an OpenHands API key is stored — never the key itself.
+  openhandsApiKeySet: z.boolean(),
   update: UpdateStateSchema,
   // F5 terminal dock
   terminalOpen: z.boolean(),

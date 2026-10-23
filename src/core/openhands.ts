@@ -36,6 +36,22 @@ export function normalizeBaseUrl(raw: string, allowHttp = false): string | null 
   return `${u.protocol}//${u.host}${path}`;
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+// The base URL the app talks to: a test-mode override (AGENT_WORKSPACE_TEST_OPENHANDS_URL,
+// http allowed for loopback only) wins over the saved setting; an unusable
+// override falls back to the saved value.
+export function effectiveBaseUrl(saved: string, override: string | undefined): string {
+  if (!override) return saved;
+  let loopback = false;
+  try {
+    loopback = LOOPBACK_HOSTS.has(new URL(override.trim()).hostname);
+  } catch {
+    return saved;
+  }
+  return normalizeBaseUrl(override, loopback) ?? saved;
+}
+
 export function apiUrl(base: string, path: string, query?: Record<string, string | number | undefined>): string {
   const b = base.replace(/\/+$/, '');
   const p = path.startsWith('/') ? path : `/${path}`;

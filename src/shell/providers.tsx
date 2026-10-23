@@ -1,5 +1,5 @@
 import type { ComponentType, CSSProperties } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Hand, Sparkles } from 'lucide-react';
 import type { Rect } from '../core/layout';
 import { PROVIDERS, providerBySource, type ProviderId } from '../core/providers';
 import type { SettingsTabId } from '../core/settingsDraft';
@@ -14,6 +14,7 @@ import { ClaudeGlyph } from './components/icons/ClaudeGlyph';
 import { DevinCloudSidebar } from './components/DevinCloudSidebar';
 import { ClaudeTab } from './components/settings/ClaudeTab';
 import { DevinTab } from './components/settings/DevinTab';
+import { OpenHandsTab } from './components/settings/OpenHandsTab';
 import { LocalPanel } from './local/LocalPanel';
 import { LocalSidebar } from './local/LocalSidebar';
 
@@ -97,6 +98,28 @@ function ClaudeButton({ surface, buttonClass }: RailButtonProps) {
   );
 }
 
+function OpenHandsButton({ surface, buttonClass }: RailButtonProps) {
+  return (
+    <button
+      id="openhandsButton"
+      type="button"
+      aria-label="OpenHands"
+      aria-pressed={surface === 'openhands'}
+      title="OpenHands"
+      className={`${buttonClass} flex items-center justify-center`}
+      onClick={() => void requestSurface('openhands')}
+    >
+      <Hand size={18} strokeWidth={1.8} />
+    </button>
+  );
+}
+
+// Placeholder main column until the OpenHands view pool lands: no hosted view
+// is attached on this surface yet.
+function OpenHandsPanel({ style }: StyleProps) {
+  return <div id="openhandsPanel" style={style} />;
+}
+
 // Devin's analytics tab is the hosted tenant page; the shell renders nothing.
 function DevinAnalyticsPlaceholder(_props: StyleProps) {
   return null;
@@ -121,6 +144,11 @@ export const PROVIDER_UI: ProviderUiMap = {
     Sidebar: ClaudeSidebar,
     Panel: ClaudeView,
     SourceGlyph: ClaudeGlyph,
+  },
+  openhands: {
+    RailButton: OpenHandsButton,
+    SettingsTab: OpenHandsTab,
+    Panel: OpenHandsPanel,
   },
 };
 

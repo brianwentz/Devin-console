@@ -52,7 +52,7 @@ const selectedTab = (app: ElectronApplication) =>
 const hasEl = (app: ElectronApplication, id: string) =>
   shell(app, `Boolean(document.getElementById('${id}'))`);
 
-test('settings has seven tabs and switches panels', async () => {
+test('settings has eight tabs and switches panels', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
@@ -66,13 +66,13 @@ test('settings has seven tabs and switches panels', async () => {
           `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.dataset.settingsTab).join(',')`,
         ),
       )
-      .toBe('general,devin,claude,links,passwords,notifications,updates');
+      .toBe('general,devin,claude,openhands,links,passwords,notifications,updates');
     expect(
       await shell(
         app,
         `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.textContent).join('|')`,
       ),
-    ).toBe('General|Devin|Claude Code|Link Handling|Passwords|Notifications|Updates');
+    ).toBe('General|Devin|Claude Code|OpenHands|Link Handling|Passwords|Notifications|Updates');
     expect(await selectedTab(app)).toBe('general');
     // General keeps the hosts, sessions column and shell rows; the GitHub tab
     // pool moved to Link Handling and the Cloud rows to Devin.

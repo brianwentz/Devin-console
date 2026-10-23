@@ -33,6 +33,7 @@ import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
 import { notificationsUnread } from './notifications';
+import { openhandsSnapshot } from './openhandsConfig';
 import { allOpenPullRequests, prStore } from './prs';
 import { quiet, state } from './state';
 import { updateState } from './updater';
@@ -185,6 +186,8 @@ export function publicState(): ShellState {
     currentSessionId: state.currentSessionId,
     localSessionId: state.localSessionId,
     claudeSessionId: state.claudeSessionId,
+    openhandsSessionId: state.openhandsSessionId,
+    openhandsApiKeySet: state.secrets?.hasOpenHandsApiKey() ?? false,
     settings: state.settings?.current ?? SettingsSchema.parse({}),
     tabs: state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 },
     credentials: state.credentials?.list() ?? [],
@@ -218,6 +221,7 @@ export function publicState(): ShellState {
     usage: usageSummary(),
     cloud: cloudSessions().snapshot(),
     claude: claudeSessions().snapshot(),
+    openhands: openhandsSnapshot(),
     update: updateState(),
     terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
@@ -369,6 +373,7 @@ export function syncScope(): void {
       cloud: state.currentSessionId,
       local: state.localSessionId,
       claude: state.claudeSessionId,
+      openhands: state.openhandsSessionId,
     }),
   );
 }

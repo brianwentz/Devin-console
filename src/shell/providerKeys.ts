@@ -9,4 +9,5 @@ export const PROVIDER_UI_KEYS = {
   'devin-cloud': { analyticsPanel: true, sourceGlyph: false },
   'devin-local': { analyticsPanel: false, sourceGlyph: false },
   claude: { analyticsPanel: true, sourceGlyph: true },
+  openhands: { analyticsPanel: false, sourceGlyph: false },
 } as const satisfies Record<ProviderId, { analyticsPanel: boolean; sourceGlyph: boolean }>;

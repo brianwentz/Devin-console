@@ -35,6 +35,7 @@ export const SETTINGS_PRESERVE_SPEC: PreserveSpec = structural({
   analytics: structural(),
   usage: structural(),
   claude: structural(),
+  openhands: structural(),
   // ssh entries by alias: membership/order from memory, unknown per-entry fields survive.
   hosts: structural({ ssh: identityArray('alias', structural()) }),
 });
@@ -293,8 +294,21 @@ function mergeDefined<T extends object>(base: T, patch: { [K in keyof T]?: T[K] 
 export function mergeSettings(current: Settings, patch: unknown): Settings {
   const parsed = SettingsPatchSchema.safeParse(patch);
   if (!parsed.success) return current;
-  const { routing, pane, notifications, prs, local, tabs, layout, terminal, sessions, claude, hosts, ...rest } =
-    parsed.data;
+  const {
+    routing,
+    pane,
+    notifications,
+    prs,
+    local,
+    tabs,
+    layout,
+    terminal,
+    sessions,
+    claude,
+    openhands,
+    hosts,
+    ...rest
+  } = parsed.data;
   const topLevel = Object.fromEntries(
     Object.entries(rest).filter(([, value]) => value !== undefined),
   );
@@ -316,6 +330,7 @@ export function mergeSettings(current: Settings, patch: unknown): Settings {
     terminal: mergeDefined(current.terminal, terminal),
     sessions: mergeDefined(current.sessions, sessions),
     claude: mergeDefined(current.claude, claude),
+    openhands: mergeDefined(current.openhands, openhands),
     hosts: hosts
       ? {
           ...mergeDefined(current.hosts, { ...hosts, overrides: undefined }),

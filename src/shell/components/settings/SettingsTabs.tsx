@@ -5,6 +5,7 @@ const TAB_LABELS: Record<SettingsTabId, string> = {
   general: 'General',
   devin: 'Devin',
   claude: 'Claude Code',
+  openhands: 'OpenHands',
   links: 'Link Handling',
   passwords: 'Passwords',
   notifications: 'Notifications',

@@ -21,6 +21,7 @@ import {
   SettingsFlushDoneArg,
   SettingsPatchSchema,
   SettingsSchema,
+  OpenHandsApiKeySetArg,
   SetPatArg,
   SurfaceArg,
   TabIdArg,
@@ -417,6 +418,30 @@ function setupExtrasIpc(): void {
       return { ok: false, error: error instanceof Error ? error.message : 'Could not clear token.' };
     }
     notifier.restart('pat-cleared');
+    return { ok: true };
+  });
+  // OpenHands API key: replies carry `{ ok }` only; the key is never logged
+  // or echoed (SecretStore logs presence only). notifyShell refreshes
+  // ShellState.openhandsApiKeySet.
+  guardedHandle(IpcChannels.openhandsApiKeySet, async (_event, arg: unknown) => {
+    const parsed = OpenHandsApiKeySetArg.safeParse(arg);
+    if (!parsed.success || !state.secrets) return { ok: false };
+    try {
+      await state.secrets.setOpenHandsApiKey(parsed.data.value);
+    } catch {
+      return { ok: false };
+    }
+    notifyShell();
+    return { ok: true };
+  });
+  guardedHandle(IpcChannels.openhandsApiKeyClear, async () => {
+    if (!state.secrets) return { ok: false };
+    try {
+      await state.secrets.setOpenHandsApiKey(null);
+    } catch {
+      return { ok: false };
+    }
+    notifyShell();
     return { ok: true };
   });
   guardedHandle(IpcChannels.prsList, () => openPrs());
