@@ -11,6 +11,7 @@ import { ClaudeView } from './claude/ClaudeView';
 import { ClaudeAnalyticsTab } from './components/analytics/ClaudeAnalyticsTab';
 import { ClaudeSidebar } from './components/ClaudeSidebar';
 import { ClaudeGlyph } from './components/icons/ClaudeGlyph';
+import { OpenHandsGlyph } from './components/icons/OpenHandsGlyph';
 import { DevinCloudSidebar } from './components/DevinCloudSidebar';
 import { ClaudeTab } from './components/settings/ClaudeTab';
 import { DevinTab } from './components/settings/DevinTab';
@@ -130,6 +131,7 @@ export const PROVIDER_UI: ProviderUiMap = {
     RailButton: OpenHandsRailButton,
     SettingsTab: OpenHandsTab,
     Sidebar: OpenHandsSidebar,
+    SourceGlyph: OpenHandsGlyph,
   },
 };
 

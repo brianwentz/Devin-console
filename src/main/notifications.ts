@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nativeImage, screen } from 'electron';
-import { z } from 'zod';
 import {
   addNotification,
   clearNotifications,
@@ -23,29 +22,11 @@ import {
   unknownPaths,
   type PreserveSpec,
 } from '../core/storePreserve';
-import { NotificationSourceSchema, UsageMetricSchema } from '../core/providers';
+import { AppNotificationSchema } from '../core/notificationSchema';
 import { IpcChannels } from '../shared/ipc';
 import { log } from './log';
 import { state } from './state';
 import { notifyShell } from './window';
-
-const AppNotificationSchema = z.object({
-  id: z.string(),
-  kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth', 'usage']),
-  sessionId: z.string().nullable(),
-  ownerUserId: z.string().nullable().optional(),
-  source: NotificationSourceSchema.optional(),
-  sessionTitle: z.string(),
-  metric: UsageMetricSchema.optional(),
-  accountKey: z.string().optional(),
-  prUrl: z.string().optional(),
-  prState: z.string().optional(),
-  version: z.string().optional(),
-  title: z.string(),
-  body: z.string(),
-  createdAt: z.number(),
-  readAt: z.number().nullable(),
-});
 
 const SAVE_DEBOUNCE_MS = 300;
 

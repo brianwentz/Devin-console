@@ -3,6 +3,7 @@
 // No electron imports.
 import { z } from 'zod';
 import type { CloudSessionState } from '../shared/ipc';
+import type { NewNotification } from './notificationModel';
 
 export type OhStatus = 'starting' | 'idle' | 'running' | 'waiting' | 'finished' | 'error' | 'paused';
 
@@ -258,6 +259,74 @@ export function statusTransitions(
     else if (r.status === 'error') out.push({ id: r.id, kind: 'blocked' });
   }
   return out;
+}
+
+export type OhTransitionKind = 'finished' | 'waiting' | 'blocked';
+export interface OhTransition {
+  id: string;
+  kind: OhTransitionKind;
+  row: OhRow;
+}
+
+// Remembers the last status of every conversation seen by a successful list.
+// The first observation (each source lives for one base URL) is
+// a baseline that emits nothing. An incremental list holds only changed rows:
+// they are diffed against the full map and merged in; absent rows stay.
+export function createTransitionTracker() {
+  let known: Map<string, OhStatus> | null = null;
+  return {
+    observe(items: OhRow[], full: boolean): OhTransition[] {
+      const prev = known;
+      const byId = new Map(items.map((r) => [r.id, r]));
+      const out: OhTransition[] = prev
+        ? statusTransitions(prev, items).flatMap((t) => {
+            const row = byId.get(t.id);
+            return row ? [{ id: t.id, kind: t.kind, row }] : [];
+          })
+        : [];
+      const next = full || !prev ? new Map<string, OhStatus>() : prev;
+      for (const r of items) next.set(r.id, r.status);
+      known = next;
+      return out;
+    },
+  };
+}
+
+const ENTRY_TITLES: Record<OhTransitionKind, string> = {
+  finished: 'Finished',
+  waiting: 'Waiting for confirmation',
+  blocked: 'Conversation error',
+};
+
+// Notification entry for a status transition (src/main/providers/openhands.ts
+// adds it to the store). Never carries URLs or keys.
+export function openHandsEntry(
+  t: { id: string; kind: OhTransitionKind },
+  row: Pick<OhRow, 'title'>,
+  now: number = Date.now(),
+): NewNotification {
+  const title = row.title || UNTITLED;
+  return {
+    kind: t.kind,
+    source: 'openhands',
+    ownerUserId: null,
+    sessionId: t.id,
+    sessionTitle: title,
+    title: ENTRY_TITLES[t.kind],
+    body: title,
+    createdAt: now,
+  };
+}
+
+// Same gate and defaults as the Claude chat path: `notifications.collect`
+// and the per-kind toggle (finished is off by default).
+export function notifyAllowed(
+  collect: boolean | undefined,
+  kinds: Partial<Record<OhTransitionKind, boolean>> | undefined,
+  kind: OhTransitionKind,
+): boolean {
+  if (!(collect ?? true)) return false;
+  return kinds?.[kind] ?? kind !== 'finished';
 }
 
 export function toCloudSession(row: OhRow, baseUrl: string): CloudSessionState {

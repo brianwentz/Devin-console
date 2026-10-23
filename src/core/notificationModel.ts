@@ -123,11 +123,12 @@ export function unreadCount(list: readonly AppNotification[]): number {
 // Drop session-scoped entries that were derived for a different token user
 // (or by a build that recorded no owner). `ownerUserId === null` means the
 // token has no user identity, so every session-scoped entry goes. Claude
-// entries are not tied to the Devin identity and always survive.
+// and OpenHands entries are not tied to the Devin identity and always survive.
 export function pruneForeign(list: readonly AppNotification[], ownerUserId: string | null): AppNotification[] {
   return list.filter(
     (item) =>
       item.source === 'claude' ||
+      item.source === 'openhands' ||
       item.sessionId === null ||
       (ownerUserId !== null && item.ownerUserId === ownerUserId),
   );

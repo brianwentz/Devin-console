@@ -8,12 +8,20 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, net, session, webContents } from 'electron';
 import { sanitizeMessage } from '../../core/devinApi';
-import { isConversationId, normalizeBaseUrl } from '../../core/openhands';
+import {
+  isConversationId,
+  normalizeBaseUrl,
+  notifyAllowed,
+  openHandsEntry,
+  type OhTransition,
+} from '../../core/openhands';
+import { providerScope } from '../../core/tabModel';
 import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
 import type { CloudCache } from '../../core/cloudCache';
 import { CloudSessionsController } from '../cloudKit/sessionsController';
 import { log } from '../log';
+import { notificationStore } from '../notifications';
 import { OpenHandsContextMenu } from '../openhands/contextMenu';
 import { createOpenHandsFetch } from '../openhands/fetch';
 import {
@@ -24,13 +32,14 @@ import {
 import { buildOpenHandsShellState, createOpenHandsSource } from '../openhands/source';
 import {
   openhandsForgetSession,
+  openhandsOpenSession,
   openhandsShowHome,
   openhandsViews,
   resetOpenHandsViews,
 } from '../openhands/views';
 import { idleOpenHandsState, openhandsEffectiveBase, setOpenHandsSnapshotSource } from '../openhandsConfig';
 import { state, testMode } from '../state';
-import { notifyShell } from '../window';
+import { applyLayout, notifyShell } from '../window';
 import type { ProviderRuntime } from './runtime';
 
 const PARTITION = 'persist:openhands';
@@ -50,6 +59,23 @@ async function readCacheFile(): Promise<unknown> {
   }
 }
 
+// Status transitions of a successful list -> notification entries, gated like
+// the Claude chat path. Logs kinds/counts only (never titles).
+function notifyTransitions(transitions: OhTransition[]): void {
+  try {
+    const settings = state.settings?.current.notifications;
+    const counts: Record<string, number> = {};
+    for (const t of transitions) {
+      if (!notifyAllowed(settings?.collect, settings?.kinds, t.kind)) continue;
+      notificationStore().add(openHandsEntry(t, t.row));
+      counts[t.kind] = (counts[t.kind] ?? 0) + 1;
+    }
+    for (const [kind, count] of Object.entries(counts)) log('shell', 'openhands-notify', { detail: { kind, count } });
+  } catch (error) {
+    log('shell', 'openhands-notify-error', { detail: { code: error instanceof Error ? error.name : 'unknown' } });
+  }
+}
+
 function build(base: string) {
   const fetcher = createOpenHandsFetch({
     baseUrl: () => base,
@@ -66,6 +92,7 @@ function build(base: string) {
     now: () => Date.now(),
     log: (event, detail) => log('shell', event, { detail }),
     baseUrl: () => base,
+    onTransitions: notifyTransitions,
   });
   const controller = new CloudSessionsController(source, {
     tenantKey: () => tenantKey(base),
@@ -168,6 +195,13 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   },
   // Ctrl+N / the sidebar '+': the OpenHands home page (its composer).
   showHome: () => openhandsShowHome({ reload: true, focus: true }),
+  openNotification(entry) {
+    if (entry.source !== 'openhands' || !entry.sessionId) return false;
+    // A conversation of another origin (base URL changed since): home instead.
+    if (!openhandsOpenSession(entry.sessionId)) openhandsShowHome();
+    notifyShell();
+    return true;
+  },
   async newSession() {
     menu.record('new-session');
     openhandsRuntime.showHome?.();
@@ -194,7 +228,12 @@ export async function openhandsRename(id: string, title: string): Promise<void> 
 export async function openhandsDelete(id: string): Promise<void> {
   if (!validId(id)) return;
   // Only a server-accepted delete touches the pool; a failure changes nothing.
-  if (await core.mutate({ op: 'delete', id })) openhandsForgetSession(id);
+  if (await core.mutate({ op: 'delete', id })) {
+    openhandsForgetSession(id);
+    // The conversation is gone: so are its GitHub tabs.
+    await state.tabManager?.closeScope(providerScope('openhands', id));
+    applyLayout();
+  }
 }
 // Sidebar refresh button.
 export function openhandsUiRefresh(): Promise<void> {

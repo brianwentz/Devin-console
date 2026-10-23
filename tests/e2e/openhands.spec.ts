@@ -356,8 +356,19 @@ test('deleting the open conversation drops its view and falls back to home; a fa
     expect((await state(app)).openhandsSessionId).toBe(ID1);
     fixtures.openhands.setStatus('delete', 0);
 
+    // The conversation's GitHub tab survives a failed delete and goes with a successful one.
+    const scopeOf = async () =>
+      (await app.evaluate(() => (globalThis as any).__agentworkspace.listScopes())) as { scope: string; count: number }[];
+    const tabId = await app.evaluate(
+      (_e, url) => (globalThis as any).__agentworkspace.open(url) as string,
+      `${fixtures.githubUrl}/acme/web/pull/12`,
+    );
+    expect(tabId).not.toBe('');
+    expect((await scopeOf()).find((x) => x.scope === `openhands:${ID1}`)?.count).toBe(1);
+
     // Success: the background view of another conversation is untouched.
     await deleteViaMenu(ID1);
+    await expect.poll(async () => (await scopeOf()).some((x) => x.scope === `openhands:${ID1}`)).toBe(false);
     await expect.poll(async () => (await views(app)).some((v) => v.key === ID1)).toBe(false);
     await expect.poll(async () => (await activeView(app))?.key).toBe('home');
     const s = await state(app);
@@ -375,6 +386,53 @@ test('deleting the open conversation drops its view and falls back to home; a fa
     await deleteViaMenu(ID2);
     await expect.poll(async () => (await views(app)).map((v) => v.key)).toEqual(['home']);
     expect((await activeView(app))?.key).toBe('home');
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('a status transition on a polled conversation raises a notification that opens it', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-oh-'));
+  const app = await launch(profile);
+  try {
+    await clickRail(app);
+    const entries = () =>
+      hook<{ id: string; kind: string; source?: string; sessionId: string | null; ownerUserId?: string | null }[]>(
+        app,
+        'notifications',
+      ).then((all) => all.filter((n) => n.source === 'openhands'));
+    // The first list is a baseline: nothing for the rows already on the server.
+    await hook(app, 'openhandsRefresh');
+    await expect.poll(async () => (await state(app)).openhands.sessions.length).toBe(3);
+    expect(await entries()).toEqual([]);
+
+    const fixtureRows = JSON.parse(readFileSync(FIXTURE_JSON, 'utf8')) as Record<string, unknown>[];
+    fixtures.openhands.setConversations(
+      fixtureRows.map((c) =>
+        c.id === ID1
+          ? { ...c, execution_status: 'waiting_for_confirmation', updated_at: '2026-10-21T10:00:00Z' }
+          : c,
+      ),
+    );
+    await hook(app, 'openhandsRefresh');
+    await expect.poll(async () => (await entries()).length).toBe(1);
+    const [entry] = await entries();
+    expect(entry).toMatchObject({ kind: 'waiting', sessionId: ID1, ownerUserId: null });
+    // The same list again changes nothing.
+    await hook(app, 'openhandsRefresh');
+    expect(await entries()).toHaveLength(1);
+
+    // Opening it lands on the conversation.
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('cloud'));
+    await hook(app, 'notificationsOpen', entry!.id);
+    await expect.poll(async () => (await state(app)).surface).toBe('openhands');
+    await expect.poll(async () => (await activeView(app))?.key).toBe(ID1);
+    expect((await state(app)).openhandsSessionId).toBe(ID1);
+
+    const events = await readEvents(join(profile, 'events.jsonl'));
+    const notify = events.filter((e) => e.event === 'openhands-notify');
+    expect(notify.map((e) => e.detail)).toEqual([{ kind: 'waiting', count: 1 }]);
+    expect(JSON.stringify(events)).not.toContain('Fix the login redirect');
   } finally {
     await quit(app, profile);
   }

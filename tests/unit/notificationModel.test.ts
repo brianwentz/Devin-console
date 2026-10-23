@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AppNotificationSchema } from '../../src/core/notificationSchema';
 import { NotificationSourceSchema } from '../../src/core/providers';
 import type { DevinSession } from '../../src/core/devinApi';
 import {
@@ -382,5 +383,25 @@ describe('provider-derived source enum', () => {
   });
   it('itemKey defaults the source to devin', () => {
     expect(itemKey({ kind: 'waiting', sessionId: 's1' } as never)).toBe('session:devin:s1');
+  });
+});
+
+describe('openhands notification entries', () => {
+  const oh: AppNotification = { ...note('oh', 'finished', 'a'.repeat(32)), source: 'openhands', ownerUserId: null };
+  it('pruneForeign keeps openhands entries for a user owner and a null owner', () => {
+    const foreign = { ...note('f', 'waiting', 'sess-other'), ownerUserId: 'user-other' };
+    expect(pruneForeign([oh, foreign], 'u1')).toEqual([oh]);
+    expect(pruneForeign([oh, foreign], null)).toEqual([oh]);
+  });
+  it('keys openhands session entries apart from devin and claude ones', () => {
+    expect(itemKey(oh)).toBe(`session:openhands:${'a'.repeat(32)}`);
+    const devin = { ...oh, source: undefined };
+    expect(itemKey(devin)).toBe(`session:devin:${'a'.repeat(32)}`);
+  });
+  it('the persisted schema keeps source openhands and ownerUserId null through a JSON round-trip', () => {
+    const parsed = AppNotificationSchema.array().parse(JSON.parse(JSON.stringify([oh])));
+    expect(parsed).toEqual([oh]);
+    expect(parsed[0]?.source).toBe('openhands');
+    expect(parsed[0]?.ownerUserId).toBeNull();
   });
 });

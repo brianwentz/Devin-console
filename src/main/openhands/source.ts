@@ -8,11 +8,13 @@
 import type { CloudSourceCapabilities } from '../../core/cloudKit/capabilities';
 import {
   listAllPages,
+  createTransitionTracker,
   mergeRows,
   nextCursor,
   parseSearchPage,
   toCloudSession,
   type OhRow,
+  type OhTransition,
 } from '../../core/openhands';
 import type { CloudListData } from '../../core/sessionTree';
 import type { CloudState, OpenHandsConnection, OpenHandsShellState } from '../../shared/ipc';
@@ -38,6 +40,8 @@ export interface OpenHandsSourceDeps {
   now(): number;
   log: CloudSessionsLog;
   baseUrl(): string;
+  /** Status transitions of a successful list (never the first one: that is a baseline). */
+  onTransitions?(transitions: OhTransition[]): void;
 }
 
 export interface OpenHandsSource extends CloudSessionSource {
@@ -85,6 +89,9 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
   let listing = false;
   let connection: OpenHandsConnection = 'idle';
   let lastAuthLog = '';
+  // One source per base URL (the runtime rebuilds it on a change), so the
+  // first list of a source is always the baseline.
+  const tracker = createTransitionTracker();
 
   const note = (result: OpenHandsFetchResult, listResult: boolean): void => {
     connection = connectionFor(result, listResult);
@@ -150,6 +157,8 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
           rows = mergeRows(rows, items);
           cursor = nextCursor(items, cursor);
         }
+        const transitions = tracker.observe(items, full);
+        if (transitions.length > 0) deps.onTransitions?.(transitions);
         deps.log('openhands-list', { count: rows.length, ms: deps.now() - t0, incremental: since !== undefined });
         return toData();
       } catch (error) {

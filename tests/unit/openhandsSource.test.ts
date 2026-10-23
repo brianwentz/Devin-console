@@ -196,3 +196,51 @@ describe('openhands source', () => {
     }).not.toThrow();
   });
 });
+
+describe('openhands source transitions', () => {
+  const A = 'a'.repeat(32);
+  const B = 'b'.repeat(32);
+  const withTransitions = (results: OpenHandsFetchResult[]) => {
+    const queue = [...results];
+    const seen: { id: string; kind: string; title: string }[][] = [];
+    const fetch: OpenHandsFetch = vi.fn(async () => queue.shift()!);
+    const source = createOpenHandsSource({
+      fetch,
+      now: () => T,
+      log: vi.fn(),
+      baseUrl: () => BASE,
+      onTransitions: (t) => seen.push(t.map((x) => ({ id: x.id, kind: x.kind, title: x.row.title }))),
+    });
+    return { source, seen };
+  };
+  const running = (id: string) => item(id, 1, { id, execution_status: 'running' });
+  const finished = (id: string, minutes = 2) => item(id, minutes, { id, execution_status: 'finished' });
+
+  it('first list is a baseline; the next running -> finished emits once', async () => {
+    const { source, seen } = withTransitions([page([running(A)]), page([finished(A)])]);
+    await source.list();
+    expect(seen).toEqual([]);
+    source.requestFull();
+    await source.list();
+    expect(seen).toEqual([[{ id: A, kind: 'finished', title: `T-${A}` }]]);
+  });
+  it('an incremental list diffs only its rows against the full map', async () => {
+    const { source, seen } = withTransitions([page([running(A), running(B)]), page([finished(B, 5)]), page([])]);
+    await source.list();
+    await source.list(); // incremental: only B changed
+    expect(seen).toEqual([[{ id: B, kind: 'finished', title: `T-${B}` }]]);
+    await source.list(); // A absent from the incremental list: silent
+    expect(seen).toHaveLength(1);
+  });
+  it('a failed list leaves the map intact', async () => {
+    const { source, seen } = withTransitions([
+      page([running(A)]),
+      { status: 500, body: null, mode: 'api-key' },
+      page([finished(A)]),
+    ]);
+    await source.list();
+    await expect(source.list()).rejects.toThrow();
+    await source.list();
+    expect(seen).toEqual([[{ id: A, kind: 'finished', title: `T-${A}` }]]);
+  });
+});

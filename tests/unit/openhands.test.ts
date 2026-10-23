@@ -4,6 +4,7 @@ import {
   apiUrl,
   conversationIdFromUrl,
   conversationUrl,
+  createTransitionTracker,
   effectiveBaseUrl,
   parseUrlAliases,
   listAllPages,
@@ -11,12 +12,15 @@ import {
   mergeRows,
   nextCursor,
   normalizeBaseUrl,
+  notifyAllowed,
+  openHandsEntry,
   parseSearchPage,
   prUrl,
   statusTransitions,
   toCloudSession,
   type OhRow,
 } from '../../src/core/openhands';
+import { itemKey } from '../../src/core/notificationModel';
 import { CloudSessionSchema } from '../../src/shared/ipc';
 
 const ID = 'a'.repeat(32);
@@ -297,5 +301,95 @@ describe('AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP', () => {
     const map = 'https://alt.test=http://127.0.0.1:4000';
     expect(effectiveBaseUrl('https://other.test', 'http://127.0.0.1:1', map)).toBe('http://127.0.0.1:1');
     expect(effectiveBaseUrl('https://other.test', undefined, map)).toBe('https://other.test');
+  });
+});
+
+describe('openHandsEntry', () => {
+  it('maps a transition + row to the notification entry', () => {
+    const entry = openHandsEntry({ id: ID, kind: 'finished' }, row({ title: 'Fix the build' }), 5000);
+    expect(entry).toMatchObject({
+      kind: 'finished',
+      source: 'openhands',
+      ownerUserId: null,
+      sessionId: ID,
+      sessionTitle: 'Fix the build',
+      createdAt: 5000,
+    });
+    expect(itemKey(entry)).toBe(`session:openhands:${ID}`);
+    expect(entry.title).toBe('Finished');
+    expect(entry.body).toBe('Fix the build');
+  });
+  it('titles per kind and falls back to the untitled label', () => {
+    const waiting = openHandsEntry({ id: ID, kind: 'waiting' }, row({ title: '' }), 1);
+    expect(waiting.title).toBe('Waiting for confirmation');
+    expect(waiting.sessionTitle).toBe('Untitled conversation');
+    expect(openHandsEntry({ id: ID, kind: 'blocked' }, row(), 1).title).toBe('Conversation error');
+  });
+});
+
+describe('notifyAllowed', () => {
+  const kinds = { waiting: true, finished: false, blocked: true };
+  it('needs collect and the kind toggle', () => {
+    expect(notifyAllowed(true, kinds, 'waiting')).toBe(true);
+    expect(notifyAllowed(true, kinds, 'finished')).toBe(false);
+    expect(notifyAllowed(false, kinds, 'waiting')).toBe(false);
+  });
+  it('defaults like the Claude path when settings are absent', () => {
+    expect(notifyAllowed(undefined, undefined, 'waiting')).toBe(true);
+    expect(notifyAllowed(undefined, undefined, 'blocked')).toBe(true);
+    expect(notifyAllowed(undefined, undefined, 'finished')).toBe(false);
+  });
+});
+
+describe('createTransitionTracker', () => {
+  const a = 'a'.repeat(32);
+  const b = 'b'.repeat(32);
+  const kinds = (out: { id: string; kind: string }[]) => out.map((x) => [x.id, x.kind]);
+  it('first observation is a baseline', () => {
+    const t = createTransitionTracker();
+    expect(t.observe([row({ id: a, status: 'running' }), row({ id: b, status: 'finished' })], true)).toEqual([]);
+  });
+  it('a second full list emits running -> finished once', () => {
+    const t = createTransitionTracker();
+    t.observe([row({ id: a, status: 'running' })], true);
+    const out = t.observe([row({ id: a, status: 'finished', title: 'Done' })], true);
+    expect(out).toEqual([{ id: a, kind: 'finished', row: expect.objectContaining({ id: a, title: 'Done' }) }]);
+    expect(t.observe([row({ id: a, status: 'finished' })], true)).toEqual([]);
+  });
+  it('running -> error and running -> stuck both give blocked; paused is silent', () => {
+    const t = createTransitionTracker();
+    const c = 'c'.repeat(32);
+    t.observe([row({ id: a, status: 'running' }), row({ id: b, status: 'running' }), row({ id: c, status: 'running' })], true);
+    const out = t.observe(
+      [
+        row({ id: a, status: mapStatus('RUNNING', 'error') }),
+        row({ id: b, status: mapStatus('RUNNING', 'stuck') }),
+        row({ id: c, status: mapStatus('RUNNING', 'paused') }),
+      ],
+      true,
+    );
+    expect(kinds(out)).toEqual([
+      [a, 'blocked'],
+      [b, 'blocked'],
+    ]);
+  });
+  it('an incremental list diffs against the full map; absent rows stay and emit nothing', () => {
+    const t = createTransitionTracker();
+    t.observe([row({ id: a, status: 'running' }), row({ id: b, status: 'running' })], true);
+    expect(kinds(t.observe([row({ id: a, status: 'waiting' })], false))).toEqual([[a, 'waiting']]);
+    // b was absent above but is still known as running, so finishing now emits.
+    expect(kinds(t.observe([row({ id: b, status: 'finished' })], false))).toEqual([[b, 'finished']]);
+    expect(t.observe([row({ id: a, status: 'waiting' })], false)).toEqual([]);
+  });
+  it('a conversation first seen in an incremental list is not a transition', () => {
+    const t = createTransitionTracker();
+    t.observe([row({ id: a, status: 'running' })], true);
+    expect(t.observe([row({ id: b, status: 'finished' })], false)).toEqual([]);
+  });
+  it('a full list drops vanished conversations from the map', () => {
+    const t = createTransitionTracker();
+    t.observe([row({ id: a, status: 'running' })], true);
+    t.observe([row({ id: b, status: 'running' })], true);
+    expect(t.observe([row({ id: a, status: 'finished' })], false)).toEqual([]);
   });
 });

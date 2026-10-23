@@ -564,6 +564,7 @@ describe('provider registry shell lists (A1 T5)', () => {
   it('resolves providers by notification source', () => {
     expect(providerBySource('claude')?.id).toBe('claude');
     expect(providerBySource('devin')?.id).toBe('devin-cloud');
+    expect(providerBySource('openhands')?.id).toBe('openhands');
   });
 
   it('declares the shell UI slots per provider', () => {
@@ -571,7 +572,7 @@ describe('provider registry shell lists (A1 T5)', () => {
     expect(PROVIDER_UI_KEYS['devin-cloud']).toEqual({ analyticsPanel: true, sourceGlyph: false });
     expect(PROVIDER_UI_KEYS['devin-local']).toEqual({ analyticsPanel: false, sourceGlyph: false });
     expect(PROVIDER_UI_KEYS.claude).toEqual({ analyticsPanel: true, sourceGlyph: true });
-    expect(PROVIDER_UI_KEYS.openhands).toEqual({ analyticsPanel: false, sourceGlyph: false });
+    expect(PROVIDER_UI_KEYS.openhands).toEqual({ analyticsPanel: false, sourceGlyph: true });
   });
 });
 
