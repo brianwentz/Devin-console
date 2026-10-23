@@ -1,17 +1,19 @@
 // DevinUsageService: polls the tenant's /api/personal-analytics/usage-limit
 // with the hosted page's bearer token (same identity path as cloudSessions)
-// and feeds usageAlertStore on every fresh parse. State is plain in-memory —
+// and publishes a usage reading (devinUsageFeed → the devin-cloud runtime's
+// UsageSource → UsageAlertStore) on every fresh parse. State is plain in-memory —
 // the shell reads it via ShellState.usage.devin; changes call notifyShell().
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { app, net } from 'electron';
 import { fmt, parseUsageLimit, shortDate } from '../core/devinUsage';
 import { monthKey } from '../core/claudeUsage';
+import { USAGE_METRIC_LABEL } from '../core/usageAlerts';
 import type { DevinUsageState, Settings } from '../shared/ipc';
 import { cloudSessions, type TokenFailReason } from './cloudSessions';
 import { log } from './log';
 import { state, testMode } from './state';
-import { usageAlertStore } from './usageAlerts';
+import { UsageFeed, type UsageSummaryItem } from './cloudKit/usage';
 import { notifyShell } from './window';
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -19,6 +21,18 @@ const FIRST_POLL_MS = 5_000;
 const MAX_BACKOFF_MS = 16 * 60_000;
 const TRANSIENT_RETRY_MS = 30_000;
 const MAX_TRANSIENT_RETRIES = 6;
+
+// Published after every fresh parse with a percent (the devin-cloud runtime's
+// UsageSource reads it).
+export const devinUsageFeed = new UsageFeed();
+
+// Rail badge / summary item: the monthly percent whenever one is known (a
+// stale cached body included).
+export function devinUsageSummary(): UsageSummaryItem[] {
+  const percent = devinUsage().state.percent;
+  if (percent === null) return [];
+  return [{ metric: 'devin-monthly', accountKey: '', label: USAGE_METRIC_LABEL['devin-monthly'], percent }];
+}
 
 interface DevinUsageCache {
   version: 1;
@@ -237,13 +251,13 @@ export class DevinUsageService {
       });
       if (snap.percent !== null) {
         const cycleLimit = snap.cycleLimit!;
-        usageAlertStore().evaluate([
+        devinUsageFeed.publish([
           {
             metric: 'devin-monthly',
-            accountKey: '',
+            account: '',
             percent: snap.percent,
             periodKey: snap.cycleStart ?? monthKey(new Date()),
-            source: 'devin',
+            stale: false,
             body: `${fmt(snap.cycleUsage)} / ${fmt(cycleLimit)} ACUs used${snap.cycleEnd ? ` — resets ${shortDate(snap.cycleEnd)}` : ''}`,
           },
         ]);

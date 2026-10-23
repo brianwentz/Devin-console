@@ -1,6 +1,7 @@
 // UsageAlertStore: threshold ledger for usage alerts (Devin Cloud monthly
 // ACUs + Claude limits). The ledger file is a cache-class store — no preserve
-// spec; an unreadable file starts empty.
+// spec; an unreadable file starts empty. Fed by every provider runtime's
+// `usage` (UsageSource, ./cloudKit/usage.ts) — see subscribe().
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -9,21 +10,18 @@ import {
   usageAlertTitle,
   USAGE_METRIC_LABEL,
   type UsageLedger,
-  type UsageReading,
 } from '../core/usageAlerts';
-import type { ProviderSource } from '../core/providers';
+import { subscribeUsage, type UsageAlertInput, type UsageSource } from './cloudKit/usage';
 import { log } from './log';
 import { notificationStore } from './notifications';
 import { state } from './state';
 
-export interface UsageAlertInput extends UsageReading {
-  body: string;
-  source: ProviderSource;
-}
+export type { UsageAlertInput } from './cloudKit/usage';
 
 export class UsageAlertStore {
   private ledger: UsageLedger;
   private readonly file: string;
+  private readonly subscribed = new Set<UsageSource>();
 
   constructor(userData: string) {
     this.file = join(userData, 'usage-alerts.json');
@@ -36,6 +34,14 @@ export class UsageAlertStore {
     } catch {
       /* missing/corrupt ledger — start empty */
     }
+  }
+
+  // One subscription per source, made when the store is created (before any
+  // service can publish — Devin's refresh() is callable before its start()).
+  // Each publish evaluates that source's non-stale readings, exactly as the
+  // named feeds did. A repeat call (second createWindow) is a no-op.
+  subscribe(sources: readonly (UsageSource | undefined)[]): void {
+    subscribeUsage(sources, (inputs) => this.evaluate(inputs), this.subscribed);
   }
 
   evaluate(readings: UsageAlertInput[]): void {

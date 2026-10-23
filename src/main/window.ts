@@ -18,13 +18,13 @@ import {
   type WindowBounds,
 } from '../core/layout';
 import { unreadPrCount, visiblePrs } from '../core/prPanelModel';
-import { usageLevel, USAGE_METRIC_LABEL, type UsageMetric } from '../core/usageAlerts';
+import { usageLevel } from '../core/usageAlerts';
 import { effectiveScope } from '../core/tabModel';
 import { IpcChannels, SettingsSchema, type ShellState } from '../shared/ipc';
 
 import { ensureAnalyticsView } from './analytics';
 import { cloudSessions } from './cloudSessions';
-import { claudeUsage } from './claude/usage';
+import { usageSummaryItems } from './cloudKit/usage';
 import { devinUsage } from './devinUsage';
 import { runtimeFor, runtimes } from './providers';
 import { claudeSessions } from './claude/sessions';
@@ -137,41 +137,12 @@ export function setSessionsOpen(open: boolean, source: string): void {
   log('shell', 'sessions-panel', { detail: { open, source } });
 }
 
-// Rail badge + summary inputs: the Devin monthly percent plus each non-stale
-// Claude account's session/weekly limits. Reading claudeUsage().state is safe
-// before start — the getter returns the initial state without starting the
-// service.
+// Rail badge + summary inputs: every runtime's usage summary items in runtime
+// order (devin-cloud's monthly percent, then each non-stale Claude account's
+// session/weekly limits). `devin` stays the raw Devin metric state.
 function usageSummary(): ShellState['usage'] {
-  const items: { metric: string; accountKey: string; label: string; percent: number }[] = [];
-  const devin = devinUsage().state;
-  if (devin.percent !== null) {
-    items.push({
-      metric: 'devin-monthly',
-      accountKey: '',
-      label: USAGE_METRIC_LABEL['devin-monthly'],
-      percent: devin.percent,
-    });
-  }
-  for (const account of claudeUsage().state.accounts) {
-    if (account.stale) continue;
-    const accountKey = account.email ?? `host:${account.hosts[0] ?? ''}`;
-    for (const limit of account.limits) {
-      const metric: UsageMetric | null =
-        limit.kind === 'session'
-          ? 'claude-session'
-          : limit.kind === 'weekly_all'
-            ? 'claude-weekly'
-            : null;
-      if (!metric) continue;
-      items.push({
-        metric,
-        accountKey,
-        label: `${USAGE_METRIC_LABEL[metric]}${account.email ? ` (${account.email})` : ''}`,
-        percent: limit.percent,
-      });
-    }
-  }
-  return { level: usageLevel(items.map((item) => item.percent)), items, devin };
+  const items = usageSummaryItems(runtimes().map((runtime) => runtime.usage));
+  return { level: usageLevel(items.map((item) => item.percent)), items, devin: devinUsage().state };
 }
 
 export function publicState(): ShellState {

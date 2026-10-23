@@ -1,7 +1,8 @@
 import { providerById } from '../../core/providers';
 import { claudeHost } from '../claude/host';
 import { claudeSessions } from '../claude/sessions';
-import { claudeUsage } from '../claude/usage';
+import { claudeUsage, claudeUsageFeed, claudeUsageSummary } from '../claude/usage';
+import { usageSource } from '../cloudKit/usage';
 import { log } from '../log';
 import { openClaudeSessionPr } from '../notifier';
 import type { ProviderRuntime } from './runtime';
@@ -11,6 +12,12 @@ export const claudeRuntime: ProviderRuntime = {
   start() {
     claudeUsage().start();
   },
+  usage: usageSource({
+    providerId: 'claude',
+    source: 'claude',
+    feed: () => claudeUsageFeed,
+    summary: () => claudeUsageSummary(),
+  }),
   async dispose() {
     // Claude teardown must never block or abort the quit sequence — a slow
     // consumer close or a failure here would skip the settings snapshot below.

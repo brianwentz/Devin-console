@@ -27,9 +27,11 @@ import {
   sumTotals,
   type UsageBuckets,
 } from '../../core/claudeUsage';
-import { usageAlertStore, type UsageAlertInput } from '../usageAlerts';
+import { USAGE_METRIC_LABEL, type UsageMetric } from '../../core/usageAlerts';
+import { UsageFeed, type UsageReading, type UsageSummaryItem } from '../cloudKit/usage';
 import type {
   ClaudeUsageAccount,
+  ClaudeUsageLimit,
   ClaudeUsageState,
   ClaudeTokenTotals,
   HostId,
@@ -109,6 +111,41 @@ function appTimeZone(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// Usage alerts: published at the end of every runFetch (the claude runtime's
+// UsageSource reads it); one reading per account per plan limit (session +
+// weekly-all), stale accounts flagged `stale` so they never alert.
+export const claudeUsageFeed = new UsageFeed();
+
+function limitMetric(kind: ClaudeUsageLimit['kind']): UsageMetric | null {
+  return kind === 'session' ? 'claude-session' : kind === 'weekly_all' ? 'claude-weekly' : null;
+}
+
+function accountKeyOf(account: ClaudeUsageAccount): string {
+  return account.email ?? `host:${account.hosts[0] ?? ''}`;
+}
+
+// Rail badge / summary items: each non-stale account's session/weekly limits.
+// Reading claudeUsage().state is safe before start — the getter returns the
+// initial state without starting the service.
+export function claudeUsageSummary(): UsageSummaryItem[] {
+  const items: UsageSummaryItem[] = [];
+  for (const account of claudeUsage().state.accounts) {
+    if (account.stale) continue;
+    const accountKey = accountKeyOf(account);
+    for (const limit of account.limits) {
+      const metric = limitMetric(limit.kind);
+      if (!metric) continue;
+      items.push({
+        metric,
+        accountKey,
+        label: `${USAGE_METRIC_LABEL[metric]}${account.email ? ` (${account.email})` : ''}`,
+        percent: limit.percent,
+      });
+    }
+  }
+  return items;
 }
 
 /** Plain-object check for a `usage.scan` bucket map (shape is trusted below that). */
@@ -541,31 +578,25 @@ export class ClaudeUsageService {
       }));
       // ShellState.usage mirrors these limits — push a full state update too.
       notifyShell();
-      // Usage alerts: one reading per non-stale account per plan limit
-      // (session + weekly-all).
-      const readings: UsageAlertInput[] = [];
+      // Usage alerts: one reading per account per plan limit (session +
+      // weekly-all); stale accounts are flagged and never alert.
+      const readings: UsageReading[] = [];
       for (const account of accounts) {
-        if (account.stale) continue;
-        const accountKey = account.email ?? `host:${account.hosts[0] ?? ''}`;
+        const accountKey = accountKeyOf(account);
         for (const limit of account.limits) {
-          const metric =
-            limit.kind === 'session'
-              ? 'claude-session'
-              : limit.kind === 'weekly_all'
-                ? 'claude-weekly'
-                : null;
+          const metric = limitMetric(limit.kind);
           if (!metric) continue;
           readings.push({
             metric,
-            accountKey,
+            account: accountKey,
             percent: limit.percent,
             periodKey: limit.resetsAt ?? '',
-            source: 'claude',
+            stale: account.stale,
             body: `${account.email ?? 'Claude'} — ${Math.round(limit.percent)}% used${limit.resetsAt ? `, resets in ${resetsIn(this.now(), limit.resetsAt)}` : ''}`,
           });
         }
       }
-      usageAlertStore().evaluate(readings);
+      claudeUsageFeed.publish(readings);
     } catch {
       /* surfaced via the account error field / backoff */
     }

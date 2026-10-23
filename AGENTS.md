@@ -461,9 +461,11 @@ variable that selects it.
   (`userData/usage-alerts.json` ledger, cache-class): `deriveUsageAlerts` (`src/core/usageAlerts.ts`) fires thresholds 50/80 once per period —
   highest-only per reading (40→85 fires 80, marks [50,80]), a new `periodKey` re-arms, muted kinds still advance the ledger. Devin metric
   `devin-monthly` (periodKey = `cycle_start`); Claude `claude-session`/`claude-weekly` per non-stale account (`resetsAt` periodKey), fed by the
-  claude service's `runFetch`. Alerts become `usage`-kind notification entries (persisted, never banner, `itemKey` = `usage:<metric>:<account>`,
+  claude service's `runFetch`. Feeds go through each runtime's `usage` (`UsageSource`, see Providers): the services publish into their
+  `UsageFeed` (`devinUsageFeed` after a fresh parse, `claudeUsageFeed` at the end of `runFetch`) and `UsageAlertStore.subscribe` — called once
+  where the store is created in `createWindow`, before any service can publish — evaluates that source's non-stale readings on each publish. Alerts become `usage`-kind notification entries (persisted, never banner, `itemKey` = `usage:<metric>:<account>`,
   open → Analytics on the matching tab) gated by `notifications.collect` ∧ `notifications.kinds.usage`. `ShellState.usage` = `{level,items,devin}`
-  → `#usageBadge` rail dot (warn amber `#e0a03c` / critical `#d93a2f`), `#devinUsageSummary` + `#claudeUsageSummary` rows inside the strip
+  (`items` = `usageSummaryItems` over the runtimes' `usage.summary()` in registration order) → `#usageBadge` rail dot (warn amber `#e0a03c` / critical `#d93a2f`), `#devinUsageSummary` + `#claudeUsageSummary` rows inside the strip
   (`ANALYTICS_TABS_HEIGHT = 36 + 24`).
 
 ### Devin Local
@@ -819,6 +821,12 @@ variable that selects it.
   `onPrPanelOpen`, `openPullRequests`, `openNotification`, `openSessionPr(sessionId, prUrl)`, `newSession`. `src/main/providers/index.ts` registers
   `devinCloud`, `devinLocal`, `claude` in that order (wrappers delegate to the existing singletons); `disposeAll()` disposes in registration order and a
   throwing `dispose` logs `provider-dispose-error {provider}` without stopping the rest. `runtimeFor(idOrSurface)` looks one up.
+- Usage: `ProviderRuntime.usage?: UsageSource` (`src/main/cloudKit/usage.ts`, electron-free) = `{ providerId, source, readings(), summary(),
+  onChange(cb) }`; a `UsageReading` is `{ metric, account, percent, periodKey, stale, body }` (`stale` never alerts; `body` = the alert text) and
+  `summary()` returns the provider's `ShellState.usage.items` rows (several for Claude: account × limit). Build one with `usageSource({ providerId,
+  source, feed: () => <UsageFeed>, summary })` — getters, because runtime modules sit in import cycles. `alertInputs(usage)` maps readings to
+  `deriveUsageAlerts` inputs; `usageSummaryItems(sources)` flattens summaries. `devin-cloud` and `claude` provide one; a new usage metric also
+  extends `PROVIDER_USAGE_METRICS` + `USAGE_METRIC_LABEL`.
 - Adding a provider: add the descriptor and extend the tuples in `providers.ts` (plus `ProviderId`); add a `PROVIDER_UI` + `PROVIDER_UI_KEYS` entry; add a
   runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
   prefix `<id>:`) differ only in descriptor flags and the runtime. Put the provider's new zod schemas in `src/shared/ipc/<provider>.ts` and re-export them

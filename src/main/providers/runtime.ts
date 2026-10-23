@@ -2,6 +2,7 @@ import type { ProviderDescriptor } from '../../core/providers';
 import type { AppNotification } from '../../core/notificationModel';
 import type { SessionPrLink } from '../../core/notifyModel';
 import type { Settings } from '../../shared/ipc';
+import type { UsageSource } from '../cloudKit/usage';
 
 // Electron-free: the registry and disposeAll are unit-tested directly. Wrappers
 // (devinCloud.ts, devinLocal.ts, claude.ts) delegate to the existing singletons.
@@ -28,6 +29,11 @@ export interface ProviderRuntime {
    * of it missing from `openPullRequests()` proves nothing. Omitted = true.
    */
   prsKnown?(): boolean;
+  /**
+   * Usage readings (UsageAlertStore subscribes at creation) and summary items
+   * (window.ts usageSummary, in runtime order). Omitted = no usage.
+   */
+  usage?: UsageSource;
 }
 
 const registry: ProviderRuntime[] = [];

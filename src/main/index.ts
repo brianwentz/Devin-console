@@ -298,7 +298,9 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
 async function createWindow(): Promise<void> {
   state.settings = new SettingsStore(userData);
   notificationStore(userData);
-  usageAlertStore(userData);
+  // Subscribed to every runtime's usage now, before any service can publish
+  // (Devin's refresh() is callable before its start()); nothing is fetched here.
+  usageAlertStore(userData).subscribe(runtimes().map((runtime) => runtime.usage));
   prStore(userData);
   prLedger(userData);
   identityResolver(userData, testMode);

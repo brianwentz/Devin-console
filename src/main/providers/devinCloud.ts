@@ -1,6 +1,7 @@
 import { providerById } from '../../core/providers';
 import { openPullRequests } from '../../core/notifyModel';
-import { devinUsage } from '../devinUsage';
+import { usageSource } from '../cloudKit/usage';
+import { devinUsage, devinUsageFeed, devinUsageSummary } from '../devinUsage';
 import { notifier, openDevinNotification, openSessionPr } from '../notifier';
 import { state } from '../state';
 import { openNewSession } from '../shortcuts';
@@ -13,6 +14,13 @@ export const devinCloudRuntime: ProviderRuntime = {
   start() {
     devinUsage().start();
   },
+  // Getters, not values: devinUsage.ts sits in this module's import cycle.
+  usage: usageSource({
+    providerId: 'devin-cloud',
+    source: 'devin',
+    feed: () => devinUsageFeed,
+    summary: () => devinUsageSummary(),
+  }),
   // The notifier/cloudSessions stops run earlier in shutdown and
   // devinUsage().dispose() stays named there to keep today's order.
   async dispose() {},
