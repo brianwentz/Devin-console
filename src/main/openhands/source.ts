@@ -89,6 +89,9 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
   let listing = false;
   let connection: OpenHandsConnection = 'idle';
   let lastAuthLog = '';
+  // A list already in flight when the source is stopped (base URL change) must
+  // not report transitions of the old origin.
+  let stopped = false;
   // One source per base URL (the runtime rebuilds it on a change), so the
   // first list of a source is always the baseline.
   const tracker = createTransitionTracker();
@@ -124,7 +127,9 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
     providerId: 'openhands',
     capabilities: OPENHANDS_CAPABILITIES,
     start() {},
-    stop() {},
+    stop() {
+      stopped = true;
+    },
     connection: () => connection,
     requestFull() {
       forceFull = true;
@@ -157,8 +162,10 @@ export function createOpenHandsSource(deps: OpenHandsSourceDeps): OpenHandsSourc
           rows = mergeRows(rows, items);
           cursor = nextCursor(items, cursor);
         }
-        const transitions = tracker.observe(items, full);
-        if (transitions.length > 0) deps.onTransitions?.(transitions);
+        if (!stopped) {
+          const transitions = tracker.observe(items, full);
+          if (transitions.length > 0) deps.onTransitions?.(transitions);
+        }
         deps.log('openhands-list', { count: rows.length, ms: deps.now() - t0, incremental: since !== undefined });
         return toData();
       } catch (error) {

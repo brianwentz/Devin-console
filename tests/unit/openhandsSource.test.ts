@@ -244,3 +244,24 @@ describe('openhands source transitions', () => {
     expect(seen).toEqual([[{ id: A, kind: 'finished', title: `T-${A}` }]]);
   });
 });
+
+describe('openhands source stop', () => {
+  it('a list that resolves after stop() emits no transitions', async () => {
+    const A = 'a'.repeat(32);
+    let release!: (r: OpenHandsFetchResult) => void;
+    const results = [page([item(A, 1, { id: A, execution_status: 'running' })])];
+    const fetch: OpenHandsFetch = vi.fn(async () =>
+      results.length > 0 ? results.shift()! : new Promise<OpenHandsFetchResult>((resolve) => (release = resolve)),
+    );
+    const onTransitions = vi.fn();
+    const source = createOpenHandsSource({ fetch, now: () => T, log: vi.fn(), baseUrl: () => BASE, onTransitions });
+    await source.list(); // baseline
+    source.requestFull();
+    const pending = source.list();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    source.stop();
+    release(page([item(A, 2, { id: A, execution_status: 'finished' })]));
+    await pending;
+    expect(onTransitions).not.toHaveBeenCalled();
+  });
+});

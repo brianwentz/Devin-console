@@ -8,13 +8,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, net, session, webContents } from 'electron';
 import { sanitizeMessage } from '../../core/devinApi';
-import {
-  isConversationId,
-  normalizeBaseUrl,
-  notifyAllowed,
-  openHandsEntry,
-  type OhTransition,
-} from '../../core/openhands';
+import { isConversationId, normalizeBaseUrl } from '../../core/openhands';
 import { providerScope } from '../../core/tabModel';
 import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
@@ -22,6 +16,7 @@ import type { CloudCache } from '../../core/cloudCache';
 import { CloudSessionsController } from '../cloudKit/sessionsController';
 import { log } from '../log';
 import { notificationStore } from '../notifications';
+import { createTransitionNotifier } from '../openhands/notify';
 import { OpenHandsContextMenu } from '../openhands/contextMenu';
 import { createOpenHandsFetch } from '../openhands/fetch';
 import {
@@ -39,7 +34,7 @@ import {
 } from '../openhands/views';
 import { idleOpenHandsState, openhandsEffectiveBase, setOpenHandsSnapshotSource } from '../openhandsConfig';
 import { state, testMode } from '../state';
-import { applyLayout, notifyShell } from '../window';
+import { activateWindow, applyLayout, notifyShell } from '../window';
 import type { ProviderRuntime } from './runtime';
 
 const PARTITION = 'persist:openhands';
@@ -59,22 +54,13 @@ async function readCacheFile(): Promise<unknown> {
   }
 }
 
-// Status transitions of a successful list -> notification entries, gated like
-// the Claude chat path. Logs kinds/counts only (never titles).
-function notifyTransitions(transitions: OhTransition[]): void {
-  try {
-    const settings = state.settings?.current.notifications;
-    const counts: Record<string, number> = {};
-    for (const t of transitions) {
-      if (!notifyAllowed(settings?.collect, settings?.kinds, t.kind)) continue;
-      notificationStore().add(openHandsEntry(t, t.row));
-      counts[t.kind] = (counts[t.kind] ?? 0) + 1;
-    }
-    for (const [kind, count] of Object.entries(counts)) log('shell', 'openhands-notify', { detail: { kind, count } });
-  } catch (error) {
-    log('shell', 'openhands-notify-error', { detail: { code: error instanceof Error ? error.name : 'unknown' } });
-  }
-}
+// Status transitions of a successful list -> notification entries (gate in
+// ../openhands/notify.ts, same defaults as the Claude chat path).
+const notifyTransitions = createTransitionNotifier({
+  settings: () => state.settings?.current.notifications,
+  add: (entry) => void notificationStore().add(entry),
+  log: (event, detail) => log('shell', event, { detail }),
+});
 
 function build(base: string) {
   const fetcher = createOpenHandsFetch({
@@ -197,9 +183,10 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   showHome: () => openhandsShowHome({ reload: true, focus: true }),
   openNotification(entry) {
     if (entry.source !== 'openhands' || !entry.sessionId) return false;
-    // A conversation of another origin (base URL changed since): home instead.
+    // A malformed id cannot open a conversation: land on home instead.
     if (!openhandsOpenSession(entry.sessionId)) openhandsShowHome();
     notifyShell();
+    activateWindow('notification-open');
     return true;
   },
   async newSession() {
@@ -231,8 +218,11 @@ export async function openhandsDelete(id: string): Promise<void> {
   if (await core.mutate({ op: 'delete', id })) {
     openhandsForgetSession(id);
     // The conversation is gone: so are its GitHub tabs.
-    await state.tabManager?.closeScope(providerScope('openhands', id));
-    applyLayout();
+    try {
+      await state.tabManager?.closeScope(providerScope('openhands', id));
+    } finally {
+      applyLayout();
+    }
   }
 }
 // Sidebar refresh button.

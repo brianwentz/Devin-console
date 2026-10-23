@@ -909,7 +909,7 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   and paused are silent). The wrapper (`providers/openhands.ts`) turns them into `openHandsEntry` entries (`source:'openhands'`, `ownerUserId:null`, key
   `session:openhands:<id>`) gated by `notifications.collect` + `notifications.kinds[kind]` (`notifyAllowed`, same defaults as Claude: finished off).
   `pruneForeign` keeps them; `SourceGlyph` is the rail's Hand icon. `ProviderRuntime.openNotification` → `openhandsOpenSession(id)` (surface `openhands`,
-  pooled view, `openhandsSessionId`; home when the id no longer parses on the current base). A successful delete also `closeScope('openhands:<id>')`.
+  pooled view, `openhandsSessionId`, `activateWindow`; an id that does not parse as a conversation id falls back to home, a well-formed id of a conversation that no longer exists just opens its page). `stop()` on a source drops the transitions of a list still in flight, so a base URL change never notifies for the old origin. A successful delete also `closeScope('openhands:<id>')` (`applyLayout` runs even if that rejects).
 
 ## Conventions
 - `src/core/` is pure TS — no `electron` imports (unit-testable).
@@ -1064,7 +1064,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `openhands-mutate` | `{ op: 'rename'\|'delete', ok, status }`. |
 | `openhands-auth` | `{ mode: 'api-key'\|'web-session', ok }` — logged when the (mode, ok) pair changes; the key is never logged. |
 | `openhands-open` | `{ sessionId }` (conversation id) or `{ found: false }` — a sidebar row opened its pooled view. |
-| `openhands-notify` | `{ kind: 'waiting'|'finished'|'blocked', count }` — status-transition notifications added after a list (counts only; never titles). |
+| `openhands-notify` | `{ kind: 'waiting'\|'finished'\|'blocked', count }` — status-transition notifications added after a list (counts only; never titles). |
 | `openhands-notify-error` | `{ code }` — error class name when adding the entries threw. |
 | `openhands-views-reset` | No detail — base URL change reset (on the surface) or disposed (off it) the pooled OpenHands views. |
 | `openhands-delete-confirm` | `{ confirmed }` — the delete confirm dialog's answer (auto-confirmed in test mode). |
