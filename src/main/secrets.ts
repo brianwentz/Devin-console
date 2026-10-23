@@ -205,9 +205,17 @@ export class SecretStore {
     if (value !== null && !(await this.encryptionAvailable())) {
       throw new SecretStoreError('OS encryption is unavailable; key not stored.');
     }
+    const previous = this.openhandsKey;
     this.openhandsKey = value;
     this.touched.add('openhandsApiKey');
-    await this.persist();
+    try {
+      await this.persist();
+    } catch (error) {
+      // Memory must not claim a key (or its removal) that never reached disk.
+      this.openhandsKey = previous;
+      this.touched.delete('openhandsApiKey');
+      throw error;
+    }
     log('shell', 'secrets-openhands-set', { detail: { ok: true } });
   }
 
