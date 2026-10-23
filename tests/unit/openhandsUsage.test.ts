@@ -446,6 +446,42 @@ describe('openhands usage service', () => {
     h.service.stop();
   });
 
+  it('recover() during an in-flight pass, then stop(): no further fetch once it resolves', async () => {
+    let release: (() => void) | null = null;
+    let hold = false;
+    const h = serviceHarness((p) => {
+      if (hold && p === '/api/quota/status') {
+        return new Promise<OpenHandsFetchResult>((resolve) => {
+          release = () => resolve(answer(200, QUOTA_BODY));
+        });
+      }
+      return happy(p);
+    });
+    h.service.start();
+    await h.service.refresh();
+    hold = true;
+    const pass = h.service.refresh();
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    h.service.recover();
+    h.service.stop();
+    const fetched = h.paths.length;
+    (release as unknown as () => void)();
+    await pass;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.paths.length).toBe(fetched);
+    expect(h.live()).toHaveLength(0);
+  });
+
+  it('refresh() after stop() asks nothing', async () => {
+    const h = serviceHarness(happy);
+    h.service.start();
+    h.service.stop();
+    await h.service.refresh();
+    expect(h.paths).toHaveLength(0);
+    expect(h.service.cards().credits).toEqual({ state: 'pending' });
+  });
+
   it('recover() is a no-op before start / after stop', async () => {
     const h = serviceHarness(happy);
     h.service.recover();

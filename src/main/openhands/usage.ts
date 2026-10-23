@@ -137,6 +137,8 @@ export function createOpenHandsUsageService(deps: OpenHandsUsageDeps): OpenHands
   };
 
   const run = async (): Promise<void> => {
+    // A stopped service (base URL change, dispose) never asks the old base again.
+    if (stopped) return;
     lastAttempt = deps.now();
     const at = new Date(deps.now()).toISOString();
     const [c, q, s] = await Promise.all([
@@ -195,6 +197,8 @@ export function createOpenHandsUsageService(deps: OpenHandsUsageDeps): OpenHands
       backoff = 0;
       const pass = inFlight
         ? inFlight.then(() => {
+            // stop() may have come while the old pass was in flight.
+            if (!running) return;
             backoff = 0;
             return refresh();
           })
