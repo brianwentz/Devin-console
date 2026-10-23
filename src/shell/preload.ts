@@ -23,6 +23,7 @@ import {
   type OpenHandsApiKeyResult,
   type OpenHandsContextMenuRequest,
   type OpenHandsContextMenuResult,
+  type OpenUserUrlReply,
   type ScopeSummary,
   type Settings,
   type SettingsCommitResult,
@@ -289,7 +290,7 @@ const api = {
     target: 'new' | 'current';
   }) =>
     ipcRenderer.invoke(IpcChannels.tabsOpenUserUrl, arg) as Promise<
-      { ok: true } | { ok: false; reason: string }
+      OpenUserUrlReply
     >,
   openReloadMenu: (x: number, y: number) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {

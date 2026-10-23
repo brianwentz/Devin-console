@@ -57,4 +57,27 @@ describe('normalizeUserUrl', () => {
     expect(reason('hello world')).toBe('not-a-url');
     expect(reason('foo')).toBe('not-a-url');
   });
+
+  it('treats every IPv4 literal as http', () => {
+    expect(ok('192.168.1.1')).toBe('http://192.168.1.1/');
+    expect(ok('192.168.1.1:8080')).toBe('http://192.168.1.1:8080/');
+  });
+
+  it('rejects bare numbers and non-canonical hosts', () => {
+    for (const raw of ['42', '1.2.3', '0x7f.1', '999.1.1.1']) {
+      expect(reason(raw)).toBe('not-a-url');
+    }
+  });
+
+  it('rejects userinfo with or without a scheme', () => {
+    for (const raw of ['brian@cloudbeds.com', 'github.com@evil.com', 'https://u:p@host.com/']) {
+      expect(reason(raw)).toBe('not-a-url');
+    }
+  });
+
+  it('accepts single-label hosts only with an explicit scheme', () => {
+    expect(ok('http://foo')).toBe('http://foo/');
+    expect(ok('http://devbox:8080')).toBe('http://devbox:8080/');
+    expect(reason('devbox:8080')).toBe('not-a-url');
+  });
 });

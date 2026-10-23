@@ -1141,7 +1141,12 @@ export const OpenUserUrlArg = z.object({
   source: z.enum(['drop', 'typed', 'favorite']),
   target: z.enum(['new', 'current']),
 });
-export type OpenUserUrlReply = { ok: true } | { ok: false; reason: string };
+export type OpenUserUrlReply =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'empty' | 'too-long' | 'scheme' | 'not-a-url' | 'invalid' | 'unavailable';
+    };
 export const TabsTabMenuArg = z.object({ id: z.string(), x: z.number(), y: z.number() });
 export interface ScopeSummary {
   scope: string;

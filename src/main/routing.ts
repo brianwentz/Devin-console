@@ -199,16 +199,18 @@ export function openUserUrl(
   const url = normalized.url;
   const kind = routeUrl(url, routeContext());
   if (kind === 'deny' || kind === 'mailto') return { ok: false, reason: 'scheme' };
-  log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
 
   if (kind === 'devin' || kind === 'provider') {
-    applyDecision(url, 'shell', 'tab-user-open', 'navigate');
+    const applied = applyDecision(url, 'shell', 'tab-user-open', 'navigate');
+    if (applied.kind === 'deny') return { ok: false, reason: 'unavailable' };
+    log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
     return { ok: true };
   }
 
-  setPaneOpen(true, 'user-url');
   const manager = state.tabManager;
   if (!manager) return { ok: false, reason: 'unavailable' };
+  log('shell', 'tab-user-open', { url, detail: { source, target, kind } });
+  setPaneOpen(true, 'user-url');
   if (target === 'current' && manager.navigateActive(url)) {
     applyLayout();
     return { ok: true };

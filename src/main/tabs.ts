@@ -11,6 +11,7 @@ import {
   openTab,
   pickDiscardCandidates,
   pruneScopes,
+  pullRequestKey,
   reorderTab,
   restoreTabs,
   scopeOf,
@@ -802,10 +803,22 @@ export class TabManager {
     const id = this.activeId;
     const entry = id ? this.entries.get(id) : undefined;
     if (!id || !entry) return false;
-    this.updateUrl(id, url);
-    entry.loading = true;
+    // Keep per-scope dedupe: a different tab already showing this URL (or PR) wins.
+    const key = pullRequestKey(url);
+    const other = visibleTabs(this.state, this.scope).find(
+      (tab) =>
+        tab.id !== id && (tab.url === url || (key !== null && pullRequestKey(tab.url) === key)),
+    );
+    if (other) {
+      this.activate(other.id);
+      return true;
+    }
     const contents = entry.view?.webContents;
-    if (contents && !contents.isDestroyed()) {
+    const live = !!contents && !contents.isDestroyed();
+    // A discarded tab has no view to finish loading; only a live one is loading.
+    if (live) entry.loading = true;
+    this.updateUrl(id, url);
+    if (contents && live) {
       contents.loadURL(url).catch((error: unknown) => {
         this.log('load-error', { id, message: String(error) }, url);
       });
