@@ -15,8 +15,8 @@ describe('provider registry', () => {
   it('exposes literal tuples for enums', () => {
     expect([...PROVIDER_SURFACES]).toEqual(['cloud', 'local', 'claude', 'openhands']);
     expect([...PROVIDER_SOURCES]).toEqual(['devin', 'claude', 'openhands']);
-    expect([...PROVIDER_ANALYTICS_TABS]).toEqual(['devin', 'claude']);
-    expect([...PROVIDER_USAGE_METRICS]).toEqual(['devin-monthly', 'claude-session', 'claude-weekly']);
+    expect([...PROVIDER_ANALYTICS_TABS]).toEqual(['devin', 'claude', 'openhands']);
+    expect([...PROVIDER_USAGE_METRICS]).toEqual(['devin-monthly', 'claude-session', 'claude-weekly', 'openhands-quota']);
   });
 
   it('keeps rail order and matches the tuples', () => {
@@ -78,8 +78,8 @@ describe('provider registry', () => {
       scopeFallback: 'global',
       source: 'openhands',
       settingsTab: 'openhands',
-      analyticsTab: null,
-      usageMetrics: [],
+      analyticsTab: 'openhands',
+      usageMetrics: ['openhands-quota'],
       dock: true,
       sessionsColumn: true,
       newSessionShortcut: true,

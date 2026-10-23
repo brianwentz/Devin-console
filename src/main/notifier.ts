@@ -594,8 +594,9 @@ export function openNotification(id: string): void {
     return;
   }
   if (entry.kind === 'usage') {
+    // The tab of the provider that raised it (Devin when the source has none).
     state.settings?.merge({
-      analytics: { tab: entry.source === 'claude' ? 'claude' : 'devin' },
+      analytics: { tab: providerBySource(entry.source ?? 'devin')?.analyticsTab ?? 'devin' },
     });
     state.surface = 'analytics';
     refreshAnalyticsView();

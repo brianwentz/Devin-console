@@ -205,12 +205,18 @@ test('analytics tab strip: Devin default, Claude tab swaps the hosted view for t
     mkdirSync(evidenceDir, { recursive: true });
     await shell.screenshot({ path: join(evidenceDir, 'analytics-claude-panel.png') });
 
-    // --- Arrow keys switch tabs (wrap both ways).
+    // --- Arrow keys switch tabs (wrap both ways): devin, claude, openhands.
     await shell.locator('#analyticsTab-claude').focus();
+    await shell.keyboard.press('ArrowRight');
+    await expect.poll(() => analyticsTab(app)).toBe('openhands');
+    await shell.locator('#analyticsTab-openhands').focus();
     await shell.keyboard.press('ArrowRight');
     await expect.poll(() => analyticsTab(app)).toBe('devin');
     await expect.poll(async () => (await h.getAnalyticsBounds())?.width ?? 0).toBeGreaterThan(0);
     await shell.locator('#analyticsTab-devin').focus();
+    await shell.keyboard.press('ArrowLeft');
+    await expect.poll(() => analyticsTab(app)).toBe('openhands');
+    await shell.locator('#analyticsTab-openhands').focus();
     await shell.keyboard.press('ArrowLeft');
     await expect.poll(() => analyticsTab(app)).toBe('claude');
     await expect.poll(async () => h.getAnalyticsBounds()).toEqual(ZERO);

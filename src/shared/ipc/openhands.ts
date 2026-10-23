@@ -66,3 +66,27 @@ export type OpenHandsContextMenuRequest = {
 };
 // `rename` is completed in the shell (inline input); everything else runs in main.
 export type OpenHandsContextMenuResult = { action: 'rename' | null };
+
+// Analytics -> OpenHands tab (shell-only, guarded): visibility drives the
+// usage cadence (and is an explicit OpenHands action: it opens the gate);
+// refresh re-fetches. The state rides ShellState.usage.openhands.
+export const OpenHandsUsageChannels = {
+  openhandsUsageVisible: 'openhands:usageVisible',
+  openhandsUsageRefresh: 'openhands:usageRefresh',
+} as const;
+export const OpenHandsUsageVisibleArg = z.object({ visible: z.boolean() });
+
+const cardSchema = <T extends z.ZodTypeAny>(value: T) =>
+  z.discriminatedUnion('state', [
+    z.object({ state: z.literal('pending') }),
+    z.object({ state: z.literal('ok'), value, fetchedAt: z.string() }),
+    z.object({ state: z.literal('unavailable') }),
+    z.object({ state: z.literal('error'), stale: value.optional() }),
+  ]);
+const QuotaValueSchema = z.object({ percent: z.number(), resetsAt: z.string().nullable() });
+export const OpenHandsUsageStateSchema = z.object({
+  credits: cardSchema(z.number()),
+  quota: cardSchema(QuotaValueSchema),
+  spend30d: cardSchema(z.number()),
+  topByCost: z.array(z.object({ id: z.string(), title: z.string(), cost: z.number() })),
+});

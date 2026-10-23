@@ -2,14 +2,13 @@ import type { KeyboardEvent } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { Rect } from '../../core/layout';
 import { ANALYTICS_USAGE_ROW_HEIGHT } from '../../core/layout';
-import { PROVIDER_ANALYTICS_TABS } from '../../core/providers';
-import { fmt, shortDate } from '../../core/devinUsage';
-import type { DevinUsageState, LocalResult, Settings, ShellState } from '../../shared/ipc';
-import { useShellState } from '../store';
+import { PROVIDERS, PROVIDER_ANALYTICS_TABS } from '../../core/providers';
+import type { Settings } from '../../shared/ipc';
+import { PROVIDER_UI } from '../providers';
 
 export type AnalyticsTabId = Settings['analytics']['tab'];
 
-const TAB_LABELS: Record<AnalyticsTabId, string> = { devin: 'Devin', claude: 'Claude' };
+const TAB_LABELS: Record<AnalyticsTabId, string> = { devin: 'Devin', claude: 'Claude', openhands: 'OpenHands' };
 const TABS: { id: AnalyticsTabId; label: string }[] = PROVIDER_ANALYTICS_TABS.map((id) => ({
   id,
   label: TAB_LABELS[id],
@@ -17,11 +16,12 @@ const TABS: { id: AnalyticsTabId; label: string }[] = PROVIDER_ANALYTICS_TABS.ma
 
 export const ANALYTICS_TAB_IDS = TABS.map((tab) => tab.id);
 
-type RefreshApi = {
-  analyticsRefresh: () => Promise<LocalResult<null> | null>;
-  devinUsageRefresh: () => void;
-  claudeUsageRefresh: () => Promise<LocalResult<null> | null>;
-};
+// The provider that owns a tab contributes its summary row and Refresh action.
+function analyticsUi(tab: AnalyticsTabId) {
+  const owner = PROVIDERS.find((p) => p.analyticsTab === tab);
+  const ui = owner ? PROVIDER_UI[owner.id] : undefined;
+  return ui?.AnalyticsPanel ? ui : undefined;
+}
 
 interface AnalyticsTabsProps {
   rect: Rect;
@@ -29,77 +29,11 @@ interface AnalyticsTabsProps {
   onSelect: (id: AnalyticsTabId) => void;
 }
 
-const summaryRowClass =
-  'flex items-center truncate px-1 pb-1 text-xs text-[#7f8ca0]';
-
-// Claude tab: one line per account — `Session N% · Week N%`, email-prefixed
-// only when more than one account has limits.
-function ClaudeUsageSummary({ items }: { items: ShellState['usage']['items'] }) {
-  const groups = new Map<string, { email: string | null; session: number | null; week: number | null }>();
-  for (const item of items) {
-    if (!item.metric.startsWith('claude-')) continue;
-    const group = groups.get(item.accountKey) ?? {
-      email: item.accountKey.startsWith('host:') ? null : item.accountKey,
-      session: null,
-      week: null,
-    };
-    if (item.metric === 'claude-session') group.session = item.percent;
-    else if (item.metric === 'claude-weekly') group.week = item.percent;
-    groups.set(item.accountKey, group);
-  }
-  const parts = [...groups.values()].map((g) => {
-    const metrics = [g.session !== null ? `Session ${Math.round(g.session)}%` : null, g.week !== null ? `Week ${Math.round(g.week ?? 0)}%` : null]
-      .filter(Boolean)
-      .join(' · ');
-    return groups.size > 1 && g.email ? `${g.email} ${metrics}` : metrics;
-  });
-  return (
-    <div
-      id="claudeUsageSummary"
-      className={summaryRowClass}
-      style={{ height: ANALYTICS_USAGE_ROW_HEIGHT }}
-    >
-      {parts.join(' | ')}
-    </div>
-  );
-}
-
-// Devin tab only: one-line usage summary under the tab strip — the strip
-// region already reserves ANALYTICS_USAGE_ROW_HEIGHT for it (core/layout).
-function DevinUsageSummary({ devin }: { devin: DevinUsageState }) {
-  let text: string;
-  if (devin.cycleUsage !== null) {
-    text =
-      devin.cycleLimit !== null
-        ? `${fmt(devin.cycleUsage)} / ${fmt(devin.cycleLimit)} ACUs (${Math.round(devin.percent ?? 0)}%)` +
-          `${devin.estimatedCycleUsage !== null ? ` · projected ${fmt(devin.estimatedCycleUsage)}` : ''}` +
-          `${devin.cycleEnd ? ` · resets ${shortDate(devin.cycleEnd)}` : ''}` +
-          `${devin.stale ? ' · cached' : ''}`
-        : `${fmt(devin.cycleUsage)} ACUs used this cycle`;
-  } else if (devin.status === 'login-required') {
-    text = 'Sign in to Devin Cloud to see usage';
-  } else {
-    text = 'Usage unavailable';
-  }
-  return (
-    <div
-      id="devinUsageSummary"
-      data-usage-status={devin.status}
-      className={summaryRowClass}
-      style={{ height: ANALYTICS_USAGE_ROW_HEIGHT }}
-    >
-      {text}
-    </div>
-  );
-}
-
 // Shell-rendered tab strip at the top of the Analytics column (plan D5): Devin
-// (hosted tenant analytics page below) / Claude (ClaudeAnalyticsPanel). Same
-// look and arrow-key behaviour as SettingsTabs. The Refresh button on the
-// right re-fetches the Claude usage data; on the Devin tab it reloads the
-// hosted page and refreshes the usage metric.
+// (hosted tenant analytics page below) / Claude / OpenHands (shell panels).
+// Same look and arrow-key behaviour as SettingsTabs. The Refresh button and
+// the summary row come from the active tab's provider (PROVIDER_UI slots).
 export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
-  const state = useShellState();
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
@@ -110,17 +44,8 @@ export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
     if (next && next !== active) onSelect(next);
   };
 
-  const onRefresh = () => {
-    const api = window.agentworkspace as unknown as RefreshApi;
-    if (active === 'claude') {
-      void api.claudeUsageRefresh();
-    } else {
-      void api.analyticsRefresh();
-      api.devinUsageRefresh();
-    }
-  };
-
-  const devin = state?.usage.devin;
+  const ui = analyticsUi(active);
+  const Summary = ui?.AnalyticsSummary;
   const tabsHeight = rect.height - ANALYTICS_USAGE_ROW_HEIGHT;
 
   return (
@@ -151,19 +76,15 @@ export function AnalyticsTabs({ rect, active, onSelect }: AnalyticsTabsProps) {
           id="analyticsRefresh"
           type="button"
           aria-label="Refresh"
-          title={active === 'claude' ? 'Refresh Claude usage' : 'Reload analytics'}
+          title={ui?.analyticsRefreshTitle}
           disabled={false}
           className="mb-1 flex h-6 w-6 items-center justify-center rounded text-[#7f8ca0] hover:bg-[#1c2735] hover:text-[#e8edf5] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#7f8ca0]"
-          onClick={onRefresh}
+          onClick={() => ui?.analyticsRefresh()}
         >
           <RefreshCw size={14} strokeWidth={1.8} />
         </button>
       </div>
-      {active === 'devin' ? (
-        devin && <DevinUsageSummary devin={devin} />
-      ) : (
-        <ClaudeUsageSummary items={state?.usage.items ?? []} />
-      )}
+      {Summary && <Summary />}
     </div>
   );
 }

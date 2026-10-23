@@ -368,6 +368,10 @@ const api = {
   openhandsNewSession: () => ipcRenderer.send(IpcChannels.openhandsNewSession),
   openhandsOpenHome: () => ipcRenderer.send(IpcChannels.openhandsOpenHome),
   openhandsRefresh: () => ipcRenderer.send(IpcChannels.openhandsRefresh),
+  // Analytics -> OpenHands tab.
+  openhandsUsageVisible: (visible: boolean) =>
+    ipcRenderer.send(IpcChannels.openhandsUsageVisible, { visible: visible === true }),
+  openhandsUsageRefresh: () => ipcRenderer.invoke(IpcChannels.openhandsUsageRefresh) as Promise<null>,
   openhandsRename: (id: string, title: string) => {
     const trimmed = title.trim();
     if (isString(id) && id.length <= 128 && trimmed.length >= 1 && trimmed.length <= 200) {

@@ -33,7 +33,7 @@ import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
 import { notificationsUnread } from './notifications';
-import { openhandsSnapshot } from './openhandsConfig';
+import { openhandsSnapshot, openhandsUsageSnapshot } from './openhandsConfig';
 import { allOpenPullRequests, prStore } from './prs';
 import { quiet, state } from './state';
 import { updateState } from './updater';
@@ -139,10 +139,16 @@ export function setSessionsOpen(open: boolean, source: string): void {
 
 // Rail badge + summary inputs: every runtime's usage summary items in runtime
 // order (devin-cloud's monthly percent, then each non-stale Claude account's
-// session/weekly limits). `devin` stays the raw Devin metric state.
+// session/weekly limits, then the OpenHands daily quota). `devin` stays the raw
+// Devin metric state; `openhands` carries the Analytics -> OpenHands cards.
 function usageSummary(): ShellState['usage'] {
   const items = usageSummaryItems(runtimes().map((runtime) => runtime.usage));
-  return { level: usageLevel(items.map((item) => item.percent)), items, devin: devinUsage().state };
+  return {
+    level: usageLevel(items.map((item) => item.percent)),
+    items,
+    devin: devinUsage().state,
+    openhands: openhandsUsageSnapshot(),
+  };
 }
 
 export function publicState(): ShellState {

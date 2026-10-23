@@ -8,6 +8,8 @@ import {
   OpenHandsConnectionSchema,
   OpenHandsSidebarChannels,
   OpenHandsStatusSchema,
+  OpenHandsUsageChannels,
+  OpenHandsUsageStateSchema,
 } from './ipc/openhands';
 
 export * from './ipc/openhands';
@@ -222,6 +224,7 @@ export const IpcChannels = {
   badgeRendered: 'badge:rendered',
   ...OpenHandsChannels,
   ...OpenHandsSidebarChannels,
+  ...OpenHandsUsageChannels,
 } as const;
 
 export const BadgeRenderSchema = z.object({
@@ -1079,6 +1082,7 @@ export const ShellStateSchema = z.object({
       }),
     ),
     devin: DevinUsageStateSchema,
+    openhands: OpenHandsUsageStateSchema,
   }),
   cloud: CloudStateSchema,
   claude: ClaudeStateSchema,

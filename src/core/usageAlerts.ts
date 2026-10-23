@@ -88,6 +88,7 @@ export const USAGE_METRIC_LABEL: Record<UsageMetric, string> = {
   'devin-monthly': 'Devin Cloud monthly ACUs',
   'claude-session': 'Claude session limit',
   'claude-weekly': 'Claude weekly limit',
+  'openhands-quota': 'OpenHands daily quota',
 };
 
 export function usageAlertTitle(alert: UsageAlert): string {

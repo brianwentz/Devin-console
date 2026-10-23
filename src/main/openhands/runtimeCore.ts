@@ -32,18 +32,24 @@ export interface CoreSource {
   connection(): OpenHandsConnection;
 }
 
+/** Per-base usage poller (src/main/openhands/usage.ts); lives and dies with the active controller. */
+export interface CoreUsage {
+  start(): void;
+  stop(): void;
+}
+
 export interface OhSettingsLike {
   openhands: { baseUrl: string; pollSeconds: number };
 }
 
-export interface RuntimeCoreDeps {
+export interface RuntimeCoreDeps<U extends CoreUsage = CoreUsage> {
   /** Effective base URL right now. */
   currentBase(): string;
   /** Effective base URL of a settings object (test override applied). */
   baseOf(settings: OhSettingsLike): string;
   pollSeconds(): number;
   pollMs(seconds: number): number;
-  build(base: string): { source: CoreSource; controller: CoreController };
+  build(base: string): { source: CoreSource; controller: CoreController; usage?: U };
   hasKey(): Promise<boolean>;
   /** A cache file for `base`'s tenant exists. */
   cacheMatches(base: string): Promise<boolean>;
@@ -60,14 +66,15 @@ export function cacheMatchesTenant(raw: unknown, tenantKey: string): boolean {
   return raw !== null && raw !== undefined && parseCloudCacheValue(raw, tenantKey) !== null;
 }
 
-interface Active {
+interface Active<U extends CoreUsage> {
   base: string;
   source: CoreSource;
   controller: CoreController;
+  usage?: U;
 }
 
-export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
-  let active: Active | null = null;
+export function createOpenHandsRuntimeCore<U extends CoreUsage = CoreUsage>(deps: RuntimeCoreDeps<U>) {
+  let active: Active<U> | null = null;
   let timer: unknown = null;
   let started = false;
   let disposed = false;
@@ -97,11 +104,16 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
     schedule();
   };
 
-  const stopActive = (): Active | null => {
+  const stopActive = (): Active<U> | null => {
     clearTimer();
     const old = active;
     active = null;
     if (old) {
+      try {
+        old.usage?.stop();
+      } catch {
+        // the sessions controller below still stops
+      }
       try {
         old.controller.stop();
       } catch (error) {
@@ -115,6 +127,7 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
     const base = deps.currentBase();
     active = { base, ...deps.build(base) };
     void active.controller.start();
+    active.usage?.start();
     schedule();
   };
 
@@ -187,6 +200,10 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
     async dispose(): Promise<void> {
       disposed = true;
       stopActive();
+    },
+    /** Usage poller of the open gate's base URL (null while the gate is closed). */
+    usage(): U | null {
+      return active?.usage ?? null;
     },
     snapshot(): { state: CloudState; connection: OpenHandsConnection } | null {
       return active ? { state: active.controller.snapshot(), connection: active.source.connection() } : null;

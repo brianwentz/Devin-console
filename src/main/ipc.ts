@@ -24,6 +24,7 @@ import {
   OpenHandsApiKeySetArg,
   OpenHandsContextMenuArg,
   OpenHandsOpenArg,
+  OpenHandsUsageVisibleArg,
   OpenHandsRenameArg,
   OpenHandsSessionReorderArg,
   SetPatArg,
@@ -60,6 +61,8 @@ import {
   openhandsContextMenu,
   openhandsRename,
   openhandsUiRefresh,
+  openhandsUsageRefresh,
+  openhandsUsageVisible,
 } from './providers/openhands';
 import { openhandsOpenSession, openhandsShowHome } from './openhands/views';
 import { cloudViews } from './cloudViews';
@@ -366,6 +369,15 @@ export function setupIpc(): void {
   guardedOn(IpcChannels.openhandsNewSession, () => void runtimeFor('openhands')?.newSession?.());
   guardedOn(IpcChannels.openhandsOpenHome, () => openhandsShowHome({ focus: true }));
   guardedOn(IpcChannels.openhandsRefresh, () => void openhandsUiRefresh());
+  // Analytics -> OpenHands tab: visibility (opens the gate) and Refresh.
+  guardedOn(IpcChannels.openhandsUsageVisible, (_event, payload: unknown) => {
+    const parsed = OpenHandsUsageVisibleArg.safeParse(payload);
+    if (parsed.success) openhandsUsageVisible(parsed.data.visible);
+  });
+  guardedHandle(IpcChannels.openhandsUsageRefresh, async () => {
+    await openhandsUsageRefresh();
+    return null;
+  });
   guardedOn(IpcChannels.openhandsRename, (_event, payload: unknown) => {
     const parsed = OpenHandsRenameArg.safeParse(payload);
     if (parsed.success) void openhandsRename(parsed.data.id, parsed.data.title);

@@ -270,7 +270,9 @@ function heavyBody(label: string): string {
 // OpenHands Cloud fixture (REST /api/v1). Two instances share this factory:
 // `openhands` and `openhandsAlt` (second origin: base-URL-change and
 // cross-origin-redirect target) — each with its own login-hop `authOrigin`.
-export type OpenHandsEndpoint = 'search' | 'patch' | 'delete' | 'events' | 'credits' | 'quota' | 'usage';
+export type OpenHandsEndpoint = 'search' | 'patch' | 'delete' | 'events' | 'credits' | 'quota' | 'usage' | 'me';
+// Endpoints whose 200 body a spec can replace (null restores the default).
+export type OpenHandsBodyEndpoint = 'credits' | 'quota' | 'usage' | 'me';
 
 export interface OpenHandsFixture {
   url: string;
@@ -279,6 +281,7 @@ export interface OpenHandsFixture {
   // 0 clears the override.
   setStatus(endpoint: OpenHandsEndpoint, n: number): void;
   setEvents(id: string, events: unknown[]): void;
+  setBody(endpoint: OpenHandsBodyEndpoint, body: unknown): void;
   requireAuth(mode: 'cookie' | 'bearer' | 'none'): void;
   // null clears; the endpoint answers 302 to `location`.
   setRedirect(endpoint: OpenHandsEndpoint, location: string | null): void;
@@ -297,6 +300,7 @@ async function createOpenHandsFixture(): Promise<OpenHandsFixture> {
   const statuses = new Map<OpenHandsEndpoint, number>();
   const redirects = new Map<OpenHandsEndpoint, string>();
   const events = new Map<string, unknown[]>();
+  const bodies = new Map<OpenHandsBodyEndpoint, unknown>();
   const mutationLog: { op: 'rename' | 'delete'; id: string; body?: unknown }[] = [];
   const requestLog: { path: string; authorization: string | null }[] = [];
   let auth: 'cookie' | 'bearer' | 'none' = 'none';
@@ -365,6 +369,7 @@ async function createOpenHandsFixture(): Promise<OpenHandsFixture> {
     else if (p === '/api/billing/credits') endpoint = 'credits';
     else if (p === '/api/quota/status') endpoint = 'quota';
     else if (/^\/api\/organizations\/[^/]+\/conversations\/my-usage$/.test(p)) endpoint = 'usage';
+    else if (p === '/api/v1/users/me') endpoint = 'me';
     if (!endpoint) {
       json(response, 404, { error: 'not-found' });
       return;
@@ -434,14 +439,41 @@ async function createOpenHandsFixture(): Promise<OpenHandsFixture> {
         case 'events':
           json(response, 200, { items: events.get(decodeURIComponent(eventsMatch![1]!)) ?? [], next_page_id: null });
           return;
+        // Billing / usage bodies follow the research shapes (§6).
         case 'credits':
-          json(response, 200, { credits: '12.50' });
+          json(response, 200, bodies.get('credits') ?? { credits: '12.34' });
           return;
         case 'quota':
-          json(response, 200, { used: 3, limit: 10 });
+          json(
+            response,
+            200,
+            bodies.get('quota') ?? {
+              daily_limit: 10,
+              used_today: 3,
+              remaining: 7,
+              reset_at: '2026-10-24T00:00:00Z',
+              work_email: null,
+              work_email_verified: false,
+              latest_request_status: null,
+              latest_request_requested_limit: null,
+            },
+          );
           return;
         case 'usage':
-          json(response, 200, { conversations: conversations.length });
+          json(
+            response,
+            200,
+            bodies.get('usage') ?? {
+              total_spend: 4.2,
+              previous_period_spend: 1.1,
+              daily_spend: [],
+              model_usage: [],
+              recent_usage: [],
+            },
+          );
+          return;
+        case 'me':
+          json(response, 200, bodies.get('me') ?? { org_id: 'org-fixture', org_name: 'Fixture org', role: 'member' });
           return;
       }
     })();
@@ -472,6 +504,10 @@ async function createOpenHandsFixture(): Promise<OpenHandsFixture> {
     },
     setEvents: (id, list) => {
       events.set(id, list);
+    },
+    setBody: (endpoint, body) => {
+      if (body === null) bodies.delete(endpoint);
+      else bodies.set(endpoint, body);
     },
     requireAuth: (mode) => {
       auth = mode;

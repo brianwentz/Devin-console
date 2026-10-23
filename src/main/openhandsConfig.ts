@@ -2,6 +2,7 @@
 // (src/main/providers/openhands.ts) feeds the live snapshot; until it has
 // started the surface shows a static idle state.
 import { effectiveBaseUrl } from '../core/openhands';
+import { emptyOpenHandsUsageState, type OpenHandsUsageState } from '../core/openhandsUsage';
 import { OPENHANDS_DEFAULT_BASE_URL, type OpenHandsShellState } from '../shared/ipc';
 import { state, testMode } from './state';
 
@@ -50,4 +51,16 @@ export function idleOpenHandsState(lastError: OpenHandsShellState['lastError'] =
 
 export function openhandsSnapshot(): OpenHandsShellState {
   return snapshotSource?.() ?? idleOpenHandsState();
+}
+
+// ShellState.usage.openhands: the runtime's usage cards (pending cards before a
+// gate opens or after a base URL change).
+let usageSource: (() => OpenHandsUsageState | null) | null = null;
+
+export function setOpenHandsUsageSource(fn: (() => OpenHandsUsageState | null) | null): void {
+  usageSource = fn;
+}
+
+export function openhandsUsageSnapshot(): OpenHandsUsageState {
+  return usageSource?.() ?? emptyOpenHandsUsageState();
 }

@@ -9,6 +9,7 @@ import { useShellState } from './store';
 import { requestSurface } from './surface';
 import { ClaudeView } from './claude/ClaudeView';
 import { ClaudeAnalyticsTab } from './components/analytics/ClaudeAnalyticsTab';
+import { ClaudeAnalyticsSummary, DevinAnalyticsSummary } from './components/analytics/UsageSummaries';
 import { ClaudeSidebar } from './components/ClaudeSidebar';
 import { ClaudeGlyph } from './components/icons/ClaudeGlyph';
 import { OpenHandsGlyph } from './components/icons/OpenHandsGlyph';
@@ -18,6 +19,7 @@ import { DevinTab } from './components/settings/DevinTab';
 import { OpenHandsTab } from './components/settings/OpenHandsTab';
 import { LocalPanel } from './local/LocalPanel';
 import { LocalSidebar } from './local/LocalSidebar';
+import { OpenHandsAnalyticsPanel, OpenHandsUsageSummary } from './openhands/OpenHandsAnalyticsPanel';
 import { OpenHandsRailButton } from './openhands/OpenHandsRailButton';
 import { OpenHandsSidebar } from './openhands/OpenHandsSidebar';
 
@@ -34,10 +36,18 @@ interface ProviderUiBase {
   Sidebar?: ComponentType<SidebarProps>;
   Panel?: ComponentType<StyleProps>;
 }
+// An Analytics tab brings its panel, the one-line summary under the tab strip
+// and what the strip's Refresh button does there (AnalyticsTabs has no
+// provider branches).
+interface AnalyticsSlots {
+  AnalyticsPanel: ComponentType<StyleProps>;
+  AnalyticsSummary: ComponentType;
+  analyticsRefresh: () => void;
+  analyticsRefreshTitle: string;
+}
+type NoAnalytics = { [K in keyof AnalyticsSlots]?: undefined };
 type ProviderUiFor<K extends { analyticsPanel: boolean; sourceGlyph: boolean }> = ProviderUiBase &
-  (K['analyticsPanel'] extends true
-    ? { AnalyticsPanel: ComponentType<StyleProps> }
-    : { AnalyticsPanel?: undefined }) &
+  (K['analyticsPanel'] extends true ? AnalyticsSlots : NoAnalytics) &
   (K['sourceGlyph'] extends true ? { SourceGlyph: ComponentType } : { SourceGlyph?: undefined });
 
 export type ProviderUiMap = { [P in ProviderId]: ProviderUiFor<(typeof PROVIDER_UI_KEYS)[P]> };
@@ -111,6 +121,13 @@ export const PROVIDER_UI: ProviderUiMap = {
     RailButton: CloudButton,
     SettingsTab: DevinTab,
     AnalyticsPanel: DevinAnalyticsPlaceholder,
+    AnalyticsSummary: DevinAnalyticsSummary,
+    // Reloads the hosted page and refreshes the usage metric.
+    analyticsRefresh: () => {
+      void window.agentworkspace.analyticsRefresh();
+      window.agentworkspace.devinUsageRefresh();
+    },
+    analyticsRefreshTitle: 'Reload analytics',
     Sidebar: DevinCloudSidebar,
   },
   'devin-local': {
@@ -122,6 +139,9 @@ export const PROVIDER_UI: ProviderUiMap = {
     RailButton: ClaudeButton,
     SettingsTab: ClaudeTab,
     AnalyticsPanel: ClaudeAnalyticsTab,
+    AnalyticsSummary: ClaudeAnalyticsSummary,
+    analyticsRefresh: () => void window.agentworkspace.claudeUsageRefresh(),
+    analyticsRefreshTitle: 'Refresh Claude usage',
     Sidebar: ClaudeSidebar,
     Panel: ClaudeView,
     SourceGlyph: ClaudeGlyph,
@@ -130,6 +150,10 @@ export const PROVIDER_UI: ProviderUiMap = {
   openhands: {
     RailButton: OpenHandsRailButton,
     SettingsTab: OpenHandsTab,
+    AnalyticsPanel: OpenHandsAnalyticsPanel,
+    AnalyticsSummary: OpenHandsUsageSummary,
+    analyticsRefresh: () => void window.agentworkspace.openhandsUsageRefresh(),
+    analyticsRefreshTitle: 'Refresh OpenHands usage',
     Sidebar: OpenHandsSidebar,
     SourceGlyph: OpenHandsGlyph,
   },

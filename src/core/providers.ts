@@ -6,8 +6,8 @@ export type ProviderId = 'devin-cloud' | 'devin-local' | 'claude' | 'openhands';
 export const PROVIDER_SURFACES = ['cloud', 'local', 'claude', 'openhands'] as const;
 export const PROVIDER_SOURCES = ['devin', 'claude', 'openhands'] as const;
 export const PROVIDER_VIEW_NAMES = ['cloud', 'local', 'claude', 'openhands'] as const;
-export const PROVIDER_ANALYTICS_TABS = ['devin', 'claude'] as const;
-export const PROVIDER_USAGE_METRICS = ['devin-monthly', 'claude-session', 'claude-weekly'] as const;
+export const PROVIDER_ANALYTICS_TABS = ['devin', 'claude', 'openhands'] as const;
+export const PROVIDER_USAGE_METRICS = ['devin-monthly', 'claude-session', 'claude-weekly', 'openhands-quota'] as const;
 
 export type ProviderSource = (typeof PROVIDER_SOURCES)[number];
 export type ProviderViewName = (typeof PROVIDER_VIEW_NAMES)[number];
@@ -101,8 +101,8 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
     scopeFallback: 'global',
     source: 'openhands',
     settingsTab: 'openhands',
-    analyticsTab: null,
-    usageMetrics: [],
+    analyticsTab: 'openhands',
+    usageMetrics: ['openhands-quota'],
     dock: true,
     sessionsColumn: true,
     newSessionShortcut: true,

@@ -428,10 +428,30 @@ variable that selects it.
   `applyLayout`/`lowerShell` and stays alive after switching away and reloads in place on each re-entry (`refreshAnalyticsView`, `analytics-refresh` log
   event with `mode: reload|navigate`). Router: same-tab navigations from `analytics` to GitHub open a foreground gh-tab, to other tenant pages route to
   the Cloud view (`devin`), everything else stays in place. Log events `analytics-view-created` / `analytics` `load-error`. Test hook `getAnalyticsBounds`.
-- **Two tabs** (shell `AnalyticsTabs` strip, `analytics.tab` setting `'devin'|'claude'` — default `devin`): the Devin tab keeps the hosted view (Refresh
-  button → `analytics:refresh` IPC → `refreshAnalyticsView()`); the Claude tab is shell-rendered `ClaudeAnalyticsPanel` and zeroes/detaches the hosted
-  view (`getAnalyticsBounds` returns null; re-entering on the Claude tab logs `analytics-refresh-skipped {tab:'claude'}` — the hosted page is created
-  lazily when the Devin tab is shown). `#analyticsRefresh` → `claudeUsageRefresh` on Claude / `analytics:refresh` + `devin:usageRefresh` on Devin.
+- **Three tabs** (shell `AnalyticsTabs` strip, `analytics.tab` setting `'devin'|'claude'|'openhands'` = `PROVIDER_ANALYTICS_TABS` — default `devin`): the
+  Devin tab keeps the hosted view (Refresh button → `analytics:refresh` IPC → `refreshAnalyticsView()`); the Claude and OpenHands tabs are shell-rendered
+  (`ClaudeAnalyticsPanel`, `OpenHandsAnalyticsPanel`) and zero/detach the hosted view (`getAnalyticsBounds` returns null; re-entering on them logs
+  `analytics-refresh-skipped {tab}` — the hosted page is created lazily when the Devin tab is shown). The strip has no provider branches: the tab's
+  owner (descriptor `analyticsTab`) supplies `PROVIDER_UI` slots `AnalyticsPanel`, `AnalyticsSummary` (the one row under the strip:
+  `#devinUsageSummary` / `#claudeUsageSummary` / `#openhandsUsageSummary`), `analyticsRefresh` and `analyticsRefreshTitle` — required together when
+  `PROVIDER_UI_KEYS[id].analyticsPanel` is true. `#analyticsRefresh` → `claudeUsageRefresh` on Claude / `analytics:refresh` + `devin:usageRefresh` on
+  Devin / `openhands:usageRefresh` on OpenHands.
+- **OpenHands usage** (`src/main/openhands/usage.ts` `createOpenHandsUsageService`, electron-free; pure model `src/core/openhandsUsage.ts`): built with each
+  source in `providers/openhands.ts build()` (runtimeCore `build` → `usage`, started/stopped with the active controller), so nothing is requested while the
+  opt-in gate is closed and a base URL change starts from `pending` cards. Requests go through the same gated `createOpenHandsFetch`:
+  `GET /api/billing/credits` (`parseCredits`, decimal string), `/api/quota/status` (`parseQuota` → `used_today / daily_limit` %, `reset_at`),
+  `/api/v1/users/me` (`parseOrgId`, cached per service; none → spend `unavailable`) then
+  `/api/organizations/<org>/conversations/my-usage?time_window=30d` (`parseMyUsage` → `total_spend`). Cards `Card<T>` =
+  `pending | ok {value,fetchedAt} | unavailable | error {stale?}` (`nextCard`): 200 + parsed → ok, 200 unparsed → error keeping a known value (else unavailable), 404 / 503 → unavailable (no backoff for either),
+  429/5xx/no response → error keeping the last good value with backoff 1→16 min (`nextBackoffMs`), 401/403 → error without backoff. Cadence
+  `usageDelayMs`: 15 min, 60 s while the tab is visible (backoff only slows it); first poll 5 s after the gate opens, at once when the tab is visible.
+  The panel (`#openhandsAnalytics`, `[data-card=credits|quota|spend|top][data-card-state]` — `top` is `pending` until the conversation list is `ready` or cached, unavailable text `Not available on this server`, quota via
+  the shared `Gauge`) sends `openhands:usageVisible {visible}` on mount/unmount — showing it is an explicit OpenHands action: `core.onSurfaceEnter()` opens
+  the gate (not the hosted pool). `openhands:usageRefresh` (invoke) also opens it. State rides `ShellState.usage.openhands` (`OpenHandsUsageStateSchema`,
+  `openhandsUsageSnapshot()` in `openhandsConfig.ts`, `notifyShell` on change; `topByCost` = the listed conversations' `metrics.accumulated_cost`, top 5).
+  Alerts: metric `openhands-quota` (label "OpenHands daily quota"), account = base URL origin, periodKey = `resetsAt ?? <UTC date>`; a fresh ok quota
+  publishes into the runtime's `UsageFeed` (`openhandsRuntime.usage`, source `openhands`); `summary()` keeps a stale percent. A `usage` entry opens
+  Analytics on `providerBySource(source).analyticsTab`. Log `openhands-usage-fetch {endpoint, ok, status}` only.
 - **Claude usage service** (`src/main/claude/usage.ts`, singleton `claudeUsage()`): pushes `ClaudeUsageState` on `claude:usage` (`createPushedStore`;
   invoke `claudeUsageState`, `claudeUsageRefresh`, send `claudeUsageVisible`). Started eagerly at window creation (usage alerts); visible → fetch+scan every 60 s, hidden → fetch
   every 10 min; `poke('turn'|'hook')` (debounced 5 s) fires on chat `end_turn` and `Stop` hook events. Accounts: per-host `.credentials.json`
@@ -464,8 +484,8 @@ variable that selects it.
   claude service's `runFetch`. Feeds go through each runtime's `usage` (`UsageSource`, see Providers): the services publish into their
   `UsageFeed` (`devinUsageFeed` after a fresh parse, `claudeUsageFeed` at the end of `runFetch`) and `UsageAlertStore.subscribe` — called once
   where the store is created in `createWindow`, before any service can publish — evaluates that source's non-stale readings on each publish. Alerts become `usage`-kind notification entries (persisted, never banner, `itemKey` = `usage:<metric>:<account>`,
-  open → Analytics on the matching tab) gated by `notifications.collect` ∧ `notifications.kinds.usage`. `ShellState.usage` = `{level,items,devin}`
-  (`items` = `usageSummaryItems` over the runtimes' `usage.summary()` in registration order) → `#usageBadge` rail dot (warn amber `#e0a03c` / critical `#d93a2f`), `#devinUsageSummary` + `#claudeUsageSummary` rows inside the strip
+  open → Analytics on the matching tab) gated by `notifications.collect` ∧ `notifications.kinds.usage`. `ShellState.usage` = `{level,items,devin,openhands}`
+  (`items` = `usageSummaryItems` over the runtimes' `usage.summary()` in registration order) → `#usageBadge` rail dot (warn amber `#e0a03c` / critical `#d93a2f`), `#devinUsageSummary` / `#claudeUsageSummary` / `#openhandsUsageSummary` rows inside the strip
   (`ANALYTICS_TABS_HEIGHT = 36 + 24`).
 
 ### Devin Local
@@ -825,7 +845,7 @@ variable that selects it.
   onChange(cb) }`; a `UsageReading` is `{ metric, account, percent, periodKey, stale, body }` (`stale` never alerts; `body` = the alert text) and
   `summary()` returns the provider's `ShellState.usage.items` rows (several for Claude: account × limit). Build one with `usageSource({ providerId,
   source, feed: () => <UsageFeed>, summary })` — getters, because runtime modules sit in import cycles. `alertInputs(usage)` maps readings to
-  `deriveUsageAlerts` inputs; `usageSummaryItems(sources)` flattens summaries. `devin-cloud` and `claude` provide one; a new usage metric also
+  `deriveUsageAlerts` inputs; `usageSummaryItems(sources)` flattens summaries. `devin-cloud`, `claude` and `openhands` provide one; a new usage metric also
   extends `PROVIDER_USAGE_METRICS` + `USAGE_METRIC_LABEL`.
 - Adding a provider: add the descriptor and extend the tuples in `providers.ts` (plus `ProviderId`); add a `PROVIDER_UI` + `PROVIDER_UI_KEYS` entry; add a
   runtime wrapper and `registerRuntime` it. Cloud kind (`kind:'cloud'`, hosted view, `scopeFallback:'cloud'`) vs local kind (sidebar + chat/terminal, scope
@@ -934,6 +954,8 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   `extractPullRequestUrls`; skipped while a scan for that id is in flight; event text is never logged or kept. Any change → `prTitles.ensure(new urls)` +
   `prStore().reconcile(allOpenPullRequests())` + `notifyShell`. `openPullRequests()` → `SessionPrLink {source:'openhands'}` (merged/closed per the
   `prTitles` state left out); `openSessionPr` / a notification with `prUrl` → `openhandsOpenSession(id)` + the PR tab in `openhands:<id>`.
+- **Usage** (B3): credits / daily quota / 30-day spend, the `openhands-quota` alert and the Analytics → OpenHands tab — see Analytics surface →
+  OpenHands usage. The usage service is part of the gated runtime (`build` → `usage`); the tab's visibility opens the gate.
 
 ## Conventions
 - `src/core/` is pure TS — no `electron` imports (unit-testable).
@@ -1023,6 +1045,7 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `openhandsViewsInfo()` / `openhandsOpen(id)` / `openhandsResetViews()` | The OpenHands pool's `{key,url,active,loads,loading}` per view ([] until the surface is entered) / open a conversation like a row click / the base-URL-change reset — pools reset to home on the OpenHands surface, disposed (`[]`) on any other; the real path is Settings + `AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`. |
 | `openhandsMenuItems()` / `openhandsMenuClick(id)` / `openhandsMutations()` | Described items of the open OpenHands native menu / click one (resolves the open `openhands:contextMenu` invoke → `{action}`) / recorded sidebar actions `{op,payload}` (`copy-id`, `open-in-browser`, `rename`, `delete`, `refresh`, `new-session`; ids only, never titles). |
 | `openhandsBaseUrl()` | The effective OpenHands base URL (`AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`, then `_URL`, win over the setting). |
+| `openhandsUsageState()` / `openhandsUsageRefresh()` | `ShellState.usage.openhands` (all cards `pending` before a gate opened) / open the gate and run one usage pass (resolves when it finishes). Fixture `fixtures.openhands.setBody('credits'\|'quota'\|'usage'\|'me', body\|null)` replaces a 200 body (research shapes by default: credits `'12.34'`, quota 3/10, spend `4.2`, org `org-fixture`); `setStatus` works on the same endpoints. |
 
 ## Log events
 
@@ -1095,6 +1118,7 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `openhands-views-reset` | No detail — base URL change reset (on the surface) or disposed (off it) the pooled OpenHands views. |
 | `openhands-delete-confirm` | `{ confirmed }` — the delete confirm dialog's answer (auto-confirmed in test mode). |
 | `openhands-session-reorder` | `{ section: 'recent'\|'pinned'\|'repo', count }` — row drag in the OpenHands sidebar persisted to `openhands.sessionOrder`. |
+| `openhands-usage-fetch` | `{ endpoint: 'credits'\|'quota'\|'me'\|'usage', ok, status }` — one OpenHands usage request (never bodies, amounts or the org id). |
 | `openhands-stop-error` | `{ code }` (error class name only) — stopping the OpenHands sessions controller threw during a base-URL restart or dispose; teardown continues. |
 | `usage-alert` | `{ metric, threshold, percent }` — a threshold crossed (fires even when the kind is muted; channel `shell`). |
 | `usage-alerts-save-error` | `{ message }` — ledger write failure. |

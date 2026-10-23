@@ -13,7 +13,9 @@ import { providerScope } from '../../core/tabModel';
 import type { OpenHandsContextMenuRequest } from '../../shared/ipc';
 import { providerById } from '../../core/providers';
 import type { CloudCache } from '../../core/cloudCache';
+import { topByCost, type OpenHandsUsageState } from '../../core/openhandsUsage';
 import { CloudSessionsController } from '../cloudKit/sessionsController';
+import { UsageFeed, usageSource } from '../cloudKit/usage';
 import { autoOpenLocalPr } from '../local/prAutoOpen';
 import { log } from '../log';
 import { notificationStore } from '../notifications';
@@ -29,6 +31,7 @@ import {
   type OhSettingsLike,
 } from '../openhands/runtimeCore';
 import { buildOpenHandsShellState, createOpenHandsSource } from '../openhands/source';
+import { createOpenHandsUsageService, type OpenHandsUsageService } from '../openhands/usage';
 import {
   openhandsForgetSession,
   openhandsOpenSession,
@@ -36,7 +39,12 @@ import {
   openhandsViews,
   resetOpenHandsViews,
 } from '../openhands/views';
-import { idleOpenHandsState, openhandsEffectiveBase, setOpenHandsSnapshotSource } from '../openhandsConfig';
+import {
+  idleOpenHandsState,
+  openhandsEffectiveBase,
+  setOpenHandsSnapshotSource,
+  setOpenHandsUsageSource,
+} from '../openhandsConfig';
 import { fixtureOrigins, state, testMode } from '../state';
 import { activateWindow, applyLayout, notifyShell } from '../window';
 import type { ProviderRuntime } from './runtime';
@@ -65,6 +73,19 @@ const notifyTransitions = createTransitionNotifier({
   add: (entry) => void notificationStore().add(entry),
   log: (event, detail) => log('shell', event, { detail }),
 });
+
+// Usage (Analytics -> OpenHands, `openhands-quota` alerts): one service per
+// base URL, built with the source, so it only runs while a gate is open.
+// Quota readings land in this feed (the runtime's UsageSource).
+const openhandsUsageFeed = new UsageFeed();
+// Analytics -> OpenHands on screen (60 s cadence instead of 15 min).
+let usageVisible = false;
+
+const unrefTimer = (fn: () => void, ms: number) => {
+  const handle = setTimeout(fn, ms);
+  handle.unref?.();
+  return handle;
+};
 
 // PR panel + auto-open: one tracker per base URL (built with its source), so a
 // base change drops the old origin's PRs and starts a fresh baseline.
@@ -131,10 +152,21 @@ function build(base: string) {
     sanitize: (message) => sanitizeMessage(message, knownKey ?? ''),
     onChange: () => notifyShell(),
   });
-  return { source, controller };
+  const usage = createOpenHandsUsageService({
+    fetch: fetcher,
+    baseUrl: () => base,
+    now: () => Date.now(),
+    visible: () => usageVisible,
+    setTimer: unrefTimer,
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    log: (event, detail) => log('shell', event, { detail }),
+    onChange: () => notifyShell(),
+    publish: (readings) => openhandsUsageFeed.publish(readings),
+  });
+  return { source, controller, usage };
 }
 
-const core = createOpenHandsRuntimeCore({
+const core = createOpenHandsRuntimeCore<OpenHandsUsageService>({
   currentBase: () => effective(state.settings?.current.openhands.baseUrl),
   baseOf: (s: OhSettingsLike) => effective(s.openhands.baseUrl),
   pollSeconds: () => state.settings?.current.openhands.pollSeconds ?? 30,
@@ -146,11 +178,7 @@ const core = createOpenHandsRuntimeCore({
   hasKey: async () => ((await state.secrets?.getOpenHandsApiKey()) ?? null) !== null,
   cacheMatches: async (base) => cacheMatchesTenant(await readCacheFile(), tenantKey(base)),
   dropCache: () => rm(cachePath(), { force: true }),
-  setTimer: (fn, ms) => {
-    const handle = setTimeout(fn, ms);
-    handle.unref?.();
-    return handle;
-  },
+  setTimer: unrefTimer,
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   // A hosted WebContentsView leaves BaseWindow.isFocused() false.
   focused: () => webContents.getFocusedWebContents() !== null,
@@ -173,6 +201,13 @@ function snapshot() {
   return local ? idleOpenHandsState(local) : null;
 }
 
+// ShellState.usage.openhands (null = pending cards: no gate open yet).
+function usageState(): OpenHandsUsageState | null {
+  const usage = core.usage();
+  if (!usage) return null;
+  return { ...usage.cards(), topByCost: topByCost(liveSnapshot()?.sessions ?? []) };
+}
+
 const menu = new OpenHandsContextMenu({
   titleOf: (id) => liveSnapshot()?.sessions.find((s) => s.id === id)?.title,
   capabilities: () => liveSnapshot()?.capabilities ?? { rename: false, delete: false },
@@ -184,8 +219,15 @@ const menu = new OpenHandsContextMenu({
 
 export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   descriptor: providerById('openhands'),
+  usage: usageSource({
+    providerId: 'openhands',
+    source: 'openhands',
+    feed: () => openhandsUsageFeed,
+    summary: () => core.usage()?.summary() ?? [],
+  }),
   start() {
     setOpenHandsSnapshotSource(snapshot);
+    setOpenHandsUsageSource(usageState);
     void core.start();
   },
   dispose: () => {
@@ -300,4 +342,18 @@ export function openhandsUiRefresh(): Promise<void> {
 export const openhandsState = snapshot;
 export function openhandsRefresh(): Promise<void> {
   return core.forceRefresh();
+}
+
+// Analytics -> OpenHands tab (src/main/ipc.ts). Showing it is an explicit
+// OpenHands action: it opens the gate (never the hosted pool — that is the
+// surface's job) and switches the usage cadence to 60 s.
+export function openhandsUsageVisible(visible: boolean): void {
+  usageVisible = visible;
+  if (visible) core.onSurfaceEnter();
+  core.usage()?.visibilityChanged();
+}
+// The tab's Refresh button and the `openhandsUsageRefresh` test hook (opens the gate).
+export async function openhandsUsageRefresh(): Promise<void> {
+  core.onSurfaceEnter();
+  await core.usage()?.refresh();
 }

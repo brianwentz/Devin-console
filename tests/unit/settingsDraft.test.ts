@@ -572,7 +572,7 @@ describe('provider registry shell lists (A1 T5)', () => {
     expect(PROVIDER_UI_KEYS['devin-cloud']).toEqual({ analyticsPanel: true, sourceGlyph: false });
     expect(PROVIDER_UI_KEYS['devin-local']).toEqual({ analyticsPanel: false, sourceGlyph: false });
     expect(PROVIDER_UI_KEYS.claude).toEqual({ analyticsPanel: true, sourceGlyph: true });
-    expect(PROVIDER_UI_KEYS.openhands).toEqual({ analyticsPanel: false, sourceGlyph: true });
+    expect(PROVIDER_UI_KEYS.openhands).toEqual({ analyticsPanel: true, sourceGlyph: true });
   });
 });
 

@@ -46,13 +46,14 @@ import { getChatState, publicChatState } from './claude/chatState';
 import { prTitles } from './prTitles';
 import { publicLocalState } from './local/localState';
 import { hosts } from './hosts';
-import { openhandsBaseUrl } from './openhandsConfig';
+import { openhandsBaseUrl, openhandsUsageSnapshot } from './openhandsConfig';
 import {
   openhandsMenuClick,
   openhandsMenuItems,
   openhandsMutations,
   openhandsRefresh,
   openhandsState,
+  openhandsUsageRefresh,
 } from './providers/openhands';
 import { openhandsOpenSession, openhandsViewsInfo, resetOpenHandsViews } from './openhands/views';
 import { remoteFsViolationCount } from './remoteFsGuard';
@@ -242,6 +243,9 @@ export function registerTestHooks(): void {
       // B1 T21: OpenHands sidebar snapshot / force a full list (resolves when it finishes).
       openhandsState: () => openhandsState(),
       openhandsRefresh: () => openhandsRefresh(),
+      // Analytics -> OpenHands usage cards; refresh opens the gate and resolves after one pass.
+      openhandsUsageState: () => openhandsUsageSnapshot(),
+      openhandsUsageRefresh: () => openhandsUsageRefresh(),
       // B1 T22: hosted views, menus and the recorded sidebar actions.
       openhandsViewsInfo: () => openhandsViewsInfo(),
       openhandsOpen: (id: string) => openhandsOpenSession(id),
