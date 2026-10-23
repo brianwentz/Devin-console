@@ -94,6 +94,8 @@ class Notifier {
   private pollAgain = false;
   private pendingSessionId: string | null = null;
   private generation = 0;
+  // A poll succeeded since start/restart: state.apiSessions is authoritative.
+  private listedThisRun = false;
   private notBefore = 0;
 
   start(): void {
@@ -119,6 +121,15 @@ class Notifier {
     log('shell', 'notifier-stop', { detail: { reason } });
   }
 
+  // PR panel pruning gate (ProviderRuntime.prsKnown): the open-PR list is
+  // authoritative after a successful poll since start/restart. With no token
+  // there are no Devin PRs to list (state.apiSessions stays empty), so a
+  // missing token counts as known — otherwise a Claude/OpenHands-only user
+  // would never prune.
+  prsKnown(): boolean {
+    return this.listedThisRun || !(state.secrets?.getPat() ?? null);
+  }
+
   // Token or settings changed: forget cached org/snapshot and poll again now.
   restart(reason: string): void {
     this.stop(reason);
@@ -134,6 +145,7 @@ class Notifier {
     this.pendingSessionId = null;
     this.failures = 0;
     this.notBefore = 0;
+    this.listedThisRun = false;
     state.apiSessions = [];
     state.notifications = {
       lastPollAt: null,
@@ -367,6 +379,7 @@ class Notifier {
       // (single-page) list — a partial page can't prove absence.
       const previousSessions = state.apiSessions;
       state.apiSessions = sessions;
+      this.listedThisRun = true;
       prStore().reconcile(allOpenPullRequests(), Date.now());
       for (const scope of archivedScopes(previousSessions, sessions, !page.hasNextPage)) {
         void state.tabManager?.closeScope(scope).then(() => {

@@ -73,6 +73,8 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
   let disposed = false;
   let opened = false;
   let surfaceEntered = false;
+  // start() has evaluated gates (a) and (c).
+  let gateSettled = false;
   // Rename/delete asked for while no gate is open: surfaced as lastError.
   let local: { op: 'rename' | 'delete'; message: string } | null = null;
 
@@ -129,6 +131,7 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
       if (started || disposed) return;
       started = true;
       if (surfaceEntered) {
+        gateSettled = true;
         open();
         return;
       }
@@ -138,7 +141,13 @@ export function createOpenHandsRuntimeCore(deps: RuntimeCoreDeps) {
       } catch {
         gate = false;
       }
+      gateSettled = true;
       if (gate) open();
+    },
+    /** 'pending' until start() has evaluated the gates; then 'open' or 'closed'. */
+    gate(): 'pending' | 'open' | 'closed' {
+      if (opened) return 'open';
+      return gateSettled ? 'closed' : 'pending';
     },
     onSurfaceEnter(): void {
       surfaceEntered = true;

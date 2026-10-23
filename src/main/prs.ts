@@ -10,7 +10,7 @@ import {
   type PrRecord,
 } from '../core/prPanelModel';
 import type { SessionPrLink } from '../core/notifyModel';
-import { runtimes } from './providers';
+import { allPrsKnown, runtimes } from './providers';
 import { log } from './log';
 import { notifyShell } from './window';
 
@@ -47,8 +47,11 @@ export class PrStore {
     return this.list;
   }
 
-  reconcile(open: readonly SessionPrLink[], now: number): void {
-    const next = reconcilePrRecords(this.list, open, now);
+  // New open PRs always get a record; records of PRs no longer open are only
+  // dropped once every provider has listed this run (`prune`), so a provider
+  // that has not listed yet cannot lose its read/dismissed state.
+  reconcile(open: readonly SessionPrLink[], now: number, prune = allPrsKnown()): void {
+    const next = reconcilePrRecords(this.list, open, now, prune);
     if (JSON.stringify(next) === JSON.stringify(this.list)) return;
     this.list = next;
     this.persist();

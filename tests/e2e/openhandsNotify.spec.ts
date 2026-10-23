@@ -1,7 +1,7 @@
 // B2 T26: OpenHands status-transition notifications, PR panel rows from
 // `pr_number`, the finished-conversation event scan and PR auto-open, against
 // the OpenHands fixture server.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -150,6 +150,62 @@ test('transitions notify, PRs reach the panel, a finished conversation’s PR au
     expect(text).not.toContain(TITLE);
   } finally {
     fixtures.openhands.setEvents(ID1, []);
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+});
+
+// Fix round 1: PR records are pruned only once every provider has listed. An
+// OpenHands list that lands before the Devin poller's first successful poll
+// must not drop a Devin record (it would come back unread / undismissed).
+test('an OpenHands list before the first Devin poll keeps Devin PR records; pruning resumes once both listed', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-ohn-'));
+  const logFile = join(profile, 'events.jsonl');
+  const DEVIN_PR = 'https://github.com/acme/devin/pull/5';
+  writeFileSync(
+    join(profile, 'prs.json'),
+    JSON.stringify([{ url: DEVIN_PR, firstSeenAt: 1, readAt: 2, dismissedAt: 3 }]),
+  );
+  fixtures.openhands.setConversations([conv(ID1, 'running', '2026-10-20T10:00:00Z', { pr_number: [7] })]);
+  fixtures.api.setSessions([]);
+  fixtures.api.setMode({ kind: 'status', status: 500 });
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+    AGENT_WORKSPACE_API_BASE: fixtures.apiUrl,
+    AGENT_WORKSPACE_POLL_MS: '500',
+  });
+  type Rec = { url: string; dismissedAt: number | null };
+  const records = () => hook<Rec[]>(app, 'prRecords');
+  try {
+    await expect
+      .poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace)))
+      .toBe(true);
+    // A Devin token whose polls fail: Devin has not listed this run.
+    expect(await hook<boolean>(app, 'setPat', 'test-token-123')).toBe(true);
+    await expect.poll(async () => (await readEvents(logFile)).some((e) => e.event === 'poll-error')).toBe(true);
+
+    // OpenHands lists first: its PR is added, the Devin record survives.
+    await hook(app, 'openhandsRefresh');
+    await expect.poll(async () => (await records()).map((r) => r.url)).toContain(PR7);
+    expect((await records()).find((r) => r.url === DEVIN_PR)?.dismissedAt).toBe(3);
+
+    // Devin's first good poll lists that PR: it stays dismissed.
+    fixtures.api.setMode({ kind: 'ok' });
+    fixtures.api.setSessions([
+      { session_id: 'sess-d', title: 'Devin', status: 'running', updated_at: 10, pull_requests: [{ pr_url: DEVIN_PR, pr_state: 'open' }] },
+    ]);
+    await hook(app, 'pollNow');
+    await expect.poll(async () => (await state(app)).notifications.openPrCount).toBe(1);
+    expect((await records()).find((r) => r.url === DEVIN_PR)?.dismissedAt).toBe(3);
+
+    // Both providers have listed: a PR that left the open list is pruned again.
+    fixtures.api.setSessions([{ session_id: 'sess-d', title: 'Devin', status: 'running', updated_at: 11, pull_requests: [] }]);
+    await hook(app, 'pollNow');
+    await expect.poll(async () => (await records()).map((r) => r.url)).toEqual([PR7]);
+  } finally {
+    fixtures.api.setMode({ kind: 'ok' });
+    fixtures.api.setSessions([]);
     await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });

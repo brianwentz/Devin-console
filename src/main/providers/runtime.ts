@@ -23,6 +23,11 @@ export interface ProviderRuntime {
   onCredentialsChanged?(): void;
   /** The user entered this provider's surface (called from applyLayout). */
   onSurfaceEnter?(): void;
+  /**
+   * false while this provider has not listed its PRs yet this run, so a PR
+   * of it missing from `openPullRequests()` proves nothing. Omitted = true.
+   */
+  prsKnown?(): boolean;
 }
 
 const registry: ProviderRuntime[] = [];
@@ -48,6 +53,12 @@ export function runtimeFor(idOrSurface: string): ProviderRuntime | undefined {
     registry.find((r) => r.descriptor.id === idOrSurface) ??
     registry.find((r) => r.descriptor.surface === idOrSurface)
   );
+}
+
+// PR panel records may be pruned only when every provider's open-PR list is
+// authoritative (src/main/prs.ts PrStore.reconcile).
+export function allPrsKnown(): boolean {
+  return registry.every((r) => r.prsKnown?.() ?? true);
 }
 
 export async function disposeAll(): Promise<void> {

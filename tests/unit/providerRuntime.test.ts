@@ -6,6 +6,7 @@ import {
   resetRuntimesForTest,
   runtimeFor,
   runtimes,
+  allPrsKnown,
   setRuntimeLogger,
   type ProviderRuntime,
 } from '../../src/main/providers/runtime';
@@ -93,5 +94,26 @@ describe('provider runtime registry', () => {
     registerRuntime(odd);
     registerRuntime(fake('claude'));
     expect(runtimeFor('claude')?.descriptor.id).toBe('claude');
+  });
+});
+
+describe('allPrsKnown (PR record pruning gate)', () => {
+  beforeEach(() => {
+    resetRuntimesForTest();
+  });
+
+  it('is true when every runtime omits prsKnown or reports true', () => {
+    registerRuntime(fake('claude'));
+    registerRuntime({ ...fake('devin-cloud'), prsKnown: () => true });
+    expect(allPrsKnown()).toBe(true);
+  });
+
+  it('is false while any runtime has not listed its PRs yet', () => {
+    let devinListed = false;
+    registerRuntime({ ...fake('devin-cloud'), prsKnown: () => devinListed });
+    registerRuntime({ ...fake('openhands'), prsKnown: () => true });
+    expect(allPrsKnown()).toBe(false);
+    devinListed = true;
+    expect(allPrsKnown()).toBe(true);
   });
 });

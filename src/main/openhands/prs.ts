@@ -36,6 +36,8 @@ export interface OpenHandsPrTracker {
   onRows(rows: readonly OhRow[]): void;
   onFinished(id: string): Promise<void>;
   openPullRequests(): SessionPrLink[];
+  /** The first rows arrived (and the tracker is not stopped). */
+  listed(): boolean;
   stop(): void;
 }
 
@@ -173,6 +175,8 @@ export function createOpenHandsPrTracker(deps: OpenHandsPrTrackerDeps): OpenHand
       }
       return out;
     },
+
+    listed: () => baselined && !stopped,
 
     stop() {
       stopped = true;

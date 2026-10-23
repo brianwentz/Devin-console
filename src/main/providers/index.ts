@@ -11,5 +11,5 @@ registerRuntime(devinLocalRuntime);
 registerRuntime(claudeRuntime);
 registerRuntime(openhandsRuntime);
 
-export { disposeAll, runtimeFor, runtimes } from './runtime';
+export { allPrsKnown, disposeAll, runtimeFor, runtimes } from './runtime';
 export type { ProviderRuntime } from './runtime';

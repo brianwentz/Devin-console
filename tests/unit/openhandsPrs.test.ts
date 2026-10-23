@@ -210,3 +210,17 @@ describe('openhands PR tracker: events scan', () => {
     expect(tracker.openPullRequests()).toEqual([]);
   });
 });
+
+describe('openhands PR tracker: listed()', () => {
+  it('is false until the first rows arrive and again after stop()', () => {
+    const { tracker, onChange } = make();
+    let listedDuringChange: boolean | null = null;
+    onChange.mockImplementation(() => (listedDuringChange = tracker.listed()));
+    expect(tracker.listed()).toBe(false);
+    tracker.onRows([row(A, [pr(7)])]);
+    expect(listedDuringChange).toBe(true); // the reconcile it triggers may prune
+    expect(tracker.listed()).toBe(true);
+    tracker.stop();
+    expect(tracker.listed()).toBe(false);
+  });
+});

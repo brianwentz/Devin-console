@@ -25,6 +25,9 @@ export const devinCloudRuntime: ProviderRuntime = {
   openPullRequests() {
     return openPullRequests(state.apiSessions);
   },
+  prsKnown() {
+    return notifier.prsKnown();
+  },
   openNotification(entry) {
     openDevinNotification(entry);
     return true;

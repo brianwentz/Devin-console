@@ -85,6 +85,20 @@ function harness(opts: { key?: boolean; cache?: boolean; focused?: boolean; muta
 }
 
 describe('openhands runtime core', () => {
+  it('gate(): pending until start settles, closed with no gate, open once a gate opens', async () => {
+    const h = harness();
+    expect(h.core.gate()).toBe('pending');
+    const started = h.core.start();
+    expect(h.core.gate()).toBe('pending');
+    await started;
+    expect(h.core.gate()).toBe('closed');
+    h.core.onSurfaceEnter();
+    expect(h.core.gate()).toBe('open');
+    const keyed = harness({ key: true });
+    await keyed.core.start();
+    expect(keyed.core.gate()).toBe('open');
+  });
+
   it('opens no gate on its own: no build, no timer, no focus refresh', async () => {
     const h = harness();
     await h.core.start();

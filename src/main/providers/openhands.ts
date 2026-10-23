@@ -230,6 +230,12 @@ export const openhandsRuntime: ProviderRuntime & { showHome?: () => void } = {
   openPullRequests() {
     return prTracker?.openPullRequests() ?? [];
   },
+  // No gate (never used here, nothing cached): there are no OpenHands PRs to
+  // protect. An open gate counts only once the current tracker has listed.
+  prsKnown() {
+    const gate = core.gate();
+    return gate === 'closed' || (gate === 'open' && (prTracker?.listed() ?? false));
+  },
   openSessionPr(sessionId, prUrl) {
     log('shell', 'pr-open', { url: prUrl, detail: { sessionId } });
     openConversationPr(sessionId, prUrl);

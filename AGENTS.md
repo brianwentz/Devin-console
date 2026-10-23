@@ -329,6 +329,12 @@ variable that selects it.
   `[data-pr-url][data-unread]`. Per-URL read/dismissed records live in `src/core/prPanelModel.ts` (pure) + `src/main/prs.ts` (`PrStore`,
   `userData/prs.json`), reconciled against `openPullRequests(apiSessions)` after every successful poll (records drop when the PR leaves the open list;
   `restart()` deliberately does not reconcile). Every PR is unread from first observation; delete/clear = dismissed permanently while open.
+- Pruning gate: `PrStore.reconcile(open, now, prune = allPrsKnown())` always adds records for new open PRs but drops records of PRs missing from
+  `allOpenPullRequests()` only when every runtime's optional `ProviderRuntime.prsKnown()` is true (`allPrsKnown()` in `providers/runtime.ts`; omitted =
+  true — Claude, Devin Local). Devin: `notifier.prsKnown()` = a poll succeeded since start/`restart()` (which resets it), or no Devin token is stored
+  (nothing to list). OpenHands: `core.gate()` is `closed` (no key, no matching cache, surface not entered — no OpenHands PRs to protect) or `open` and the
+  current per-base tracker has listed (`tracker.listed()`); `pending` (start not settled) is unknown. So a provider that lists first (or a provider
+  whose list keeps failing) cannot wipe another provider's read/dismissed records; `reconcilePrRecords(…, prune)` is the pure model. prs.json unchanged.
 - `ShellState.notifications`: `openPrCount` = visible (open ∧ not dismissed), `unreadPrCount` (the badge), `prsPanelOpen`. IPC
   `prs:list|markRead|markAllRead|remove|clear|open|panel` (`PrUrlArg`/`PrOpenArg`/`PrPanelArg`); `setPrsPanel` mirrors `setNotificationsPanel` and the two
   panels close each other. Log events `pr-read`/`pr-dismiss` (`{ all, count }`), `prs-panel`, `prs-save-error`.
