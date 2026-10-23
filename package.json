@@ -27,6 +27,7 @@
     "claude:hooks-probe": "npm run build && node out/scripts/claude-hooks-probe.cjs",
     "claude:store-probe": "npm run build && node out/scripts/claude-store-probe.cjs",
     "hosts:probe": "npm run build && node out/scripts/hosts-probe.cjs",
+    "openhands:probe": "npm run build && electron out/scripts/openhands-probe.cjs",
     "dist:win:smoke": "npm run build && electron-builder --win nsis --x64 --publish never -c.appId=io.github.brianwentz.agent-workspace.smoke -c.productName=\"Agent Workspace Smoke\" -c.nsis.guid=8bc73818-13fb-5883-bfb3-62006ae4a564 -c.nsis.shortcutName=\"Agent Workspace Smoke\" -c.nsis.artifactName=\"AgentWorkspace-Smoke-Setup-${version}.${ext}\" -c.directories.output=dist/smoke",
     "smoke:install:rename": "npm run dist:win:smoke && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1 -From dist/smoke-before/DevinWorkspaces-Smoke-Setup-1.2.0.exe",
     "smoke:install:real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-install.ps1",

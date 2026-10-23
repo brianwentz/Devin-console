@@ -45,6 +45,9 @@ Agent Workspace — Electron desktop client (BaseWindow + WebContentsViews; the 
   the file's `ssh` key (alias recorded as `ssh:#<sha256-8>` only); `AGENT_WORKSPACE_TEST_SSH_CMD` runs the same steps against the fake (`fake: true`).
   `-- --soak <minutes> [--profile <dir>]` launches the built app on a temp copy of the profile and writes `soak` (host-exec/min by kind, background
   claude-list/min, usage-scan files, `remoteFsViolations` + by-op counts from `remote-fs-violation` — must be 0) into the same file — never run it against the real profile without saying so; test/FAKE_* env passes through.
+- `npm run openhands:probe` — build then run `scripts/openhands-probe.ts` under Electron (`electron out/scripts/openhands-probe.cjs`); MANUAL, needs a real OpenHands
+  account (log in in the window; `OPENHANDS_PROBE_URL` / `OPENHANDS_API_KEY` optional) → `docs/evidence/openhands-spike.md` (git-ignored; statuses/hosts/URL shapes
+  only). `-- --selftest` runs only the `redirect:'manual'` check (`net.fetch` vs `session.fetch`) against localhost and exits.
 - `acp:contract` honours `AGENT_WORKSPACE_HOST=wsl:<distro>` — spawns `devin acp` through `spawnSpec` + captured env with cwd = distro home; evidence
   `docs/evidence/p4-acp-contract-wsl.jsonl`.
 - CI:
