@@ -88,6 +88,14 @@ export function TabStrip({ tabs, activeId }: TabStripProps) {
           ))}
         </SortableContext>
       </DndContext>
+      {/* Empty strip space moves the window; tiny grow so tabs still fill the row up to their max width. */}
+      {tabs.length > 0 && (
+        <div
+          data-testid="tabStripFiller"
+          className="app-drag h-full shrink-0 min-w-2"
+          style={{ flexGrow: 0.0001 }}
+        />
+      )}
       {tabs.length === 0 && (
         <div
           data-testid="tabStripEmpty"
