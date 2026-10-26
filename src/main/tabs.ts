@@ -586,6 +586,12 @@ export class TabManager {
     if (this.parent.children.includes(view)) this.parent.removeChildView(view);
     this.parent.addChildView(view);
     view.setBounds(this.lastBounds ?? { x: 0, y: 0, width: 0, height: 0 });
+    // A detached WebContentsView never leaves Chromium's VISIBLE state, so
+    // re-adding it does not run the hidden→shown cycle that makes the renderer
+    // submit a fresh frame — the pane stays blank until the next re-parent. A
+    // hide/show round-trip on attach forces that cycle every time.
+    view.setVisible(false);
+    view.setVisible(true);
     this.activeViewId = tabId;
     const entry = this.entries.get(tabId);
     if (entry) entry.lastActiveAt = Date.now();
