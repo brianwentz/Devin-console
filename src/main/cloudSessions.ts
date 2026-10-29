@@ -21,6 +21,7 @@ import {
   type CloudSession,
 } from '../core/cloudAcp';
 import { parseCloudCache, serializeCloudCache } from '../core/cloudCache';
+import { CHILD_CAP, PAGE_SIZE } from '../core/cloudFolderPaging';
 import {
   DEVIN_CLOUD_CAPABILITIES,
   type CloudSourceCapabilities,
@@ -244,6 +245,9 @@ class CloudSessions {
       userId: this.userId,
       folder,
       rootsOffset,
+      archivedStatus: this.showArchived ? 'ALL' : 'ACTIVE',
+      pageSize: PAGE_SIZE,
+      childCap: CHILD_CAP,
     });
     void this.request('session/list', params, LIST_TIMEOUT_MS)
       .then((message) => {

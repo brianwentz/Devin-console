@@ -10,6 +10,7 @@ import {
   sanitizeToken,
   usersInfoUrl,
 } from '../../src/core/cloudAcp';
+import { CHILD_CAP, PAGE_SIZE } from '../../src/core/cloudFolderPaging';
 
 const ORG = 'org-abc123';
 
@@ -39,10 +40,27 @@ describe('buildListParams', () => {
         'cognition.ai/groupChildren': true,
         'cognition.ai/childrenDirect': true,
         'cognition.ai/limit': 50,
-        'cognition.ai/maxChildrenPerRoot': 8,
+        'cognition.ai/maxChildrenPerRoot': 200,
         'cognition.ai/maxRootsPerFolder': 20,
       },
     });
+  });
+
+  it('defaults the caps to PAGE_SIZE / CHILD_CAP and honours overrides', () => {
+    const defaults = buildListParams({ orgId: ORG, userId: null })._meta as Record<string, unknown>;
+    expect(defaults['cognition.ai/maxRootsPerFolder']).toBe(PAGE_SIZE);
+    expect(defaults['cognition.ai/maxChildrenPerRoot']).toBe(CHILD_CAP);
+    const custom = buildListParams({
+      orgId: ORG,
+      userId: null,
+      archivedStatus: 'ALL',
+      rootsCap: 7,
+      childCap: 9,
+    })._meta as Record<string, unknown>;
+    expect(custom['cognition.ai/maxRootsPerFolder']).toBe(7);
+    expect(custom['cognition.ai/maxChildrenPerRoot']).toBe(9);
+    expect(custom['cognition.ai/archivedStatus']).toBe('ALL');
+    expect(custom['cognition.ai/limit']).toBe(50);
   });
 
   it('omits participant when userId is null and never sends compact', () => {
@@ -54,19 +72,52 @@ describe('buildListParams', () => {
 });
 
 describe('buildFolderPageParams', () => {
-  it('swaps limit for folder + rootsOffset + maxRootsPerFolder', () => {
+  it('is page 1 minus limit plus folder + rootsOffset, with its own caps and status', () => {
     const params = buildFolderPageParams({
       orgId: ORG,
       userId: 'user-1',
       folder: 'Activity Log',
       rootsOffset: 20,
+      archivedStatus: 'ALL',
+      pageSize: 15,
+      childCap: 33,
+    });
+    const page1 = buildListParams({
+      orgId: ORG,
+      userId: 'user-1',
+      archivedStatus: 'ALL',
+      rootsCap: 15,
+      childCap: 33,
+    })._meta as Record<string, unknown>;
+    const { ['cognition.ai/limit']: _limit, ...shared } = page1;
+    expect(params).toEqual({
+      _meta: {
+        ...shared,
+        'cognition.ai/folder': 'Activity Log',
+        'cognition.ai/rootsOffset': 20,
+      },
     });
     const meta = params._meta as Record<string, unknown>;
-    expect(meta['cognition.ai/folder']).toBe('Activity Log');
-    expect(meta['cognition.ai/rootsOffset']).toBe(20);
-    expect(meta['cognition.ai/maxRootsPerFolder']).toBe(20);
+    expect(meta['cognition.ai/archivedStatus']).toBe('ALL');
+    expect(meta['cognition.ai/maxRootsPerFolder']).toBe(15);
+    expect(meta['cognition.ai/maxChildrenPerRoot']).toBe(33);
     expect(meta).not.toHaveProperty('cognition.ai/limit');
     expect(JSON.stringify(params)).not.toContain('compact');
+  });
+
+  it('sends ACTIVE when asked and omits participant when userId is null', () => {
+    const meta = buildFolderPageParams({
+      orgId: ORG,
+      userId: null,
+      folder: 'participated',
+      rootsOffset: 0,
+      archivedStatus: 'ACTIVE',
+      pageSize: PAGE_SIZE,
+      childCap: CHILD_CAP,
+    })._meta as Record<string, unknown>;
+    expect(meta['cognition.ai/archivedStatus']).toBe('ACTIVE');
+    expect(meta).not.toHaveProperty('cognition.ai/participant');
+    expect(meta['cognition.ai/rootsOffset']).toBe(0);
   });
 });
 
