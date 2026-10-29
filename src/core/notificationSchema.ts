@@ -5,7 +5,7 @@ import { NotificationSourceSchema, UsageMetricSchema } from './providers';
 
 export const AppNotificationSchema = z.object({
   id: z.string(),
-  kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth', 'usage']),
+  kind: z.enum(['waiting', 'approval', 'blocked', 'finished', 'pr-opened', 'pr-completed', 'update', 'identity', 'auth', 'usage', 'review']),
   sessionId: z.string().nullable(),
   ownerUserId: z.string().nullable().optional(),
   source: NotificationSourceSchema.optional(),
@@ -14,6 +14,8 @@ export const AppNotificationSchema = z.object({
   accountKey: z.string().optional(),
   prUrl: z.string().optional(),
   prState: z.string().optional(),
+  reviewVerdict: z.enum(['approved', 'changes', 'discussion']).optional(),
+  scope: z.string().optional(),
   version: z.string().optional(),
   title: z.string(),
   body: z.string(),

@@ -54,6 +54,7 @@ function kindEnabled() {
     identity: true,
     auth: true,
     usage: k?.usage ?? true,
+    review: k?.review ?? true,
   };
 }
 

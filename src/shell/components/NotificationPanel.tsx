@@ -111,6 +111,9 @@ export function NotificationPanel() {
                   }`}
                 >
                   <SourceGlyph source={entry.source} />
+                  {entry.kind === 'review' && entry.reviewVerdict && (
+                    <span className="reviewDot" data-review={entry.reviewVerdict} />
+                  )}
                   {entry.title}
                 </div>
                 <div className="text-[11px] text-[#7d8a99] leading-snug">{entry.body}</div>
