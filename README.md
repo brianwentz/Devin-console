@@ -64,6 +64,16 @@ The OpenHands rail button shows your OpenHands Cloud (or self-hosted) conversati
 - **Usage**: **Analytics → OpenHands** shows the remaining credits, today's sandbox quota, the last 30 days' spend and your most expensive conversations; a card reads *Not available on this server* where the server has no billing (typical for self-hosted). Opening that tab counts as using OpenHands (it connects); the figures refresh every minute while it is open and every 15 minutes otherwise, and reaching 50 % / 80 % of the daily quota raises a usage notification.
 - **Settings → OpenHands** also holds the **OpenHands URL** (https only, a sub-path is allowed), how often to check for conversation updates (10–600 seconds), how many conversations stay loaded (1–20) and how long hidden ones stay live (0–168 hours). Changing the URL closes the loaded pages and lists the new server's conversations.
 
+## Reviewing pull requests
+
+Right-click a pull request tab in Linked Context → **Review pull request** to have Claude Code review it with the `/cb:review` skill. The review runs in a local Claude Code terminal strip at the bottom of the pane; drag its top edge to resize it, or close it with its close button (closing while a review is running asks you to confirm and stops the review). The tab's menu also offers **Re-run review** and **Show review terminal** (to bring a hidden strip back).
+
+- **Tab dot**: yellow (pulsing) while reviewing, green approved, red changes requested, amber needs discussion, gray when the review ended without a verdict.
+- **Where it runs**: **Settings → Claude Code → Run reviews on** picks this PC or one of your WSL distros (not shown on macOS). The review needs Claude Code with the `/cb:review` skill/plugin installed on that machine.
+- **First review on a machine**: Claude Code shows its one-time folder-trust prompt in the strip — answer it once.
+- **Notifications**: when a verdict arrives a **Review: …** notification appears (switch it off under **Settings → Notifications → Review results**); opening it switches to the session the tab belongs to and shows the pane.
+- **Review sessions** appear in the Claude sidebar under the **Reviews** workspace, a folder at `~/.agent-workspace/reviews` (inside the distro's home for WSL).
+
 ## Running sessions in WSL
 
 Add a workspace inside a distro on the **Local** or **Claude** surface and its sessions run inside that distro. Enable or disable distros under **Settings → General → Hosts**.
