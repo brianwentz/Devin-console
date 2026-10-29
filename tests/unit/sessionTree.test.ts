@@ -153,6 +153,27 @@ describe('buildSessionTree', () => {
     expect(section(tree(result), 'Alpha')!.hasMore).toBe(false);
   });
 
+  it('incompleteFolders overrides the total heuristic', () => {
+    const base: CloudListResult = {
+      folders: ['Alpha', 'Beta'],
+      folderTotals: { Alpha: 3, Beta: 2 },
+      nextCursor: null,
+      sessions: [
+        session({ id: 'p', isPinned: true, folder: 'Alpha' }),
+        session({ id: 'a', folder: 'Alpha' }),
+        session({ id: 'a2', folder: 'Alpha' }),
+        session({ id: 'b', folder: 'Beta' }),
+      ],
+    };
+    // Legacy rule without the field: Beta total 2 > 1 root.
+    expect(section(tree(base), 'Beta')!.hasMore).toBe(true);
+    const t = tree({ ...base, incompleteFolders: ['Beta'] } as CloudListResult);
+    // Alpha total (3) > roots (2) because of the pinned lift, but it is complete.
+    expect(section(t, 'Alpha')!.hasMore).toBe(false);
+    expect(section(t, 'Beta')!.hasMore).toBe(true);
+    expect(section(t, 'Alpha')!.total).toBe(3);
+  });
+
   it('applies collapsed flag and current marker', () => {
     const result: CloudListResult = {
       folders: ['Alpha'],
@@ -230,6 +251,14 @@ describe('optimistic mutations', () => {
     expect(next.folders).toEqual(['pinned', 'Beta']);
     expect(next.sessions[0]!.folder).toBeNull();
     expect(next.folderTotals).toEqual({ Beta: 1 });
+  });
+
+  it('renameFolder / removeFolder keep incompleteFolders in step', () => {
+    const d = { ...data(), incompleteFolders: ['Alpha', 'Beta'] };
+    expect(renameFolder(d, 'Alpha', 'Greek').incompleteFolders).toEqual(['Greek', 'Beta']);
+    expect(removeFolder(d, 'Alpha').incompleteFolders).toEqual(['Beta']);
+    expect('incompleteFolders' in renameFolder(data(), 'Alpha', 'Greek')).toBe(false);
+    expect('incompleteFolders' in removeFolder(data(), 'Alpha')).toBe(false);
   });
 
   it('setArchived toggles the flag', () => {

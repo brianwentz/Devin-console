@@ -20,11 +20,14 @@ const USER_DATA = path.join(os.tmpdir(), 'agent-workspace-spike');
 const LOG_FILE = path.join(USER_DATA, 'events.jsonl');
 const VARIANTS = process.argv.includes('--variants');
 const CAPTURE = process.argv.includes('--capture');
+const FOLDER_PAGING = process.argv.includes('--folder-paging');
 const EVIDENCE = path.join(
   process.cwd(),
   'docs',
   'evidence',
-  CAPTURE
+  FOLDER_PAGING
+    ? 'cloud-acp-spike-folder-paging.json'
+    : CAPTURE
     ? 'cloud-acp-spike-capture.json'
     : VARIANTS
       ? 'cloud-acp-spike-variants.json'
@@ -834,6 +837,253 @@ const CAPTURE_FN = async ({ webContents }, args) => {
   return result;
 };
 
+// --folder-paging mode (plan S0, docs/plans/devin-session-panel-show-all-folder-sessions.md §3):
+// measures the per-folder roots clamp (M1), rootsOffset paging + full pages
+// (M3), `participated` as a folder filter (M5), the children clamp (M6) and
+// child-fetch request candidates (M7). Uses the app's own session/list shape
+// (src/core/cloudAcp.ts buildListParams). Evidence is counts/booleans/bytes/ms
+// only: folder names become sha256-8, ids/titles never leave this function,
+// and a final scrub replaces every token/org/user/folder/session id string.
+const FOLDER_PAGING_FN = async ({ webContents }, args) => {
+  const M = 'cognition.ai/';
+  const tenant = args.tenant.replace(/\/$/, '');
+  const out = { mode: 'folder-paging', errors: [] };
+  const contents = webContents.getAllWebContents().find((c) => c.getURL().startsWith(tenant));
+  if (!contents) return { fatal: 'tenant webContents not found' };
+  const token = await contents.executeJavaScript('window.devinDebug.getAccessToken()');
+  // devinDebug.getOrgId() can change for a while after login (multi-org users — see
+  // cloudSessions syncOrg): wait until it reads the same value 3 times in a row (≤ 20 s).
+  // `--org <id>` overrides it.
+  let orgId = args.org ?? null;
+  for (let stable = 0, last = null, i = 0; !orgId && i < 20; i++) {
+    const current = await contents.executeJavaScript('window.devinDebug.getOrgId()');
+    stable = current && current === last ? stable + 1 : 0;
+    last = current;
+    if (stable >= 2) orgId = current;
+    else await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  orgId ??= await contents.executeJavaScript('window.devinDebug.getOrgId()');
+  const secrets = new Set([token, orgId].filter(Boolean));
+  const hash = async (s) =>
+    Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))).toString('hex').slice(0, 8);
+  out.org = { hash: orgId ? await hash(orgId) : null, source: args.org ? 'flag' : 'page' };
+
+  let userId = null;
+  try {
+    const res = await fetch(`${tenant}/api/users/info`, {
+      headers: { authorization: `Bearer ${token}`, 'x-cog-org-id': orgId, accept: 'application/json' },
+    });
+    userId = res.ok ? ((await res.json())?.user_id ?? null) : null;
+    out.participantFilter = Boolean(userId);
+  } catch (error) {
+    out.errors.push({ op: 'users-info', error: String(error?.name ?? error) });
+  }
+  if (userId) secrets.add(userId);
+
+  const wsUrl = `${tenant.replace(/^http/, 'ws')}/api/acp/live?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(orgId)}`;
+  const socket = new WebSocket(wsUrl);
+  const pending = new Map();
+  let nextId = 1;
+  socket.addEventListener('message', (event) => {
+    const msg = JSON.parse(String(event.data));
+    if (msg?.id != null && pending.has(msg.id)) {
+      pending.get(msg.id)({ msg, bytes: String(event.data).length });
+      pending.delete(msg.id);
+    }
+  });
+  socket.addEventListener('close', () => {
+    for (const done of pending.values()) done({ msg: { error: { code: 'ws-closed' } }, bytes: 0 });
+    pending.clear();
+  });
+  const opened = await new Promise((resolve) => {
+    socket.addEventListener('open', () => resolve(true));
+    socket.addEventListener('error', () => resolve(false));
+    setTimeout(() => resolve(false), 20_000);
+  });
+  if (!opened) return { ...out, fatal: 'ws failed to open within 20s' };
+  const rpc = (method, params) =>
+    new Promise((resolve) => {
+      const id = nextId++;
+      const started = Date.now();
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve({ msg: { error: { code: 'timeout-60s' } }, bytes: 0, ms: Date.now() - started });
+      }, 60_000);
+      pending.set(id, (reply) => {
+        clearTimeout(timer);
+        resolve({ ...reply, ms: Date.now() - started });
+      });
+      socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    });
+
+  const init = await rpc('initialize', {
+    protocolVersion: 1,
+    clientInfo: { name: 'agent-workspace-spike', version: '0.0.0' },
+    clientCapabilities: { _meta: { [`${M}sessionListFolders`]: true } },
+  });
+  if (init.msg.error) return { ...out, fatal: `initialize error ${init.msg.error.code}` };
+
+  // Same shape as buildListParams; `extra` overrides/extends, a null value deletes the key.
+  const list = async ({ status = 'ACTIVE', roots = 20, children = 8, extra = {} } = {}) => {
+    const meta = {
+      archivedStatus: status, orgIds: [orgId], hideCodeScans: true, foldersExcludeArchived: true,
+      sessionType: ['devin'], orderBy: 'updated_at', sortDirection: 'desc', includePinned: true,
+      groupChildren: true, childrenDirect: true, limit: 50, maxChildrenPerRoot: children, maxRootsPerFolder: roots,
+      ...(userId ? { participant: [userId] } : {}), ...extra,
+    };
+    const params = {};
+    for (const [k, v] of Object.entries(meta)) if (v !== null) params[`${M}${k}`] = v;
+    const { msg, bytes, ms } = await rpc('session/list', { _meta: params });
+    if (msg.error) return { error: { code: msg.error.code ?? null, message: String(msg.error.message ?? '').slice(0, 160) }, bytes, ms };
+    const raw = Array.isArray(msg.result?.sessions) ? msg.result.sessions : (msg.result?.items ?? []);
+    const rows = raw.map((s) => {
+      const m = s?._meta ?? {};
+      return {
+        id: s?.sessionId ?? s?.id ?? null, folder: m[`${M}folder`] ?? null, parentId: m[`${M}proposedByDevinId`] ?? null,
+        pinned: m[`${M}isPinned`] === true, archived: m[`${M}isArchived`] === true,
+        dcc: typeof m[`${M}directChildrenCount`] === 'number' ? m[`${M}directChildrenCount`] : 0,
+        hasMoreChildren: m[`${M}hasMoreChildren`] === true,
+      };
+    });
+    rows.forEach((r) => { if (r.id) secrets.add(r.id); });
+    const ids = new Set(rows.map((r) => r.id));
+    for (const r of rows) r.orphan = r.parentId !== null && !ids.has(r.parentId);
+    const folders = msg.result?._meta?.[`${M}sidebarFoldersByOrg`]?.[orgId] ?? [];
+    folders.forEach((f) => secrets.add(f));
+    return { rows, totals: msg.result?._meta?.[`${M}folderTotals`] ?? {}, folders, nextCursor: Boolean(msg.result?.nextCursor), bytes, ms };
+  };
+  // Top-level rows of folder k; `participated` rows may not carry the folder key, then every top-level row counts.
+  const topLevel = (res, k) => {
+    const inK = res.rows.filter((r) => r.folder === k);
+    const base = inK.length || k !== 'participated' ? inK : res.rows;
+    return base.filter((r) => r.parentId === null || r.orphan);
+  };
+
+  // Baselines: ACTIVE and ALL page 1 at the app's current caps.
+  const active = await list();
+  const all = await list({ status: 'ALL' });
+  if (active.error) return { ...out, fatal: `page-1 error ${active.error.code}` };
+  if (active.rows.length === 0 && Object.keys(active.totals).length === 0) {
+    socket.close();
+    return { ...out, fatal: 'page 1 is empty for this org (wrong org selected?) — re-run with --org <org-id>' };
+  }
+  const folderNames = Object.keys(active.totals);
+  out.page1 = { bytes: active.bytes, ms: active.ms, rows: active.rows.length, folders: active.folders.length, nextCursor: active.nextCursor, totals: {} };
+  for (const k of folderNames) {
+    out.page1.totals[await hash(k)] = { total: active.totals[k], totalAll: all.totals?.[k] ?? null, topLevel: topLevel(active, k).length,
+      pinned: active.rows.filter((r) => r.folder === k && r.pinned).length, orphans: active.rows.filter((r) => r.folder === k && r.orphan).length,
+      archivedUnderAll: all.rows?.filter((r) => r.folder === k && r.archived).length ?? null };
+  }
+  const named = (k) => k !== 'pinned' && k !== 'participated';
+  const byTotal = (totals) => Object.keys(totals).filter(named).sort((a, b) => totals[b] - totals[a]);
+  const largest = byTotal(active.totals)[0] ?? null;
+
+  // M1 — roots clamp and page-1 cost.
+  const m1Status = Object.entries(active.totals).some(([k, t]) => named(k) && t >= 200) ? 'ACTIVE' : 'ALL';
+  const m1Folder = byTotal(m1Status === 'ACTIVE' ? active.totals : all.totals)[0] ?? null;
+  out.m1 = { status: m1Status, folder: m1Folder && (await hash(m1Folder)), runs: [] };
+  for (const v of [20, 50, 100, 200, 500]) {
+    const res = await list({ status: m1Status, roots: v });
+    const T = res.totals?.[m1Folder] ?? null;
+    out.m1.runs.push(res.error ? { v, error: res.error } : { v, total: T, slice: topLevel(res, m1Folder).length, rows: res.rows.length, bytes: res.bytes, ms: res.ms });
+  }
+  const okRuns = out.m1.runs.filter((r) => !r.error && r.total != null && r.slice === Math.min(r.total, r.v));
+  out.m1.Hr = okRuns.length ? Math.max(...okRuns.map((r) => r.v)) : 20;
+
+  // M3 / M5 — page one folder with rootsOffset until two consecutive pages add no new id.
+  const pageSize = Math.max(20, Math.min(out.m1.Hr, 100));
+  const pageFolder = async (k, status) => {
+    const seen = new Set();
+    const pages = [];
+    let offset = 0;
+    let dry = 0;
+    while (dry < 2 && pages.length < 60) {
+      const res = await list({ status, roots: pageSize, extra: { limit: null, folder: k, rootsOffset: offset } });
+      if (res.error) { pages.push({ offset, error: res.error }); break; }
+      const tl = topLevel(res, k);
+      const fresh = res.rows.filter((r) => !seen.has(r.id));
+      fresh.forEach((r) => seen.add(r.id));
+      pages.push({ offset, topLevel: tl.length, newIds: fresh.length, dups: res.rows.length - fresh.length, rows: res.rows.length,
+        inFolder: res.rows.filter((r) => r.folder === k).length, pinned: tl.filter((r) => r.pinned).length,
+        orphans: tl.filter((r) => r.orphan).length, archived: res.rows.filter((r) => r.archived).length, total: res.totals?.[k] ?? null, ms: res.ms });
+      dry = fresh.length === 0 ? dry + 1 : 0;
+      offset += tl.length || pageSize;
+    }
+    const ok = pages.filter((p) => !p.error);
+    const shortAt = ok.findIndex((p) => p.topLevel < pageSize);
+    return {
+      folder: await hash(k), status, pageSize, pages,
+      offsetHonoured: ok.length > 1 ? (ok[0].topLevel < pageSize ? 'n/a (fits one page)' : ok[1].newIds > 0) : 'n/a',
+      shortMidFolder: shortAt >= 0 && ok.slice(shortAt + 1).some((p) => p.newIds > 0),
+      unionIds: seen.size, total: ok[0]?.total ?? null,
+    };
+  };
+  const mostArchived = folderNames.filter(named)
+    .sort((a, b) => all.rows.filter((r) => r.folder === b && r.archived).length - all.rows.filter((r) => r.folder === a && r.archived).length)[0] ?? null;
+  const withOrphans = folderNames.find((k) => named(k) && active.rows.some((r) => r.folder === k && r.orphan)) ?? null;
+  out.m3 = {
+    largest: largest && (await pageFolder(largest, 'ACTIVE')),
+    mostArchived: mostArchived && (await pageFolder(mostArchived, 'ACTIVE')),
+    mostArchivedUnderAll: mostArchived && (await pageFolder(mostArchived, 'ALL')),
+    withOrphans: withOrphans && (await pageFolder(withOrphans, 'ACTIVE')),
+    mostArchivedHasArchivedRows: mostArchived ? all.rows.some((r) => r.folder === mostArchived && r.archived) : false,
+  };
+  const participated = await pageFolder('participated', 'ACTIVE');
+  const pRes = await list({ roots: pageSize, extra: { limit: null, folder: 'participated', rootsOffset: 0 } });
+  out.m5 = { ...participated, accepted: !participated.pages[0]?.error,
+    rowsCarryParticipated: pRes.error ? null : `${pRes.rows.filter((r) => r.folder === 'participated').length}/${pRes.rows.length}` };
+
+  // M6 — children clamp for the root with the most direct children.
+  const roots = (res) => res.rows.filter((r) => r.parentId === null);
+  const pickRoot = (res) => roots(res).sort((a, b) => b.dcc - a.dcc)[0] ?? null;
+  const m6Status = (pickRoot(all)?.dcc ?? 0) > (pickRoot(active)?.dcc ?? 0) ? 'ALL' : 'ACTIVE';
+  const root = pickRoot(m6Status === 'ALL' ? all : active);
+  out.m6 = { status: m6Status, D: root?.dcc ?? 0, runs: [] };
+  const childIdsAt8 = new Set();
+  for (const c of [8, 20, 50, 100, 200]) {
+    if (!root) break;
+    const res = await list({ status: m6Status, children: c });
+    if (res.error) { out.m6.runs.push({ c, error: res.error }); continue; }
+    const kids = res.rows.filter((r) => r.parentId === root.id);
+    if (c === 8) kids.forEach((r) => childIdsAt8.add(r.id));
+    const kidIds = new Set(kids.map((r) => r.id));
+    out.m6.runs.push({ c, children: kids.length, hasMoreChildren: res.rows.find((r) => r.id === root.id)?.hasMoreChildren ?? null,
+      grandchildren: res.rows.filter((r) => kidIds.has(r.parentId)).length, bytes: res.bytes, ms: res.ms });
+  }
+  const okC = out.m6.runs.filter((r) => !r.error && r.children === Math.min(out.m6.D, r.c));
+  out.m6.Hc = okC.length ? Math.max(...okC.map((r) => r.c)) : 8;
+
+  // M7 — request candidates that might return children beyond page 1's cap.
+  out.m7 = { candidates: [] };
+  if (root && root.dcc > 8) {
+    const candidates = [
+      ['sessionIds', { sessionIds: [root.id] }, 200],
+      ['sessionIds+childrenOffset', { sessionIds: [root.id], childrenOffset: 8 }, 8],
+      ['sessionIds+childOffset', { sessionIds: [root.id], childOffset: 8 }, 8],
+      ['parentSessionId', { parentSessionId: root.id, groupChildren: false, includePinned: false }, 8],
+      ['proposedByDevinId', { proposedByDevinId: root.id, groupChildren: false, includePinned: false }, 8],
+    ];
+    for (const [label, extra, children] of candidates) {
+      const res = await list({ status: m6Status, children, extra });
+      if (res.error) { out.m7.candidates.push({ label, error: res.error }); continue; }
+      const kids = res.rows.filter((r) => r.parentId === root.id);
+      out.m7.candidates.push({ label, rows: res.rows.length, children: kids.length,
+        newVsPage1: kids.filter((r) => !childIdsAt8.has(r.id)).length, nextCursor: res.nextCursor });
+    }
+  }
+  socket.close();
+
+  // Scrub string VALUES (never keys) of every id/name seen — longest first so prefixes don't leak.
+  const scrubList = [...secrets].filter((s) => typeof s === 'string' && s.length >= 3).sort((a, b) => b.length - a.length);
+  const scrub = (value) => {
+    if (typeof value === 'string') return scrubList.reduce((acc, s) => acc.split(s).join('[redacted]'), value);
+    if (Array.isArray(value)) return value.map(scrub);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v)]));
+    return value;
+  };
+  return scrub(out);
+};
+
 async function closeApp(app) {
   try {
     await Promise.race([
@@ -863,6 +1113,8 @@ async function main() {
     env: {
       ...process.env,
       AGENT_WORKSPACE_TEST: '1',
+      // Test mode launches quiet (invisible window) — the manual login needs it shown.
+      AGENT_WORKSPACE_TEST_QUIET: '0',
       AGENT_WORKSPACE_USER_DATA: USER_DATA,
       AGENT_WORKSPACE_LOG: LOG_FILE,
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
@@ -940,6 +1192,25 @@ async function main() {
       return 1;
     }
 
+    if (FOLDER_PAGING) {
+      console.log('Login detected — running folder-paging probes (M1/M3/M5/M6/M7); this takes a few minutes…');
+      const orgFlag = process.argv.indexOf('--org');
+      const org = orgFlag > -1 ? process.argv[orgFlag + 1] ?? null : null;
+      const fp = await app.evaluate(FOLDER_PAGING_FN, { tenant: TENANT, org });
+      writeEvidence({ at: new Date().toISOString(), ...fp });
+      console.log('Evidence written to', EVIDENCE);
+      console.log('org:', JSON.stringify(fp.org ?? null));
+      if (fp.fatal) console.log('FATAL:', fp.fatal);
+      const page = (p) => p && `${p.folder} ${p.status}: pages=${p.pages.length} offsetHonoured=${p.offsetHonoured} shortMidFolder=${p.shortMidFolder} union=${p.unionIds} total=${p.total}`;
+      console.log('M1 Hr =', fp.m1?.Hr, '|', JSON.stringify(fp.m1?.runs ?? []));
+      for (const [label, p] of Object.entries(fp.m3 ?? {})) if (p && typeof p === 'object') console.log(`M3 ${label}:`, page(p));
+      console.log('M3 mostArchived has archived rows:', fp.m3?.mostArchivedHasArchivedRows);
+      console.log('M5 participated accepted =', fp.m5?.accepted, '| rowsCarry =', fp.m5?.rowsCarryParticipated, '|', page(fp.m5));
+      console.log('M6 D =', fp.m6?.D, 'Hc =', fp.m6?.Hc, '|', JSON.stringify(fp.m6?.runs ?? []));
+      console.log('M7:', JSON.stringify(fp.m7?.candidates ?? []));
+      if (fp.errors?.length) console.log('errors:', JSON.stringify(fp.errors));
+      return fp.fatal ? 1 : 0;
+    }
     console.log(
       CAPTURE
         ? 'Login detected — capturing the web app’s own ACP traffic via CDP…'

@@ -848,6 +848,8 @@ export const CloudStateSchema = z.object({
   error: z.string().nullable(),
   folders: z.array(z.string()),
   folderTotals: z.record(z.string(), z.number()),
+  // Folders whose listed sessions are known to be partial (drives "show more").
+  incompleteFolders: z.array(z.string()).optional(),
   sessions: z.array(CloudSessionSchema),
   // Bare-hex ids of sessions with a live pooled view (for sidebar markers).
   liveSessionIds: z.array(z.string()),

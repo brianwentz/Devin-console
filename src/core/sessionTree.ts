@@ -25,6 +25,8 @@ export interface SidebarListData<S extends SidebarSession = SidebarSession> {
   sessions: S[];
   folders: string[];
   folderTotals: Record<string, number>;
+  /** Folders whose listing is known to be partial; absent = infer from folderTotals. */
+  incompleteFolders?: string[];
 }
 
 export interface SessionTreeNode<S extends SidebarSession = SidebarSession> {
@@ -137,7 +139,9 @@ export function buildSessionTree<S extends SidebarSession>(
       nodes: orderRoots(sectionRoots, opts.sectionOrder?.[name], byUpdatedDesc).map((s) =>
         toNode(s, 0),
       ),
-      hasMore: total !== null && total > sectionRoots.length,
+      hasMore: result.incompleteFolders
+        ? result.incompleteFolders.includes(name)
+        : total !== null && total > sectionRoots.length,
     };
   };
 
@@ -233,6 +237,9 @@ export function renameFolder<S extends SidebarSession, D extends SidebarListData
     ...data,
     folders: data.folders.map((f) => (f === oldName ? newName : f)),
     folderTotals: totals,
+    ...(data.incompleteFolders
+      ? { incompleteFolders: data.incompleteFolders.map((f) => (f === oldName ? newName : f)) }
+      : {}),
     sessions: data.sessions.map((s) => (s.folder === oldName ? { ...s, folder: newName } : s)),
   };
 }
@@ -247,6 +254,9 @@ export function removeFolder<S extends SidebarSession, D extends SidebarListData
     ...data,
     folders: data.folders.filter((f) => f !== name),
     folderTotals: totals,
+    ...(data.incompleteFolders
+      ? { incompleteFolders: data.incompleteFolders.filter((f) => f !== name) }
+      : {}),
     sessions: data.sessions.map((s) => (s.folder === name ? { ...s, folder: null } : s)),
   };
 }

@@ -4,6 +4,7 @@
 // the 'cognition.ai/' prefix. The 'cognition.ai/sessionListFolders' client
 // capability is required for folder data; 'cognition.ai/compact' strips it.
 
+import { CHILD_CAP, PAGE_SIZE } from './cloudFolderPagingLimits';
 import { sanitizeMessage } from './devinApi';
 
 const META = 'cognition.ai/';
@@ -86,13 +87,17 @@ export function buildInitializeParams(version: string): Record<string, unknown> 
   };
 }
 
-export function buildListParams(options: {
+// Shared by page 1 and folder pages so both send the same filters — in
+// particular the same archivedStatus (folder pages used to be ACTIVE-only).
+function baseListMeta(options: {
   orgId: string;
   userId: string | null;
-  archivedStatus?: 'ACTIVE' | 'ALL';
+  archivedStatus: 'ACTIVE' | 'ALL';
+  rootsCap: number;
+  childCap: number;
 }): Record<string, unknown> {
   const meta: Record<string, unknown> = {
-    [`${META}archivedStatus`]: options.archivedStatus ?? 'ACTIVE',
+    [`${META}archivedStatus`]: options.archivedStatus,
     [`${META}orgIds`]: [options.orgId],
     [`${META}hideCodeScans`]: true,
     [`${META}foldersExcludeArchived`]: true,
@@ -102,30 +107,54 @@ export function buildListParams(options: {
     [`${META}includePinned`]: true,
     [`${META}groupChildren`]: true,
     [`${META}childrenDirect`]: true,
-    [`${META}limit`]: 50,
-    [`${META}maxChildrenPerRoot`]: 8,
-    [`${META}maxRootsPerFolder`]: 20,
+    [`${META}maxChildrenPerRoot`]: options.childCap,
+    [`${META}maxRootsPerFolder`]: options.rootsCap,
   };
   // Omitted entirely when the identity lookup failed — the key itself is
   // meaningful to the server.
   if (options.userId) meta[`${META}participant`] = [options.userId];
+  return meta;
+}
+
+export function buildListParams(options: {
+  orgId: string;
+  userId: string | null;
+  archivedStatus?: 'ACTIVE' | 'ALL';
+  rootsCap?: number;
+  childCap?: number;
+}): Record<string, unknown> {
+  const meta = baseListMeta({
+    orgId: options.orgId,
+    userId: options.userId,
+    archivedStatus: options.archivedStatus ?? 'ACTIVE',
+    rootsCap: options.rootsCap ?? PAGE_SIZE,
+    childCap: options.childCap ?? CHILD_CAP,
+  });
+  meta[`${META}limit`] = 50;
   return { _meta: meta };
 }
 
-// Per-folder "show more" page: same shape minus limit, offset by roots seen.
+// One folder page: page 1's shape minus limit, plus folder + rootsOffset
+// (offset counted in top-level rows of the folder).
 export function buildFolderPageParams(options: {
   orgId: string;
   userId: string | null;
   folder: string;
   rootsOffset: number;
+  archivedStatus: 'ACTIVE' | 'ALL';
+  pageSize: number;
+  childCap: number;
 }): Record<string, unknown> {
-  const params = buildListParams(options);
-  const meta = params._meta as Record<string, unknown>;
-  delete meta[`${META}limit`];
+  const meta = baseListMeta({
+    orgId: options.orgId,
+    userId: options.userId,
+    archivedStatus: options.archivedStatus,
+    rootsCap: options.pageSize,
+    childCap: options.childCap,
+  });
   meta[`${META}folder`] = options.folder;
   meta[`${META}rootsOffset`] = options.rootsOffset;
-  meta[`${META}maxRootsPerFolder`] = 20;
-  return params;
+  return { _meta: meta };
 }
 
 export function acpWsUrl(tenantUrl: string, token: string, orgId: string): string {
