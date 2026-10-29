@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  REVIEW_VERDICT_RETRY_MS,
   buildReviewPrompt,
   canonicalPrUrl,
+  lastAssistantText,
   parseVerdict,
   prLabel,
   reduceReview,
   resolveReviewHostPure,
   reviewDotLabel,
   tabMenuModel,
+  verdictSource,
   type ReviewRecord,
 } from '../../src/core/tabReview';
 
@@ -209,5 +212,68 @@ describe('resolveReviewHostPure', () => {
   });
   it('ready distro', () => {
     expect(resolveReviewHostPure('wsl:D', 'win32', ready)).toEqual({ ok: true, hostId: 'wsl:D' });
+  });
+});
+
+describe('verdictSource', () => {
+  it('uses the Stop payload text when last_assistant_message is a string', () => {
+    const text = 'done\nAW_REVIEW_VERDICT: approved';
+    expect(verdictSource({ last_assistant_message: text })).toEqual({ kind: 'payload', text });
+    expect(verdictSource({ last_assistant_message: '' })).toEqual({ kind: 'payload', text: '' });
+  });
+
+  it('falls back to the transcript when the field is absent or not a string', () => {
+    expect(verdictSource({})).toEqual({ kind: 'transcript' });
+    expect(verdictSource({ last_assistant_message: 42 })).toEqual({ kind: 'transcript' });
+    expect(verdictSource({ last_assistant_message: null })).toEqual({ kind: 'transcript' });
+  });
+
+  it('retries a null transcript read at 1 s, 3 s and 7 s after Stop', () => {
+    expect(REVIEW_VERDICT_RETRY_MS).toEqual([1000, 3000, 7000]);
+  });
+});
+
+describe('lastAssistantText', () => {
+  const assistant = (content: unknown, extra: Record<string, unknown> = {}) => ({
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: { role: 'assistant', content },
+    ...extra,
+  });
+
+  it('returns the text blocks of the last top-level assistant message with text', () => {
+    const messages = [
+      { type: 'user', message: { role: 'user', content: 'AW_REVIEW_VERDICT: approved | changes | discussion' } },
+      assistant([{ type: 'text', text: 'first' }]),
+      assistant([
+        { type: 'text', text: 'Summary' },
+        { type: 'tool_use', id: 't', name: 'Bash', input: {} },
+        { type: 'text', text: 'AW_REVIEW_VERDICT: changes' },
+      ]),
+      assistant([{ type: 'tool_use', id: 't2', name: 'Read', input: {} }]),
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'x' }] } },
+    ];
+    expect(lastAssistantText(messages)).toBe('Summary\nAW_REVIEW_VERDICT: changes');
+  });
+
+  it('accepts a plain string content', () => {
+    expect(lastAssistantText([assistant('AW_REVIEW_VERDICT: approved')])).toBe(
+      'AW_REVIEW_VERDICT: approved',
+    );
+  });
+
+  it('skips subagent assistant messages and user text', () => {
+    const messages = [
+      assistant([{ type: 'text', text: 'parent' }]),
+      assistant([{ type: 'text', text: 'AW_REVIEW_VERDICT: approved' }], { parent_tool_use_id: 'tu1' }),
+      { type: 'user', message: { role: 'user', content: 'AW_REVIEW_VERDICT: approved' } },
+    ];
+    expect(lastAssistantText(messages)).toBe('parent');
+  });
+
+  it('returns null when there is no assistant text', () => {
+    expect(lastAssistantText([])).toBeNull();
+    expect(lastAssistantText([null, 'x', { type: 'assistant' }])).toBeNull();
+    expect(lastAssistantText([assistant([{ type: 'tool_use', id: 't', name: 'Bash', input: {} }])])).toBeNull();
   });
 });

@@ -164,3 +164,44 @@ export function resolveReviewHostPure(
 export function reviewsDirFor(home: string, family: 'posix' | 'win32'): string {
   return (family === 'win32' ? win32 : posix).join(home, '.agent-workspace', 'reviews');
 }
+
+/** Transcript re-reads after a Stop whose read found no verdict (ms after the Stop). */
+export const REVIEW_VERDICT_RETRY_MS: readonly number[] = [1000, 3000, 7000];
+
+/**
+ * Where a Stop's verdict comes from: the hook body's `last_assistant_message`
+ * when the CLI sent it (claude >= 2.1.312), else the session transcript. A
+ * payload string without a verdict is final for that Stop — no transcript read.
+ */
+export function verdictSource(payload: {
+  last_assistant_message?: unknown;
+}): { kind: 'payload'; text: string } | { kind: 'transcript' } {
+  const text = payload.last_assistant_message;
+  return typeof text === 'string' ? { kind: 'payload', text } : { kind: 'transcript' };
+}
+
+/** Text blocks of the last top-level assistant message that has any text, in
+ * SDK transcript shape (`{type:'assistant', message:{content}}`). User text
+ * (which echoes the marker template) and subagent messages never count. */
+export function lastAssistantText(messages: readonly unknown[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m || typeof m !== 'object') continue;
+    const msg = m as { type?: unknown; parent_tool_use_id?: unknown; message?: unknown };
+    if (msg.type !== 'assistant' || (msg.parent_tool_use_id ?? null) !== null) continue;
+    const content = (msg.message as { content?: unknown } | null | undefined)?.content;
+    if (typeof content === 'string') {
+      if (content) return content;
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    const texts = content
+      .filter(
+        (b): b is { type: 'text'; text: string } =>
+          !!b && typeof b === 'object' && b.type === 'text' && typeof b.text === 'string',
+      )
+      .map((b) => b.text);
+    if (texts.length > 0) return texts.join('\n');
+  }
+  return null;
+}

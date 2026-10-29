@@ -40,8 +40,11 @@ export type TerminalOpenOptions =
   | {
       kind: 'claude';
       sessionId: string;
-      mode: 'resume' | 'new' | 'attach';
+      // 'review': a Tab Review pty — args as 'new'; owned by reviewGate, not claudeGate.
+      mode: 'resume' | 'new' | 'attach' | 'review';
       agentId?: string | undefined;
+      // Review mode: the review host (a fresh session id is unknown to resolveHost).
+      hostId?: HostId | undefined;
       cwd: string | null;
       // claude-kind: `--settings` hook block + hook token env (resume/new only).
       extraArgs?: string[] | undefined;
@@ -79,8 +82,10 @@ interface TerminalEntry {
   lastDataLogAt: number;
   // Test mode only: rolling output buffer for __agentworkspace.terminalRead.
   readBuffer: string;
-  // Devin-kind only: PR-URL scanner over the pty output stream.
+  // PR-URL scanner over the pty output stream (null for shell and review ptys).
   linkScanner: LinkScanner | null;
+  // A Tab Review pty: exit goes to reviewGate instead of claudeGate.
+  review: boolean;
 }
 
 // Sampled event-log volume for terminal output (F2).
@@ -129,6 +134,14 @@ export class TerminalHost {
     onExit: (sessionId: string) => void;
     // The exec host a claude session runs on ('local' or 'wsl:<distro>').
     resolveHost: (sessionId: string) => HostId;
+  } | null = null;
+
+  // Injected from index.ts: the Tab Review controller. Review ptys skip the
+  // claudeGate chat handoff (no terminalOwned) and all PR handling — the
+  // review prompt itself carries the PR URL.
+  reviewGate: {
+    onExit: (sessionId: string) => void;
+    isReview: (sessionId: string) => boolean;
   } | null = null;
 
   constructor(private readonly testMode: boolean) {}
@@ -349,8 +362,11 @@ export class TerminalHost {
     const workspaces = (state.settings?.current.workspaces ?? []).map((w) => resolve(w));
     const execHost: ExecHost =
       options.kind === 'claude'
-        ? (hosts().hostById(this.claudeGate?.resolveHost(options.sessionId) ?? 'local') ??
-          LOCAL_HOST)
+        ? (hosts().hostById(
+            options.mode === 'review'
+              ? (options.hostId ?? 'local')
+              : (this.claudeGate?.resolveHost(options.sessionId) ?? 'local'),
+          ) ?? LOCAL_HOST)
         : options.kind === 'devin'
           ? (hosts().hostById(hosts().pathHostId(options.workspace)) ?? LOCAL_HOST)
           : LOCAL_HOST;
@@ -423,7 +439,7 @@ export class TerminalHost {
       log('local', 'terminal-open', { detail: { cwd: normalized, ok: false } });
       return { ok: false, error: command.error };
     }
-    if (options.kind === 'claude') {
+    if (options.kind === 'claude' && options.mode !== 'review') {
       // One-writer policy: the chat query closes before the pty opens;
       // a running prompt refuses.
       try {
@@ -540,6 +556,9 @@ export class TerminalHost {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     const spawnedAt = Date.now();
+    const review =
+      options.kind === 'claude' &&
+      (options.mode === 'review' || this.reviewGate?.isReview(options.sessionId) === true);
     const entry: TerminalEntry = {
       id: randomUUID(),
       host: execHost.id,
@@ -557,9 +576,10 @@ export class TerminalHost {
       lastDataLogAt: 0,
       readBuffer: '',
       linkScanner:
-        options.kind !== 'shell'
+        options.kind !== 'shell' && !review
           ? new LinkScanner({ context: { githubOrigins: fixtureOrigins } })
           : null,
+      review,
     };
     this.terminals.set(entry.id, entry);
     if (options.kind !== 'shell') this.bySession.set(options.sessionId, entry.id);
@@ -591,7 +611,8 @@ export class TerminalHost {
         void this.sessionGate?.reclaim(entry.sessionId);
       }
       if (entry.kind === 'claude' && entry.sessionId) {
-        this.claudeGate?.onExit(entry.sessionId);
+        if (entry.review) this.reviewGate?.onExit(entry.sessionId);
+        else this.claudeGate?.onExit(entry.sessionId);
       }
       const view = state.shellView;
       if (view?.webContents && !view.webContents.isDestroyed()) {

@@ -129,6 +129,8 @@ export class ClaudeHost {
   private readonly readMessages: (id: string) => Promise<unknown[]>;
   private readonly readSubagentMessages: (id: string, agentId: string) => Promise<unknown[]>;
   private readonly onPullRequestUrl: (sessionId: string, url: string) => void;
+  // A refusal message while another writer owns the transcript (a review pty).
+  private readonly refusePrompt: (sessionId: string) => string | null;
   private readonly onEvent: (
     sessionId: string,
     kind: 'waiting' | 'finished' | 'blocked',
@@ -157,6 +159,7 @@ export class ClaudeHost {
     hostFor?: (id: string) => ExecHost;
     messages?: (id: string) => Promise<unknown[]>;
     subagentMessages?: (id: string, agentId: string) => Promise<unknown[]>;
+    refusePrompt?: (sessionId: string) => string | null;
     onPullRequestUrl: (sessionId: string, url: string) => void;
     onEvent?: (
       sessionId: string,
@@ -166,6 +169,7 @@ export class ClaudeHost {
   }) {
     this.cliPath = opts.cliPath;
     this.configDir = opts.configDir;
+    this.refusePrompt = opts.refusePrompt ?? (() => null);
     this.isOnDisk = opts.isOnDisk;
     this.hostFor = opts.hostFor ?? (() => LOCAL_HOST);
     this.readMessages =
@@ -361,6 +365,8 @@ export class ClaudeHost {
   async prompt(id: string, text: string): Promise<void> {
     const session = getChatState().sessions[id];
     if (!session) throw new Error('unknown claude session');
+    const refusal = this.refusePrompt(id);
+    if (refusal) throw new Error(refusal);
     update((s) => startPrompt(s, id, text, new Date().toISOString()));
     log('claude', 'claude-prompt', { detail: { sessionId: id, length: text.length } });
     try {

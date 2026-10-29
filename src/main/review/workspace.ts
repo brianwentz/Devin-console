@@ -12,7 +12,7 @@ import { log } from '../log';
 import { state, testMode } from '../state';
 
 export type ReviewsWorkspaceResult =
-  | { ok: true; cwd: string; workspacePath: string }
+  | { ok: true; cwd: string; workspacePath: string; created: boolean }
   | { ok: false; reason: 'helper-not-ready' | 'not-probed' | 'io' };
 
 const REVIEWS_LABEL = 'Reviews';
@@ -56,5 +56,5 @@ export async function ensureReviewsWorkspace(hostId: HostId): Promise<ReviewsWor
     });
   }
   log('claude', 'review-workspace', { detail: { host: hostId, created } });
-  return { ok: true, cwd, workspacePath: normalized };
+  return { ok: true, cwd, workspacePath: normalized, created };
 }

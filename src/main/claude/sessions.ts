@@ -59,9 +59,11 @@ import { terminalHost } from '../local/terminalHost';
 import { ClaudeBackgroundAgents } from './backgroundAgents';
 import { getChatState } from './chatState';
 import { titleFromPrompt } from '../../core/localModel';
+import { reviews } from '../review/controller';
 
 const execFileAsync = promisify(execFile);
 const SURFACE_REFRESH_MIN_MS = 60_000;
+const REVIEW_RUNNING_MESSAGE = 'A review is running in this session';
 
 export class ClaudeSessions {
   private stores = new Map<HostId, ClaudeStore>();
@@ -140,6 +142,21 @@ export class ClaudeSessions {
 
   private storeForSession(id: string): StoreBackend {
     return this.storeForHost(this.execHostFor(id)).backend;
+  }
+
+  /** Transcript read on an explicit host — a review's fresh session id is in
+   * no list yet, so hostIdFor would answer 'local'. */
+  messagesOn(hostId: HostId, sessionId: string): Promise<unknown[]> {
+    const store = this.stores.get(hostId);
+    if (store) return store.backend.messages(sessionId);
+    const host = hosts().hostById(hostId);
+    if (!host) return Promise.reject(new Error(`unknown host ${hostId}`));
+    return this.storeForHost(host).backend.messages(sessionId);
+  }
+
+  /** The resolved local `claude` binary (claude.path, else PATH); null = not found. */
+  claudeCliPath(): string | null {
+    return this.cliPath;
   }
 
   /** A store watch report. Local: any change re-lists the local host (the
@@ -229,6 +246,7 @@ export class ClaudeSessions {
       isOnDisk: (id) => this.storeSessions.some((s) => s.id === id),
       messages: (id) => this.storeForSession(id).messages(id),
       subagentMessages: (id, agentId) => this.storeForSession(id).subagentMessages(id, agentId),
+      refusePrompt: (id) => (reviews().isRunning(id) ? REVIEW_RUNNING_MESSAGE : null),
       onPullRequestUrl: (id, url) => {
         this.recordPr(id, url, 'chat');
         autoOpenLocalPr(url, claudeScope(id), 'claude-chat');
@@ -309,8 +327,10 @@ export class ClaudeSessions {
   hookInjection(
     sessionId: string,
     mode: 'resume' | 'new' | 'attach',
+    // A review pty's fresh session id is unknown to hostIdFor — it passes its host.
+    hostOverride?: HostId,
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
-    const hostId = this.hostIdFor(sessionId);
+    const hostId = hostOverride ?? this.hostIdFor(sessionId);
     // ssh (fix round 1 #1c): hooks only through a forward whose listener
     // proved the token — never toward whoever holds the remote port. The
     // permission mode is passed either way (R40 M1).
@@ -680,6 +700,12 @@ export class ClaudeSessions {
   }
 
   open(sessionId: string): void {
+    // One writer per transcript: the review pty owns it while it runs.
+    if (reviews().isRunning(sessionId)) {
+      this.lastError = { op: 'open', message: REVIEW_RUNNING_MESSAGE };
+      this.emit();
+      return;
+    }
     this.selectedSubagentId = null;
     state.claudeSessionId = sessionId;
     state.settings?.merge({ claude: { lastSessionId: sessionId } });
@@ -949,9 +975,15 @@ export class ClaudeSessions {
     const current = state.settings?.current.claude.workspaces ?? [];
     if (current.includes(normalized)) return;
     state.settings?.merge({ claude: { workspaces: [...current, normalized] } });
-    applyLayout();
     const hostId = hosts().pathHostId(normalized);
     log('claude', 'claude-workspace-add', { detail: { host: hostId } });
+    this.workspacesChanged();
+  }
+
+  /** After `claude.workspaces` was merged elsewhere (the Reviews workspace):
+   * re-layout and re-derive so the new section shows at once. */
+  workspacesChanged(): void {
+    applyLayout();
     this.rederive();
   }
 

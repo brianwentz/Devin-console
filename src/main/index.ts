@@ -22,6 +22,7 @@ import { hosts } from './hosts';
 import { claudeUsage } from './claude/usage';
 import { autoOpenLocalPr } from './local/prAutoOpen';
 import { terminalHost } from './local/terminalHost';
+import { reviews } from './review/controller';
 import { log, logFile } from './log';
 import { setPermissions } from './permissions';
 import { installProtocol } from './protocol';
@@ -187,6 +188,8 @@ export async function shutdown(options: { installUpdate?: boolean } = {}): Promi
     } catch {
       // best effort at shutdown
     }
+    // Pending review verdict reads stop; the ptys go with terminalHost.dispose().
+    reviews().dispose();
     // Local host dispose then the Claude host dispose (2 s race), in
     // registration order; each failure is logged and never aborts the quit.
     await disposeAll();
@@ -330,6 +333,11 @@ async function createWindow(): Promise<void> {
       claudeSessions().recordPr(sessionId, url, 'terminal');
     }
     autoOpenLocalPr(url, target.scope, target.source);
+  };
+  // Tab Review ptys: exit is the verdict backstop; ids gate PR scanning.
+  terminalHost.reviewGate = {
+    onExit: (sessionId) => void reviews().onPtyExit(sessionId),
+    isReview: (sessionId) => reviews().isReviewSession(sessionId),
   };
   // Exclusive handoff: `devin -r` ptys take the CLI's per-session lock; the acp
   // agent releases it (restart) on open and reclaims the session on close.
