@@ -2,17 +2,20 @@ import { folderPromptOpen, folderPromptPublic } from './folderPrompt';
 import { screen, View, type WebContentsView } from 'electron';
 import {
   clampPaneWidth,
+  clampReviewTerminalHeight,
   clampSessionsWidth,
   clampTerminalHeight,
   computeBounds,
   dockSurface,
   fractionFromPx,
+  layoutStateFromState,
   leftChrome,
   MIN_DEVIN_WIDTH,
   paneToggleWindowWidth,
   RAIL_WIDTH,
   sessionsColumnSurface,
   SPLITTER_WIDTH,
+  TITLE_BAR_HEIGHT,
   type LayoutState,
   type Rect,
   type WindowBounds,
@@ -108,17 +111,18 @@ export function setPaneOpen(open: boolean, source: string): void {
 }
 
 export function layoutState(): LayoutState {
-  return {
+  return layoutStateFromState({
+    surface: state.surface,
     paneOpen: state.paneOpen,
     paneFraction: state.paneFraction,
-    terminalOpen: terminalVisible(),
+    terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
-    // The sessions column occupies space on every provider surface.
-    sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
+    sessionsOpen: state.sessionsOpen,
     sessionsWidth: state.sessionsWidth,
-    analyticsTabs: state.surface === 'analytics',
     addressBarOpen: state.addressBar.open,
-  };
+    reviewTerminalOpen: state.reviewTerminalOpen,
+    reviewTerminalHeight: state.reviewTerminalHeight,
+  });
 }
 
 // Where the address bar was opened: a surface or tab-scope change closes it.
@@ -244,6 +248,8 @@ export function publicState(): ShellState {
     update: updateState(),
     terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
+    reviewTerminalOpen: state.reviewTerminalOpen,
+    reviewTerminalHeight: state.reviewTerminalHeight,
     terminals: terminalHost.list(),
     activeTerminalId: (() => {
       const terminals = terminalHost.list();
@@ -473,6 +479,7 @@ export function cancelDrag(restore: boolean, reason: string): void {
   if (restore) {
     if (state.dragAxis === 'x') state.paneFraction = state.dragStartFraction;
     else if (state.dragAxis === 's') state.sessionsWidth = state.dragStartSessionsWidth;
+    else if (state.dragAxis === 'r') state.reviewTerminalHeight = state.dragStartReviewHeight;
     else state.terminalHeight = state.dragStartHeight;
   }
   log('shell', 'drag-cancel', {
@@ -489,11 +496,12 @@ export function cancelDrag(restore: boolean, reason: string): void {
   state.shellView?.webContents.send(IpcChannels.layoutDragReset);
 }
 
-export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
+export function beginDrag(axis: 'x' | 'y' | 's' | 'r', pos: number): void {
   const { windowRef, shellView } = state;
   if (!windowRef || !shellView || state.dragging) return;
   if (axis === 'x' && (!state.paneOpen || state.paneCollapsed)) return;
   if (axis === 'y' && !terminalVisible()) return;
+  if (axis === 'r' && !state.reviewTerminalOpen) return;
   if (axis === 's' &&
     (!state.sessionsOpen ||
       state.sessionsCollapsed ||
@@ -503,6 +511,7 @@ export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
   state.dragAxis = axis;
   state.dragStartFraction = state.paneFraction;
   state.dragStartHeight = state.terminalHeight;
+  state.dragStartReviewHeight = state.reviewTerminalHeight;
   state.dragStartSessionsWidth = state.sessionsWidth;
   state.dragLastX = pos;
   if (state.dragTimer) clearTimeout(state.dragTimer);
@@ -532,6 +541,14 @@ export function moveDrag(pos: number): void {
     const next = clampSessionsWidth(pos - RAIL_WIDTH, content.width);
     changed = next !== state.sessionsWidth;
     state.sessionsWidth = next;
+  } else if (state.dragAxis === 'r') {
+    // The strip is bottom-anchored in the pane: dragging up makes it taller.
+    const next = clampReviewTerminalHeight(
+      content.height - pos - SPLITTER_WIDTH / 2,
+      content.height - TITLE_BAR_HEIGHT,
+    );
+    changed = next !== state.reviewTerminalHeight;
+    state.reviewTerminalHeight = next;
   } else {
     const next = clampTerminalHeight(
       content.height - pos - SPLITTER_WIDTH / 2,

@@ -78,9 +78,12 @@ export const state = {
   terminalOpen: false,
   terminalHeight: DEFAULT_TERMINAL_HEIGHT,
   reviewTerminalHeight: DEFAULT_REVIEW_TERMINAL_HEIGHT,
+  // Set by window.ts from the active tab's review record (Task 8).
+  reviewTerminalOpen: false,
   activeTerminalId: null as string | null,
-  dragAxis: 'x' as 'x' | 'y' | 's',
+  dragAxis: 'x' as 'x' | 'y' | 's' | 'r',
   dragStartHeight: DEFAULT_TERMINAL_HEIGHT,
+  dragStartReviewHeight: DEFAULT_REVIEW_TERMINAL_HEIGHT,
   dragStartSessionsWidth: DEFAULT_SESSIONS_WIDTH,
   shuttingDown: false,
   // True after cleanup finished and the normal quit lifecycle was invoked —

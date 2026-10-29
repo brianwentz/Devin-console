@@ -222,7 +222,8 @@ button:disabled {
   transform: translateX(-50%);
 }
 
-.splitter[data-axis='y'] > .splitter-line {
+.splitter[data-axis='y'] > .splitter-line,
+.splitter[data-axis='r'] > .splitter-line {
   top: 50%;
   left: 0;
   right: 0;

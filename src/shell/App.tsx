@@ -3,10 +3,10 @@ import {
   computeBounds,
   dockSurface,
   RAIL_WIDTH,
-  sessionsColumnSurface,
   TITLE_BAR_HEIGHT,
 } from '../core/layout';
 import { addressBarShortcut } from '../core/addressBarKeys';
+import { layoutStateFromShellState } from './layoutState';
 import { PROVIDERS, providerBySurface } from '../core/providers';
 import { PROVIDER_UI } from './providers';
 import { renderBadgeDataUrl } from './badge';
@@ -120,16 +120,7 @@ export function App() {
 
   if (!state) return null;
   const terminalVisible = state.terminalOpen && dockSurface(state.surface);
-  const bounds = computeBounds(size, {
-    paneOpen: state.paneOpen,
-    paneFraction: state.paneFraction,
-    terminalOpen: terminalVisible,
-    terminalHeight: state.terminalHeight,
-    sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
-    sessionsWidth: state.sessionsWidth,
-    analyticsTabs: state.surface === 'analytics',
-    addressBarOpen: state.tabs.addressBar.open,
-  });
+  const bounds = computeBounds(size, layoutStateFromShellState(state));
   const analyticsTab = state.settings.analytics.tab;
   const paneVisible = state.paneOpen && !bounds.paneCollapsed;
   const mainRect = bounds.devin;

@@ -1136,6 +1136,9 @@ export const ShellStateSchema = z.object({
   // F5 terminal dock
   terminalOpen: z.boolean(),
   terminalHeight: z.number(),
+  // Review terminal strip (pane-level); Task 8 supplies the live values.
+  reviewTerminalOpen: z.boolean().optional(),
+  reviewTerminalHeight: z.number().optional(),
   terminals: z.array(TerminalSummarySchema),
   activeTerminalId: z.string().nullable(),
   // Execution hosts known to main (local first).
@@ -1434,7 +1437,7 @@ export const SurfaceArg = SurfaceSchema;
 export const LinkOpenArg = z.string().max(8192);
 export const DragPosArg = z.number().finite();
 export const DragStartArg = z.object({
-  axis: z.enum(['x', 'y', 's']),
+  axis: z.enum(['x', 'y', 's', 'r']),
   pos: z.number().finite(),
 });
 export const DragCancelReasonArg = z.enum(['escape', 'pointer-cancel']);

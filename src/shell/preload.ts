@@ -329,8 +329,8 @@ const api = {
   openLink: (url: string) => {
     if (typeof url === 'string' && url.length < 8192) ipcRenderer.send(IpcChannels.linkOpen, url);
   },
-  dragStart: (axis: 'x' | 'y' | 's', pos: number) => {
-    if ((axis === 'x' || axis === 'y' || axis === 's') && Number.isFinite(pos)) {
+  dragStart: (axis: 'x' | 'y' | 's' | 'r', pos: number) => {
+    if ((axis === 'x' || axis === 'y' || axis === 's' || axis === 'r') && Number.isFinite(pos)) {
       ipcRenderer.send(IpcChannels.layoutDragStart, { axis, pos });
     }
   },
