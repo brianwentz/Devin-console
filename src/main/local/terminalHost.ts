@@ -371,6 +371,8 @@ export class TerminalHost {
           ? (hosts().hostById(hosts().pathHostId(options.workspace)) ?? LOCAL_HOST)
           : LOCAL_HOST;
     const wslExec = isRemoteHost(execHost);
+    // A review pty is owned by reviewGate (open and exit); its cwd is never logged.
+    const reviewMode = options.kind === 'claude' && options.mode === 'review';
     const normalized =
       options.kind === 'devin'
         ? resolve(options.workspace)
@@ -399,7 +401,7 @@ export class TerminalHost {
     if (!allowed) {
       log('local', 'terminal-open', {
         detail: {
-          cwd: normalized,
+          ...(reviewMode ? {} : { cwd: normalized }),
           kind: options.kind,
           ok: false,
           error: 'cwd not allowed',
@@ -436,10 +438,12 @@ export class TerminalHost {
       command = this.resolveCommand(options);
     }
     if ('error' in command) {
-      log('local', 'terminal-open', { detail: { cwd: normalized, ok: false } });
+      log('local', 'terminal-open', {
+        detail: { ...(reviewMode ? {} : { cwd: normalized }), ok: false },
+      });
       return { ok: false, error: command.error };
     }
-    if (options.kind === 'claude' && options.mode !== 'review') {
+    if (options.kind === 'claude' && !reviewMode) {
       // One-writer policy: the chat query closes before the pty opens;
       // a running prompt refuses.
       try {
@@ -551,14 +555,16 @@ export class TerminalHost {
       // The session was released for a pty that never started — hand it back.
       if (options.kind === 'devin') void this.sessionGate?.reclaim(options.sessionId);
       log('local', 'terminal-open', {
-        detail: { cwd: normalized, ok: false, error: String(error) },
+        detail: { ...(reviewMode ? {} : { cwd: normalized }), ok: false, error: String(error) },
       });
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     const spawnedAt = Date.now();
-    const review =
+    // PR handling is skipped for every pty of a review session id (a later
+    // resume terminal included); exit routing follows the mode alone.
+    const skipPrScan =
       options.kind === 'claude' &&
-      (options.mode === 'review' || this.reviewGate?.isReview(options.sessionId) === true);
+      (reviewMode || this.reviewGate?.isReview(options.sessionId) === true);
     const entry: TerminalEntry = {
       id: randomUUID(),
       host: execHost.id,
@@ -576,10 +582,10 @@ export class TerminalHost {
       lastDataLogAt: 0,
       readBuffer: '',
       linkScanner:
-        options.kind !== 'shell' && !review
+        options.kind !== 'shell' && !skipPrScan
           ? new LinkScanner({ context: { githubOrigins: fixtureOrigins } })
           : null,
-      review,
+      review: reviewMode,
     };
     this.terminals.set(entry.id, entry);
     if (options.kind !== 'shell') this.bySession.set(options.sessionId, entry.id);
@@ -627,7 +633,7 @@ export class TerminalHost {
     log('local', 'terminal-open', {
       detail: {
         id: entry.id,
-        cwd: normalized,
+        ...(reviewMode ? {} : { cwd: normalized }),
         kind: options.kind,
         ok: true,
         pid: proc.pid,

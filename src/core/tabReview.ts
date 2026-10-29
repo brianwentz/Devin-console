@@ -168,6 +168,22 @@ export function reviewsDirFor(home: string, family: 'posix' | 'win32'): string {
 /** Transcript re-reads after a Stop whose read found no verdict (ms after the Stop). */
 export const REVIEW_VERDICT_RETRY_MS: readonly number[] = [1000, 3000, 7000];
 
+/** Timer delays for the re-reads, `elapsedMs` after the Stop (overdue → 0). */
+export function reviewRetryDelays(elapsedMs: number): number[] {
+  return REVIEW_VERDICT_RETRY_MS.map((ms) => Math.max(0, ms - elapsedMs));
+}
+
+/**
+ * The prompt argv entry for the review pty. CreateProcess runs a `.cmd`/`.bat`
+ * (an npm `claude.cmd` set as `claude.path`) through cmd.exe, which ends the
+ * command at a raw line break — so a shim gets the prompt on one line (the
+ * slash command takes the rest of the line as its arguments either way).
+ * Quoted `|` is literal to cmd.exe.
+ */
+export function reviewPromptArg(prompt: string, binary: string | null): string {
+  return binary && /\.(cmd|bat)$/i.test(binary) ? prompt.replace(/(?:\r?\n)+/g, ' ') : prompt;
+}
+
 /**
  * Where a Stop's verdict comes from: the hook body's `last_assistant_message`
  * when the CLI sent it (claude >= 2.1.312), else the session transcript. A

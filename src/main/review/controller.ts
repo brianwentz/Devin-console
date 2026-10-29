@@ -10,12 +10,13 @@ import type { HostId } from '../../core/execHost';
 import { reviewNotification } from '../../core/notificationModel';
 import { scopeOf } from '../../core/tabModel';
 import {
-  REVIEW_VERDICT_RETRY_MS,
   buildReviewPrompt,
   canonicalPrUrl,
   lastAssistantText,
   parseVerdict,
   reduceReview,
+  reviewPromptArg,
+  reviewRetryDelays,
   verdictSource,
   type ReviewEvent,
   type ReviewRecord,
@@ -91,7 +92,13 @@ class ReviewController {
         sessionId,
         hostId: host.hostId,
         cwd: workspace.cwd,
-        extraArgs: [...(injection?.extraArgs ?? []), buildReviewPrompt(prUrl)],
+        extraArgs: [
+          ...(injection?.extraArgs ?? []),
+          reviewPromptArg(
+            buildReviewPrompt(prUrl),
+            host.hostId === 'local' ? claudeSessions().claudeCliPath() : null,
+          ),
+        ],
         extraEnv: injection?.extraEnv ?? {},
       });
       if (!opened.ok) {
@@ -100,7 +107,16 @@ class ReviewController {
         return this.refuse('spawn');
       }
       const current = this.records.get(tabId);
-      if (current?.sessionId === sessionId) this.records.set(tabId, { ...current, ptyId: opened.id });
+      if (this.disposed || current?.sessionId !== sessionId) {
+        // The tab closed (or the app quit) while the pty spawned — nothing
+        // tracks it any more, so it must not keep running. At quit the
+        // taskkill teardown of terminalHost.dispose() (later in shutdown)
+        // takes it instead of a plain kill.
+        if (!this.disposed) terminalHost.close(opened.id, { reclaim: false });
+        log('claude', 'review-ended', { detail: { sessionId, reason: 'tab-closed' } });
+        return this.refuse('spawn');
+      }
+      this.records.set(tabId, { ...current, ptyId: opened.id });
       log('claude', 'review-start', { detail: { tabId, sessionId, host: host.hostId } });
       notifyShell();
       return { ok: true };
@@ -111,6 +127,7 @@ class ReviewController {
 
   async onStop(sessionId: string, payload: ReviewStopPayload): Promise<void> {
     if (!this.reviewing(sessionId)) return;
+    const stopAt = Date.now();
     this.cancelRetries(sessionId);
     const source = verdictSource(payload);
     if (source.kind === 'payload') {
@@ -123,9 +140,12 @@ class ReviewController {
       this.applyVerdict(sessionId, verdict);
       return;
     }
-    // The transcript may land after the Stop — re-read on a fixed schedule;
-    // a later Stop, the pty's exit or a close cancels it.
-    const timers = REVIEW_VERDICT_RETRY_MS.map((ms) => {
+    // The read awaited: a later Stop, the exit or a close may have moved on.
+    if (!this.reviewing(sessionId)) return;
+    // The transcript may land after the Stop — re-read 1 s / 3 s / 7 s after
+    // it; a later Stop, the pty's exit or a close cancels the schedule.
+    this.cancelRetries(sessionId);
+    const timers = reviewRetryDelays(Date.now() - stopAt).map((ms) => {
       const timer = setTimeout(() => void this.retryRead(sessionId), ms);
       timer.unref?.();
       return timer;
@@ -178,7 +198,8 @@ class ReviewController {
     for (const [tabId, record] of this.records) {
       if (liveTabIds.has(tabId)) continue;
       this.stopRecord(record);
-      if (record.status === 'reviewing') {
+      // ptyId null while reviewing = mid-spawn: start() logs the end itself.
+      if (record.status === 'reviewing' && record.ptyId !== null) {
         log('claude', 'review-ended', { detail: { sessionId: record.sessionId, reason: 'tab-closed' } });
       }
       this.records.delete(tabId);

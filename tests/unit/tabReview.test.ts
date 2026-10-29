@@ -4,6 +4,8 @@ import {
   buildReviewPrompt,
   canonicalPrUrl,
   lastAssistantText,
+  reviewPromptArg,
+  reviewRetryDelays,
   parseVerdict,
   prLabel,
   reduceReview,
@@ -275,5 +277,34 @@ describe('lastAssistantText', () => {
     expect(lastAssistantText([])).toBeNull();
     expect(lastAssistantText([null, 'x', { type: 'assistant' }])).toBeNull();
     expect(lastAssistantText([assistant([{ type: 'tool_use', id: 't', name: 'Bash', input: {} }])])).toBeNull();
+  });
+});
+
+describe('reviewRetryDelays', () => {
+  it('measures the 1 s / 3 s / 7 s re-reads from the Stop', () => {
+    expect(reviewRetryDelays(0)).toEqual([1000, 3000, 7000]);
+    expect(reviewRetryDelays(400)).toEqual([600, 2600, 6600]);
+  });
+
+  it('runs an overdue re-read at once', () => {
+    expect(reviewRetryDelays(3500)).toEqual([0, 0, 3500]);
+    expect(reviewRetryDelays(9000)).toEqual([0, 0, 0]);
+  });
+});
+
+describe('reviewPromptArg', () => {
+  const prompt = buildReviewPrompt('https://github.com/o/r/pull/7');
+
+  it('passes the prompt unchanged to an executable', () => {
+    expect(reviewPromptArg(prompt, 'C:\\Users\\u\\.local\\bin\\claude.exe')).toBe(prompt);
+    expect(reviewPromptArg(prompt, null)).toBe(prompt);
+  });
+
+  it('flattens line breaks for a cmd.exe shim, keeping the marker instruction', () => {
+    const arg = reviewPromptArg(prompt, 'C:\\npm\\claude.CMD');
+    expect(arg).not.toMatch(/[\r\n]/);
+    expect(arg).toContain('/cb:review https://github.com/o/r/pull/7');
+    expect(arg).toContain('AW_REVIEW_VERDICT: approved | changes | discussion');
+    expect(reviewPromptArg('a\r\n\r\nb', 'x.bat')).toBe('a b');
   });
 });
