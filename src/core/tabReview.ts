@@ -1,3 +1,4 @@
+import { posix, win32 } from 'node:path';
 import type { HostId } from './execHost';
 import { pullRequestKey } from './tabModel';
 
@@ -157,4 +158,9 @@ export function resolveReviewHostPure(
   }
   if (!distro.fsReady) return { ok: false, reason: 'helper-not-ready' };
   return { ok: true, hostId: setting as HostId };
+}
+
+/** `<home>/.agent-workspace/reviews` in the host path flavour. */
+export function reviewsDirFor(home: string, family: 'posix' | 'win32'): string {
+  return (family === 'win32' ? win32 : posix).join(home, '.agent-workspace', 'reviews');
 }
