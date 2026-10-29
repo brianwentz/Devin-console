@@ -78,6 +78,21 @@ describe('sidebarListData', () => {
     ]);
   });
 
+  it('passes incompleteFolders through for every folders mode', () => {
+    const withInc = { ...data, incompleteFolders: ['Work'] };
+    expect(sidebarListData(withInc, DEVIN_CLOUD_CAPABILITIES, false).incompleteFolders).toEqual([
+      'Work',
+    ]);
+    expect(
+      sidebarListData(withInc, { ...DEVIN_CLOUD_CAPABILITIES, folders: 'none' }, false)
+        .incompleteFolders,
+    ).toEqual(['Work']);
+    expect(
+      (sidebarListData(data, DEVIN_CLOUD_CAPABILITIES, false) as { incompleteFolders?: string[] })
+        .incompleteFolders,
+    ).toBeUndefined();
+  });
+
   it('server folders: showArchived keeps archived rows', () => {
     const out = sidebarListData(data, DEVIN_CLOUD_CAPABILITIES, true);
     expect(out.sessions.map((s) => s.id)).toEqual(['a', 'b', 'c']);

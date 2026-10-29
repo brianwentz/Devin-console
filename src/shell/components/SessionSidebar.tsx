@@ -169,9 +169,10 @@ export function SessionSidebar({
       sessions: cloud.sessions,
       folders: cloud.folders,
       folderTotals: cloud.folderTotals,
+      ...(cloud.incompleteFolders ? { incompleteFolders: cloud.incompleteFolders } : {}),
       sessionOrder,
     }),
-    [cloud.sessions, cloud.folders, cloud.folderTotals, sessionOrder],
+    [cloud.sessions, cloud.folders, cloud.folderTotals, cloud.incompleteFolders, sessionOrder],
   );
   // Optimistic edits hold until the next cloud update (a successful list —
   // or the test-mode fake applying the same change — replaces them) or a
