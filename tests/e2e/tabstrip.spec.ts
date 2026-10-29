@@ -141,6 +141,37 @@ test('pointer and keyboard reorder, keyboard activate/close, titles', async () =
   }
 });
 
+test('right-click tab menu lists Copy address and copies the tab URL', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
+  try {
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
+    const url = `${fixtures.githubUrl}/page/menu-a`;
+    const id = await openTab(app, url);
+    const shell = await shellPage(app);
+    await shell.click(`[data-tab-id="${id}"]`, { button: 'right' });
+    const hook = <T>(fn: string, ...args: unknown[]) =>
+      app.evaluate(
+        (_e, p: { fn: string; args: unknown[] }) => (globalThis as any).__agentworkspace[p.fn](...p.args),
+        { fn, args },
+      ) as Promise<T>;
+    await expect
+      .poll(async () => (await hook<{ id: string; label: string }[] | null>('tabMenuItems'))?.map((i) => i.label))
+      .toEqual(['Copy address', 'Review pull request']);
+    const items = (await hook<{ id: string; label: string; enabled: boolean }[]>('tabMenuItems'))!;
+    expect(items[1]!.enabled).toBe(false);
+    const copy = items.find((i) => i.label === 'Copy address')!;
+    expect(await hook<{ action: string }>('tabMenuClick', copy.id)).toEqual({ action: 'copy' });
+    expect(await hook<string>('clipboardRead')).toBe(url);
+    expect(await hook<string | null>('lastReviewRefusal')).toBeNull();
+  } finally {
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+});
+
 test('overflowing strip scrolls the active tab into view', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-'));
   const logFile = join(profile, 'events.jsonl');

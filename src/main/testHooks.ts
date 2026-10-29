@@ -21,7 +21,8 @@ import {
   updateOnWindowFocus,
 } from './updater';
 import { handleLink, openUserUrl } from './routing';
-import { copyTabAddress, reloadCurrentScope } from './ipc';
+import { reloadCurrentScope } from './ipc';
+import { copyTabAddress, lastReviewRefusal, tabMenuClick, tabMenuItems } from './tabMenu';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
@@ -360,6 +361,9 @@ export function registerTestHooks(): void {
         }
         claudeSessions().open(id);
       },
+      tabMenuItems: () => tabMenuItems(),
+      tabMenuClick: (id: string) => tabMenuClick(id),
+      lastReviewRefusal: () => lastReviewRefusal(),
       favoritesMenuItems: () => favoritesMenuItems(),
       favoritesMenuClick: (id: string) => favoritesMenuClick(id),
       claudeMenuItems: () => claudeSessions().menuItems(),

@@ -1,4 +1,4 @@
-import { clipboard, Menu } from 'electron';
+import { Menu } from 'electron';
 import { guardedHandle, guardedOn } from './ipcGuard';
 import { openFolderDialog } from './dialogs';
 import { clampFraction01 } from '../core/layout';
@@ -75,6 +75,7 @@ import {
 import { openhandsOpenSession, openhandsShowHome } from './openhands/views';
 import { cloudViews } from './cloudViews';
 import { popupFavoritesMenu } from './favoritesMenu';
+import { popupTabMenu } from './tabMenu';
 import {
   applyLayout,
   beginDrag,
@@ -93,15 +94,6 @@ import {
 // "Reload all tabs in this session" (strip menu + test hook).
 export function reloadCurrentScope(): number {
   return state.tabManager?.reloadScope() ?? 0;
-}
-
-// "Copy address" (tab context menu + test hook). Returns false when the tab is gone.
-export function copyTabAddress(tabId: string): boolean {
-  const tab = state.tabManager?.getTab(tabId);
-  if (!tab) return false;
-  clipboard.writeText(tab.url);
-  log('shell', 'tab-copy-address', { detail: { id: tabId }, url: tab.url });
-  return true;
 }
 
 export function applySettingsPatch(patch: SettingsPatch): Settings {
@@ -262,14 +254,7 @@ export function setupIpc(): void {
   guardedOn(IpcChannels.tabsTabMenu, (_event, payload: unknown) => {
     const parsed = TabsTabMenuArg.safeParse(payload);
     if (!parsed.success || !state.windowRef) return;
-    if (!state.tabManager?.getTab(parsed.data.id)) return;
-    Menu.buildFromTemplate([
-      { label: 'Copy address', click: () => copyTabAddress(parsed.data.id) },
-    ]).popup({
-      window: state.windowRef,
-      x: Math.round(parsed.data.x),
-      y: Math.round(parsed.data.y),
-    });
+    popupTabMenu(parsed.data.id, parsed.data.x, parsed.data.y);
   });
   guardedOn(IpcChannels.navAction, (_event, action: unknown) => {
     const parsed = NavActionArg.safeParse(action);
