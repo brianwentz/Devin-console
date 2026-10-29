@@ -19,6 +19,9 @@ import {
 } from './ipc/openhands';
 
 export * from './ipc/openhands';
+import { ReviewChannels, ReviewStatusSchema, ReviewTerminalSchema } from './ipc/review';
+
+export * from './ipc/review';
 import { RESERVED_SSH_ALIAS_MESSAGE, SSH_ALIAS_CANONICAL_RE, isReservedSshAlias } from '../core/execHost';
 
 // Execution hosts: 'local' is this machine, 'wsl:<distro>' runs inside WSL,
@@ -236,6 +239,7 @@ export const IpcChannels = {
   ...OpenHandsChannels,
   ...OpenHandsSidebarChannels,
   ...OpenHandsUsageChannels,
+  ...ReviewChannels,
 } as const;
 
 export const BadgeRenderSchema = z.object({
@@ -786,6 +790,8 @@ const TabSchema = z.object({
   canGoForward: z.boolean().optional(),
   originSessionId: z.string().optional(),
   discarded: z.boolean().optional(),
+  // Tab Review status, overlaid by main (window.ts publicState).
+  review: z.object({ status: ReviewStatusSchema }).optional(),
 });
 
 export const IdentitySourceSchema = z.enum(['self', 'cli', 'inferred', 'manual']);
@@ -1139,6 +1145,7 @@ export const ShellStateSchema = z.object({
   // Review terminal strip (pane-level); Task 8 supplies the live values.
   reviewTerminalOpen: z.boolean().optional(),
   reviewTerminalHeight: z.number().optional(),
+  reviewTerminal: ReviewTerminalSchema.nullable().optional(),
   terminals: z.array(TerminalSummarySchema),
   activeTerminalId: z.string().nullable(),
   // Execution hosts known to main (local first).

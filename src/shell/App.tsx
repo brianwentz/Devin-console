@@ -21,6 +21,7 @@ import { RemoteFolderPrompt } from './components/RemoteFolderInput';
 import { TitleBar } from './components/TitleBar';
 import { Splitter } from './components/Splitter';
 import { TerminalDock } from './components/TerminalDock';
+import { ReviewTerminal } from './components/ReviewTerminal';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AnalyticsTabs } from './components/AnalyticsTabs';
 import { AddressBar } from './components/AddressBar';
@@ -187,6 +188,14 @@ export function App() {
       />
       {terminalVisible && bounds.terminalSplitter && (
         <Splitter axis="y" rect={bounds.terminalSplitter} enabled={true} />
+      )}
+      <ReviewTerminal
+        rect={paneVisible ? bounds.reviewTerminal : null}
+        review={state.reviewTerminal ?? null}
+        terminals={state.terminals}
+      />
+      {paneVisible && bounds.reviewSplitter && (
+        <Splitter axis="r" rect={bounds.reviewSplitter} enabled={true} />
       )}
       <NotificationPanel />
       <PrPanel />

@@ -21,6 +21,7 @@ import {
   type LocalSessionSummary,
   type LocalStatePublic,
   type OpenHandsApiKeyResult,
+  type ReviewCloseResult,
   type OpenHandsContextMenuRequest,
   type OpenHandsContextMenuResult,
   type OpenUserUrlReply,
@@ -315,6 +316,12 @@ const api = {
     if (typeof id === 'string' && Number.isFinite(x) && Number.isFinite(y)) {
       ipcRenderer.send(IpcChannels.tabsTabMenu, { id, x, y });
     }
+  },
+  // Tab Review strip: close kills a running review (the shell confirms first).
+  reviewClose: (tabId: string) =>
+    ipcRenderer.invoke(IpcChannels.reviewClose, { tabId }) as Promise<ReviewCloseResult>,
+  reviewShow: (tabId: string) => {
+    if (isString(tabId)) ipcRenderer.send(IpcChannels.reviewShow, { tabId });
   },
   navigate: (action: 'back' | 'forward' | 'reload') => {
     if (action === 'back' || action === 'forward' || action === 'reload') {

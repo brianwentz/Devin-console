@@ -120,6 +120,52 @@ button:disabled {
   outline-offset: 1px;
 }
 
+/* Tab Review status dot: tab strip, review strip header, notification panel/banner. */
+.reviewDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6e7681;
+}
+
+.reviewDot[data-review='reviewing'] {
+  background: #e0a03c;
+  animation: reviewPulse 1.2s ease-in-out infinite;
+}
+
+.reviewDot[data-review='approved'] {
+  background: #2ea043;
+}
+
+.reviewDot[data-review='changes'] {
+  background: #d93a2f;
+}
+
+.reviewDot[data-review='discussion'] {
+  background: #f0883e;
+}
+
+.reviewDot[data-review='ended'] {
+  background: #6e7681;
+}
+
+@keyframes reviewPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reviewDot[data-review='reviewing'] {
+    animation: none;
+  }
+}
+
 .tabTitle {
   flex: 1;
   overflow: hidden;

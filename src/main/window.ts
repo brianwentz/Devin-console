@@ -15,7 +15,6 @@ import {
   RAIL_WIDTH,
   sessionsColumnSurface,
   SPLITTER_WIDTH,
-  TITLE_BAR_HEIGHT,
   type LayoutState,
   type Rect,
   type WindowBounds,
@@ -35,6 +34,8 @@ import { allPoolViews, poolForSurface } from './cloudKit/pools';
 import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
+import { prLabel, type ReviewRecord, type ReviewStatus } from '../core/tabReview';
+import { reviews } from './review/controller';
 import { notificationsUnread } from './notifications';
 import { openhandsSnapshot, openhandsUsageSnapshot } from './openhandsConfig';
 import { allOpenPullRequests, prStore } from './prs';
@@ -108,6 +109,38 @@ export function setPaneOpen(open: boolean, source: string): void {
       maximized: false,
     },
   });
+}
+
+// Tab Review status overlaid on the tab list (TabManager stays review-agnostic).
+function reviewOverlay<P extends { tabs: object[] }>(
+  publicTabs: P,
+): P & { tabs: Array<P['tabs'][number] & { review?: { status: ReviewStatus } }> } {
+  const tabs = publicTabs.tabs.map((tab) => {
+    const status = reviews().statusFor((tab as { id: string }).id);
+    return status ? { ...tab, review: { status } } : tab;
+  });
+  return { ...publicTabs, tabs };
+}
+
+// The strip shows for the pane's active tab while its review has a live pty
+// (a verdict leaves claude running) and the user has not closed the strip.
+function reviewStripRecord(): ReviewRecord | null {
+  const tabId = state.tabManager?.activeId;
+  if (!tabId || !state.paneOpen) return null;
+  const record = reviews().active(tabId);
+  return record && record.terminalOpen && record.ptyId !== null ? record : null;
+}
+
+function reviewTerminalState(): ShellState['reviewTerminal'] {
+  const record = state.reviewTerminalOpen ? reviewStripRecord() : null;
+  if (!record || record.ptyId === null) return null;
+  return {
+    tabId: record.tabId,
+    ptyId: record.ptyId,
+    prLabel: prLabel(record.prUrl),
+    status: record.status,
+    hooksReachable: reviews().hooksReachable(record.hostId),
+  };
 }
 
 export function layoutState(): LayoutState {
@@ -210,7 +243,9 @@ export function publicState(): ShellState {
     openhandsApiKeySet: state.secrets?.hasOpenHandsApiKey() ?? false,
     settings: state.settings?.current ?? SettingsSchema.parse({}),
     tabs: {
-      ...(state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 }),
+      ...reviewOverlay(
+        state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 },
+      ),
       addressBar: { ...state.addressBar },
     },
     credentials: state.credentials?.list() ?? [],
@@ -250,6 +285,7 @@ export function publicState(): ShellState {
     terminalHeight: state.terminalHeight,
     reviewTerminalOpen: state.reviewTerminalOpen,
     reviewTerminalHeight: state.reviewTerminalHeight,
+    reviewTerminal: reviewTerminalState(),
     terminals: terminalHost.list(),
     activeTerminalId: (() => {
       const terminals = terminalHost.list();
@@ -444,8 +480,16 @@ export function applyLayout(): void {
     runtimeFor(layoutSurface)?.onSurfaceEnter?.();
   }
   syncScope();
+  // Tabs closed since the last layout end their review (a no-op without reviews).
+  reviews().reconcileTabs(new Set(tabManager.currentState.tabs.map((tab) => tab.id)));
+  state.reviewTerminalOpen = reviewStripRecord() !== null;
   closeAddressBarIfStale(false);
   let bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  if (state.reviewTerminalOpen && !bounds.reviewTerminal) {
+    // Pane collapsed or no hosted rect: nowhere to draw the strip.
+    state.reviewTerminalOpen = false;
+    bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  }
   if (bounds.paneCollapsed && state.addressBar.open) {
     closeAddressBarIfStale(true);
     bounds = computeBounds(windowRef.getContentBounds(), layoutState());
@@ -543,10 +587,10 @@ export function moveDrag(pos: number): void {
     state.sessionsWidth = next;
   } else if (state.dragAxis === 'r') {
     // The strip is bottom-anchored in the pane: dragging up makes it taller.
-    const next = clampReviewTerminalHeight(
-      content.height - pos - SPLITTER_WIDTH / 2,
-      content.height - TITLE_BAR_HEIGHT,
-    );
+    // Clamp against the hosted rect before the strip, as computeBounds does.
+    const paneHeight =
+      computeBounds(content, { ...layoutState(), reviewTerminalOpen: false }).ghTab?.height ?? 0;
+    const next = clampReviewTerminalHeight(content.height - pos - SPLITTER_WIDTH / 2, paneHeight);
     changed = next !== state.reviewTerminalHeight;
     state.reviewTerminalHeight = next;
   } else {

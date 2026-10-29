@@ -33,6 +33,7 @@ import {
   TabReorderArgs,
   TabsCloseScopeArg,
   TabsReloadMenuArg,
+  ReviewTabArg,
   TabsTabMenuArg,
   OpenUserUrlArg,
   TabsDropTypesArg,
@@ -76,6 +77,7 @@ import { openhandsOpenSession, openhandsShowHome } from './openhands/views';
 import { cloudViews } from './cloudViews';
 import { popupFavoritesMenu } from './favoritesMenu';
 import { popupTabMenu } from './tabMenu';
+import { reviews } from './review/controller';
 import {
   applyLayout,
   beginDrag,
@@ -256,7 +258,17 @@ export function setupIpc(): void {
     if (!parsed.success || !state.windowRef) return;
     popupTabMenu(parsed.data.id, parsed.data.x, parsed.data.y);
   });
-  guardedOn(IpcChannels.navAction, (_event, action: unknown) => {
+  guardedHandle(IpcChannels.reviewClose, (_event, arg: unknown) => {
+    const parsed = ReviewTabArg.safeParse(arg);
+    if (!parsed.success) return { ok: false };
+    reviews().closeTerminal(parsed.data.tabId);
+    return { ok: true };
+  });
+  guardedOn(IpcChannels.reviewShow, (_event, arg: unknown) => {
+    const parsed = ReviewTabArg.safeParse(arg);
+    if (parsed.success) reviews().showTerminal(parsed.data.tabId);
+  });
+  guardedOn(IpcChannels.navAction,(_event, action: unknown) => {
     const parsed = NavActionArg.safeParse(action);
     if (!parsed.success) return;
     const contents = navigationTarget();

@@ -23,6 +23,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { reviewDotLabel } from '../../core/tabReview';
 import type { ShellState } from '../../shared/ipc';
 
 type Tab = ShellState['tabs']['tabs'][number];
@@ -180,6 +181,14 @@ function SortableTab({ tab, active }: { tab: Tab; active: boolean }) {
     >
       {/* Not natively draggable: dropped on the row it would open the icon as a tab. */}
       {tab.favicon && <img className="favicon" src={tab.favicon} alt="" draggable={false} />}
+      {tab.review && (
+        <span
+          className="reviewDot"
+          data-review={tab.review.status}
+          title={reviewDotLabel(tab.review.status)}
+          aria-label={reviewDotLabel(tab.review.status)}
+        />
+      )}
       <span className="tabTitle">{tab.title || safeHostname(tab.url)}</span>
       {tab.loading && <span className="spinner" aria-label="Loading" />}
       <button
