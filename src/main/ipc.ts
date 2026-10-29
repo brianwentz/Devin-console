@@ -3,6 +3,7 @@ import { guardedHandle, guardedOn } from './ipcGuard';
 import { openFolderDialog } from './dialogs';
 import { clampFraction01 } from '../core/layout';
 import { closeAutofillOverlays } from './autofill';
+import { withReactivateDiag } from './tabPaintDiag';
 import {
   CredentialDeleteSchema,
   CredentialRevealSchema,
@@ -190,8 +191,10 @@ export function setupIpc(): void {
   guardedOn(IpcChannels.tabActivate, (_event, id: unknown) => {
     const parsed = TabIdArg.safeParse(id);
     if (!parsed.success) return;
-    state.tabManager?.activate(parsed.data);
-    applyLayout();
+    withReactivateDiag(parsed.data, () => {
+      state.tabManager?.activate(parsed.data);
+      applyLayout();
+    });
   });
   guardedOn(IpcChannels.tabClose, (_event, id: unknown) => {
     const parsed = TabIdArg.safeParse(id);

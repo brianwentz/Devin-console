@@ -11,9 +11,11 @@ import {
   dragTab,
   launchApp,
   openTab,
+  readEvents,
   shellPage,
   state,
   waitForEvent,
+  waitForEventCount,
   waitForTabCount,
   waitForTabTitle,
 } from './helpers';
@@ -198,6 +200,59 @@ test('overflowing strip scrolls the active tab into view', async () => {
     await expect.poll(async () => (await metrics()).scrollLeft).toBeLessThan(before);
     await shell.mouse.wheel(0, 400);
     await expect.poll(async () => (await metrics()).scrollLeft).toBeGreaterThan(before);
+  } finally {
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+});
+
+test('clicking the active tab logs a blank-pane diagnostic before re-attaching', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-strip-diag-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
+  try {
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
+    await setPaneFraction(app, WIDE_PANE);
+    const a = await openTab(app, `${fixtures.githubUrl}/page/diag-a`);
+    const b = await openTab(app, `${fixtures.githubUrl}/page/diag-b`);
+    await waitForTabTitle(app, 'diag-a');
+    await waitForTabTitle(app, 'diag-b');
+    expect((await state(app)).tabs.activeId).toBe(b);
+    const shell = await shellPage(app);
+
+    // A click on another tab is a plain activation — no diagnostic.
+    await shell.click(`[data-tab-id="${a}"] .tabTitle`);
+    await expect.poll(async () => (await state(app)).tabs.activeId).toBe(a);
+    // Clicking the already-active tab is the blank-pane workaround: diagnosed.
+    await shell.click(`[data-tab-id="${a}"] .tabTitle`);
+    await waitForEvent(logFile, 'tab-reactivate-diag');
+    const events = (await readEvents(logFile)).filter((entry) => entry.event === 'tab-reactivate-diag');
+    expect(events).toHaveLength(1);
+    const detail = events[0]!.detail as Record<string, unknown>;
+    expect(detail).toMatchObject({
+      attached: true,
+      coveredBy: 0,
+      shellAbove: false,
+      boundsMatch: true,
+      paneVisible: true,
+      viewVisible: true,
+      crashed: false,
+      visibility: 'visible',
+      surface: 'cloud',
+    });
+    expect(detail.shellIndex).toBe(0);
+    expect(typeof detail.sinceAttachMs).toBe('number');
+    if (process.platform === 'win32') expect(detail.pixels).toEqual(expect.any(Object));
+    else expect(detail.pixels).toBeNull();
+    // Numbers and booleans only: no URL, title or page text.
+    const line = JSON.stringify(events[0]);
+    expect(events[0]!.url).toBeUndefined();
+    expect(line).not.toContain('diag-a');
+    expect(line).not.toContain('GitHub fixture');
+    // The activation still runs after the snapshot.
+    await waitForEventCount(logFile, 'tab-activate', 2);
+    await expect.poll(async () => (await state(app)).tabs.activeId).toBe(a);
   } finally {
     await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
     await app.close().catch(() => undefined);
