@@ -78,7 +78,13 @@ export function popupTabMenu(tabId: string, x: number, y: number): void {
     items.map((item) => ({
       label: item.label,
       enabled: item.enabled,
-      click: () => void runAction(tabId, item.action),
+      click: () => {
+        runAction(tabId, item.action).catch((error: unknown) => {
+          log('shell', 'tab-menu-error', {
+            detail: { action: item.action, code: error instanceof Error ? error.name : 'unknown' },
+          });
+        });
+      },
     })),
   ).popup({ window: state.windowRef, x: Math.round(x), y: Math.round(y) });
 }

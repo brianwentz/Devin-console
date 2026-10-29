@@ -363,10 +363,11 @@ export class ClaudeHost {
   }
 
   async prompt(id: string, text: string): Promise<void> {
-    const session = getChatState().sessions[id];
-    if (!session) throw new Error('unknown claude session');
+    // Before the session lookup: a running review session has no chat state.
     const refusal = this.refusePrompt(id);
     if (refusal) throw new Error(refusal);
+    const session = getChatState().sessions[id];
+    if (!session) throw new Error('unknown claude session');
     update((s) => startPrompt(s, id, text, new Date().toISOString()));
     log('claude', 'claude-prompt', { detail: { sessionId: id, length: text.length } });
     try {

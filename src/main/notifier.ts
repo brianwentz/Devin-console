@@ -609,7 +609,7 @@ export function openNotification(id: string): void {
   // Review entries are source 'claude' but belong to the originating scope, so
   // they must not reach the Claude dispatch below.
   if (entry.kind === 'review') {
-    void openReviewNotification(entry);
+    openReviewNotification(entry);
     return;
   }
   // Entries with no/unknown source keep the Devin default; a Claude entry

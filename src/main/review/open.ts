@@ -6,11 +6,12 @@ import { log } from '../log';
 import { openhandsOpenSession } from '../openhands/views';
 import { loadInDevinView } from '../routing';
 import { state } from '../state';
-import { activateWindow, applyLayout } from '../window';
+import { activateWindow, applyLayout, setPaneOpen } from '../window';
 
 // Opening a review notification returns to the session scope the reviewed tab
-// belongs to (not the review session itself), then focuses or opens the PR tab.
-export async function openReviewNotification(entry: AppNotification): Promise<void> {
+// belongs to (not the review session itself), then focuses or opens the PR tab
+// — with the pane shown, or the activated tab would stay invisible.
+export function openReviewNotification(entry: AppNotification): void {
   const scope = entry.scope ?? '';
   const target = parseReviewScope(scope);
   log('shell', 'review-open', { detail: { scope: target.kind } });
@@ -36,6 +37,7 @@ export async function openReviewNotification(entry: AppNotification): Promise<vo
       break;
   }
   applyLayout();
+  setPaneOpen(true, 'review-notification');
   const manager = state.tabManager;
   if (manager && entry.prUrl) {
     const tabId = findReviewTabId(manager.currentState.tabs, scope, entry.prUrl);
