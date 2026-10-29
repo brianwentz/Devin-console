@@ -186,7 +186,7 @@ class ReviewController {
 
   showTerminal(tabId: string): void {
     const record = this.records.get(tabId);
-    if (!record || record.terminalOpen) return;
+    if (!record || record.terminalOpen || record.ptyId === null) return;
     this.update(tabId, record.sessionId, { type: 'show-terminal' });
     log('claude', 'review-terminal', { detail: { tabId, op: 'show' } });
     applyLayout();

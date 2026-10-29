@@ -297,7 +297,12 @@ test.describe('tab review (local host)', () => {
     await toGlobalScope(app);
     const url = prUrl(102);
     const tab = await openTab(app, url);
-    const tabCount = (await st(app)).tabs.tabs.length;
+    // Every tab in every scope: an auto-open would land in the hidden claude:<review id> scope.
+    const allTabs = async () => {
+      const tabs = (await st(app)).tabs;
+      return tabs.tabs.length + tabs.hiddenTabCount;
+    };
+    const tabCount = await allTabs();
 
     await menuReview(app, tab);
     expect(await call(app, 'lastReviewRefusal')).toBeNull();
@@ -326,6 +331,8 @@ test.describe('tab review (local host)', () => {
     expect(await shell(app, `document.getElementById('reviewTerminalLabel')?.textContent`)).toBe(
       'Review cloudbeds/testrepo#102',
     );
+    // Local host: the hook listener is reachable, so no warning.
+    expect(await shell(app, `Boolean(document.getElementById('reviewTerminalHooksWarning'))`)).toBe(false);
 
     // The Reviews workspace: created on disk, pinned first with its label.
     expect(existsSync(reviewsDir)).toBe(true);
@@ -345,9 +352,11 @@ test.describe('tab review (local host)', () => {
         })
       ).ok,
     ).toBe(true);
+    // Hook handling is synchronous once the POST is answered; 1.5 s also covers
+    // the 150 ms prTitles debounce and a lazy tab open.
     await sleep(1_500);
     expect(await call<unknown[]>(app, 'claudePrs', record.sessionId)).toEqual([]);
-    expect((await st(app)).tabs.tabs.length).toBe(tabCount);
+    expect(await allTabs()).toBe(tabCount);
     expect((await readEvents(logFile)).filter((e) => e.event === 'pr-auto-open')).toEqual([]);
     expect((await notifications(app)).filter((n) => n.kind === 'pr-opened')).toEqual([]);
 
@@ -415,9 +424,15 @@ test.describe('tab review (local host)', () => {
       const { sessionId } = await startReview(app, tab);
       local(sessionId, 'AW_REVIEW_VERDICT: approved', url);
       await postHook(app, 'Stop', { session_id: sessionId, last_assistant_message: 'Still working on it.' });
-      await sleep(1_500);
+      // Past the last transcript re-read (7 s after the Stop): none was scheduled.
+      await sleep(8_000);
       expect(await reviewStatus(app, tab)).toBe('reviewing');
       expect(await reviewEntries(app, url)).toEqual([]);
+      expect(
+        (await readEvents(ctx.logFile)).filter(
+          (e) => e.event === 'review-verdict' && (e.detail as { sessionId?: string }).sessionId === sessionId,
+        ),
+      ).toEqual([]);
       await call(app, 'close', tab);
     }
 
@@ -430,6 +445,7 @@ test.describe('tab review (local host)', () => {
       const { sessionId } = await startReview(app, tab);
       const { file, userUuid } = local(sessionId, null, url);
       await postHook(app, 'Stop', { session_id: sessionId });
+      // 1.5 s: past the immediate read and the 1 s re-read, before the 3 s one.
       await sleep(1_500);
       expect(await reviewStatus(app, tab)).toBe('reviewing');
       expect(await dotOf(app, tab)).toBe('reviewing');
@@ -476,8 +492,19 @@ test.describe('tab review (local host)', () => {
     const tabA = await openTab(app, urlA);
     const a = await startReview(app, tabA);
     const before = (await notifications(app)).length;
+    const ignoredStops = async () =>
+      (await readEvents(ctx.logFile)).filter((e) => {
+        const detail = e.detail as { event?: string; reason?: string } | undefined;
+        return e.event === 'claude-hook-ignored' && detail?.event === 'Stop' && detail.reason === 'hooks-off';
+      }).length;
+    const ignoredBefore = await ignoredStops();
     // /clear or /resume inside the review pty → Stop under a new session id.
+    // With claude.hooksEnabled off (the default) the listener drops it: no
+    // open claude pty owns that id. The hooks-on path (a generic Stop for the
+    // new id) is the known deferred gap in the ledger (Task 5 minor).
     await postHook(app, 'Stop', { session_id: randomUUID(), cwd: reviewsDir });
+    await expect.poll(ignoredStops).toBe(ignoredBefore + 1);
+    // 1.5 s: past the review's own 1 s re-read point, had the Stop reached it.
     await sleep(1_500);
     expect(await reviewStatus(app, tabA)).toBe('reviewing');
     expect((await notifications(app)).length).toBe(before);
@@ -623,9 +650,19 @@ test.describe('tab review (local host)', () => {
     await expect.poll(async () => (await reviewEntries(app, url)).map((e) => [e.scope, e.title])).toEqual([
       [`claude:${UA}`, 'Review: changes requested'],
     ]);
+    // Opening it lands on scope B, with B's tab active.
+    const [entry] = await reviewEntries(app, url);
+    await clickPanelRow(app, entry!.id);
+    await expect.poll(async () => (await st(app)).tabs.scope).toBe(`claude:${UA}`);
+    expect((await st(app)).surface).toBe('claude');
+    expect((await st(app)).claudeSessionId).toBe(UA);
+    await expect.poll(async () => (await st(app)).tabs.activeId).toBe(tabB);
+    await shell(app, `window.agentworkspace.notificationsPanel(false)`);
 
     await call(app, 'close', tabA);
     await call(app, 'close', tabB);
+    await call(app, 'claudeSelect', null);
+    await toGlobalScope(app);
   });
 
   test('7. strip: resize, tab switch, close while reviewing and after a verdict, tab close', async () => {
@@ -691,15 +728,45 @@ test.describe('tab review (local host)', () => {
     expect(await dotOf(app, tab)).toBe('approved');
     // A verdict leaves claude running: the pty survives the strip close.
     expect((await terminals(app)).some((t) => t.id === second.ptyId)).toBe(true);
-    // After a verdict the menu offers a re-run (Show is for a running review only).
+    // The pty is alive and its strip closed: the menu offers it back beside Re-run.
     const after = await openTabMenu(app, tab);
-    expect(after.map((i) => i.label)).toEqual(['Copy address', 'Re-run review']);
+    expect(after.map((i) => i.label)).toEqual(['Copy address', 'Re-run review', 'Show review terminal']);
+    const show = after.find((i) => i.label === 'Show review terminal')!;
+    expect(await call(app, 'tabMenuClick', show.id)).toEqual({ action: 'show-review' });
+    await expect.poll(() => stripVisible(app)).toBe(true);
+    expect((await reviewState(app, tab))?.ptyId).toBe(second.ptyId);
+    expect(await shell(app, `document.getElementById('reviewTerminal')?.getAttribute('data-tab-id')`)).toBe(tab);
+    expect(await reviewStatus(app, tab)).toBe('approved');
+    // Shown again: no Show item.
+    expect((await openTabMenu(app, tab)).map((i) => i.label)).toEqual(['Copy address', 'Re-run review']);
 
     // Closing the tab ends its pty and drops the record.
     await closeTabUi(app, tab);
     await expect.poll(async () => (await terminals(app)).some((t) => t.id === second.ptyId)).toBe(false);
     expect(await reviewState(app, tab)).toBeNull();
     await call(app, 'close', plain);
+
+    // K10: no review-* record (refused, workspace, start, verdict, ended,
+    // open, terminal) carries a PR URL or the reviews cwd.
+    const reviewLogs = (await readEvents(ctx.logFile)).filter((e) => String(e.event).startsWith('review-'));
+    expect(new Set(reviewLogs.map((e) => e.event))).toEqual(
+      new Set([
+        'review-refused',
+        'review-workspace',
+        'review-start',
+        'review-verdict',
+        'review-ended',
+        'review-open',
+        'review-terminal',
+      ]),
+    );
+    for (const record of reviewLogs) {
+      const text = JSON.stringify(record);
+      expect(text).not.toContain('/pull/');
+      expect(text).not.toContain(fixtures.githubUrl);
+      expect(text).not.toContain('reviews-home');
+      expect(text).not.toContain('.agent-workspace');
+    }
   });
 });
 

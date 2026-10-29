@@ -69,7 +69,9 @@ async function runAction(tabId: string, action: TabMenuItem['action']): Promise<
 export function popupTabMenu(tabId: string, x: number, y: number): void {
   const tab = state.tabManager?.getTab(tabId);
   if (!tab || !state.windowRef) return;
-  const items = tabMenuModel(tab.url, reviews().statusFor(tabId), reviews().active(tabId)?.terminalOpen ?? false);
+  const record = reviews().active(tabId);
+  const terminalHidden = record !== null && record.ptyId !== null && !record.terminalOpen;
+  const items = tabMenuModel(tab.url, record?.status ?? null, terminalHidden);
   if (testMode) {
     pending = { tabId, items };
     return;

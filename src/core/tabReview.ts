@@ -115,10 +115,12 @@ export interface TabMenuItem {
   action: 'copy' | 'review' | 'rerun' | 'show-review';
 }
 
+/** `terminalHidden`: the review pty is alive but its strip was closed — any
+ * status (claude keeps running after a verdict). */
 export function tabMenuModel(
   url: string,
   status: ReviewStatus | null,
-  terminalOpen: boolean,
+  terminalHidden: boolean,
 ): TabMenuItem[] {
   const items: TabMenuItem[] = [
     { id: 'copy-address', label: 'Copy address', enabled: true, action: 'copy' },
@@ -131,16 +133,11 @@ export function tabMenuModel(
     items.push({ id: 'review', label: 'Review pull request', enabled: true, action: 'review' });
   } else if (status === 'reviewing') {
     items.push({ id: 'review', label: 'Review pull request', enabled: false, action: 'review' });
-    if (!terminalOpen) {
-      items.push({
-        id: 'show-review',
-        label: 'Show review terminal',
-        enabled: true,
-        action: 'show-review',
-      });
-    }
   } else {
     items.push({ id: 'rerun', label: 'Re-run review', enabled: true, action: 'rerun' });
+  }
+  if (status !== null && terminalHidden) {
+    items.push({ id: 'show-review', label: 'Show review terminal', enabled: true, action: 'show-review' });
   }
   return items;
 }

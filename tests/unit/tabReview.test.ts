@@ -168,10 +168,10 @@ describe('tabMenuModel', () => {
     expect(tabMenuModel(pr, null, false)[1]).toMatchObject({ action: 'review', enabled: true });
   });
   it('reviewing disables review and offers the terminal when hidden', () => {
-    const m = tabMenuModel(pr, 'reviewing', false);
+    const m = tabMenuModel(pr, 'reviewing', true);
     expect(m[1]).toMatchObject({ action: 'review', enabled: false });
     expect(m[2]).toMatchObject({ action: 'show-review', label: 'Show review terminal' });
-    expect(tabMenuModel(pr, 'reviewing', true)).toHaveLength(2);
+    expect(tabMenuModel(pr, 'reviewing', false)).toHaveLength(2);
   });
   it('finished review offers re-run', () => {
     expect(tabMenuModel(pr, 'approved', false)[1]).toMatchObject({
@@ -179,6 +179,16 @@ describe('tabMenuModel', () => {
       label: 'Re-run review',
       enabled: true,
     });
+  });
+  it('finished review with a live hidden pty offers re-run and show', () => {
+    expect(tabMenuModel(pr, 'approved', true).map((i) => i.action)).toEqual(['copy', 'rerun', 'show-review']);
+  });
+  it('finished review with the strip shown (or no pty) offers re-run only', () => {
+    expect(tabMenuModel(pr, 'approved', false).map((i) => i.action)).toEqual(['copy', 'rerun']);
+    expect(tabMenuModel(pr, 'ended', false).map((i) => i.action)).toEqual(['copy', 'rerun']);
+  });
+  it('non-PR never offers show', () => {
+    expect(tabMenuModel('https://example.com/', 'approved', true).map((i) => i.action)).toEqual(['copy', 'review']);
   });
 });
 
