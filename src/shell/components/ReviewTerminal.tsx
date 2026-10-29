@@ -28,6 +28,14 @@ export function ReviewTerminal({ rect, review, terminals }: ReviewTerminalProps)
     if (ptyId) setMounted((ids) => (ids.includes(ptyId) ? ids : [...ids, ptyId]));
   }, [ptyId]);
 
+  // Drop ids of ptys that no longer exist.
+  useEffect(() => {
+    setMounted((ids) => {
+      const kept = ids.filter((id) => terminals.some((entry) => entry.id === id));
+      return kept.length === ids.length ? ids : kept;
+    });
+  }, [terminals]);
+
   // A different tab, or a verdict landing, voids a pending close confirmation.
   useEffect(() => setConfirming(false), [tabId, status]);
 
@@ -59,7 +67,14 @@ export function ReviewTerminal({ rect, review, terminals }: ReviewTerminalProps)
       }}
     >
       <div className="flex h-[30px] flex-none items-center gap-2 border-b border-[#39475a] bg-[#101722] px-2 text-[11px] text-[#e8edf3]">
-        {review && <span className="reviewDot" data-review={review.status} />}
+        {review && (
+          <span
+            className="reviewDot"
+            data-review={review.status}
+            title={reviewDotLabel(review.status)}
+            aria-label={reviewDotLabel(review.status)}
+          />
+        )}
         <span id="reviewTerminalLabel" className="truncate font-medium">
           {review ? `Review ${review.prLabel}` : ''}
         </span>

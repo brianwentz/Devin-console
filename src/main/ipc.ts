@@ -268,7 +268,7 @@ export function setupIpc(): void {
     const parsed = ReviewTabArg.safeParse(arg);
     if (parsed.success) reviews().showTerminal(parsed.data.tabId);
   });
-  guardedOn(IpcChannels.navAction,(_event, action: unknown) => {
+  guardedOn(IpcChannels.navAction, (_event, action: unknown) => {
     const parsed = NavActionArg.safeParse(action);
     if (!parsed.success) return;
     const contents = navigationTarget();

@@ -28,7 +28,7 @@ import { terminalHost } from '../local/terminalHost';
 import { log } from '../log';
 import { notificationStore } from '../notifications';
 import { state, testMode } from '../state';
-import { notifyShell } from '../window';
+import { applyLayout } from '../window';
 import { resolveReviewHost } from './host';
 import { ensureReviewsWorkspace } from './workspace';
 
@@ -118,7 +118,7 @@ class ReviewController {
       }
       this.records.set(tabId, { ...current, ptyId: opened.id });
       log('claude', 'review-start', { detail: { tabId, sessionId, host: host.hostId } });
-      notifyShell();
+      applyLayout();
       return { ok: true };
     } finally {
       this.starting.delete(tabId);
@@ -167,7 +167,7 @@ class ReviewController {
     }
     this.update(record.tabId, sessionId, { type: 'exit', at: Date.now() });
     void claudeSessions().refresh('review', [record.hostId]);
-    notifyShell();
+    applyLayout();
   }
 
   closeTerminal(tabId: string): void {
@@ -181,7 +181,7 @@ class ReviewController {
     }
     this.update(tabId, record.sessionId, { type: 'close-terminal', at: Date.now() });
     log('claude', 'review-terminal', { detail: { tabId, op: running ? 'close' : 'hide' } });
-    notifyShell();
+    applyLayout();
   }
 
   showTerminal(tabId: string): void {
@@ -189,7 +189,7 @@ class ReviewController {
     if (!record || record.terminalOpen) return;
     this.update(tabId, record.sessionId, { type: 'show-terminal' });
     log('claude', 'review-terminal', { detail: { tabId, op: 'show' } });
-    notifyShell();
+    applyLayout();
   }
 
   /** Runs on every applyLayout — O(1) while there are no reviews. */
@@ -315,7 +315,7 @@ class ReviewController {
       notificationStore().add(reviewNotification(record, verdict.verdict, now));
     }
     void claudeSessions().refresh('review', [record.hostId]);
-    notifyShell();
+    applyLayout();
   }
 }
 
