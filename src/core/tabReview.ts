@@ -1,6 +1,6 @@
 import { posix, win32 } from 'node:path';
 import type { HostId } from './execHost';
-import { pullRequestKey } from './tabModel';
+import { PULL_REQUEST_PATH, pullRequestKey } from './tabModel';
 
 export type ReviewVerdict = 'approved' | 'changes' | 'discussion';
 export type ReviewStatus = 'reviewing' | ReviewVerdict | 'ended';
@@ -74,14 +74,12 @@ export function buildReviewPrompt(prUrl: string): string {
   );
 }
 
-const PR_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/;
-
 // Scheme, host (with port) and owner/repo case are kept from the input so the
 // canonical URL matches the tab's own URL (fixture origins are http://127.0.0.1:<port>).
 function parsePr(rawUrl: string): { base: string; owner: string; repo: string; n: string } | null {
   if (!pullRequestKey(rawUrl)) return null;
   const url = new URL(rawUrl);
-  const m = PR_PATH.exec(url.pathname);
+  const m = PULL_REQUEST_PATH.exec(url.pathname);
   if (!m) return null;
   return { base: `${url.protocol}//${url.host}`, owner: m[1] ?? '', repo: m[2] ?? '', n: m[3] ?? '' };
 }
@@ -142,19 +140,25 @@ export function tabMenuModel(
   return items;
 }
 
+/**
+ * `start: true` = the enumeration reports the distro Stopped: a review is a
+ * user action, so the controller starts it (an explicit probe / exec boots it)
+ * instead of waiting for a helper that never comes up on its own.
+ */
 export function resolveReviewHostPure(
   setting: string,
   platform: NodeJS.Platform,
-  distro: { listed: boolean; enabled: boolean; fsReady: boolean } | null,
+  distro: { listed: boolean; enabled: boolean; fsReady: boolean; stopped: boolean } | null,
 ):
-  | { ok: true; hostId: HostId }
+  | { ok: true; hostId: HostId; start?: true }
   | { ok: false; reason: 'distro-unavailable' | 'helper-not-ready' } {
   if (platform !== 'win32' || !setting.startsWith('wsl:')) return { ok: true, hostId: 'local' };
   if (!distro || !distro.listed || !distro.enabled) {
     return { ok: false, reason: 'distro-unavailable' };
   }
-  if (!distro.fsReady) return { ok: false, reason: 'helper-not-ready' };
-  return { ok: true, hostId: setting as HostId };
+  if (distro.fsReady) return { ok: true, hostId: setting as HostId };
+  if (distro.stopped) return { ok: true, hostId: setting as HostId, start: true };
+  return { ok: false, reason: 'helper-not-ready' };
 }
 
 /** `<home>/.agent-workspace/reviews` in the host path flavour. */

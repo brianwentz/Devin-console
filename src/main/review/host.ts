@@ -1,6 +1,7 @@
 // The review host: `settings.review.host` resolved against the live host
 // registry. A configured distro that is unavailable refuses — never a silent
-// fallback to this PC.
+// fallback to this PC; an enabled one the enumeration reports Stopped is
+// started by the review (`start: true`, see the controller).
 
 import type { HostId } from '../../core/execHost';
 import { resolveReviewHostPure } from '../../core/tabReview';
@@ -8,10 +9,10 @@ import { hosts } from '../hosts';
 import { state } from '../state';
 
 export function resolveReviewHost():
-  | { ok: true; hostId: HostId }
+  | { ok: true; hostId: HostId; start?: true }
   | { ok: false; reason: 'distro-unavailable' | 'helper-not-ready' } {
   const setting = state.settings?.current.review.host ?? 'local';
-  let distro: { listed: boolean; enabled: boolean; fsReady: boolean } | null = null;
+  let distro: { listed: boolean; enabled: boolean; fsReady: boolean; stopped: boolean } | null = null;
   if (setting.startsWith('wsl:')) {
     const name = setting.slice('wsl:'.length);
     const host = hosts().list().find((h) => h.id === setting);
@@ -19,6 +20,7 @@ export function resolveReviewHost():
       listed: hosts().enumerate().some((row) => row.name === name),
       enabled: host !== undefined,
       fsReady: host !== undefined && hosts().fsReady(host),
+      stopped: hosts().isStopped(setting),
     };
   }
   return resolveReviewHostPure(setting, process.platform, distro);

@@ -548,6 +548,11 @@ describe('review terminal strip', () => {
     expect(clampReviewTerminalHeight(300, 600)).toBe(300);
   });
 
+  it('never exceeds the settings schema max on a very tall pane', () => {
+    expect(clampReviewTerminalHeight(5000, 4000)).toBe(2000);
+    expect(clampReviewTerminalHeight(1900, 4000)).toBe(1900);
+  });
+
   it('returns null rects when the pane is hidden or collapsed', () => {
     const hidden = computeBounds(size, layout({ paneOpen: false, reviewTerminalOpen: true }));
     expect(hidden.reviewTerminal).toBeNull();

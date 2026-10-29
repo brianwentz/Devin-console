@@ -338,6 +338,7 @@ async function createWindow(): Promise<void> {
   terminalHost.reviewGate = {
     onExit: (sessionId) => void reviews().onPtyExit(sessionId),
     isReview: (sessionId) => reviews().isReviewSession(sessionId),
+    releaseFinished: (sessionId) => reviews().releaseFinished(sessionId),
   };
   // Exclusive handoff: `devin -r` ptys take the CLI's per-session lock; the acp
   // agent releases it (restart) on open and reclaims the session on close.

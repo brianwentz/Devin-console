@@ -66,13 +66,13 @@ The OpenHands rail button shows your OpenHands Cloud (or self-hosted) conversati
 
 ## Reviewing pull requests
 
-Right-click a pull request tab in Linked Context → **Review pull request** to have Claude Code review it with the `/cb:review` skill. The review runs in a local Claude Code terminal strip at the bottom of the pane; drag its top edge to resize it, or close it with its close button (closing while a review is running asks you to confirm and stops the review). The tab's menu also offers **Re-run review** and **Show review terminal** (to bring a hidden strip back).
+Right-click a pull request tab in Linked Context → **Review pull request** to have Claude Code review it with the `/cb:review` skill. The review runs in a Claude Code terminal strip at the bottom of the pane; drag its top edge to resize it, or close it with its close button (closing while a review is running asks you to confirm and stops the review). The tab's menu also offers **Re-run review** and **Show review terminal** (to bring a hidden strip back).
 
-- **Tab dot**: yellow (pulsing) while reviewing, green approved, red changes requested, amber needs discussion, gray when the review ended without a verdict.
-- **Where it runs**: **Settings → Claude Code → Run reviews on** picks this PC or one of your WSL distros (not shown on macOS). The review needs Claude Code with the `/cb:review` skill/plugin installed on that machine.
+- **Tab dot**: yellow (pulsing) while reviewing, green approved, red changes requested, orange needs discussion, gray when the review ended without a verdict.
+- **Where it runs**: **Settings → Claude Code → Run reviews on** picks this PC or one of your WSL distros (not shown on macOS); a stopped distro is started when the review begins. The review needs Claude Code with the `/cb:review` skill/plugin installed on that machine.
 - **First review on a machine**: Claude Code shows its one-time folder-trust prompt in the strip — answer it once.
 - **Notifications**: when a verdict arrives a **Review: …** notification appears (switch it off under **Settings → Notifications → Review results**); opening it switches to the session the tab belongs to and shows the pane.
-- **Review sessions** appear in the Claude sidebar under the **Reviews** workspace, a folder at `~/.agent-workspace/reviews` (inside the distro's home for WSL).
+- **Review sessions** appear in the Claude sidebar under the **Reviews** workspace, a folder at `~/.agent-workspace/reviews` (inside the distro's home for WSL). Once a review has its verdict you can open its session in the Claude chat; that ends the review's terminal first.
 
 ## Running sessions in WSL
 
@@ -103,6 +103,8 @@ Claude Code sessions can also run on another machine you reach over SSH (a Linux
 ## Where things live
 
 `%APPDATA%\agent-workspace\` on Windows, `~/Library/Application Support/agent-workspace/` on macOS — `settings.json` (plain settings and layout), `secrets.json` (Devin API token and OpenHands API key, encrypted), `credentials.json` (saved logins, encrypted), `notifications.json` (notification history), `prs.json` (PR panel read/dismissed state), `pr-ledger.json` (PRs already seen, for catch-up after an outage), `identity.json` (resolved user id for service-user tokens), `local-sessions.json` (Devin Local session index), `claude-sessions.json` (Claude sidebar pin/archive/removed state and recorded PRs), `claude-hooks.json` (hook listener port + bearer token, mode 0600), `claude-usage-cache.json` (usage fetch caches + transcript-scan offsets), `openhands-cache.json` (the last OpenHands conversation list, so the sidebar renders at once), `events.jsonl` (the event log), and the browser profiles (`persist:cloud`, `persist:github`, `persist:openhands`). Uninstalling removes the app; delete this folder to remove all data.
+
+Pull request reviews run in `~/.agent-workspace/reviews` in your home folder (inside the distro's home when reviews run in WSL); their transcripts are ordinary Claude Code sessions.
 
 Claude session transcripts stay where Claude Code keeps them (`~/.claude/projects/`). The one Claude config file the app edits is `~/.claude/settings.json` (on this PC and in WSL distros — never on an SSH host, except to remove a hook block an earlier version left there), and only when *Report Claude Code sessions started from other terminals* is on: the original is copied once to `~/.claude/settings.json.agent-workspace.bak` before the hook block is added, and the block is removed again when the toggle is turned off.
 

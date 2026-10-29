@@ -160,9 +160,12 @@ button:disabled {
   }
 }
 
+/* Without the pulse, a hollow ring keeps reviewing distinct from the orange discussion dot. */
 @media (prefers-reduced-motion: reduce) {
   .reviewDot[data-review='reviewing'] {
     animation: none;
+    background: transparent;
+    box-shadow: inset 0 0 0 2px #e0a03c;
   }
 }
 

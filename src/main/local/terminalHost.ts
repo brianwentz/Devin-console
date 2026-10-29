@@ -142,6 +142,8 @@ export class TerminalHost {
   reviewGate: {
     onExit: (sessionId: string) => void;
     isReview: (sessionId: string) => boolean;
+    // Ends a finished review's idle pty before the session opens elsewhere.
+    releaseFinished: (sessionId: string) => void;
   } | null = null;
 
   constructor(private readonly testMode: boolean) {}
@@ -410,6 +412,9 @@ export class TerminalHost {
       });
       return { ok: false, error: 'cwd not allowed' };
     }
+    // A resume/attach of a finished review session must not land on (or race)
+    // the review's idle pty.
+    if (options.kind === 'claude' && !reviewMode) this.reviewGate?.releaseFinished(options.sessionId);
     if (options.kind !== 'shell') {
       const existingId = this.bySession.get(options.sessionId);
       if (existingId) {

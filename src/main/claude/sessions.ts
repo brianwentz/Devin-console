@@ -246,7 +246,11 @@ export class ClaudeSessions {
       isOnDisk: (id) => this.storeSessions.some((s) => s.id === id),
       messages: (id) => this.storeForSession(id).messages(id),
       subagentMessages: (id, agentId) => this.storeForSession(id).subagentMessages(id, agentId),
-      refusePrompt: (id) => (reviews().isRunning(id) ? REVIEW_RUNNING_MESSAGE : null),
+      refusePrompt: (id) => {
+        if (reviews().isRunning(id)) return REVIEW_RUNNING_MESSAGE;
+        reviews().releaseFinished(id);
+        return null;
+      },
       onPullRequestUrl: (id, url) => {
         this.recordPr(id, url, 'chat');
         autoOpenLocalPr(url, claudeScope(id), 'claude-chat');
@@ -706,6 +710,7 @@ export class ClaudeSessions {
       this.emit();
       return;
     }
+    reviews().releaseFinished(sessionId);
     this.selectedSubagentId = null;
     state.claudeSessionId = sessionId;
     state.settings?.merge({ claude: { lastSessionId: sessionId } });

@@ -85,6 +85,7 @@ export const DEFAULT_TERMINAL_HEIGHT = 280;
 export const MIN_TERMINAL_HEIGHT = 120;
 export const DEFAULT_REVIEW_TERMINAL_HEIGHT = 260;
 export const MIN_REVIEW_TERMINAL_HEIGHT = 120;
+export const MAX_REVIEW_TERMINAL_HEIGHT = 2000;
 const REVIEW_TERMINAL_MAX_FRACTION = 0.7;
 // Minimum px the main column keeps above an open terminal dock (below the title bar).
 export const TERMINAL_RESERVED_MAIN = 200;
@@ -117,11 +118,16 @@ export function clampTerminalHeight(height: number, windowHeight: number): numbe
   return Math.min(max, Math.max(MIN_TERMINAL_HEIGHT, Math.round(height)));
 }
 
-// Review strip height: at least MIN_REVIEW_TERMINAL_HEIGHT, at most 70% of the pane.
+// Review strip height: at least MIN_REVIEW_TERMINAL_HEIGHT, at most 70% of the
+// pane and never above MAX_REVIEW_TERMINAL_HEIGHT (the settings schema's max —
+// a taller value would be repaired to the default on the next load).
 export function clampReviewTerminalHeight(height: number, paneHeight: number): number {
   const max = Math.max(
     MIN_REVIEW_TERMINAL_HEIGHT,
-    Math.floor(Math.max(0, paneHeight) * REVIEW_TERMINAL_MAX_FRACTION),
+    Math.min(
+      MAX_REVIEW_TERMINAL_HEIGHT,
+      Math.floor(Math.max(0, paneHeight) * REVIEW_TERMINAL_MAX_FRACTION),
+    ),
   );
   return Math.min(max, Math.max(MIN_REVIEW_TERMINAL_HEIGHT, Math.round(height)));
 }

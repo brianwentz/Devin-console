@@ -70,6 +70,8 @@ describe('pullRequestKey', () => {
     'https://github.com/org/repo/issues/42',
     'https://github.com/org/repo',
     'https://github.com/org/repo/blob/main/pull/42',
+    'https://github.com/%25org%25/repo/pull/42',
+    'https://github.com/org/re%25po/pull/42',
     'not a url',
   ])('%s has no PR key', (url) => {
     expect(pullRequestKey(url)).toBeNull();

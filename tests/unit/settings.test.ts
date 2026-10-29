@@ -148,6 +148,13 @@ describe('tab review settings', () => {
     expect(out.review).toEqual({ host: 'ssh:x', future: 1 });
   });
 
+  it('caps review.host at 200 characters', () => {
+    expect(parseSettingsFile({ review: { host: `wsl:${'a'.repeat(196)}` } }).settings.review.host).toHaveLength(200);
+    const long = parseSettingsFile({ review: { host: `wsl:${'a'.repeat(197)}` } });
+    expect(long.settings.review.host).toBe('local');
+    expect(long.dropped).toContain('review.host');
+  });
+
   it('bounds layout.reviewTerminalHeight to 120..2000', () => {
     expect(parseSettingsFile({ layout: { reviewTerminalHeight: 50 } }).dropped).toContain('layout.reviewTerminalHeight');
     expect(parseSettingsFile({ layout: { reviewTerminalHeight: 2001 } }).dropped).toContain('layout.reviewTerminalHeight');

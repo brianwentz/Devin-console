@@ -36,7 +36,14 @@ export type ReviewStartResult =
   | { ok: true }
   | {
       ok: false;
-      reason: 'not-pr' | 'running' | 'distro-unavailable' | 'helper-not-ready' | 'no-claude' | 'spawn';
+      reason:
+        | 'not-pr'
+        | 'running'
+        | 'distro-unavailable'
+        | 'distro-stopped'
+        | 'helper-not-ready'
+        | 'no-claude'
+        | 'spawn';
     };
 
 type Verdict = NonNullable<ReturnType<typeof parseVerdict>>;
@@ -58,11 +65,14 @@ class ReviewController {
     if (this.starting.has(tabId) || previous?.status === 'reviewing') return this.refuse('running');
     const host = resolveReviewHost();
     if (!host.ok) return this.refuse(host.reason);
-    if (!this.claudeResolvable(host.hostId)) return this.refuse('no-claude');
     this.starting.add(tabId);
     try {
+      if (host.start && !(await this.startDistro(host.hostId))) return this.refuse('distro-stopped');
+      if (!this.claudeResolvable(host.hostId)) return this.refuse('no-claude');
+      // The mkdir is an explicit exec — on a Stopped distro it is what boots it.
       const workspace = await ensureReviewsWorkspace(host.hostId);
       if (!workspace.ok) {
+        if (host.start) return this.refuse('distro-stopped');
         return this.refuse(workspace.reason === 'io' ? 'spawn' : 'helper-not-ready');
       }
       if (workspace.created) claudeSessions().workspacesChanged();
@@ -218,10 +228,26 @@ class ReviewController {
     return this.sessionIds.has(id);
   }
 
-  /** The review pty for this session is alive — it is the transcript's writer. */
+  /** The review is still working in its live pty — it is the transcript's
+   * writer, so chat must not open the session. After a verdict the pty idles
+   * and the session may be opened (releaseFinished ends that pty first). */
   isRunning(id: string): boolean {
     const record = this.recordFor(id);
-    return record !== null && record.ptyId !== null;
+    return record !== null && record.status === 'reviewing' && record.ptyId !== null;
+  }
+
+  /**
+   * A finished review's pty still runs claude on the session — a second
+   * writer once the session is opened in chat, prompted or resumed in a
+   * terminal. End it first (the strip collapses with it). No-op otherwise.
+   */
+  releaseFinished(id: string): void {
+    const record = this.recordFor(id);
+    if (!record || record.status === 'reviewing' || record.ptyId === null) return;
+    terminalHost.close(record.ptyId, { reclaim: false });
+    this.update(record.tabId, id, { type: 'exit', at: Date.now() });
+    log('claude', 'review-terminal', { detail: { tabId: record.tabId, op: 'release' } });
+    applyLayout();
   }
 
   hooksReachable(hostId: HostId): boolean {
@@ -238,6 +264,22 @@ class ReviewController {
   private refuse(reason: Extract<ReviewStartResult, { ok: false }>['reason']): ReviewStartResult {
     log('claude', 'review-refused', { detail: { reason } });
     return { ok: false, reason };
+  }
+
+  // A Stopped review distro: the user asked for a review there, so start it.
+  // shellEnv({explicit}) probes a distro never probed this run (the probe's
+  // `wsl.exe -d` boots it) and re-reads the table afterwards; the probe yields
+  // the home, the claude path and the hook reachability. No home = it could
+  // not be started.
+  private async startDistro(hostId: HostId): Promise<boolean> {
+    const host = hosts().hostById(hostId);
+    if (!host) return false;
+    try {
+      await hosts().shellEnv(host, { explicit: true });
+    } catch {
+      return false;
+    }
+    return Boolean(hosts().status(hostId)?.home);
   }
 
   // Local: the resolved claude binary — in test mode the fake pty command

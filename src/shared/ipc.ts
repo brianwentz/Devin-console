@@ -3,6 +3,8 @@ import {
   DEFAULT_PANE_FRACTION,
   DEFAULT_REVIEW_TERMINAL_HEIGHT,
   DEFAULT_TERMINAL_HEIGHT,
+  MAX_REVIEW_TERMINAL_HEIGHT,
+  MIN_REVIEW_TERMINAL_HEIGHT,
   MIN_TERMINAL_HEIGHT,
 } from '../core/layout';
 import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } from '../core/providers';
@@ -350,11 +352,11 @@ const LayoutFields = {
   terminalOpen: z.boolean(),
   terminalHeight: z.number().min(MIN_TERMINAL_HEIGHT),
   // Tab Review strip height (px); the splitter clamps to 0.7 x the pane height.
-  reviewTerminalHeight: z.number().int().min(120).max(2000),
+  reviewTerminalHeight: z.number().int().min(MIN_REVIEW_TERMINAL_HEIGHT).max(MAX_REVIEW_TERMINAL_HEIGHT),
 };
 // Tab Review: which host runs review ptys ('local' or a WSL distro host id).
 const ReviewFields = {
-  host: z.string().regex(/^(local|wsl:.+)$/, 'must be local or wsl:<distro>'),
+  host: z.string().max(200).regex(/^(local|wsl:.+)$/, 'must be local or wsl:<distro>'),
 };
 // Cloud session sidebar: open/width are persisted via syncFromState;
 // collapsedFolders is patched by the shell through settings:set/commit.

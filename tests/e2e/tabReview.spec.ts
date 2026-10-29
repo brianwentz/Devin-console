@@ -604,6 +604,20 @@ test.describe('tab review (local host)', () => {
     expect((await st(app)).paneOpen).toBe(true);
     await shell(app, `window.agentworkspace.notificationsPanel(false)`);
 
+    // After the verdict the review session may be opened: its idle pty (claude
+    // still running) is ended first, so chat is the only writer.
+    const cRecord = await reviewState(app, tabC);
+    expect(cRecord?.status).toBe('approved');
+    const cPty = cRecord!.ptyId!;
+    expect(cPty).toBeTruthy();
+    expect((await terminals(app)).some((t) => t.id === cPty)).toBe(true);
+    await call(app, 'claudeSelect', c.sessionId);
+    await expect.poll(async () => (await st(app)).claudeSessionId).toBe(c.sessionId);
+    await expect.poll(async () => (await terminals(app)).some((t) => t.id === cPty)).toBe(false);
+    expect((await reviewState(app, tabC))?.ptyId).toBeNull();
+    expect((await reviewState(app, tabC))?.status).toBe('approved');
+    await call(app, 'claudeSelect', null);
+
     for (const id of [tabC, otherC, tabL, otherL]) await call(app, 'close', id);
     await shell(app, `window.agentworkspace.localActiveSession(null)`);
     await call(app, 'claudeSelect', null);
@@ -837,6 +851,59 @@ test('8. WSL host: workspace in the distro, --cd, verdict over the channel, hook
     expect(await call(app, 'lastReviewRefusal')).toBe('distro-unavailable');
     expect(await reviewState(app, other)).toBeNull();
 
+    expect(await call<number>(app, 'remoteFsViolations')).toBe(0);
+  } finally {
+    await closeApp(ctx.app);
+  }
+});
+
+// --- Case 9: the review distro is Stopped (e.g. after a reboot). The review is
+// a user action, so it starts the distro (explicit probe + mkdir) instead of
+// refusing "not ready" forever. The fake cannot boot a distro, so the table is
+// flipped to Running the way the real one would flip once wsl.exe -d starts it.
+test('9. WSL host: a Stopped review distro is started by the review', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-review-wsl-stopped-'));
+  const distros = join(root, 'distros.txt');
+  writeFileSync(distros, 'Fake:Stopped:default');
+  const ctx = await launchReviewApp({
+    FAKE_WSL_DISTROS_FILE: distros,
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '300',
+  });
+  const { app } = ctx;
+  const HOST = 'wsl:Fake';
+  const hostStatus = () =>
+    call<{ state: string; home: string | null; hooks: string } | null>(app, 'hostStatus', HOST);
+  try {
+    await expect.poll(async () => (await hostStatus())?.state, { timeout: 30_000 }).toBe('stopped');
+    // Never probed (no implicit work on a Stopped distro) → no home, no helper.
+    expect((await hostStatus())?.home ?? null).toBeNull();
+    expect(await call(app, 'hostChannelState', HOST)).toBeNull();
+
+    await setSettings(app, { review: { host: HOST } });
+    await expect.poll(() => readSettings(ctx.profile).review?.host).toBe(HOST);
+    await toGlobalScope(app);
+    const url = prUrl(161);
+    const tab = await openTab(app, url);
+    writeFileSync(distros, 'Fake:Running:default');
+    const record = await startReview(app, tab);
+    expect(record.hostId).toBe(HOST);
+    expect(existsSync(join(root, 'home', 'u', '.agent-workspace', 'reviews'))).toBe(true);
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('--cd /home/u/.agent-workspace/reviews');
+    // The start's probe settled the hook reachability (FAKE_WSL_HOOKS unset →
+    // unreachable): the strip shows the warning from the probe result.
+    await expect.poll(async () => (await hostStatus())?.hooks).toBe('unreachable');
+    await expect.poll(() => stripVisible(app)).toBe(true);
+    await expect
+      .poll(() => shell(app, `Boolean(document.getElementById('reviewTerminalHooksWarning'))`))
+      .toBe(true);
+    // The re-read table flips the distro to Running; its helper comes up.
+    await expect
+      .poll(async () => (await call<{ state: string } | null>(app, 'hostChannelState', HOST))?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    expect((await readEvents(ctx.logFile)).some((e) => e.event === 'review-refused')).toBe(false);
     expect(await call<number>(app, 'remoteFsViolations')).toBe(0);
   } finally {
     await closeApp(ctx.app);

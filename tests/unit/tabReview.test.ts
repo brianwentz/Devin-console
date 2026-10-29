@@ -108,6 +108,14 @@ describe('canonicalPrUrl / prLabel', () => {
   it('is null for a non-PR url', () => {
     expect(canonicalPrUrl('https://github.com/o/r')).toBeNull();
   });
+  it('rejects owner/repo with characters GitHub names never carry (cmd.exe %VAR% expansion)', () => {
+    expect(canonicalPrUrl('https://github.com/%25PATH%25/r/pull/1')).toBeNull();
+    expect(canonicalPrUrl('https://github.com/o/%PATH%/pull/1')).toBeNull();
+    expect(canonicalPrUrl('https://github.com/o/r%20x/pull/1')).toBeNull();
+    expect(canonicalPrUrl('https://github.com/my-org/my.repo_2/pull/1')).toBe(
+      'https://github.com/my-org/my.repo_2/pull/1',
+    );
+  });
   it('labels owner/repo#n', () => {
     expect(prLabel('https://github.com/o/r/pull/12')).toBe('o/r#12');
   });
@@ -203,7 +211,7 @@ describe('reviewDotLabel', () => {
 });
 
 describe('resolveReviewHostPure', () => {
-  const ready = { listed: true, enabled: true, fsReady: true };
+  const ready = { listed: true, enabled: true, fsReady: true, stopped: false };
   it('ignores a stale wsl setting off Windows', () => {
     expect(resolveReviewHostPure('wsl:D', 'darwin', null)).toEqual({ ok: true, hostId: 'local' });
   });
@@ -224,6 +232,19 @@ describe('resolveReviewHostPure', () => {
   });
   it('ready distro', () => {
     expect(resolveReviewHostPure('wsl:D', 'win32', ready)).toEqual({ ok: true, hostId: 'wsl:D' });
+  });
+  it('a listed + enabled Stopped distro is started, not refused', () => {
+    const stopped = { ...ready, fsReady: false, stopped: true };
+    expect(resolveReviewHostPure('wsl:D', 'win32', stopped)).toStrictEqual({
+      ok: true,
+      hostId: 'wsl:D',
+      start: true,
+    });
+    // Stopped but not listed/enabled still refuses.
+    expect(resolveReviewHostPure('wsl:D', 'win32', { ...stopped, enabled: false })).toEqual({
+      ok: false,
+      reason: 'distro-unavailable',
+    });
   });
 });
 

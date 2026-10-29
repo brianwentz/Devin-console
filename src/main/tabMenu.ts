@@ -20,10 +20,19 @@ const REFUSAL_TEXT: Record<RefusalReason, string> = {
   'not-pr': 'This tab is not a pull request.',
   running: 'A review of this tab is already running.',
   'distro-unavailable': 'The WSL distro chosen for reviews is not available.',
+  'distro-stopped': "The WSL distro chosen for reviews is stopped and couldn't be started. Start it and try again.",
   'helper-not-ready': 'The WSL distro chosen for reviews is not ready yet. Try again in a moment.',
   'no-claude': 'The claude CLI was not found on the review host.',
   spawn: 'The review terminal could not be started.',
 };
+
+function refusalText(reason: RefusalReason): string {
+  const host = state.settings?.current.review.host ?? '';
+  if (reason === 'distro-stopped' && host.startsWith('wsl:')) {
+    return `The WSL distro ${host.slice('wsl:'.length)} is stopped and couldn't be started. Start it and try again.`;
+  }
+  return REFUSAL_TEXT[reason];
+}
 
 // "Copy address" (tab context menu + test hook). Returns false when the tab is gone.
 export function copyTabAddress(tabId: string): boolean {
@@ -46,7 +55,7 @@ async function startReview(tabId: string): Promise<void> {
     lastRefusal = result.reason;
     return;
   }
-  const options = { type: 'info' as const, message: REFUSAL_TEXT[result.reason], buttons: ['OK'] };
+  const options = { type: 'info' as const, message: refusalText(result.reason), buttons: ['OK'] };
   if (state.windowRef) await dialog.showMessageBox(state.windowRef, options);
   else await dialog.showMessageBox(options);
 }
