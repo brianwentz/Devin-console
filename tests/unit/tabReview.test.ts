@@ -54,6 +54,20 @@ describe('parseVerdict', () => {
     });
     expect(parseVerdict('Overall Assessment: Needs Discussion')?.verdict).toBe('discussion');
   });
+  it('handles CRLF', () => {
+    expect(parseVerdict('x\r\nAW_REVIEW_VERDICT: changes\r\n')?.verdict).toBe('changes');
+  });
+  it('last assessment wins', () => {
+    expect(
+      parseVerdict('Overall Assessment: Approved\nOverall Assessment: Needs Discussion')?.verdict,
+    ).toBe('discussion');
+  });
+  it('marker beats assessment', () => {
+    expect(parseVerdict('Overall Assessment: Approved\nAW_REVIEW_VERDICT: changes')).toEqual({
+      verdict: 'changes',
+      via: 'marker',
+    });
+  });
   it('returns null when neither is present', () => {
     expect(parseVerdict('looks fine to me')).toBeNull();
   });
@@ -76,6 +90,15 @@ describe('canonicalPrUrl / prLabel', () => {
     expect(canonicalPrUrl('https://github.com/o/r/pull/12/files?w=1#x')).toBe(
       'https://github.com/o/r/pull/12',
     );
+  });
+  it('keeps scheme, port and case', () => {
+    expect(canonicalPrUrl('http://127.0.0.1:4010/o/r/pull/3/commits')).toBe(
+      'http://127.0.0.1:4010/o/r/pull/3',
+    );
+    expect(canonicalPrUrl('https://github.com/Org/Repo/pull/12#discussion_r1')).toBe(
+      'https://github.com/Org/Repo/pull/12',
+    );
+    expect(prLabel('https://github.com/Org/Repo/pull/12/files')).toBe('Org/Repo#12');
   });
   it('is null for a non-PR url', () => {
     expect(canonicalPrUrl('https://github.com/o/r')).toBeNull();
@@ -128,6 +151,12 @@ describe('tabMenuModel', () => {
     expect(m.map((i) => [i.label, i.enabled])).toEqual([
       ['Copy address', true],
       ['Review pull request', false],
+    ]);
+  });
+  it('non-PR with a status still disables review', () => {
+    expect(tabMenuModel('https://example.com/', 'approved', false).map((i) => i.enabled)).toEqual([
+      true,
+      false,
     ]);
   });
   it('PR with no review enables review', () => {

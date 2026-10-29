@@ -73,17 +73,26 @@ export function buildReviewPrompt(prUrl: string): string {
   );
 }
 
-// pullRequestKey is `host/owner/repo/pull/N` lower-cased; sub-paths, query and hash are gone.
+const PR_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/;
+
+// Scheme, host (with port) and owner/repo case are kept from the input so the
+// canonical URL matches the tab's own URL (fixture origins are http://127.0.0.1:<port>).
+function parsePr(rawUrl: string): { base: string; owner: string; repo: string; n: string } | null {
+  if (!pullRequestKey(rawUrl)) return null;
+  const url = new URL(rawUrl);
+  const m = PR_PATH.exec(url.pathname);
+  if (!m) return null;
+  return { base: `${url.protocol}//${url.host}`, owner: m[1] ?? '', repo: m[2] ?? '', n: m[3] ?? '' };
+}
+
 export function canonicalPrUrl(url: string): string | null {
-  const key = pullRequestKey(url);
-  return key ? `https://${key}` : null;
+  const pr = parsePr(url);
+  return pr ? `${pr.base}/${pr.owner}/${pr.repo}/pull/${pr.n}` : null;
 }
 
 export function prLabel(prUrl: string): string {
-  const key = pullRequestKey(prUrl);
-  const parts = key?.split('/');
-  if (!parts || parts.length !== 5) return prUrl;
-  return `${parts[1]}/${parts[2]}#${parts[4]}`;
+  const pr = parsePr(prUrl);
+  return pr ? `${pr.owner}/${pr.repo}#${pr.n}` : prUrl;
 }
 
 const DOT_LABEL: Record<ReviewStatus, string> = {
