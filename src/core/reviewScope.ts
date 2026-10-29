@@ -1,4 +1,5 @@
 import { PROVIDERS } from './providers';
+import { pullRequestKey } from './tabModel';
 
 export type ReviewScopeTarget =
   | { kind: 'global' }
@@ -16,4 +17,17 @@ export function parseReviewScope(scope: string): ReviewScopeTarget {
     }
   }
   return { kind: 'cloud', id: scope };
+}
+
+// The tab of `scope` showing the same PR as `prUrl` (sub-paths and query
+// ignored), or null when there is none.
+export function findReviewTabId(
+  tabs: ReadonlyArray<{ id: string; url: string; originSessionId?: string | null | undefined }>,
+  scope: string,
+  prUrl: string,
+): string | null {
+  const key = pullRequestKey(prUrl);
+  if (key === null) return null;
+  const tab = tabs.find((t) => (t.originSessionId ?? '') === scope && pullRequestKey(t.url) === key);
+  return tab?.id ?? null;
 }
