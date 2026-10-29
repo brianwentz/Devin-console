@@ -212,6 +212,9 @@ export function createFolderPaging(deps: {
     let firstStop: PagingStop | null = null;
     let code: PageErrorCode | null = null;
     let anyEnd = false;
+    let anyError = false;
+    // Set when the context (socket / org / archived filter) changed mid-run.
+    let superseded = false;
     let reused = 0;
     let mismatch = 0;
     const extra = new Map<string, CloudSession>();
@@ -227,6 +230,11 @@ export function createFolderPaging(deps: {
       let rootsOffset = 0;
       let pages = 0;
       for (;;) {
+        // A superseded run must not issue another request.
+        if (!sameContext(current(), ctx)) {
+          superseded = true;
+          return { rows: rows(), stop: 'error', code: null };
+        }
         if (pages >= allowance) return { rows: rows(), stop: 'max-pages', code: null };
         if (listPages >= config.maxPagesPerList) return { rows: rows(), stop: 'list-max-pages', code: null };
         const remaining = config.budgetMs - (now() - started);
@@ -283,6 +291,7 @@ export function createFolderPaging(deps: {
           ? 2 * config.maxPagesPerFolder
           : config.maxPagesPerFolder;
         outcome = await pageFolder(folder, allowance);
+        if (superseded) break;
         if (LIST_STOPS.has(outcome.stop)) listStop = outcome.stop;
       }
       addExtra(outcome.rows);
@@ -302,6 +311,7 @@ export function createFolderPaging(deps: {
       }
       incomplete.push(folder);
       firstStop ??= outcome.stop;
+      if (outcome.stop === 'error') anyError = true;
       code ??= outcome.code;
       // A transient failure never shrinks a folder that was complete before.
       if (memoMatches) addExtra(memo.rows);
@@ -322,7 +332,7 @@ export function createFolderPaging(deps: {
     };
 
     const latest = current();
-    if (!sameContext(latest, ctx)) {
+    if (superseded || !sameContext(latest, ctx)) {
       if (latest.orgId === ctx.orgId) mergeForce(pending, force);
       safeLog({ ...detail, discarded: true });
       return { kind: 'discard' };
@@ -330,7 +340,8 @@ export function createFolderPaging(deps: {
 
     for (const folder of [...memos.keys()]) if (!r0.includes(folder)) memos.delete(folder);
     for (const [folder, entry] of memoWrites) memos.set(folder, entry);
-    if (fullDue) lastFullRepage = started;
+    // A due full re-page that stopped early is retried on the next list.
+    if (fullDue && listStop === null && !anyError) lastFullRepage = started;
     if (listPages > 0 || incomplete.length > 0 || reused > 0) safeLog({ ...detail, discarded: false });
 
     const headIds = new Set(head.sessions.map((row) => row.id));

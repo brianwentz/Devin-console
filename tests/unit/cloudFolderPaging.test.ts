@@ -580,6 +580,26 @@ describe('paging module', () => {
     expect(srv.calls.length > 0).toBe(restored);
   });
 
+  it('stops at once when the context changes after the first folder page: no further fetch, discard', async () => {
+    const { paging, logs } = setup();
+    let gen = 1;
+    const srv = server(
+      { A: roots('A', 9), B: roots('B', 9) },
+      { onFetch: () => (gen = 2) }, // the socket is replaced while page 1 of A is in flight
+    );
+    const head = list([...roots('A', 3), ...roots('B', 3)], { A: 9, B: 9 });
+    const res = await paging.complete(head, CTX, srv.fetch, () => ({ ...CTX, socketGen: gen }), 'poll');
+    expect(res).toEqual({ kind: 'discard' });
+    expect(srv.calls.map((c) => `${c.folder}${c.offset}`)).toEqual(['A0']);
+    expect(logs.at(-1)).toMatchObject({ discarded: true, pages: 1 });
+
+    // Same org → the force (here the first full re-page) is restored and runs on the next list.
+    srv.calls.length = 0;
+    const next: ListContext = { ...CTX, socketGen: 2 };
+    applied(await paging.complete(head, next, srv.fetch, () => next, 'connect'));
+    expect(srv.offsets('A')).toEqual([0, 3, 6, 9]);
+  });
+
   it('a discarded list does not write the memo', async () => {
     const { paging } = setup();
     const content = roots('A', 4);
@@ -851,6 +871,51 @@ describe('Branch B memo', () => {
     );
     expect(res.incompleteFolders).toEqual(['A']);
     expect(sortedIds(res.sessions)).toEqual(['A1', 'A2', 'A3']);
+  });
+
+  it('a partial outcome does not merge the memo when the archived status differs', async () => {
+    const { paging } = await primed(); // memo A written under ACTIVE, same total
+    const all: ListContext = { ...CTX, archivedStatus: 'ALL' };
+    const failing = server(
+      { A: content },
+      { override: (_req, call) => (call === 2 ? new PageError('timeout', 'x') : undefined) },
+    );
+    const res = applied(await paging.complete(head, all, failing.fetch, () => all, 'shell'));
+    expect(res.incompleteFolders).toEqual(['A']);
+    // Only the head + the one fetched page; the ACTIVE memo rows A4..A7 never leak in.
+    expect(sortedIds(res.sessions)).toEqual(['A1', 'A2', 'A3']);
+  });
+
+  it.each<[string, (advance: (ms: number) => void) => ReturnType<typeof server>]>([
+    ['budget', (advance) => server({ A: content }, { onFetch: () => advance(CFG.budgetMs) })],
+    ['error', () => server({ A: content }, { override: () => new PageError('timeout', 'x') })],
+  ])('a due full re-page that stopped early (%s) is retried on the next list', async (_name, make) => {
+    const { paging, srv, advance } = await primed();
+    advance(CFG.fullRepageMs);
+    const stopped = make(advance);
+    applied(await paging.complete(head, CTX, stopped.fetch, same, 'poll'));
+    expect(stopped.calls.length).toBeGreaterThan(0);
+
+    advance(1_000);
+    await paging.complete(head, CTX, srv.fetch, same, 'poll');
+    expect(srv.offsets('A')).toEqual([0, 3, 6]); // still due → re-paged
+    srv.calls.length = 0;
+    advance(1_000);
+    await paging.complete(head, CTX, srv.fetch, same, 'poll');
+    expect(srv.calls).toEqual([]); // completed → timestamp advanced
+  });
+
+  it('a due full re-page that hit list-max-pages is retried on the next list', async () => {
+    const { paging, advance } = setup({ ...CFG, maxPagesPerList: 2 });
+    const srv = server({ A: roots('A', 4), B: roots('B', 4) });
+    const h = list([...roots('A', 3), ...roots('B', 3)], { A: 4, B: 4 });
+    await paging.complete(h, CTX, srv.fetch, same, 'poll'); // A0 A3 → B stopped by list-max-pages
+    expect(srv.calls.map((c) => `${c.folder}${c.offset}`)).toEqual(['A0', 'A3']);
+    srv.calls.length = 0;
+    advance(1_000);
+    await paging.complete(h, CTX, srv.fetch, same, 'poll');
+    // Still due → A re-paged (not reused from its memo) before B.
+    expect(srv.calls.map((c) => `${c.folder}${c.offset}`)).toEqual(['A0', 'A3']);
   });
 
   it('an incomplete stop keeps the previous memo for later reuse', async () => {

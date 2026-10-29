@@ -1259,7 +1259,9 @@ class CloudSessions {
       // Pages 2+ only ever mark folders incomplete: complete() never rejects,
       // and nothing below tears down the socket or sets an error.
       const fetch = createPageFetch({
-        request: (method, params, timeoutMs) => this.request(method, params, timeoutMs),
+        // Bound to this list's socket: once it is replaced, a stale run's page
+        // rejects (code 'socket') instead of going out on the new socket.
+        request: (method, params, timeoutMs) => this.request(method, params, timeoutMs, socket),
         orgId,
         userId: this.userId,
         archivedStatus: ctx.archivedStatus,
@@ -1311,10 +1313,11 @@ class CloudSessions {
     method: string,
     params: Record<string, unknown>,
     timeoutMs = REQUEST_TIMEOUT_MS,
+    bound?: WebSocket | null,
   ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const socket = this.socket;
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
+      if (!socket || socket.readyState !== WebSocket.OPEN || (bound !== undefined && bound !== socket)) {
         reject(new Error('ws not open'));
         return;
       }
