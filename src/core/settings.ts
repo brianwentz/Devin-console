@@ -36,6 +36,7 @@ export const SETTINGS_PRESERVE_SPEC: PreserveSpec = structural({
   analytics: structural(),
   usage: structural(),
   claude: structural(),
+  review: structural(),
   openhands: structural(),
   // ssh entries by alias: membership/order from memory, unknown per-entry fields survive.
   hosts: structural({ ssh: identityArray('alias', structural()) }),

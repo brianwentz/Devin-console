@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { DEFAULT_PANE_FRACTION, DEFAULT_TERMINAL_HEIGHT, MIN_TERMINAL_HEIGHT } from '../core/layout';
+import {
+  DEFAULT_PANE_FRACTION,
+  DEFAULT_REVIEW_TERMINAL_HEIGHT,
+  DEFAULT_TERMINAL_HEIGHT,
+  MIN_TERMINAL_HEIGHT,
+} from '../core/layout';
 import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } from '../core/providers';
 import { isAllowedAppUrl } from '../core/sessions';
 import { normalizeBaseUrl } from '../core/openhands';
@@ -284,6 +289,7 @@ const NotificationKindFields = {
   prCompleted: z.boolean(),
   update: z.boolean(),
   usage: z.boolean(),
+  review: z.boolean(),
 };
 const NotificationsFields = {
   orgId: z.string().max(128),
@@ -300,6 +306,7 @@ const NotificationsFields = {
     prCompleted: NotificationKindFields.prCompleted.default(true),
     update: NotificationKindFields.update.default(true),
     usage: NotificationKindFields.usage.default(true),
+    review: NotificationKindFields.review.default(true),
   }),
 };
 // Usage alerts (Devin Cloud monthly ACUs + Claude limits): poll cadence.
@@ -338,6 +345,12 @@ const TabsFields = {
 const LayoutFields = {
   terminalOpen: z.boolean(),
   terminalHeight: z.number().min(MIN_TERMINAL_HEIGHT),
+  // Tab Review strip height (px); the splitter clamps to 0.7 x the pane height.
+  reviewTerminalHeight: z.number().int().min(120).max(2000),
+};
+// Tab Review: which host runs review ptys ('local' or a WSL distro host id).
+const ReviewFields = {
+  host: z.string().regex(/^(local|wsl:.+)$/, 'must be local or wsl:<distro>'),
 };
 // Cloud session sidebar: open/width are persisted via syncFromState;
 // collapsedFolders is patched by the shell through settings:set/commit.
@@ -605,12 +618,12 @@ export const SettingsObject = z.object({
       banner: NotificationsFields.banner.default(true),
       kinds: NotificationsFields.kinds.default({
         waiting: true, approval: true, blocked: true, finished: false,
-        prOpened: true, prCompleted: true, update: true, usage: true,
+        prOpened: true, prCompleted: true, update: true, usage: true, review: true,
       }),
     })
     .default({
       orgId: '', userId: '', collect: true, banner: true,
-      kinds: { waiting: true, approval: true, blocked: true, finished: false, prOpened: true, prCompleted: true, update: true, usage: true },
+      kinds: { waiting: true, approval: true, blocked: true, finished: false, prOpened: true, prCompleted: true, update: true, usage: true, review: true },
     }),
   prs: z
     .object({ autoOpenTabs: PrsFields.autoOpenTabs.default(true) })
@@ -622,8 +635,16 @@ export const SettingsObject = z.object({
     .object({
       terminalOpen: LayoutFields.terminalOpen.default(false),
       terminalHeight: LayoutFields.terminalHeight.default(DEFAULT_TERMINAL_HEIGHT),
+      reviewTerminalHeight: LayoutFields.reviewTerminalHeight.default(DEFAULT_REVIEW_TERMINAL_HEIGHT),
     })
-    .default({ terminalOpen: false, terminalHeight: DEFAULT_TERMINAL_HEIGHT }),
+    .default({
+      terminalOpen: false,
+      terminalHeight: DEFAULT_TERMINAL_HEIGHT,
+      reviewTerminalHeight: DEFAULT_REVIEW_TERMINAL_HEIGHT,
+    }),
+  review: z
+    .object({ host: ReviewFields.host.default('local') })
+    .default({ host: 'local' }),
   sessions: z
     .object({
       open: SessionsFields.open.default(true),
@@ -732,6 +753,7 @@ export const SettingsPatchSchema = z.object({
   favorites: z.object(FavoritesFields).partial().optional(),
   local: z.object(LocalFields).partial().optional(),
   layout: z.object(LayoutFields).partial().optional(),
+  review: z.object(ReviewFields).partial().optional(),
   terminal: z.object(TerminalFields).partial().optional(),
   analytics: z.object(AnalyticsFields).partial().optional(),
   usage: z.object(UsageFields).partial().optional(),

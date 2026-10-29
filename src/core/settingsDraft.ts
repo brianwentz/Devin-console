@@ -60,6 +60,8 @@ export interface SettingsDraft {
   claudeMaxLiveAgents: string;
   claudeDefaultWslDistro: string;
   claudePickerFolder: string;
+  // 'local' or 'wsl:<distro>' — where Tab Review ptys run.
+  reviewHost: string;
   openhandsBaseUrl: string;
   openhandsPollSeconds: string;
   openhandsMaxLiveViews: string;
@@ -109,6 +111,7 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   claudeMaxLiveAgents: 'claude',
   claudeDefaultWslDistro: 'claude',
   claudePickerFolder: 'claude',
+  reviewHost: 'claude',
   openhandsBaseUrl: 'openhands',
   openhandsPollSeconds: 'openhands',
   openhandsMaxLiveViews: 'openhands',
@@ -153,6 +156,7 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     claudeMaxLiveAgents: String(settings.claude.maxLiveAgents),
     claudeDefaultWslDistro: settings.claude.defaultWslDistro ?? '',
     claudePickerFolder: settings.claude.pickerFolder ?? '',
+    reviewHost: settings.review.host,
     openhandsBaseUrl: settings.openhands.baseUrl,
     openhandsPollSeconds: String(settings.openhands.pollSeconds),
     openhandsMaxLiveViews: String(settings.openhands.maxLiveViews),
@@ -198,6 +202,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     Number(draft.claudeMaxLiveAgents) !== Number(base.claudeMaxLiveAgents) ||
     draft.claudeDefaultWslDistro !== base.claudeDefaultWslDistro ||
     draft.claudePickerFolder.trim() !== base.claudePickerFolder ||
+    draft.reviewHost !== base.reviewHost ||
     draft.openhandsBaseUrl.trim() !== base.openhandsBaseUrl ||
     Number(draft.openhandsPollSeconds) !== Number(base.openhandsPollSeconds) ||
     Number(draft.openhandsMaxLiveViews) !== Number(base.openhandsMaxLiveViews) ||
@@ -346,6 +351,7 @@ export function validateDraft(
         defaultWslDistro: draft.claudeDefaultWslDistro || null,
         pickerFolder: claudePickerFolder || null,
       },
+      review: { host: draft.reviewHost },
       openhands: {
         baseUrl: openhandsBaseUrl,
         pollSeconds: openhandsPoll,
@@ -380,6 +386,7 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'claude.keepAliveMinutes': 'claudeKeepAliveMinutes',
   'claude.maxLiveAgents': 'claudeMaxLiveAgents',
   'claude.defaultWslDistro': 'claudeDefaultWslDistro',
+  'review.host': 'reviewHost',
   'openhands.baseUrl': 'openhandsBaseUrl',
   'openhands.pollSeconds': 'openhandsPollSeconds',
   'openhands.maxLiveViews': 'openhandsMaxLiveViews',

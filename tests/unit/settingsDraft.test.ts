@@ -91,6 +91,7 @@ describe('draftFromSettings', () => {
       claudeMaxLiveAgents: '2',
       claudeDefaultWslDistro: 'Ubuntu-24.04',
       claudePickerFolder: '/home/u/ws',
+      reviewHost: 'local',
       openhandsBaseUrl: 'https://oh.example.com/app',
       openhandsPollSeconds: '45',
       openhandsMaxLiveViews: '3',
@@ -127,6 +128,15 @@ describe('isDraftDirty', () => {
     expect(isDraftDirty(draft({ claudeModel: 'claude-sonnet-4-5' }), defaults)).toBe(true);
     // Blank model equals the null default; whitespace-only is clean too.
     expect(isDraftDirty(draft({ claudeModel: '   ' }), defaults)).toBe(false);
+  });
+
+  it('round-trips reviewHost into review.host and flags a change as dirty', () => {
+    expect(draftFromSettings(defaults).reviewHost).toBe('local');
+    const result = validateDraft(draft({ reviewHost: 'wsl:Ubuntu' }));
+    expect(result.ok && result.patch.review).toEqual({ host: 'wsl:Ubuntu' });
+    expect(isDraftDirty(draft({ reviewHost: 'wsl:Ubuntu' }), defaults)).toBe(true);
+    const withHost = mergeSettings(defaults, { review: { host: 'wsl:Ubuntu' } });
+    expect(draftFromSettings(withHost).reviewHost).toBe('wsl:Ubuntu');
   });
 
   it('round-trips claude fields into the patch', () => {
@@ -254,6 +264,7 @@ describe('validateDraft', () => {
         defaultWslDistro: null,
         pickerFolder: null,
       },
+      review: { host: 'local' },
       openhands: {
         baseUrl: 'https://app.all-hands.dev',
         pollSeconds: 30,

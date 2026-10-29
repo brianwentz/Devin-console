@@ -130,6 +130,31 @@ describe('P8 migration', () => {
   });
 });
 
+describe('tab review settings', () => {
+  it('defaults review.host, layout.reviewTerminalHeight and kinds.review', () => {
+    const s = SettingsSchema.parse({});
+    expect(s.review.host).toBe('local');
+    expect(s.layout.reviewTerminalHeight).toBe(260);
+    expect(s.notifications.kinds.review).toBe(true);
+  });
+
+  it('accepts local and wsl:<distro> hosts, repairs ssh:x to local keeping it raw', () => {
+    expect(parseSettingsFile({ review: { host: 'wsl:Ubuntu' } }).settings.review.host).toBe('wsl:Ubuntu');
+    const raw = { review: { host: 'ssh:x', future: 1 } };
+    const { settings, dropped, invalid } = parseSettingsFile(raw);
+    expect(settings.review.host).toBe('local');
+    expect(dropped).toContain('review.host');
+    const out = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect(out.review).toEqual({ host: 'ssh:x', future: 1 });
+  });
+
+  it('bounds layout.reviewTerminalHeight to 120..2000', () => {
+    expect(parseSettingsFile({ layout: { reviewTerminalHeight: 50 } }).dropped).toContain('layout.reviewTerminalHeight');
+    expect(parseSettingsFile({ layout: { reviewTerminalHeight: 2001 } }).dropped).toContain('layout.reviewTerminalHeight');
+    expect(parseSettingsFile({ layout: { reviewTerminalHeight: 400 } }).settings.layout.reviewTerminalHeight).toBe(400);
+  });
+});
+
 describe('F2 pane fraction migration', () => {
   // Legacy px widths were recorded against the 1400 px default window: 1400 - 56 - 6 = 1338.
   it('converts pane.width px to pane.fraction and drops width', () => {
@@ -196,6 +221,7 @@ describe('notifications settings (P5/P6)', () => {
     prCompleted: true,
     update: true,
     usage: true,
+    review: true,
   };
   it('defaults collect/banner on, org/user blank, kinds with finished off', () => {
     const base = SettingsSchema.parse({});
@@ -252,17 +278,17 @@ describe('prs settings (F1)', () => {
 describe('terminal dock settings (F5)', () => {
   it('defaults layout/terminal and merges shallowly', () => {
     const base = SettingsSchema.parse({});
-    expect(base.layout).toEqual({ terminalOpen: false, terminalHeight: 280 });
+    expect(base.layout).toEqual({ terminalOpen: false, terminalHeight: 280, reviewTerminalHeight: 260 });
     expect(base.terminal).toEqual({ shell: '' });
 
     const merged = mergeSettings(base, {
       layout: { terminalOpen: true },
       terminal: { shell: 'pwsh.exe -NoLogo' },
     });
-    expect(merged.layout).toEqual({ terminalOpen: true, terminalHeight: 280 });
+    expect(merged.layout).toEqual({ terminalOpen: true, terminalHeight: 280, reviewTerminalHeight: 260 });
     expect(merged.terminal).toEqual({ shell: 'pwsh.exe -NoLogo' });
-    const resized = mergeSettings(merged, { layout: { terminalHeight: 400 } });
-    expect(resized.layout).toEqual({ terminalOpen: true, terminalHeight: 400 });
+    const resized = mergeSettings(merged, { layout: { terminalHeight: 400, reviewTerminalHeight: 260 } });
+    expect(resized.layout).toEqual({ terminalOpen: true, terminalHeight: 400, reviewTerminalHeight: 260 });
   });
 
   it('rejects a terminal height below the minimum', () => {
@@ -273,7 +299,7 @@ describe('terminal dock settings (F5)', () => {
     });
     expect(dropped).toEqual(['layout.terminalHeight']);
     expect(invalid).toEqual({ 'layout.terminalHeight': 60 });
-    expect(settings.layout).toEqual({ terminalOpen: true, terminalHeight: 280 });
+    expect(settings.layout).toEqual({ terminalOpen: true, terminalHeight: 280, reviewTerminalHeight: 260 });
   });
 });
 

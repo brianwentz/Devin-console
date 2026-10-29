@@ -2,6 +2,7 @@ import type { BaseWindow, WebContentsView } from 'electron';
 import {
   DEFAULT_PANE_FRACTION,
   DEFAULT_SESSIONS_WIDTH,
+  DEFAULT_REVIEW_TERMINAL_HEIGHT,
   DEFAULT_TERMINAL_HEIGHT,
 } from '../core/layout';
 import type { IdentitySource, Surface } from '../shared/ipc';
@@ -76,6 +77,7 @@ export const state = {
   // F5 terminal dock
   terminalOpen: false,
   terminalHeight: DEFAULT_TERMINAL_HEIGHT,
+  reviewTerminalHeight: DEFAULT_REVIEW_TERMINAL_HEIGHT,
   activeTerminalId: null as string | null,
   dragAxis: 'x' as 'x' | 'y' | 's',
   dragStartHeight: DEFAULT_TERMINAL_HEIGHT,

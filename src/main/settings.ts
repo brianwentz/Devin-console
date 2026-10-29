@@ -158,7 +158,11 @@ export class SettingsStore {
     this.value = {
       ...this.value,
       pane: { open: state.paneOpen, fraction: state.paneFraction },
-      layout: { terminalOpen: state.terminalOpen, terminalHeight: state.terminalHeight },
+      layout: {
+        terminalOpen: state.terminalOpen,
+        terminalHeight: state.terminalHeight,
+        reviewTerminalHeight: state.reviewTerminalHeight,
+      },
       sessions: {
         ...this.value.sessions,
         open: state.sessionsOpen,

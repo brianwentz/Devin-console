@@ -314,6 +314,7 @@ async function createWindow(): Promise<void> {
   state.paneFraction = clampFraction01(saved.pane.fraction);
   state.terminalOpen = saved.layout.terminalOpen;
   state.terminalHeight = saved.layout.terminalHeight;
+  state.reviewTerminalHeight = saved.layout.reviewTerminalHeight;
   state.sessionsOpen = saved.sessions.open;
   state.sessionsWidth = saved.sessions.width;
   if (testMode && process.env.AGENT_WORKSPACE_TEST_SESSIONS_OPEN !== undefined) {
