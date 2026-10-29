@@ -9,7 +9,6 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   acpWsUrl,
-  buildFolderPageParams,
   buildInitializeParams,
   buildListParams,
   NEW_SESSION_WATCH_DELAYS_MS,
@@ -21,7 +20,17 @@ import {
   type CloudSession,
 } from '../core/cloudAcp';
 import { parseCloudCache, serializeCloudCache } from '../core/cloudCache';
-import { CHILD_CAP, PAGE_SIZE } from '../core/cloudFolderPaging';
+import {
+  CHILD_CAP,
+  createFolderPaging,
+  createPageFetch,
+  PAGING_CONFIG,
+  type ArchivedStatus,
+  type FolderPaging,
+  type ListContext,
+  type PageFetch,
+  type PagingConfig,
+} from '../core/cloudFolderPaging';
 import {
   DEVIN_CLOUD_CAPABILITIES,
   type CloudSourceCapabilities,
@@ -73,7 +82,43 @@ const FixtureSchema = z.object({
   folders: z.array(z.string()).default([]),
   folderTotals: z.record(z.string(), z.number()).default({}),
   nextCursor: z.string().nullable().default(null),
+  // Folder-paging seam: folders[k] is the full server content of k (roots +
+  // children); the fixture fetch serves R1-shaped slices of it.
+  paging: z
+    .object({
+      pageSize: z.number().int().positive(),
+      childCap: z.number().int().positive().optional(),
+      folders: z.record(z.string(), z.array(CloudSessionSchema)),
+    })
+    .optional(),
 });
+type FixturePaging = NonNullable<z.infer<typeof FixtureSchema>['paging']>;
+
+const EMPTY_PAGE: CloudListResult = { sessions: [], folders: [], folderTotals: {}, nextCursor: null };
+
+function sameListContext(a: ListContext, b: ListContext): boolean {
+  return a.socketGen === b.socketGen && a.orgId === b.orgId && a.archivedStatus === b.archivedStatus;
+}
+
+// Fixture stand-in for a folder page: the top-level rows [offset,
+// offset+pageSize) of folders[k] plus their direct children, capped at
+// childCap with hasMoreChildren set on a capped root.
+function fixturePageFetch(paging: FixturePaging, childCap: number): PageFetch {
+  return (req) => {
+    const rows = paging.folders[req.folder] ?? [];
+    const ids = new Set(rows.map((row) => row.id));
+    const top = rows.filter((row) => row.parentId === null || !ids.has(row.parentId));
+    const sessions: CloudSession[] = [];
+    for (const root of top.slice(req.rootsOffset, req.rootsOffset + req.pageSize)) {
+      const children = rows.filter((row) => row.parentId === root.id);
+      sessions.push(
+        children.length > childCap ? { ...root, hasMoreChildren: true } : root,
+        ...children.slice(0, childCap),
+      );
+    }
+    return Promise.resolve({ ...EMPTY_PAGE, sessions });
+  };
+}
 
 type Pending = {
   resolve: (message: Record<string, unknown>) => void;
@@ -95,6 +140,7 @@ class CloudSessions {
   private sessions: CloudSession[] = [];
   private folders: string[] = [];
   private folderTotals: Record<string, number> = {};
+  private incompleteFolders: string[] = [];
   private status: CloudState['status'] = 'disabled';
   private lastSyncAt: string | null = null;
   private error: string | null = null;
@@ -106,7 +152,12 @@ class CloudSessions {
   private lastSnapshotJson = '';
   private started = false;
   private fixtureFile: string | null = null;
-  private folderOffsets = new Map<string, number>();
+  // Serialises fixture reloads (each one may page) so they land in order.
+  private fixtureChain: Promise<void> = Promise.resolve();
+  // Bumped per new socket — a paged list built on an older socket is discarded.
+  private socketGen = 0;
+  private pagingConfig: PagingConfig = PAGING_CONFIG;
+  private paging: FolderPaging = this.createPaging(PAGING_CONFIG);
   private unsubActiveNavigate: (() => void) | null = null;
   private tokenInFlight: Promise<void> | null = null;
   private tokenBackoffMs = TOKEN_BACKOFF_MIN_MS;
@@ -150,6 +201,8 @@ class CloudSessions {
       error: this.error,
       folders: this.folders,
       folderTotals: this.folderTotals,
+      // A cached list is never marked partial — "Show more" waits for a live list.
+      incompleteFolders: this.cached ? [] : this.incompleteFolders,
       sessions: this.sessions,
       liveSessionIds: cloudViews().publicInfo().liveSessionIds,
       showArchived: this.showArchived,
@@ -166,7 +219,8 @@ class CloudSessions {
       this.fixtureFile = process.env.AGENT_WORKSPACE_TEST_CLOUD_SESSIONS ?? null;
       const cacheFile = process.env.AGENT_WORKSPACE_TEST_CLOUD_CACHE ?? null;
       if (this.fixtureFile) {
-        this.loadFixture('start');
+        this.paging.requestForce({ all: true });
+        void this.loadFixture('start');
       } else if (cacheFile) {
         // Cache-only test mode: render the cached list under 'connecting'.
         this.setStatus('connecting');
@@ -196,14 +250,16 @@ class CloudSessions {
     this.unsubActiveNavigate?.();
     this.unsubActiveNavigate = null;
     this.closeSocket();
+    this.paging.reset();
   }
 
-  refresh(reason: string): void {
-    if (this.fixtureFile) {
-      this.loadFixture(reason);
-      return;
-    }
-    if (!this.started || (testMode && !this.fixtureFile)) return;
+  // Resolves once a fixture reload has landed (test hook); live lists run in
+  // the background.
+  refresh(reason: string): Promise<void> {
+    // An explicit refresh re-pages every folder instead of reusing the memo.
+    if (reason === 'shell' || reason === 'test') this.paging.requestForce({ all: true });
+    if (this.fixtureFile) return this.loadFixture(reason);
+    if (!this.started || (testMode && !this.fixtureFile)) return Promise.resolve();
     if (reason === 'shell' && this.socket?.readyState !== WebSocket.OPEN) {
       // Manual refresh — force a reconnect instead of waiting out a hung
       // socket or a long backoff.
@@ -216,13 +272,13 @@ class CloudSessions {
       this.backoffMs = BACKOFF_MIN_MS;
       log('cloud', 'cloud-refresh-force', { detail: { status: this.status } });
       void this.obtainToken();
-      return;
+      return Promise.resolve();
     }
     if (!this.token) {
       void this.obtainToken();
-      return;
+      return Promise.resolve();
     }
-    void (async () => {
+    return (async () => {
       // The page may have switched orgs — a reconnect re-lists via the
       // handshake, so only list when we're still on the same socket.
       const socketBefore = this.socket;
@@ -233,41 +289,16 @@ class CloudSessions {
     })();
   }
 
+  // "Show more": the next list pages this folder first, from offset 0, with a
+  // doubled page allowance — through list() coalescing, never a side request.
   loadMore(folder: string): void {
-    // Fixture mode has no live socket — paging is a no-op there.
-    if (this.fixtureFile || !this.started) return;
-    if (this.socket?.readyState !== WebSocket.OPEN || !this.orgId) return;
-    const rootsOffset =
-      this.folderOffsets.get(folder) ??
-      this.sessions.filter((s) => s.folder === folder).length;
-    const params = buildFolderPageParams({
-      orgId: this.orgId,
-      userId: this.userId,
-      folder,
-      rootsOffset,
-      archivedStatus: this.showArchived ? 'ALL' : 'ACTIVE',
-      pageSize: PAGE_SIZE,
-      childCap: CHILD_CAP,
-    });
-    void this.request('session/list', params, LIST_TIMEOUT_MS)
-      .then((message) => {
-        const result = parseListResult(message.result, this.orgId!);
-        const seen = new Set(this.sessions.map((s) => s.id));
-        const fresh = result.sessions.filter((s) => !seen.has(s.id));
-        this.sessions = [...this.sessions, ...fresh];
-        this.folderOffsets.set(folder, rootsOffset + fresh.length);
-        if (Object.keys(result.folderTotals).length) {
-          this.folderTotals = { ...this.folderTotals, ...result.folderTotals };
-        }
-        const total = this.folderTotals[folder];
-        log('cloud', 'cloud-more', {
-          detail: { count: fresh.length, hasMore: total != null && total > rootsOffset + fresh.length },
-        });
-        this.emit();
-      })
-      .catch((error: unknown) => {
-        this.onError('list-more', error);
-      });
+    if (!this.started) return;
+    this.paging.loadMore(folder);
+    if (this.fixtureFile) {
+      void this.loadFixture('load-more');
+      return;
+    }
+    if (this.socket?.readyState === WebSocket.OPEN) void this.list('load-more');
   }
 
   // Sidebar row click: the stored url is verified against the tenant before
@@ -392,10 +423,12 @@ class CloudSessions {
           sessions: this.sessions,
           folders: this.folders,
           folderTotals: this.folderTotals,
+          incompleteFolders: this.incompleteFolders,
         });
         this.sessions = next.sessions;
         this.folders = next.folders;
         this.folderTotals = next.folderTotals;
+        this.incompleteFolders = next.incompleteFolders ?? [];
         this.lastSyncAt = new Date().toISOString();
         this.emit();
       }
@@ -571,6 +604,7 @@ class CloudSessions {
     if (testMode) {
       this.mutations.push({ op: 'show-archived', payload: { value } });
     }
+    this.paging.requestForce({ all: true });
     this.emit();
     if (this.socket?.readyState === WebSocket.OPEN) void this.list('shell');
   }
@@ -772,12 +806,44 @@ class CloudSessions {
 
   // --- fixture mode -------------------------------------------------------
 
-  private loadFixture(reason: string): void {
+  private loadFixture(reason: string): Promise<void> {
+    const run = this.fixtureChain.then(() => this.loadFixtureOnce(reason));
+    this.fixtureChain = run;
+    return run;
+  }
+
+  // Fixture mode runs the same complete() as a live list, with the fixture
+  // file as page 1 and fixturePageFetch as the folder pages. Never rejects.
+  private async loadFixtureOnce(reason: string): Promise<void> {
+    const startedAt = Date.now();
     try {
       const parsed = FixtureSchema.parse(JSON.parse(readFileSync(this.fixtureFile!, 'utf8')));
-      this.sessions = parsed.sessions;
-      this.folders = parsed.folders;
-      this.folderTotals = parsed.folderTotals;
+      const head: CloudListResult = {
+        sessions: parsed.sessions,
+        folders: parsed.folders,
+        folderTotals: parsed.folderTotals,
+        nextCursor: parsed.nextCursor,
+      };
+      let fetch: PageFetch = () => Promise.resolve(EMPTY_PAGE);
+      if (parsed.paging) {
+        const childCap = parsed.paging.childCap ?? CHILD_CAP;
+        this.usePagingConfig({
+          ...PAGING_CONFIG,
+          rootsCap: parsed.paging.pageSize,
+          pageSize: parsed.paging.pageSize,
+          childCap,
+        });
+        fetch = fixturePageFetch(parsed.paging, childCap);
+      } else {
+        this.usePagingConfig(PAGING_CONFIG);
+      }
+      const ctx = this.listContext();
+      const result = await this.paging.complete(head, ctx, fetch, () => this.listContext(), reason);
+      if (result.kind === 'discard' || !sameListContext(ctx, this.listContext())) return;
+      this.sessions = result.sessions;
+      this.folders = head.folders;
+      this.folderTotals = result.folderTotals;
+      this.incompleteFolders = result.incompleteFolders;
       this.error = null;
       this.lastSyncAt = new Date().toISOString();
       this.setStatus('ready');
@@ -785,7 +851,7 @@ class CloudSessions {
         detail: {
           count: this.sessions.length,
           folders: this.folders.length,
-          durationMs: 0,
+          durationMs: Date.now() - startedAt,
           reason: `fixture-${reason}`,
         },
       });
@@ -795,6 +861,39 @@ class CloudSessions {
     }
     this.emit();
     this.settleNewSession();
+  }
+
+  // --- folder paging ------------------------------------------------------
+
+  private createPaging(config: PagingConfig): FolderPaging {
+    return createFolderPaging({
+      config,
+      now: Date.now,
+      log: (event, detail) => log('cloud', event, { detail }),
+    });
+  }
+
+  // A fixture file may carry its own page size; a different config needs a
+  // fresh instance (with every folder forced, so no memo is assumed).
+  private usePagingConfig(config: PagingConfig): void {
+    if (
+      config.rootsCap === this.pagingConfig.rootsCap &&
+      config.pageSize === this.pagingConfig.pageSize &&
+      config.childCap === this.pagingConfig.childCap
+    ) {
+      return;
+    }
+    this.pagingConfig = config;
+    this.paging = this.createPaging(config);
+    this.paging.requestForce({ all: true });
+  }
+
+  private archivedStatus(): ArchivedStatus {
+    return this.showArchived ? 'ALL' : 'ACTIVE';
+  }
+
+  private listContext(): ListContext {
+    return { socketGen: this.socketGen, orgId: this.orgId ?? '', archivedStatus: this.archivedStatus() };
   }
 
   // --- token acquisition --------------------------------------------------
@@ -924,7 +1023,8 @@ class CloudSessions {
       this.sessions = [];
       this.folders = [];
       this.folderTotals = {};
-      this.folderOffsets.clear();
+      this.incompleteFolders = [];
+      this.paging.reset();
       this.emptyListSynced = false;
       this.cached = false;
       log('cloud', 'cloud-org-change', { detail: { reason } });
@@ -979,6 +1079,9 @@ class CloudSessions {
     this.emit();
     const socket = new WebSocket(acpWsUrl(state.tenantUrl, this.token, this.orgId));
     this.socket = socket;
+    this.socketGen += 1;
+    // A new socket's first list re-pages every folder.
+    this.paging.requestForce({ all: true });
     this.connectTimer = setTimeout(() => {
       this.connectTimer = null;
       if (this.socket === socket && socket.readyState === WebSocket.CONNECTING) {
@@ -1121,14 +1224,13 @@ class CloudSessions {
     const startedAt = Date.now();
     for (let attempt = 0; attempt < 2; attempt++) {
       const socket = this.socket;
+      const ctx = this.listContext();
+      let head: CloudListResult;
       try {
         const message = await this.request(
           'session/list',
-          buildListParams({
-            orgId,
-            userId: this.userId,
-            archivedStatus: this.showArchived ? 'ALL' : 'ACTIVE',
-          }),
+          // Caps default to PAGE_SIZE roots per folder / CHILD_CAP children per root.
+          buildListParams({ orgId, userId: this.userId, archivedStatus: ctx.archivedStatus }),
           LIST_TIMEOUT_MS,
         );
         if (message.error) {
@@ -1136,43 +1238,7 @@ class CloudSessions {
           this.onRpcError('list', rpcError);
           return false;
         }
-        const result: CloudListResult = parseListResult(message.result, orgId);
-        this.sessions = result.sessions;
-        this.folders = result.folders;
-        this.folderTotals = result.folderTotals;
-        // Keep loadMore offsets aligned with what the fresh page contains.
-        this.folderOffsets.clear();
-        for (const session of result.sessions) {
-          if (session.folder !== null) {
-            this.folderOffsets.set(
-              session.folder,
-              (this.folderOffsets.get(session.folder) ?? 0) + 1,
-            );
-          }
-        }
-        this.lastSyncAt = new Date().toISOString();
-        this.error = null;
-        this.lastError = null;
-        this.cached = false;
-        this.setStatus('ready');
-        log('cloud', 'cloud-list', {
-          detail: {
-            count: result.sessions.length,
-            folders: result.folders.length,
-            durationMs: Date.now() - startedAt,
-            reason,
-          },
-        });
-        this.emit();
-        this.settleNewSession();
-        if (!testMode) this.writeCache();
-        // A totally empty result usually means the page is on another org for
-        // multi-org users — re-read devinDebug.getOrgId() once per connection.
-        if (result.sessions.length === 0 && result.folders.length === 0 && !this.emptyListSynced) {
-          this.emptyListSynced = true;
-          void this.syncOrg('empty-list');
-        }
-        return true;
+        head = parseListResult(message.result, orgId);
       } catch (error) {
         // A replacement socket's own handshake re-lists — don't tear it down.
         if (this.socket !== socket) return false;
@@ -1190,6 +1256,53 @@ class CloudSessions {
         this.scheduleReconnect();
         return false;
       }
+      // Pages 2+ only ever mark folders incomplete: complete() never rejects,
+      // and nothing below tears down the socket or sets an error.
+      const fetch = createPageFetch({
+        request: (method, params, timeoutMs) => this.request(method, params, timeoutMs),
+        orgId,
+        userId: this.userId,
+        archivedStatus: ctx.archivedStatus,
+        config: this.pagingConfig,
+      });
+      const result = await this.paging.complete(head, ctx, fetch, () => this.listContext(), reason);
+      // A discard — or a head-only fallback built for a context that has since
+      // changed (socket / org / archived filter) — is never applied; the dirty
+      // follow-up or the reconnect re-lists.
+      if (
+        result.kind === 'discard' ||
+        !sameListContext(ctx, this.listContext()) ||
+        this.socket !== socket
+      ) {
+        return false;
+      }
+      this.sessions = result.sessions;
+      this.folders = head.folders;
+      this.folderTotals = result.folderTotals;
+      this.incompleteFolders = result.incompleteFolders;
+      this.lastSyncAt = new Date().toISOString();
+      this.error = null;
+      this.lastError = null;
+      this.cached = false;
+      this.setStatus('ready');
+      log('cloud', 'cloud-list', {
+        detail: {
+          count: this.sessions.length,
+          folders: this.folders.length,
+          durationMs: Date.now() - startedAt,
+          reason,
+        },
+      });
+      this.emit();
+      this.settleNewSession();
+      if (!testMode) this.writeCache();
+      // A totally empty result usually means the page is on another org for
+      // multi-org users — re-read devinDebug.getOrgId() once per connection.
+      if (head.sessions.length === 0 && head.folders.length === 0 && !this.emptyListSynced) {
+        this.emptyListSynced = true;
+        void this.syncOrg('empty-list');
+      }
+      return true;
     }
     return false;
   }

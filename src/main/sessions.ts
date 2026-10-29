@@ -17,7 +17,7 @@ export function applySessionChange(sessionId: string | null, url: string): void 
   log('devin', 'session-change', { url, detail: { sessionId } });
   // Service-user identity inference observes the sessions the user opens.
   notifier.onSessionChanged(sessionId);
-  cloudSessions().refresh('session-change');
+  void cloudSessions().refresh('session-change');
 }
 
 export function attachSessionTracking(contents: Electron.WebContents): void {

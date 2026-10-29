@@ -314,7 +314,7 @@ export function setupIpc(): void {
     const parsed = CloudOpenArg.safeParse(payload);
     if (parsed.success) cloudSessions().openSession(parsed.data.sessionId);
   });
-  guardedOn(IpcChannels.cloudRefresh, () => cloudSessions().refresh('shell'));
+  guardedOn(IpcChannels.cloudRefresh, () => void cloudSessions().refresh('shell'));
   guardedOn(IpcChannels.cloudLoadMore, (_event, payload: unknown) => {
     const parsed = CloudLoadMoreArg.safeParse(payload);
     if (parsed.success) cloudSessions().loadMore(parsed.data.folder);

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
-import { currentDevinUrl, dndMove, launchApp, shellPage, state } from './helpers';
+import { currentDevinUrl, dndMove, launchApp, readEvents, shellPage, state } from './helpers';
 import type { CloudListResult } from '../../src/core/cloudAcp';
 import { RAIL_WIDTH, SPLITTER_WIDTH, DEFAULT_SESSIONS_WIDTH } from '../../src/core/layout';
 
@@ -27,8 +27,9 @@ function hooks(app: ElectronApplication) {
           (globalThis as any).__agentworkspace.cloudState(),
       ) as Promise<{
         status: string;
-        sessions: Array<{ id: string; url: string; folder: string | null }>;
+        sessions: Array<{ id: string; url: string; folder: string | null; parentId: string | null }>;
         folders: string[];
+        incompleteFolders?: string[];
         cached: boolean;
       }>,
     cloudRefresh: () => evaluate(() => (globalThis as any).__agentworkspace.cloudRefresh()),
@@ -79,9 +80,12 @@ test('cloud session sidebar: data, sections, interactions, geometry', async () =
       'participated',
       'pinned',
     ]);
+    // Every folder is listed in full — nothing is partial, so no "Show more".
+    expect((await h.cloudState()).incompleteFolders).toEqual([]);
 
     const page = await shellPage(app);
     await expect(page.locator('#sessionsPanel')).toBeVisible();
+    await expect(page.locator('[data-load-more]')).toHaveCount(0);
 
     // --- (1) section order: pinned, folders minus 'pinned', extras, recent --
     const names = await page
@@ -245,6 +249,112 @@ test('cloud session sidebar: cached list renders while connecting', async () => 
     );
     await expect(page.locator('#cloudStatus')).toContainText('cached');
     await expect.poll(async () => page.locator('[data-session-id]').count()).toBe(8);
+    // A cached list is never marked partial.
+    expect((await h.cloudState()).incompleteFolders).toEqual([]);
+    await expect(page.locator('[data-load-more]')).toHaveCount(0);
+  } finally {
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('cloud session sidebar: folders and children show in full', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-cloud-paging-'));
+  const logFile = join(profile, 'events.jsonl');
+  const fixturePath = join(profile, 'cloudSessions.json');
+  const raw = JSON.parse(
+    readFileSync(resolve(__dirname, '../fixtures/cloudSessions.json'), 'utf8'),
+  ) as CloudListResult & {
+    paging?: { pageSize: number; folders: Record<string, CloudListResult['sessions']> };
+  };
+  for (const session of raw.sessions) {
+    session.url = `${fixtures.devinUrl}/sessions/${session.id}`;
+  }
+  // Gamma: 7 roots on the server; page 1 (the fixture head) carries the first
+  // pageSize (3) of them — a full slice, so the folder pages. G1 (the 5th
+  // root) only arrives on a folder page, with all 11 of its children.
+  const seed = raw.sessions.find((s) => s.folder === 'Alpha' && !s.isPinned && s.parentId === null)!;
+  const hex = (prefix: string, n: number) => `${prefix}${String(n).padStart(32 - prefix.length, '0')}`;
+  const row = (id: string, title: string, parentId: string | null, updatedAt: number, children = 0) => ({
+    ...seed,
+    id,
+    acpId: `devin-${id}`,
+    title,
+    url: `${fixtures.devinUrl}/sessions/${id}`,
+    folder: 'Gamma',
+    parentId,
+    isPinned: false,
+    isUnread: false,
+    directChildrenCount: children,
+    hasMoreChildren: false,
+    updatedAt,
+  });
+  const g1 = hex('9a', 5);
+  const gammaRoots = [1, 2, 3, 4, 5, 6, 7].map((n) =>
+    row(hex('9a', n), `Gamma root ${n}`, null, 1759800000000 - n * 1000, n === 5 ? 11 : 0),
+  );
+  const g1Children = Array.from({ length: 11 }, (_, i) =>
+    row(hex('9c', i + 1), `Gamma child ${i + 1}`, g1, 1759700000000 - i * 1000),
+  );
+  raw.sessions.push(...gammaRoots.slice(0, 3));
+  raw.folders = ['Alpha', 'Beta', 'Gamma', 'participated', 'pinned'];
+  raw.folderTotals = { ...raw.folderTotals, Gamma: 7 };
+  raw.paging = { pageSize: 3, folders: { Gamma: [...gammaRoots, ...g1Children] } };
+  writeFileSync(fixturePath, JSON.stringify(raw));
+  const titles = [...raw.sessions, ...gammaRoots, ...g1Children].map((s) => s.title);
+
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures, {
+    AGENT_WORKSPACE_TEST_CLOUD_SESSIONS: fixturePath,
+    AGENT_WORKSPACE_TEST_SESSIONS_OPEN: '1',
+  });
+  const h = hooks(app);
+  const gammaShape = async () => {
+    const cloud = await h.cloudState();
+    return {
+      roots: cloud.sessions.filter((s) => s.folder === 'Gamma' && s.parentId === null).length,
+      children: cloud.sessions.filter((s) => s.parentId === g1).length,
+      incomplete: cloud.incompleteFolders,
+    };
+  };
+  const full = { roots: 7, children: 11, incomplete: [] };
+  try {
+    await expect.poll(async () => (await h.cloudState()).status).toBe('ready');
+    await expect.poll(gammaShape).toEqual(full);
+
+    const page = await shellPage(app);
+    await expect(page.locator('#sessionsPanel')).toBeVisible();
+    const expectRowsInFull = async () => {
+      for (const root of gammaRoots) {
+        await expect(page.locator(`[data-session-id="${root.id}"]`)).toHaveAttribute('data-depth', '0');
+      }
+      for (const child of g1Children) {
+        await expect(page.locator(`[data-session-id="${child.id}"]`)).toHaveAttribute('data-depth', '1');
+      }
+      await expect(page.locator('[data-load-more]')).toHaveCount(0);
+    };
+    await expectRowsInFull();
+
+    await expect
+      .poll(async () =>
+        (await readEvents(logFile)).some(
+          (e) =>
+            e.event === 'cloud-folder-paging' &&
+            (e.detail as { incomplete?: number; pages?: number }).incomplete === 0 &&
+            ((e.detail as { pages?: number }).pages ?? 0) > 0,
+        ),
+      )
+      .toBe(true);
+
+    // A later list must not drop the paged-in rows.
+    await h.cloudRefresh();
+    await expect.poll(gammaShape).toEqual(full);
+    await expectRowsInFull();
+
+    // Folder names and titles never reach the event log.
+    const text = readFileSync(logFile, 'utf8');
+    expect(text).not.toContain('Gamma');
+    for (const title of titles) expect(text).not.toContain(title);
   } finally {
     await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
     await app.close().catch(() => undefined);
