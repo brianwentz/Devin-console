@@ -67,6 +67,7 @@ import { notifier } from './notifier';
 import { SecretStore } from './secrets';
 import { requestSettingsFlush } from './settingsFlush';
 import { cancelFolderPrompt } from './folderPrompt';
+import { noteWindowFocus } from './tabPaintDiag';
 
 // Windows toasts require an AppUserModelID; match electron-builder's appId.
 if (process.platform === 'win32') app.setAppUserModelId('io.github.brianwentz.agent-workspace');
@@ -459,6 +460,7 @@ async function createWindow(): Promise<void> {
   state.windowRef.on('resize', applyLayout);
   // Re-poll immediately on focus while the poller is in error (backoff drop).
   state.windowRef.on('focus', () => {
+    noteWindowFocus();
     for (const runtime of runtimes()) runtime.onFocus?.();
     hosts().onWindowFocus();
     updateOnWindowFocus();
