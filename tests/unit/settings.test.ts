@@ -145,7 +145,15 @@ describe('tab review settings', () => {
     expect(settings.review.host).toBe('local');
     expect(dropped).toContain('review.host');
     const out = serializeSettingsFile(raw, settings, invalid, new Set());
-    expect(out.review).toMatchObject({ host: 'ssh:x', future: 1 });
+    expect(out.review).toEqual({
+      host: 'ssh:x',
+      agent: 'claude',
+      command: '/cb:review {github-url}',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+      future: 1,
+    });
   });
 
   it('caps review.host at 200 characters', () => {
@@ -810,7 +818,15 @@ describe('review agent settings', () => {
     expect(dropped).toContain('review.command');
     expect(invalid['review.command']).toBe('/x');
     const out = serializeSettingsFile(raw, settings, invalid, new Set());
-    expect(out.review).toMatchObject({ command: '/x', future: 1 });
+    expect(out.review).toEqual({
+      host: 'local',
+      agent: 'claude',
+      command: '/x',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+      future: 1,
+    });
   });
 
   it('drops an unknown devin mode', () => {

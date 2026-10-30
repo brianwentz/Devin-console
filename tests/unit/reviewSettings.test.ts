@@ -12,14 +12,20 @@ describe('isValidReviewCommand', () => {
 });
 
 describe('reviewCwdMatchesHost', () => {
-  it('local takes drive/UNC/posix but never a WSL UNC path', () => {
-    expect(reviewCwdMatchesHost('C:\\r', 'local')).toBe(true);
-    expect(reviewCwdMatchesHost('\\\\srv\\share\\r', 'local')).toBe(true);
-    expect(reviewCwdMatchesHost('\\\\wsl.localhost\\Ubuntu\\r', 'local')).toBe(false);
-    expect(reviewCwdMatchesHost('\\\\wsl$\\Ubuntu\\r', 'local')).toBe(false);
+  it('local on win32 takes drive/UNC but never a WSL UNC or POSIX path', () => {
+    expect(reviewCwdMatchesHost('C:\\r', 'local', 'win32')).toBe(true);
+    expect(reviewCwdMatchesHost('\\\\srv\\share\\r', 'local', 'win32')).toBe(true);
+    expect(reviewCwdMatchesHost('\\\\wsl.localhost\\Ubuntu\\r', 'local', 'win32')).toBe(false);
+    expect(reviewCwdMatchesHost('\\\\wsl$\\Ubuntu\\r', 'local', 'win32')).toBe(false);
+    expect(reviewCwdMatchesHost('/home/u', 'local', 'win32')).toBe(false);
   });
-  it('wsl takes POSIX absolute only', () => {
-    expect(reviewCwdMatchesHost('/home/u', 'wsl:Ubuntu')).toBe(true);
-    expect(reviewCwdMatchesHost('C:\\r', 'wsl:Ubuntu')).toBe(false);
+  it('local on darwin takes POSIX only', () => {
+    expect(reviewCwdMatchesHost('/Users/x', 'local', 'darwin')).toBe(true);
+    expect(reviewCwdMatchesHost('C:\\x', 'local', 'darwin')).toBe(false);
+  });
+  it('wsl takes a single-rooted POSIX path only', () => {
+    expect(reviewCwdMatchesHost('/home/u', 'wsl:Ubuntu', 'win32')).toBe(true);
+    expect(reviewCwdMatchesHost('C:\\r', 'wsl:Ubuntu', 'win32')).toBe(false);
+    expect(reviewCwdMatchesHost('//srv/x', 'wsl:U', 'win32')).toBe(false);
   });
 });

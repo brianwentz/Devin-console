@@ -784,5 +784,8 @@ describe('review draft fields', () => {
   it('flags a changed review field as dirty', () => {
     expect(isDraftDirty(draft({ reviewAgent: 'devin' }), defaults)).toBe(true);
     expect(isDraftDirty(draft({ reviewCwd: '/x' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewCommand: '/y {github-url}' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewClaudeMode: 'plan' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewDevinMode: 'smart' }), defaults)).toBe(true);
   });
 });

@@ -32,11 +32,12 @@ export function isValidReviewCommand(value: string): boolean {
 
 /**
  * Whether a review working directory is in the path family of the review host:
- * `local` takes a drive or non-WSL UNC path (win32) or a POSIX path (darwin) and
- * never a WSL UNC path; `wsl:` takes a POSIX-absolute path.
+ * `local` takes a drive or non-WSL UNC path (win32) or a POSIX path (darwin,
+ * linux) and never a WSL UNC path; `wsl:` takes a single-rooted POSIX path.
  */
-export function reviewCwdMatchesHost(cwd: string, host: string): boolean {
-  if (host.startsWith('wsl:')) return cwd.startsWith('/');
+export function reviewCwdMatchesHost(cwd: string, host: string, platform: string): boolean {
+  if (host.startsWith('wsl:')) return cwd.startsWith('/') && !cwd.startsWith('//');
   if (hostIdForPath(cwd) !== 'local') return false;
-  return /^[a-zA-Z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\') || cwd.startsWith('/');
+  if (platform === 'win32') return /^[a-zA-Z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\');
+  return cwd.startsWith('/');
 }

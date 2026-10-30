@@ -208,8 +208,13 @@ describe('SETTINGS_PRESERVE_SPEC tracks the zod schema', () => {
   it('an unknown review.future key survives the overlay', () => {
     const raw = { review: { host: 'local', future: 7 } };
     const { settings } = parseSettingsFile(raw);
-    expect((overlayKnown(raw, settings, SETTINGS_PRESERVE_SPEC) as Record<string, unknown>).review).toMatchObject({
+    expect((overlayKnown(raw, settings, SETTINGS_PRESERVE_SPEC) as Record<string, unknown>).review).toEqual({
       host: 'local',
+      agent: 'claude',
+      command: '/cb:review {github-url}',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
       future: 7,
     });
   });

@@ -245,6 +245,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
 
 export function validateDraft(
   draft: SettingsDraft,
+  platform: string = 'win32',
 ): { ok: true; patch: SettingsPatch } | { ok: false; errors: DraftErrors } {
   const errors: DraftErrors = {};
   const tenantUrl = draft.tenantUrl.trim();
@@ -348,7 +349,7 @@ export function validateDraft(
   if (reviewCwd) {
     if (!isAbsolutePickerPath(reviewCwd)) {
       errors.reviewCwd = 'Enter an absolute folder path';
-    } else if (!reviewCwdMatchesHost(reviewCwd, draft.reviewHost)) {
+    } else if (!reviewCwdMatchesHost(reviewCwd, draft.reviewHost, platform)) {
       errors.reviewCwd = draft.reviewHost.startsWith('wsl:')
         ? 'Use a Linux path for a WSL distro'
         : 'Choose the distro under Run reviews on and use its Linux path';
