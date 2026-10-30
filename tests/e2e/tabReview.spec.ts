@@ -912,3 +912,57 @@ test('9. WSL host: a Stopped review distro is started by the review', async () =
     await closeApp(ctx.app);
   }
 });
+
+// --- 10. Devin review: a finished review's idle pty is released before a session
+// in the Reviews workspace loads; a running review is left alone.
+for (const finished of [true, false]) {
+  test(`10. Devin review ${finished ? 'finished: released' : 'running: kept'} on a Reviews session load`, async () => {
+    const ctx = await launchReviewApp({
+      AGENT_WORKSPACE_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+      FAKE_ACP_LIST: '1',
+      FAKE_ACP_LOAD: '1',
+      ...(finished ? { FAKE_PTY_SAY: 'AW_REVIEW_VERDICT: changes\nok' } : {}),
+    });
+    const { app } = ctx;
+    try {
+      await setSettings(app, { review: { agent: 'devin' } });
+      await expect.poll(() => readSettings(ctx.profile).review?.agent).toBe('devin');
+      await toGlobalScope(app);
+      const tab = await openTab(app, prUrl(finished ? 171 : 172));
+      const record = await startReview(app, tab);
+      const workspace = (record as ReviewRecord & { workspacePath: string }).workspacePath;
+      if (finished) await expect.poll(() => reviewStatus(app, tab), { timeout: 15_000 }).toBe('changes');
+      await expect
+        .poll(async () => (await call<any>(app, 'localState')).agents[workspace]?.status)
+        .toBe('ready');
+      const sessionId = await call<string>(app, 'localNewSession', workspace);
+      const ptyId = record.ptyId!;
+      const alive = async () => (await terminals(app)).some((t) => t.id === ptyId && t.exitCode === null);
+      expect(await alive()).toBe(true);
+
+      // Through the shell's IPC (the sidebar row click path), not the test hook.
+      const loaded = await shell(
+        app,
+        `window.agentworkspace.localLoadSession(${JSON.stringify(workspace)}, ${JSON.stringify(sessionId)})`,
+      );
+      expect((loaded as { ok: boolean }).ok).toBe(true);
+
+      const released = (await readEvents(ctx.logFile)).some(
+        (e) => e.event === 'review-terminal' && (e.detail as any)?.op === 'release',
+      );
+      if (finished) {
+        expect(released).toBe(true);
+        expect((await reviewState(app, tab))?.ptyId).toBeNull();
+        await expect.poll(alive).toBe(false);
+      } else {
+        expect(released).toBe(false);
+        expect(await alive()).toBe(true);
+        expect(await reviewStatus(app, tab)).toBe('reviewing');
+        await call(app, 'reviewPtyExit', tab);
+      }
+    } finally {
+      await closeApp(app);
+    }
+  });
+}
+

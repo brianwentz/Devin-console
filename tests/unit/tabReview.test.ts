@@ -4,6 +4,7 @@ import {
   REVIEW_VERDICT_RETRY_MS,
   buildReviewPrompt,
   canonicalPrUrl,
+  finishedDevinReviewsIn,
   lastAssistantText,
   reviewPromptArg,
   reviewRetryDelays,
@@ -385,5 +386,30 @@ describe('reviewRefusalText', () => {
     );
     expect(reviewRefusalText('no-claude', 'Ubuntu')).toBe('The claude CLI was not found on the review host.');
     expect(reviewRefusalText('spawn', null)).toBe('The review terminal could not be started.');
+  });
+});
+
+describe('finishedDevinReviewsIn', () => {
+  const ws = 'C:\\Users\\u\\.agent-workspace\\reviews-devin';
+  const devin = (over: Partial<ReviewRecord> = {}) =>
+    rec({ agent: 'devin', status: 'changes', workspacePath: ws, ...over });
+
+  it('returns only finished devin reviews with a live pty in the workspace', () => {
+    const records = [
+      devin({ sessionId: 'ok' }),
+      devin({ sessionId: 'claude', agent: 'claude' }),
+      devin({ sessionId: 'running', status: 'reviewing' }),
+      devin({ sessionId: 'elsewhere', workspacePath: 'C:\\other' }),
+      devin({ sessionId: 'exited', ptyId: null }),
+    ];
+    expect(finishedDevinReviewsIn(records, ws)).toEqual(['ok']);
+  });
+
+  it('compares local paths case-insensitively and WSL UNC paths exactly', () => {
+    expect(finishedDevinReviewsIn([devin({ sessionId: 'a' })], ws.toUpperCase())).toEqual(['a']);
+    const unc = '\\\\wsl.localhost\\Ubuntu\\home\\u\\reviews';
+    const wsl = devin({ sessionId: 'w', workspacePath: unc });
+    expect(finishedDevinReviewsIn([wsl], unc)).toEqual(['w']);
+    expect(finishedDevinReviewsIn([wsl], unc.toUpperCase())).toEqual([]);
   });
 });

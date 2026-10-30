@@ -14,6 +14,7 @@ import { scopeOf } from '../../core/tabModel';
 import {
   buildReviewPrompt,
   canonicalPrUrl,
+  finishedDevinReviewsIn,
   lastAssistantText,
   parseVerdict,
   reduceReview,
@@ -43,6 +44,9 @@ export type ReviewStartResult = { ok: true } | { ok: false; reason: ReviewRefusa
  * committed marker (the TUI may still redraw â€” the last marker wins). */
 const PTY_VERDICT_QUIET_MS = 2000;
 
+/** Upper bound on waiting for released review ptys to exit before a load. */
+const RELEASE_EXIT_CAP_MS = 3000;
+
 type Verdict = { verdict: ReviewVerdict; via: 'marker' | 'assessment' | 'pty' };
 export type ReviewStopPayload = ClaudeHookEvent & { last_assistant_message?: string };
 
@@ -55,6 +59,8 @@ class ReviewController {
   // Devin reviews: the pty-output scanner and its quiescence timer, by session id.
   private readonly scanners = new Map<string, ReviewOutputScanner>();
   private readonly quietTimers = new Map<string, NodeJS.Timeout>();
+  // Resolvers of releaseFinishedInWorkspace, by session id — fired on pty exit.
+  private readonly exitWaiters = new Map<string, () => void>();
   private disposed = false;
 
   async start(tabId: string): Promise<ReviewStartResult> {
@@ -186,6 +192,7 @@ class ReviewController {
   }
 
   async onPtyExit(sessionId: string): Promise<void> {
+    this.exitWaiters.get(sessionId)?.();
     if (this.disposed) return;
     const record = this.recordFor(sessionId);
     if (!record) return;
@@ -281,6 +288,28 @@ class ReviewController {
     this.update(record.tabId, id, { type: 'exit', at: Date.now() });
     log('claude', 'review-terminal', { detail: { tabId: record.tabId, op: 'release' } });
     applyLayout();
+  }
+
+  /**
+   * Devin reviews: the CLI picks its own session id, so it is unknown here —
+   * loading any session in the review workspace first releases the finished
+   * reviews' idle ptys there. Resolves once each pty has exited (3 s cap total).
+   */
+  async releaseFinishedInWorkspace(workspacePath: string): Promise<void> {
+    const ids = finishedDevinReviewsIn(this.records.values(), workspacePath);
+    if (ids.length === 0) return;
+    const exits = ids.map((id) => new Promise<void>((resolve) => this.exitWaiters.set(id, resolve)));
+    for (const id of ids) this.releaseFinished(id);
+    let timer: NodeJS.Timeout | undefined;
+    const cap = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, RELEASE_EXIT_CAP_MS);
+    });
+    try {
+      await Promise.race([Promise.all(exits), cap]);
+    } finally {
+      clearTimeout(timer);
+      for (const id of ids) this.exitWaiters.delete(id);
+    }
   }
 
   /**

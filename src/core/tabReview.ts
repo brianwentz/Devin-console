@@ -261,3 +261,20 @@ export function lastAssistantText(messages: readonly unknown[]): string | null {
   }
   return null;
 }
+
+const isUncPath = (p: string): boolean => /^(\\|\/\/)/.test(p);
+
+/** Ids (session ids) of finished Devin reviews whose idle pty still holds the
+ * CLI's per-session lock in `workspacePath` — the paths are already normalised;
+ * local ones compare case-insensitively, WSL UNC ones exactly. */
+export function finishedDevinReviewsIn(records: Iterable<ReviewRecord>, workspacePath: string): string[] {
+  const unc = isUncPath(workspacePath);
+  const same = (p: string): boolean => (unc ? p === workspacePath : p.toLowerCase() === workspacePath.toLowerCase());
+  const ids: string[] = [];
+  for (const r of records) {
+    if (r.agent === 'devin' && r.status !== 'reviewing' && r.ptyId !== null && same(r.workspacePath)) {
+      ids.push(r.sessionId);
+    }
+  }
+  return ids;
+}
