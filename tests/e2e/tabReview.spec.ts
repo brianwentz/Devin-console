@@ -315,6 +315,8 @@ test.describe('tab review (local host)', () => {
     await expect.poll(() => ptyText(app, ptyId)).toContain('env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=set');
     const echo = await ptyText(app, ptyId);
     expect(echo).toContain(`--session-id ${record.sessionId}`);
+    // Reviews always run in auto mode, whatever claude.defaultPermissionMode says.
+    expect(echo).toMatch(/--permission-mode\W+auto\b/);
     expect(echo).toContain(`/cb:review ${url}`);
     expect(echo).toContain('AW_REVIEW_VERDICT: approved | changes | discussion');
     // The review pty is a claude-kind pty owned by the review session id.

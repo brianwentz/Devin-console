@@ -372,11 +372,12 @@ export class ClaudeHooks {
     mode: 'resume' | 'new' | 'attach',
     addr?: string,
     withHooks = true,
+    permissionMode?: string,
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
     const info = withHooks ? this.hookServer?.info() : null;
     return claudePtyInjection({
       mode,
-      permissionMode: state.settings?.current.claude.defaultPermissionMode ?? 'default',
+      permissionMode: permissionMode ?? state.settings?.current.claude.defaultPermissionMode ?? 'default',
       hooks: info ? { port: info.port, envVar: 'AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN', token: info.token, addr } : null,
     });
   }

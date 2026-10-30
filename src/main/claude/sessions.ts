@@ -333,13 +333,15 @@ export class ClaudeSessions {
     mode: 'resume' | 'new' | 'attach',
     // A review pty's fresh session id is unknown to hostIdFor — it passes its host.
     hostOverride?: HostId,
+    // Replaces `claude.defaultPermissionMode` (review ptys run unattended in `auto`).
+    permissionMode?: string,
   ): { extraArgs: string[]; extraEnv: Record<string, string> } | null {
     const hostId = hostOverride ?? this.hostIdFor(sessionId);
     // ssh (fix round 1 #1c): hooks only through a forward whose listener
     // proved the token — never toward whoever holds the remote port. The
     // permission mode is passed either way (R40 M1).
     const withHooks = !hostId.startsWith('ssh:') || hosts().hookForwardVerified(hostId);
-    return this.hook.injection(mode, hosts().hookAddrFor(hostId) ?? undefined, withHooks);
+    return this.hook.injection(mode, hosts().hookAddrFor(hostId) ?? undefined, withHooks, permissionMode);
   }
 
   /** Recapture the shell environment for the session's host (claude:recheckEnv). */

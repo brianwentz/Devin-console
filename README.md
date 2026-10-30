@@ -71,6 +71,7 @@ Right-click a pull request tab in Linked Context → **Review pull request** to 
 - **Tab dot**: yellow (pulsing) while reviewing, green approved, red changes requested, orange needs discussion, gray when the review ended without a verdict.
 - **Where it runs**: **Settings → Claude Code → Run reviews on** picks this PC or one of your WSL distros (not shown on macOS); a stopped distro is started when the review begins. The review needs Claude Code with the `/cb:review` skill/plugin installed on that machine.
 - **First review on a machine**: Claude Code shows its one-time folder-trust prompt in the strip — answer it once.
+- **Permissions**: review terminals always start in Claude Code's auto permission mode (whatever your default mode is), so a review is not held up by tool permission prompts.
 - **Notifications**: when a verdict arrives a **Review: …** notification appears (switch it off under **Settings → Notifications → Review results**); opening it switches to the session the tab belongs to and shows the pane.
 - **Review sessions** appear in the Claude sidebar under the **Reviews** workspace, a folder at `~/.agent-workspace/reviews` (inside the distro's home for WSL). Once a review has its verdict you can open its session in the Claude chat; that ends the review's terminal first.
 

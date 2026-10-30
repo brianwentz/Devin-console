@@ -32,6 +32,9 @@ import { applyLayout } from '../window';
 import { resolveReviewHost } from './host';
 import { ensureReviewsWorkspace } from './workspace';
 
+/** Reviews run unattended in a strip, so they must not park on permission prompts. */
+const REVIEW_PERMISSION_MODE = 'auto';
+
 export type ReviewStartResult =
   | { ok: true }
   | {
@@ -95,7 +98,7 @@ class ReviewController {
         terminalOpen: true,
       };
       this.records.set(tabId, record);
-      const injection = claudeSessions().hookInjection(sessionId, 'new', host.hostId);
+      const injection = claudeSessions().hookInjection(sessionId, 'new', host.hostId, REVIEW_PERMISSION_MODE);
       const opened = await terminalHost.open({
         kind: 'claude',
         mode: 'review',
