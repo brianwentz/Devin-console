@@ -31,7 +31,7 @@ import { notificationStore } from '../notifications';
 import { state, testMode } from '../state';
 import { applyLayout } from '../window';
 import { resolveReviewHost } from './host';
-import { ensureReviewsWorkspace } from './workspace';
+import { ensureReviewWorkspace } from './workspace';
 
 /** Reviews run unattended in a strip, so they must not park on permission prompts. */
 const REVIEW_PERMISSION_MODE = 'auto';
@@ -74,7 +74,7 @@ class ReviewController {
       if (host.start && !(await this.startDistro(host.hostId))) return this.refuse('distro-stopped');
       if (!this.claudeResolvable(host.hostId)) return this.refuse('no-claude');
       // The mkdir is an explicit exec — on a Stopped distro it is what boots it.
-      const workspace = await ensureReviewsWorkspace(host.hostId);
+      const workspace = await ensureReviewWorkspace(host.hostId, 'claude', null);
       if (!workspace.ok) {
         if (host.start) return this.refuse('distro-stopped');
         return this.refuse(workspace.reason === 'io' ? 'spawn' : 'helper-not-ready');
