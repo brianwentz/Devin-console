@@ -256,6 +256,9 @@ class ReviewController {
     applyLayout();
   }
 
+  /** A flushed chunk of a review pty's output (the data is never logged). */
+  onPtyOutput(_id: string, _data: string): void {}
+
   hooksReachable(hostId: HostId): boolean {
     if (hostId === 'local') return claudeSessions().hookInfo() !== null;
     return hosts().status(hostId)?.hooks !== 'unreachable';
