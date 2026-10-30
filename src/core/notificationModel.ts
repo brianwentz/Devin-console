@@ -4,6 +4,8 @@
 import type { DevinSession } from './devinApi';
 import { effectiveStatus, newPullRequests, prTitle } from './notifyModel';
 import type { ProviderSource } from './providers';
+import { pullRequestKey } from './tabModel';
+import { canonicalPrUrl, prLabel, type ReviewRecord, type ReviewVerdict } from './tabReview';
 import type { UsageMetric } from './usageAlerts';
 
 export type NotificationKind =
@@ -16,7 +18,8 @@ export type NotificationKind =
   | 'update'
   | 'identity'
   | 'auth'
-  | 'usage';
+  | 'usage'
+  | 'review';
 
 export interface AppNotification {
   id: string;
@@ -35,6 +38,9 @@ export interface AppNotification {
   accountKey?: string | undefined;
   prUrl?: string | undefined;
   prState?: string | undefined;
+  // 'review' entries: the verdict and the tab scope the review started from.
+  reviewVerdict?: ReviewVerdict | undefined;
+  scope?: string | undefined;
   version?: string | undefined;
   title: string;
   body: string;
@@ -59,6 +65,8 @@ export function itemKey(
     case 'pr-opened':
     case 'pr-completed':
       return `pr:${n.prUrl ?? ''}`;
+    case 'review':
+      return `review:${pullRequestKey(n.prUrl ?? '') ?? n.prUrl ?? ''}`;
     case 'usage':
       return `usage:${n.metric ?? ''}:${n.accountKey ?? ''}`;
     case 'waiting':
@@ -159,7 +167,31 @@ const STATUS_BODY: Record<NotificationKind, string> = {
   identity: '',
   auth: '',
   usage: '',
+  review: '',
 };
+
+const REVIEW_TITLE: Record<ReviewVerdict, string> = {
+  approved: 'Review: approved',
+  changes: 'Review: changes requested',
+  discussion: 'Review: needs discussion',
+};
+
+export function reviewNotification(r: ReviewRecord, verdict: ReviewVerdict, now: number): NewNotification {
+  const prUrl = canonicalPrUrl(r.prUrl) ?? r.prUrl;
+  return {
+    kind: 'review',
+    source: 'claude',
+    ownerUserId: null,
+    sessionId: r.sessionId,
+    sessionTitle: prLabel(prUrl),
+    prUrl,
+    scope: r.originScope,
+    reviewVerdict: verdict,
+    title: REVIEW_TITLE[verdict],
+    body: prLabel(prUrl),
+    createdAt: now,
+  };
+}
 
 const sessionTitleOf = (s: DevinSession) => s.title?.trim() || s.session_id;
 

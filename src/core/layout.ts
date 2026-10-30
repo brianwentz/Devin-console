@@ -24,6 +24,25 @@ export interface LayoutState {
   // Linked Context address bar: shell DOM drawn under the title bar across
   // the pane; the hosted tab rect shrinks by its height while the pane shows.
   addressBarOpen?: boolean;
+  // Review terminal strip: pane-level (every surface), carved from the bottom
+  // of the hosted tab rect while the pane shows a reviewed tab.
+  reviewTerminalOpen?: boolean;
+  reviewTerminalHeight?: number; // px
+}
+
+// Everything the LayoutState mappers read, in one flat shape so main
+// (`state`) and the shell (`ShellState`) share one implementation.
+export interface LayoutInputs {
+  surface: Surface;
+  paneOpen: boolean;
+  paneFraction: number;
+  terminalOpen: boolean;
+  terminalHeight: number;
+  sessionsOpen: boolean;
+  sessionsWidth: number;
+  addressBarOpen: boolean;
+  reviewTerminalOpen: boolean;
+  reviewTerminalHeight: number;
 }
 
 export interface WindowBounds {
@@ -34,6 +53,8 @@ export interface WindowBounds {
   titleBar: Rect | null;
   terminal: Rect | null;
   terminalSplitter: Rect | null;
+  reviewTerminal: Rect | null;
+  reviewSplitter: Rect | null;
   sessions: Rect | null;
   sessionsSplitter: Rect | null;
   sessionsCollapsed: boolean;
@@ -62,6 +83,10 @@ export const MIN_DEVIN_WIDTH = 640;
 export const DEFAULT_PANE_FRACTION = 0.5;
 export const DEFAULT_TERMINAL_HEIGHT = 280;
 export const MIN_TERMINAL_HEIGHT = 120;
+export const DEFAULT_REVIEW_TERMINAL_HEIGHT = 260;
+export const MIN_REVIEW_TERMINAL_HEIGHT = 120;
+export const MAX_REVIEW_TERMINAL_HEIGHT = 2000;
+const REVIEW_TERMINAL_MAX_FRACTION = 0.7;
 // Minimum px the main column keeps above an open terminal dock (below the title bar).
 export const TERMINAL_RESERVED_MAIN = 200;
 
@@ -91,6 +116,38 @@ export function clampTerminalHeight(height: number, windowHeight: number): numbe
     windowHeight - TITLE_BAR_HEIGHT - TERMINAL_RESERVED_MAIN,
   );
   return Math.min(max, Math.max(MIN_TERMINAL_HEIGHT, Math.round(height)));
+}
+
+// Review strip height: at least MIN_REVIEW_TERMINAL_HEIGHT, at most 70% of the
+// pane and never above MAX_REVIEW_TERMINAL_HEIGHT (the settings schema's max —
+// a taller value would be repaired to the default on the next load).
+export function clampReviewTerminalHeight(height: number, paneHeight: number): number {
+  const max = Math.max(
+    MIN_REVIEW_TERMINAL_HEIGHT,
+    Math.min(
+      MAX_REVIEW_TERMINAL_HEIGHT,
+      Math.floor(Math.max(0, paneHeight) * REVIEW_TERMINAL_MAX_FRACTION),
+    ),
+  );
+  return Math.min(max, Math.max(MIN_REVIEW_TERMINAL_HEIGHT, Math.round(height)));
+}
+
+// The single LayoutState mapper (main's `state` and the shell's ShellState both
+// feed it). The dock is a work-surface feature; the review strip is not.
+export function layoutStateFromState(input: LayoutInputs): LayoutState {
+  return {
+    paneOpen: input.paneOpen,
+    paneFraction: input.paneFraction,
+    terminalOpen: input.terminalOpen && dockSurface(input.surface),
+    terminalHeight: input.terminalHeight,
+    // The sessions column occupies space on every provider surface.
+    sessionsOpen: input.sessionsOpen && sessionsColumnSurface(input.surface),
+    sessionsWidth: input.sessionsWidth,
+    analyticsTabs: input.surface === 'analytics',
+    addressBarOpen: input.addressBarOpen,
+    reviewTerminalOpen: input.reviewTerminalOpen,
+    reviewTerminalHeight: input.reviewTerminalHeight,
+  };
 }
 
 // Persisted fraction sanitiser: 0..1, default for non-finite input. The px
@@ -162,18 +219,44 @@ export function leftChrome(layout: LayoutState, width: number): number {
 // The address bar is carved out of the top of the pane the same way: only the
 // hosted tab rect moves; a closed or auto-collapsed pane has nothing to shift.
 export function computeBounds(windowSize: Size, layout: LayoutState): WindowBounds {
-  const bounds = computeAnalyticsBounds(windowSize, layout);
-  if (!layout.addressBarOpen || !bounds.ghTab) return bounds;
-  const barHeight = Math.min(ADDRESS_BAR_HEIGHT, bounds.ghTab.height);
-  return {
-    ...bounds,
-    ghTab: {
-      x: bounds.ghTab.x,
-      y: bounds.ghTab.y + barHeight,
-      width: bounds.ghTab.width,
-      height: Math.max(0, bounds.ghTab.height - barHeight),
-    },
-  };
+  let bounds = computeAnalyticsBounds(windowSize, layout);
+  if (layout.addressBarOpen && bounds.ghTab) {
+    const barHeight = Math.min(ADDRESS_BAR_HEIGHT, bounds.ghTab.height);
+    bounds = {
+      ...bounds,
+      ghTab: {
+        x: bounds.ghTab.x,
+        y: bounds.ghTab.y + barHeight,
+        width: bounds.ghTab.width,
+        height: Math.max(0, bounds.ghTab.height - barHeight),
+      },
+    };
+  }
+  // The review strip takes the bottom of the hosted tab rect, after the
+  // address bar shift; its splitter sits directly above it.
+  if (layout.reviewTerminalOpen && bounds.ghTab) {
+    const tab = bounds.ghTab;
+    const stripHeight = Math.min(
+      clampReviewTerminalHeight(
+        layout.reviewTerminalHeight ?? DEFAULT_REVIEW_TERMINAL_HEIGHT,
+        tab.height,
+      ),
+      Math.max(0, tab.height - SPLITTER_WIDTH),
+    );
+    const bottom = tab.y + tab.height;
+    bounds = {
+      ...bounds,
+      ghTab: { ...tab, height: Math.max(0, tab.height - stripHeight - SPLITTER_WIDTH) },
+      reviewTerminal: { x: tab.x, y: bottom - stripHeight, width: tab.width, height: stripHeight },
+      reviewSplitter: {
+        x: tab.x,
+        y: bottom - stripHeight - SPLITTER_WIDTH,
+        width: tab.width,
+        height: SPLITTER_WIDTH,
+      },
+    };
+  }
+  return bounds;
 }
 
 function computeAnalyticsBounds(windowSize: Size, layout: LayoutState): WindowBounds {
@@ -285,6 +368,8 @@ function computeBoundsBase(windowSize: Size, layout: LayoutState): WindowBounds 
       splitter: null,
       terminal: docked.terminal,
       terminalSplitter: docked.terminalSplitter,
+      reviewTerminal: null,
+      reviewSplitter: null,
       paneCollapsed: false,
     };
   }
@@ -336,6 +421,8 @@ function computeBoundsBase(windowSize: Size, layout: LayoutState): WindowBounds 
     },
     terminal: docked.terminal,
     terminalSplitter: docked.terminalSplitter,
+    reviewTerminal: null,
+    reviewSplitter: null,
     paneCollapsed,
   };
 }

@@ -43,6 +43,7 @@
 //                                 helper's `…/claude agents` prints
 //                                 $FAKE_CLAUDE_AGENTS
 //   /usr/bin/printf '%s\n' args…  one arg per line (hosts:probe argv round-trip)
+//   mkdir -p [-m mode] <dir>      creates <root><dir> (the Tab Review workspace)
 //   curl … %{http_code}           canned: 200 only when FAKE_WSL_HOOKS=ok;
 //                                 `realCurl` (ssh): a real GET of the URL
 //   */claude …                    --version → a canned string; agents --json
@@ -419,6 +420,12 @@ export function createRunner(cfg: RunnerConfig) {
       return shInteractive(tail, cwd);
     }
     if (file.endsWith('curl')) return curl(tail);
+    // `mkdir -p [-m <mode>] <dir…>` — the Tab Review workspace (no mkdir.exe on CI).
+    if ((file === 'mkdir' || file.endsWith('/mkdir')) && tail.includes('-p')) {
+      const dirs = tail.filter((arg, i) => !arg.startsWith('-') && tail[i - 1] !== '-m');
+      for (const dir of dirs) mkdirSync(dir.startsWith('/') ? linuxFile(dir) : join(cwd, dir), { recursive: true });
+      return 0;
+    }
     // `/usr/bin/printf '%s\n' args…` — the hosts:probe argv round-trip.
     if (file.endsWith('/printf') && tail[0] === '%s\\n') {
       for (const arg of tail.slice(1)) process.stdout.write(`${arg}\n`);

@@ -100,6 +100,7 @@ const FIELD_INPUT: Record<DraftField, string> = {
   claudeMaxLiveAgents: 'claudeMaxLiveAgentsInput',
   claudeDefaultWslDistro: 'claudeDefaultWslDistroSelect',
   claudePickerFolder: 'claudePickerFolderInput',
+  reviewHost: 'reviewHostSelect',
   openhandsBaseUrl: 'openhandsBaseUrlInput',
   openhandsPollSeconds: 'openhandsPollSecondsInput',
   openhandsMaxLiveViews: 'openhandsMaxLiveViewsInput',

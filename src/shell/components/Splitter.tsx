@@ -2,14 +2,14 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import {
   clampPaneWidth,
   leftChrome,
-  sessionsColumnSurface,
   SPLITTER_WIDTH,
   type Rect,
 } from '../../core/layout';
+import { layoutStateFromShellState } from '../layoutState';
 import { useShellState } from '../store';
 
 interface SplitterProps {
-  axis: 'x' | 'y' | 's';
+  axis: 'x' | 'y' | 's' | 'r';
   // The live splitter rect (from computeBounds); the pointer turns into a drag
   // session that reports positions to the main-process layout.
   rect: Rect;
@@ -21,7 +21,7 @@ interface SplitterProps {
 // resulting pane width into the persisted fraction); for the sessions column
 // and the terminal dock it's the raw pointer position.
 function currentPos(
-  axis: 'x' | 'y' | 's',
+  axis: 'x' | 'y' | 's' | 'r',
   clientPos: number,
   chrome = 0,
 ): number {
@@ -37,17 +37,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
   const [draggingState, setDraggingState] = useState(false);
   const state = useShellState();
   const chrome = state
-    ? leftChrome(
-        {
-          paneOpen: state.paneOpen,
-          paneFraction: state.paneFraction,
-          terminalOpen: state.terminalOpen,
-          terminalHeight: state.terminalHeight,
-          sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
-          sessionsWidth: state.sessionsWidth,
-        },
-        document.documentElement.clientWidth,
-      )
+    ? leftChrome(layoutStateFromShellState(state), document.documentElement.clientWidth)
     : 0;
 
   useEffect(() => {
@@ -73,22 +63,31 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
   }, [axis]);
 
   const pointerPos = (event: PointerEvent) =>
-    axis === 'y' ? event.clientY : event.clientX;
+    axis === 'y' || axis === 'r' ? event.clientY : event.clientX;
 
   const id =
-    axis === 'x' ? 'splitter' : axis === 's' ? 'sessionsSplitter' : 'terminalSplitter';
+    axis === 'x'
+      ? 'splitter'
+      : axis === 's'
+        ? 'sessionsSplitter'
+        : axis === 'r'
+          ? 'reviewSplitter'
+          : 'terminalSplitter';
   const label =
     axis === 'x'
       ? 'Resize Linked Context'
       : axis === 's'
         ? 'Resize sessions sidebar'
-        : 'Resize terminal dock';
+        : axis === 'r'
+          ? 'Resize review terminal'
+          : 'Resize terminal dock';
+  const horizontal = axis === 'y' || axis === 'r';
 
   return (
     <div
       id={id}
       role="separator"
-      aria-orientation={axis === 'y' ? 'horizontal' : 'vertical'}
+      aria-orientation={horizontal ? 'horizontal' : 'vertical'}
       aria-label={label}
       className="shell-chrome splitter absolute bg-transparent"
       data-axis={axis}
@@ -99,7 +98,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
         top: rect.y,
         width: rect.width,
         height: rect.height,
-        cursor: enabled ? (axis === 'y' ? 'row-resize' : 'col-resize') : 'default',
+        cursor: enabled ? (horizontal ? 'row-resize' : 'col-resize') : 'default',
         touchAction: 'none',
       }}
       onPointerDown={(event) => {
@@ -108,7 +107,7 @@ export function Splitter({ axis, rect, enabled }: SplitterProps) {
         event.currentTarget.setPointerCapture(event.pointerId);
         dragging.current = true;
         setDraggingState(true);
-        document.body.classList.add(axis === 'y' ? 'dragging-y' : 'dragging');
+        document.body.classList.add(horizontal ? 'dragging-y' : 'dragging');
         window.agentworkspace.dragStart(axis, currentPos(axis, pointerPos(event), chrome));
       }}
       onPointerMove={(event) => {

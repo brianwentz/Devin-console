@@ -21,7 +21,9 @@ import {
   updateOnWindowFocus,
 } from './updater';
 import { handleLink, openUserUrl } from './routing';
-import { copyTabAddress, reloadCurrentScope } from './ipc';
+import { reloadCurrentScope } from './ipc';
+import { copyTabAddress, lastReviewRefusal, tabMenuClick, tabMenuItems } from './tabMenu';
+import { reviews } from './review/controller';
 import { historyAction, navigationTarget, openNewSession } from './shortcuts';
 import { lastOpenDialogOptions } from './dialogs';
 import { lastFolderPrompt } from './folderPrompt';
@@ -359,6 +361,17 @@ export function registerTestHooks(): void {
           return;
         }
         claudeSessions().open(id);
+      },
+      tabMenuItems: () => tabMenuItems(),
+      tabMenuClick: (id: string) => tabMenuClick(id),
+      lastReviewRefusal: () => lastReviewRefusal(),
+      // Tab Review: the tab's record, a start without the menu, and the pty's
+      // exit (the fake pty never exits on its own — killing it lands in onPtyExit).
+      reviewState: (tabId: string) => reviews().active(tabId),
+      reviewStart: (tabId: string) => reviews().start(tabId),
+      reviewPtyExit: (tabId: string) => {
+        const ptyId = reviews().active(tabId)?.ptyId;
+        return ptyId ? terminalHost.close(ptyId, { reclaim: false }) : false;
       },
       favoritesMenuItems: () => favoritesMenuItems(),
       favoritesMenuClick: (id: string) => favoritesMenuClick(id),

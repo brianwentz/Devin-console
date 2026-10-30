@@ -4,6 +4,7 @@ import {
   ANALYTICS_TABS_HEIGHT,
   clampFraction01,
   clampPaneWidth,
+  clampReviewTerminalHeight,
   clampSessionsWidth,
   clampTerminalHeight,
   computeBounds,
@@ -12,7 +13,9 @@ import {
   DEFAULT_TERMINAL_HEIGHT,
   dockSurface,
   fractionFromPx,
+  layoutStateFromState,
   leftChrome,
+  type LayoutInputs,
   MIN_TERMINAL_HEIGHT,
   paneAvailable,
   paneToggleWindowWidth,
@@ -26,7 +29,8 @@ import {
   TITLE_BAR_HEIGHT,
   type LayoutState,
 } from '../../src/core/layout';
-import type { Surface } from '../../src/shared/ipc';
+import { layoutStateFromShellState } from '../../src/shell/layoutState';
+import type { ShellState, Surface } from '../../src/shared/ipc';
 
 function layout(overrides: Partial<LayoutState> = {}): LayoutState {
   return {
@@ -498,5 +502,120 @@ describe('address bar carve-out', () => {
     const tiny = computeBounds({ width: 1400, height: 50 }, layout({ addressBarOpen: true }));
     expect(tiny.ghTab?.y).toBe(TITLE_BAR_HEIGHT + 14);
     expect(tiny.ghTab?.height).toBe(0);
+  });
+});
+
+describe('review terminal strip', () => {
+  const size = { width: 1400, height: 900 };
+
+  it('carves the strip from the bottom of the hosted tab rect', () => {
+    const closed = computeBounds(size, layout());
+    const open = computeBounds(size, layout({ reviewTerminalOpen: true, reviewTerminalHeight: 260 }));
+    expect(open.ghTab?.height).toBe((closed.ghTab?.height ?? 0) - (260 + SPLITTER_WIDTH));
+    expect(open.ghTab?.y).toBe(closed.ghTab?.y);
+    const closedBottom = (closed.ghTab?.y ?? 0) + (closed.ghTab?.height ?? 0);
+    expect(open.reviewTerminal).toEqual({
+      x: closed.ghTab?.x,
+      y: closedBottom - 260,
+      width: closed.ghTab?.width,
+      height: 260,
+    });
+    expect(open.reviewSplitter).toEqual({
+      x: closed.ghTab?.x,
+      y: closedBottom - 260 - SPLITTER_WIDTH,
+      width: closed.ghTab?.width,
+      height: SPLITTER_WIDTH,
+    });
+    // The splitter sits directly above the strip and directly below the tab.
+    expect((open.ghTab?.y ?? 0) + (open.ghTab?.height ?? 0)).toBe(open.reviewSplitter?.y);
+    expect(closed.reviewTerminal).toBeNull();
+    expect(closed.reviewSplitter).toBeNull();
+  });
+
+  it('does not overlap the address bar when both are open', () => {
+    const bounds = computeBounds(
+      size,
+      layout({ addressBarOpen: true, reviewTerminalOpen: true, reviewTerminalHeight: 260 }),
+    );
+    expect(bounds.ghTab?.y).toBe(TITLE_BAR_HEIGHT + ADDRESS_BAR_HEIGHT);
+    expect(bounds.ghTab?.height).toBe(900 - TITLE_BAR_HEIGHT - ADDRESS_BAR_HEIGHT - 260 - SPLITTER_WIDTH);
+    expect(bounds.reviewTerminal?.y).toBe(900 - 260);
+  });
+
+  it('clamps the height to 120..70% of the pane', () => {
+    expect(clampReviewTerminalHeight(50, 600)).toBe(120);
+    expect(clampReviewTerminalHeight(5000, 600)).toBe(420);
+    expect(clampReviewTerminalHeight(300, 600)).toBe(300);
+  });
+
+  it('never exceeds the settings schema max on a very tall pane', () => {
+    expect(clampReviewTerminalHeight(5000, 4000)).toBe(2000);
+    expect(clampReviewTerminalHeight(1900, 4000)).toBe(1900);
+  });
+
+  it('returns null rects when the pane is hidden or collapsed', () => {
+    const hidden = computeBounds(size, layout({ paneOpen: false, reviewTerminalOpen: true }));
+    expect(hidden.reviewTerminal).toBeNull();
+    expect(hidden.reviewSplitter).toBeNull();
+    const collapsed = computeBounds(
+      { width: 900, height: 900 },
+      layout({ reviewTerminalOpen: true }),
+    );
+    expect(collapsed.paneCollapsed).toBe(true);
+    expect(collapsed.reviewTerminal).toBeNull();
+    expect(collapsed.reviewSplitter).toBeNull();
+  });
+
+  it('works on every surface including OpenHands', () => {
+    const inputs: LayoutInputs = {
+      surface: 'openhands',
+      paneOpen: true,
+      paneFraction: 0.5,
+      terminalOpen: true,
+      terminalHeight: 280,
+      sessionsOpen: true,
+      sessionsWidth: 260,
+      addressBarOpen: false,
+      reviewTerminalOpen: true,
+      reviewTerminalHeight: 260,
+    };
+    expect(computeBounds(size, layoutStateFromState(inputs)).reviewTerminal).not.toBeNull();
+  });
+});
+
+describe('LayoutState mappers (drift)', () => {
+  const surfaces: Surface[] = ['cloud', 'local', 'claude', 'openhands', 'settings', 'analytics'];
+
+  it('main and shell mappers produce equal LayoutState for equivalent inputs', () => {
+    for (const surface of surfaces) {
+      for (const open of [true, false]) {
+        const inputs: LayoutInputs = {
+          surface,
+          paneOpen: true,
+          paneFraction: 0.4,
+          terminalOpen: open,
+          terminalHeight: 300,
+          sessionsOpen: open,
+          sessionsWidth: 240,
+          addressBarOpen: open,
+          reviewTerminalOpen: open,
+          reviewTerminalHeight: 200,
+        };
+        // Only the fields the mapper reads; the rest of ShellState is irrelevant to layout.
+        const shell = {
+          surface,
+          paneOpen: inputs.paneOpen,
+          paneFraction: inputs.paneFraction,
+          terminalOpen: inputs.terminalOpen,
+          terminalHeight: inputs.terminalHeight,
+          sessionsOpen: inputs.sessionsOpen,
+          sessionsWidth: inputs.sessionsWidth,
+          tabs: { addressBar: { open: inputs.addressBarOpen, mode: 'new' } },
+          reviewTerminalOpen: inputs.reviewTerminalOpen,
+          reviewTerminalHeight: inputs.reviewTerminalHeight,
+        } as unknown as ShellState;
+        expect(layoutStateFromShellState(shell)).toEqual(layoutStateFromState(inputs));
+      }
+    }
   });
 });

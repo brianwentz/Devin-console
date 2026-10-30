@@ -21,6 +21,7 @@ import {
   type LocalSessionSummary,
   type LocalStatePublic,
   type OpenHandsApiKeyResult,
+  type ReviewCloseResult,
   type OpenHandsContextMenuRequest,
   type OpenHandsContextMenuResult,
   type OpenUserUrlReply,
@@ -316,6 +317,12 @@ const api = {
       ipcRenderer.send(IpcChannels.tabsTabMenu, { id, x, y });
     }
   },
+  // Tab Review strip: close kills a running review (the shell confirms first).
+  reviewClose: (tabId: string) =>
+    ipcRenderer.invoke(IpcChannels.reviewClose, { tabId }) as Promise<ReviewCloseResult>,
+  reviewShow: (tabId: string) => {
+    if (isString(tabId)) ipcRenderer.send(IpcChannels.reviewShow, { tabId });
+  },
   navigate: (action: 'back' | 'forward' | 'reload') => {
     if (action === 'back' || action === 'forward' || action === 'reload') {
       ipcRenderer.send(IpcChannels.navAction, action);
@@ -329,8 +336,8 @@ const api = {
   openLink: (url: string) => {
     if (typeof url === 'string' && url.length < 8192) ipcRenderer.send(IpcChannels.linkOpen, url);
   },
-  dragStart: (axis: 'x' | 'y' | 's', pos: number) => {
-    if ((axis === 'x' || axis === 'y' || axis === 's') && Number.isFinite(pos)) {
+  dragStart: (axis: 'x' | 'y' | 's' | 'r', pos: number) => {
+    if ((axis === 'x' || axis === 'y' || axis === 's' || axis === 'r') && Number.isFinite(pos)) {
       ipcRenderer.send(IpcChannels.layoutDragStart, { axis, pos });
     }
   },

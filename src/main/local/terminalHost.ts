@@ -40,8 +40,11 @@ export type TerminalOpenOptions =
   | {
       kind: 'claude';
       sessionId: string;
-      mode: 'resume' | 'new' | 'attach';
+      // 'review': a Tab Review pty — args as 'new'; owned by reviewGate, not claudeGate.
+      mode: 'resume' | 'new' | 'attach' | 'review';
       agentId?: string | undefined;
+      // Review mode: the review host (a fresh session id is unknown to resolveHost).
+      hostId?: HostId | undefined;
       cwd: string | null;
       // claude-kind: `--settings` hook block + hook token env (resume/new only).
       extraArgs?: string[] | undefined;
@@ -79,8 +82,10 @@ interface TerminalEntry {
   lastDataLogAt: number;
   // Test mode only: rolling output buffer for __agentworkspace.terminalRead.
   readBuffer: string;
-  // Devin-kind only: PR-URL scanner over the pty output stream.
+  // PR-URL scanner over the pty output stream (null for shell and review ptys).
   linkScanner: LinkScanner | null;
+  // A Tab Review pty: exit goes to reviewGate instead of claudeGate.
+  review: boolean;
 }
 
 // Sampled event-log volume for terminal output (F2).
@@ -129,6 +134,16 @@ export class TerminalHost {
     onExit: (sessionId: string) => void;
     // The exec host a claude session runs on ('local' or 'wsl:<distro>').
     resolveHost: (sessionId: string) => HostId;
+  } | null = null;
+
+  // Injected from index.ts: the Tab Review controller. Review ptys skip the
+  // claudeGate chat handoff (no terminalOwned) and all PR handling — the
+  // review prompt itself carries the PR URL.
+  reviewGate: {
+    onExit: (sessionId: string) => void;
+    isReview: (sessionId: string) => boolean;
+    // Ends a finished review's idle pty before the session opens elsewhere.
+    releaseFinished: (sessionId: string) => void;
   } | null = null;
 
   constructor(private readonly testMode: boolean) {}
@@ -349,12 +364,17 @@ export class TerminalHost {
     const workspaces = (state.settings?.current.workspaces ?? []).map((w) => resolve(w));
     const execHost: ExecHost =
       options.kind === 'claude'
-        ? (hosts().hostById(this.claudeGate?.resolveHost(options.sessionId) ?? 'local') ??
-          LOCAL_HOST)
+        ? (hosts().hostById(
+            options.mode === 'review'
+              ? (options.hostId ?? 'local')
+              : (this.claudeGate?.resolveHost(options.sessionId) ?? 'local'),
+          ) ?? LOCAL_HOST)
         : options.kind === 'devin'
           ? (hosts().hostById(hosts().pathHostId(options.workspace)) ?? LOCAL_HOST)
           : LOCAL_HOST;
     const wslExec = isRemoteHost(execHost);
+    // A review pty is owned by reviewGate (open and exit); its cwd is never logged.
+    const reviewMode = options.kind === 'claude' && options.mode === 'review';
     const normalized =
       options.kind === 'devin'
         ? resolve(options.workspace)
@@ -383,7 +403,7 @@ export class TerminalHost {
     if (!allowed) {
       log('local', 'terminal-open', {
         detail: {
-          cwd: normalized,
+          ...(reviewMode ? {} : { cwd: normalized }),
           kind: options.kind,
           ok: false,
           error: 'cwd not allowed',
@@ -392,6 +412,9 @@ export class TerminalHost {
       });
       return { ok: false, error: 'cwd not allowed' };
     }
+    // A resume/attach of a finished review session must not land on (or race)
+    // the review's idle pty.
+    if (options.kind === 'claude' && !reviewMode) this.reviewGate?.releaseFinished(options.sessionId);
     if (options.kind !== 'shell') {
       const existingId = this.bySession.get(options.sessionId);
       if (existingId) {
@@ -420,10 +443,12 @@ export class TerminalHost {
       command = this.resolveCommand(options);
     }
     if ('error' in command) {
-      log('local', 'terminal-open', { detail: { cwd: normalized, ok: false } });
+      log('local', 'terminal-open', {
+        detail: { ...(reviewMode ? {} : { cwd: normalized }), ok: false },
+      });
       return { ok: false, error: command.error };
     }
-    if (options.kind === 'claude') {
+    if (options.kind === 'claude' && !reviewMode) {
       // One-writer policy: the chat query closes before the pty opens;
       // a running prompt refuses.
       try {
@@ -535,11 +560,16 @@ export class TerminalHost {
       // The session was released for a pty that never started — hand it back.
       if (options.kind === 'devin') void this.sessionGate?.reclaim(options.sessionId);
       log('local', 'terminal-open', {
-        detail: { cwd: normalized, ok: false, error: String(error) },
+        detail: { ...(reviewMode ? {} : { cwd: normalized }), ok: false, error: String(error) },
       });
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     const spawnedAt = Date.now();
+    // PR handling is skipped for every pty of a review session id (a later
+    // resume terminal included); exit routing follows the mode alone.
+    const skipPrScan =
+      options.kind === 'claude' &&
+      (reviewMode || this.reviewGate?.isReview(options.sessionId) === true);
     const entry: TerminalEntry = {
       id: randomUUID(),
       host: execHost.id,
@@ -557,9 +587,10 @@ export class TerminalHost {
       lastDataLogAt: 0,
       readBuffer: '',
       linkScanner:
-        options.kind !== 'shell'
+        options.kind !== 'shell' && !skipPrScan
           ? new LinkScanner({ context: { githubOrigins: fixtureOrigins } })
           : null,
+      review: reviewMode,
     };
     this.terminals.set(entry.id, entry);
     if (options.kind !== 'shell') this.bySession.set(options.sessionId, entry.id);
@@ -591,7 +622,8 @@ export class TerminalHost {
         void this.sessionGate?.reclaim(entry.sessionId);
       }
       if (entry.kind === 'claude' && entry.sessionId) {
-        this.claudeGate?.onExit(entry.sessionId);
+        if (entry.review) this.reviewGate?.onExit(entry.sessionId);
+        else this.claudeGate?.onExit(entry.sessionId);
       }
       const view = state.shellView;
       if (view?.webContents && !view.webContents.isDestroyed()) {
@@ -606,7 +638,7 @@ export class TerminalHost {
     log('local', 'terminal-open', {
       detail: {
         id: entry.id,
-        cwd: normalized,
+        ...(reviewMode ? {} : { cwd: normalized }),
         kind: options.kind,
         ok: true,
         pid: proc.pid,

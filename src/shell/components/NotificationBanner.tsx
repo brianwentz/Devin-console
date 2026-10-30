@@ -60,6 +60,9 @@ export function NotificationBanner() {
       }}
     >
       <SourceGlyph source={current.source} />
+      {current.kind === 'review' && current.reviewVerdict && (
+        <span className="reviewDot" data-review={current.reviewVerdict} />
+      )}
       <span className="truncate">
         {current.title} — {current.body}
       </span>

@@ -30,7 +30,8 @@ export function NotificationSettings() {
       | 'prOpened'
       | 'prCompleted'
       | 'update'
-      | 'usage',
+      | 'usage'
+      | 'review',
     enabled: boolean,
   ) => {
     void window.agentworkspace.setSettings({ notifications: { kinds: { [key]: enabled } } });
@@ -73,6 +74,7 @@ export function NotificationSettings() {
             ['prCompleted', 'PR merged or closed'],
             ['update', 'App updates'],
             ['usage', 'Usage limits (50% / 80%)'],
+            ['review', 'Review results'],
           ] as const
         ).map(([key, label]) => (
           <label key={key} className="flex items-center gap-2">

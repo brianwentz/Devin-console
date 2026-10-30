@@ -2,11 +2,13 @@ import { folderPromptOpen, folderPromptPublic } from './folderPrompt';
 import { screen, View, type WebContentsView } from 'electron';
 import {
   clampPaneWidth,
+  clampReviewTerminalHeight,
   clampSessionsWidth,
   clampTerminalHeight,
   computeBounds,
   dockSurface,
   fractionFromPx,
+  layoutStateFromState,
   leftChrome,
   MIN_DEVIN_WIDTH,
   paneToggleWindowWidth,
@@ -32,6 +34,8 @@ import { allPoolViews, poolForSurface } from './cloudKit/pools';
 import { terminalHost } from './local/terminalHost';
 import { hosts } from './hosts';
 import { log } from './log';
+import { prLabel, type ReviewRecord, type ReviewStatus } from '../core/tabReview';
+import { reviews } from './review/controller';
 import { notificationsUnread } from './notifications';
 import { openhandsSnapshot, openhandsUsageSnapshot } from './openhandsConfig';
 import { allOpenPullRequests, prStore } from './prs';
@@ -107,18 +111,51 @@ export function setPaneOpen(open: boolean, source: string): void {
   });
 }
 
-export function layoutState(): LayoutState {
+// Tab Review status overlaid on the tab list (TabManager stays review-agnostic).
+function reviewOverlay<P extends { tabs: object[] }>(
+  publicTabs: P,
+): P & { tabs: Array<P['tabs'][number] & { review?: { status: ReviewStatus } }> } {
+  const tabs = publicTabs.tabs.map((tab) => {
+    const status = reviews().statusFor((tab as { id: string }).id);
+    return status ? { ...tab, review: { status } } : tab;
+  });
+  return { ...publicTabs, tabs };
+}
+
+// The strip shows for the pane's active tab while its review has a live pty
+// (a verdict leaves claude running) and the user has not closed the strip.
+function reviewStripRecord(): ReviewRecord | null {
+  const tabId = state.tabManager?.activeId;
+  if (!tabId || !state.paneOpen) return null;
+  const record = reviews().active(tabId);
+  return record && record.terminalOpen && record.ptyId !== null ? record : null;
+}
+
+function reviewTerminalState(): ShellState['reviewTerminal'] {
+  const record = state.reviewTerminalOpen ? reviewStripRecord() : null;
+  if (!record || record.ptyId === null) return null;
   return {
+    tabId: record.tabId,
+    ptyId: record.ptyId,
+    prLabel: prLabel(record.prUrl),
+    status: record.status,
+    hooksReachable: reviews().hooksReachable(record.hostId),
+  };
+}
+
+export function layoutState(): LayoutState {
+  return layoutStateFromState({
+    surface: state.surface,
     paneOpen: state.paneOpen,
     paneFraction: state.paneFraction,
-    terminalOpen: terminalVisible(),
+    terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
-    // The sessions column occupies space on every provider surface.
-    sessionsOpen: state.sessionsOpen && sessionsColumnSurface(state.surface),
+    sessionsOpen: state.sessionsOpen,
     sessionsWidth: state.sessionsWidth,
-    analyticsTabs: state.surface === 'analytics',
     addressBarOpen: state.addressBar.open,
-  };
+    reviewTerminalOpen: state.reviewTerminalOpen,
+    reviewTerminalHeight: state.reviewTerminalHeight,
+  });
 }
 
 // Where the address bar was opened: a surface or tab-scope change closes it.
@@ -206,7 +243,9 @@ export function publicState(): ShellState {
     openhandsApiKeySet: state.secrets?.hasOpenHandsApiKey() ?? false,
     settings: state.settings?.current ?? SettingsSchema.parse({}),
     tabs: {
-      ...(state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 }),
+      ...reviewOverlay(
+        state.tabManager?.publicState() ?? { tabs: [], activeId: null, scope: '', hiddenTabCount: 0 },
+      ),
       addressBar: { ...state.addressBar },
     },
     credentials: state.credentials?.list() ?? [],
@@ -244,6 +283,9 @@ export function publicState(): ShellState {
     update: updateState(),
     terminalOpen: state.terminalOpen,
     terminalHeight: state.terminalHeight,
+    reviewTerminalOpen: state.reviewTerminalOpen,
+    reviewTerminalHeight: state.reviewTerminalHeight,
+    reviewTerminal: reviewTerminalState(),
     terminals: terminalHost.list(),
     activeTerminalId: (() => {
       const terminals = terminalHost.list();
@@ -438,8 +480,16 @@ export function applyLayout(): void {
     runtimeFor(layoutSurface)?.onSurfaceEnter?.();
   }
   syncScope();
+  // Tabs closed since the last layout end their review (a no-op without reviews).
+  reviews().reconcileTabs(new Set(tabManager.currentState.tabs.map((tab) => tab.id)));
+  state.reviewTerminalOpen = reviewStripRecord() !== null;
   closeAddressBarIfStale(false);
   let bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  if (state.reviewTerminalOpen && !bounds.reviewTerminal) {
+    // Pane collapsed or no hosted rect: nowhere to draw the strip.
+    state.reviewTerminalOpen = false;
+    bounds = computeBounds(windowRef.getContentBounds(), layoutState());
+  }
   if (bounds.paneCollapsed && state.addressBar.open) {
     closeAddressBarIfStale(true);
     bounds = computeBounds(windowRef.getContentBounds(), layoutState());
@@ -473,6 +523,7 @@ export function cancelDrag(restore: boolean, reason: string): void {
   if (restore) {
     if (state.dragAxis === 'x') state.paneFraction = state.dragStartFraction;
     else if (state.dragAxis === 's') state.sessionsWidth = state.dragStartSessionsWidth;
+    else if (state.dragAxis === 'r') state.reviewTerminalHeight = state.dragStartReviewHeight;
     else state.terminalHeight = state.dragStartHeight;
   }
   log('shell', 'drag-cancel', {
@@ -489,11 +540,12 @@ export function cancelDrag(restore: boolean, reason: string): void {
   state.shellView?.webContents.send(IpcChannels.layoutDragReset);
 }
 
-export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
+export function beginDrag(axis: 'x' | 'y' | 's' | 'r', pos: number): void {
   const { windowRef, shellView } = state;
   if (!windowRef || !shellView || state.dragging) return;
   if (axis === 'x' && (!state.paneOpen || state.paneCollapsed)) return;
   if (axis === 'y' && !terminalVisible()) return;
+  if (axis === 'r' && !state.reviewTerminalOpen) return;
   if (axis === 's' &&
     (!state.sessionsOpen ||
       state.sessionsCollapsed ||
@@ -503,6 +555,7 @@ export function beginDrag(axis: 'x' | 'y' | 's', pos: number): void {
   state.dragAxis = axis;
   state.dragStartFraction = state.paneFraction;
   state.dragStartHeight = state.terminalHeight;
+  state.dragStartReviewHeight = state.reviewTerminalHeight;
   state.dragStartSessionsWidth = state.sessionsWidth;
   state.dragLastX = pos;
   if (state.dragTimer) clearTimeout(state.dragTimer);
@@ -532,6 +585,14 @@ export function moveDrag(pos: number): void {
     const next = clampSessionsWidth(pos - RAIL_WIDTH, content.width);
     changed = next !== state.sessionsWidth;
     state.sessionsWidth = next;
+  } else if (state.dragAxis === 'r') {
+    // The strip is bottom-anchored in the pane: dragging up makes it taller.
+    // Clamp against the hosted rect before the strip, as computeBounds does.
+    const paneHeight =
+      computeBounds(content, { ...layoutState(), reviewTerminalOpen: false }).ghTab?.height ?? 0;
+    const next = clampReviewTerminalHeight(content.height - pos - SPLITTER_WIDTH / 2, paneHeight);
+    changed = next !== state.reviewTerminalHeight;
+    state.reviewTerminalHeight = next;
   } else {
     const next = clampTerminalHeight(
       content.height - pos - SPLITTER_WIDTH / 2,

@@ -205,6 +205,15 @@ describe('SETTINGS_PRESERVE_SPEC tracks the zod schema', () => {
     expect(touched.favorites).toEqual({ chromeProfile: 'Profile 1', future: 1 });
   });
 
+  it('an unknown review.future key survives the overlay', () => {
+    const raw = { review: { host: 'local', future: 7 } };
+    const { settings } = parseSettingsFile(raw);
+    expect((overlayKnown(raw, settings, SETTINGS_PRESERVE_SPEC) as Record<string, unknown>).review).toEqual({
+      host: 'local',
+      future: 7,
+    });
+  });
+
   it('a settings round-trip through the overlay keeps the file identical for a known file', () => {
     const settings = SettingsSchema.parse({ surface: 'local', claude: { model: 'opus' } });
     const raw = JSON.parse(JSON.stringify(settings));

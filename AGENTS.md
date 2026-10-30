@@ -128,6 +128,7 @@ variable that selects it.
 | `AGENT_WORKSPACE_TEST_CLAUDE_ACCOUNT_FILE` | test mode | Replaces `<dirname(configDir)>/.claude.json` as the account file (`oauthAccount {emailAddress, organizationName}` → `tests/fixtures/claude-account.json`). Local host only (a `;`-separated `local=path` pair is also accepted; bare path = default) — a WSL host's account file is the distro's own `<home>/.claude.json`, read by its helper (`usage.accounts`); specs stage a second account by writing it under `FAKE_WSL_ROOT`. |
 | `AGENT_WORKSPACE_TEST_CHROME_USER_DATA` | test mode | Replaces the Chrome user-data dir the favorites reader uses (`src/core/bookmarksReader.ts chromeUserDataDir`) — point it at a copy of `tests/fixtures/chrome-user-data` (`Local State` + `Default/Bookmarks` + `Profile 1/Bookmarks`); never the real Chrome profile. |
 | `AGENT_WORKSPACE_TEST_NOW` | test mode | ISO timestamp overriding the wall clock for the usage service (current month) and the panel's `testNow` static (gauge "resets in") — specs pin `2026-10-15T12:00:00Z`. |
+| `AGENT_WORKSPACE_TEST_REVIEWS_HOME` | test mode | Replaces the local home under which the Tab Review workspace `.agent-workspace/reviews` is created (`src/main/review/workspace.ts`); a WSL host uses `FAKE_WSL_ROOT` through the fake `mkdir -p -m`. |
 | `AGENT_WORKSPACE_PROBE_HOST` / `AGENT_WORKSPACE_HOST` | always (scripts) | `claude:sdk-probe --host wsl:<distro>` (flag or env) and `acp:contract` `AGENT_WORKSPACE_HOST=wsl:<distro>` route through `spawnSpec` + captured env against real WSL. |
 | `CLAUDE_CONFIG_DIR` | always | Claude home read by the Agent SDK (default `~/.claude`); the SDK also *writes* into it — tests always copy `tests/fixtures/claude-home`. |
 | `AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN` | always (set by the app) | Bearer token placed in claude-kind pty `extraEnv` and referenced from the injected `--settings` hooks block. |
@@ -212,6 +213,7 @@ variable that selects it.
   `settings-migrated {from:'hosts.defaultWslDistro'}` and re-saves once.
 - `openhands.{baseUrl, pollSeconds, maxLiveViews, keepAliveHours, collapsedRepos, sessionOrder}` (B1) — Settings → OpenHands; details, ids and the API key (not a setting) under "OpenHands".
 - `notifications.userId` (manual user-id override for service-user tokens; `''` = detect automatically).
+- `review.host` (`'local'` | `wsl:<distro>`, ≤200 chars, default `'local'`) — where tab reviews run (Settings → Claude Code `Run reviews on`, hidden on macOS); `layout.reviewTerminalHeight` (int 120..2000, default 260, px of the review strip); `notifications.kinds.review` (default true). See Claude integration → Tab review.
 - `routing.rules` (LinkRule `{id, kind: 'prefix'|'regex', pattern, enabled}`, max 100 — matched http(s) links open as GitHub-pane tabs; matcher in
   `src/core/linkRules.ts`, RouteKind `'rule'` ranks after github/tenant; gh-tab decisions reached via a rule log `rule-tab`/`rule-tab-background` with
   `{ruleId, ruleKind}` detail — never the pattern; the `clipboard-sanitized-write` permission extends to rule-owned origins).
@@ -734,6 +736,16 @@ variable that selects it.
 - Persisted `notifications.json` schema gained `source` (zod strips unknown keys — without it Claude entries died at reload and got `pruneForeign`d).
   Test hooks: `claudeRecordPr`, `claudePrs(id)`, `claudeRefreshPrStates`, `prTitlesSeed(url,{title,state})`.
 
+### Tab review
+- Right-click a PR tab in Linked Context → Review pull request / Re-run review / Show review terminal (`src/main/tabMenu.ts`; test mode describes items instead of popping — `tabMenuItems`/`tabMenuClick`). Controller `src/main/review/` (`controller.ts` `reviews()`, `host.ts`, `workspace.ts`, `open.ts`) over the pure `src/core/tabReview.ts` / `reviewScope.ts`; records are keyed by tab id (two scopes reviewing one PR are independent dots), tab close reconciled by `reviews().reconcileTabs(liveIds)` (`src/main/tabs.ts` is untouched — review state is overlaid in `window.ts publicState()`).
+- Start: `Reviews` workspace (label `Reviews`, index 0 of `claude.workspaces`) = `<home>/.agent-workspace/reviews`, created through `hosts().execOn` `mkdir -p -m 700` (never app `fs` on a remote path; `AGENT_WORKSPACE_TEST_REVIEWS_HOME` replaces the local home in test mode; `fakeHostRunner` emulates `mkdir -p -m` for the fake WSL/ssh side). Then a claude-kind pty in `terminalHost` with `mode:'review'` and the prompt `/cb:review <canonical PR url>`; `reviewGate` (set in `index.ts`: `isReview`, exit callbacks) routes pty exit by mode, and `LinkScanner`/`recordPr`/PR auto-open are skipped for review sessions (`isReview`) because the prompt contains the PR URL. On a `.cmd` shim (Windows npm claude) the multi-line prompt is flattened to one line. `host.ts` (chat host) refuses review session ids (chat guard) while `reviews().isRunning(id)` = status `reviewing` with a live pty; after a verdict the pty idles (claude still running) and opening the session (`claudeSessions().open`, a chat prompt, or a claude-kind terminal open via `reviewGate.releaseFinished`) first ends that pty (`reviews().releaseFinished`: `terminalHost.close(ptyId, {reclaim:false})`, reducer `exit`, strip collapses, `review-terminal {op:'release'}`).
+- Host: `review.host` resolves through `src/main/review/host.ts` (`resolveReviewHostPure`): a distro that is not listed/enabled refuses `distro-unavailable` (never a fallback to this PC); `fsReady` → go; enumerated `Stopped` → the review starts it (user action): `hosts().shellEnv(host, {explicit:true})` probes a distro never probed this run (home, claude path, hook reachability) and re-reads the table, then the explicit `mkdir` exec and the pty follow — no home afterwards or a failed mkdir refuses `distro-stopped`; a Running distro whose helper is not up refuses `helper-not-ready`.
+- Stop interception (`claude/hooks.ts`): a Stop for a review session id is handed to `reviews()` and accepted even with `claude.hooksEnabled` off (the id is known for the whole run); the generic notifications and `prUrls` handling are skipped for it. A `/clear` or `/resume` inside the pty changes `session_id`; later events under the new id are ignored and the exit backstop decides.
+- Verdict contract: the prompt asks for a final line `AW_REVIEW_VERDICT: approved|changes|discussion` (the prompt itself echoes the multi-value template — `parseVerdict` reads assistant text only and rejects it); fallback = the last assessment word (`via:'assessment'`). Sources in order: Stop payload `last_assistant_message`, then the transcript (`messagesOn`) read at the Stop and retried at 1 s / 3 s / 7 s when null, then the pty-exit backstop (verdict or status `ended`). A read failure logs `review-verdict-read-error` and carries on.
+- Layout: `reviewTerminal` / `reviewSplitter` rects from `computeBounds` (carved out of the pane's bottom; default 260, min 120, max 0.7 x pane height capped at 2000 (the schema max); splitter axis `'r'`); state maps through the shared `layoutStateFromState` (main) / `src/shell/layoutState.ts` (shell) so both sides agree; layout re-runs on every review strip state change.
+- Notifications: kind `review` (`reviewVerdict`, `scope` = the tab scope, itemKey `review:<pullRequestKey>` so a re-review supersedes; titles `Review: approved|changes requested|needs discussion`, body `owner/repo#n`), gated by `notifications.collect` and `notifications.kinds.review`. Opening one goes through `src/main/review/open.ts` (surface/session of the scope, opens the pane, activates the window).
+- Settings keys: `review.host`, `layout.reviewTerminalHeight`, `notifications.kinds.review` (see Settings keys) — run `npm run smoke:install` when these schemas change.
+
 ### Execution hosts (WSL) (landed Phase 8)
 - SSH hosts (P3, `src/main/sshHosts.ts`, owned by `HostsRegistry` — `list()`/`statuses()`/`fsReady`/`channel()`/`spawnOn`/`execOn`/
   `ptySpawnSpec`/`hostById`/`refresh`/`setEnabled` dispatch `ssh:` ids to it): `ssh:<alias>` for each enabled `hosts.ssh` entry; the alias is canonical
@@ -1061,6 +1073,8 @@ Provider `openhands` (B1): `kind:'cloud'` (hosted view + sidebar), `scopeFallbac
   user-visible feature, rail button, Settings field/tab, keyboard shortcut, persisted file in userData, or install/update step, update the matching
   README section (intro bullets, First run, Notifications and PR auto-open, Devin Local, Settings reference, Keyboard shortcuts, Where things live) in
   the same PR. AGENTS.md is for implementation notes; the README is for users — no ids, channel names or log events there.
+- A new notification kind or entry field must be added to the persisted zod schema (`src/core/notificationSchema.ts`) and covered by a round-trip unit test — zod strips unknown keys, so an unlisted field is lost at reload.
+- Any native context-menu item needs a test-mode described-items seam (`*MenuItems`/`*MenuClick`) before it can be e2e tested.
 - This file is CRLF — keep it that way.
 
 ## Test hooks
@@ -1112,6 +1126,9 @@ All are `__agentworkspace` hooks (test mode only; reachable from the installed s
 | `openhandsMenuItems()` / `openhandsMenuClick(id)` / `openhandsMutations()` | Described items of the open OpenHands native menu / click one (resolves the open `openhands:contextMenu` invoke → `{action}`) / recorded sidebar actions `{op,payload}` (`copy-id`, `open-in-browser`, `rename`, `delete`, `refresh`, `new-session`; ids only, never titles). |
 | `openhandsBaseUrl()` | The effective OpenHands base URL (`AGENT_WORKSPACE_TEST_OPENHANDS_URL_MAP`, then `_URL`, win over the setting). |
 | `openhandsUsageState()` / `openhandsUsageRefresh()` | `ShellState.usage.openhands` (all cards `pending` before a gate opened) / open the gate and run one usage pass (resolves when it finishes). Fixture `fixtures.openhands.setBody('credits'\|'quota'\|'usage'\|'me', body\|null)` replaces a 200 body (research shapes by default: credits `'12.34'`, quota 3/10, spend `4.2`, org `org-fixture`); `setStatus` works on the same endpoints. |
+| `tabMenuItems()` / `tabMenuClick(id)` | Described items of the open Linked Context tab menu (test mode describes instead of popping) / click one. |
+| `lastReviewRefusal()` | The reason of the most recent refused review start (`not-pr`/`running`/`distro-unavailable`/`distro-stopped`/`helper-not-ready`/`no-claude`/`spawn`), null before one. |
+| `reviewState(tabId)` / `reviewStart(tabId)` / `reviewPtyExit(tabId)` | The tab's active review record / start a review without the menu / close the review pty (its exit path — the fake pty never exits on its own). |
 
 ## Log events
 
@@ -1250,3 +1267,12 @@ Detail keys are ids/counts/durations/booleans only unless stated. Also carried: 
 | `claude-hooks-error` | Listener error. |
 | `claude-hooks-install` | `{enabled,changed,ok}`; a WSL host's (written by its helper's `hooks.apply`) also carries `host`; the channel-down opt-out adds `via:'one-shot'`. |
 | `host-hooks-off` | `{ host, ok, code }` — one `--apply-hooks-off` run of the deployed helper for a disabled-but-running distro (also one `host-exec` `kind:'exec'`). |
+| `review-start` | `{ tabId, sessionId, host }`. |
+| `review-refused` | `{ reason: not-pr\|running\|distro-unavailable\|distro-stopped\|helper-not-ready\|no-claude\|spawn }` — `distro-stopped` = a Stopped review distro could not be started (no home after the explicit probe, or the mkdir failed). |
+| `review-verdict` | `{ sessionId, verdict: approved\|changes\|discussion, via: marker\|assessment, ms }` (never the review text). |
+| `review-verdict-read-error` | `{ code }` — the transcript read failed; retries continue. |
+| `review-ended` | `{ sessionId, reason: exit\|closed\|tab-closed }` — review finished without a verdict (exit) or its strip/tab was closed. |
+| `review-workspace` | `{ host, created }` — the Reviews workspace ensured (path never logged). |
+| `review-terminal` | `{ tabId, op: show\|hide\|close\|release }` — `release` = a finished review's idle pty ended because its session was opened in chat or a terminal. |
+| `review-open` | `{ scope }` — a review notification opened its originating session. |
+| `tab-menu-error` | `{ action, code }` — a tab-menu action threw (error class name only). |

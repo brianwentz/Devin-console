@@ -26,6 +26,7 @@ import { prStore } from './prs';
 import { prTitles } from './prTitles';
 import { handleLink, loadInDevinView, routeContext } from './routing';
 import { claudeSessions } from './claude/sessions';
+import { openReviewNotification } from './review/open';
 import { claudeScope } from '../core/tabModel';
 import { state, testMode } from './state';
 import { installUpdate } from './updater';
@@ -54,6 +55,7 @@ function kindEnabled() {
     identity: true,
     auth: true,
     usage: k?.usage ?? true,
+    review: k?.review ?? true,
   };
 }
 
@@ -602,6 +604,12 @@ export function openNotification(id: string): void {
     refreshAnalyticsView();
     applyLayout();
     activateWindow('notification-open');
+    return;
+  }
+  // Review entries are source 'claude' but belong to the originating scope, so
+  // they must not reach the Claude dispatch below.
+  if (entry.kind === 'review') {
+    openReviewNotification(entry);
     return;
   }
   // Entries with no/unknown source keep the Devin default; a Claude entry

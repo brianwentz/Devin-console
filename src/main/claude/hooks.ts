@@ -25,6 +25,7 @@ import { hosts } from '../hosts';
 import { terminalHost } from '../local/terminalHost';
 import { hooksOffChannelDown, hooksOffDue, hooksOffFailed, type HooksOffBackoff } from '../../core/hooksOffBackoff';
 import type { ClaudeSessions } from './sessions';
+import { reviews } from '../review/controller';
 
 export class ClaudeHooks {
   private hookServer: ClaudeHookServer | null = null;
@@ -276,6 +277,9 @@ export class ClaudeHooks {
    */
   private accepts(e: ClaudeHookEvent): boolean {
     if (state.settings?.current.claude.hooksEnabled ?? false) return true;
+    // A review pty is app-launched like any claude pty; its id stays accepted
+    // for the run so a late Stop after exit is still filtered below.
+    if (reviews().isReviewSession(e.session_id)) return true;
     return terminalHost
       .list()
       .some((t) => t.kind === 'claude' && t.sessionId === e.session_id && t.exitCode === null);
@@ -292,6 +296,12 @@ export class ClaudeHooks {
     if (next !== this.activity) {
       this.activity = next;
       this.owner.emit();
+    }
+    // Review sessions: the verdict is their only notification, and the review
+    // prompt's PR URL must never be recorded or auto-opened.
+    if (reviews().isReviewSession(e.session_id)) {
+      if (e.event === 'Stop') void reviews().onStop(e.session_id, e);
+      return;
     }
     if (!(state.settings?.current.notifications.collect ?? true)) return;
     const kinds = state.settings?.current.notifications.kinds;

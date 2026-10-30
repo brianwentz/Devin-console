@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AppNotificationSchema } from '../../src/core/notificationSchema';
 import { NotificationSourceSchema } from '../../src/core/providers';
 import type { DevinSession } from '../../src/core/devinApi';
+import type { ReviewRecord } from '../../src/core/tabReview';
 import {
   addNotification,
   clearNotifications,
@@ -13,6 +14,7 @@ import {
   MAX_NOTIFICATIONS,
   pruneForeign,
   removeNotification,
+  reviewNotification,
   unreadCount,
   type AppNotification,
   type DeriveContext,
@@ -30,6 +32,7 @@ const ENABLED: Record<NotificationKind, boolean> = {
   update: true,
   identity: true,
   auth: true,
+  review: true,
 };
 const ctx = (over: Partial<DeriveContext> = {}): DeriveContext => ({
   enabled: ENABLED,
@@ -403,5 +406,67 @@ describe('openhands notification entries', () => {
     expect(parsed).toEqual([oh]);
     expect(parsed[0]?.source).toBe('openhands');
     expect(parsed[0]?.ownerUserId).toBeNull();
+  });
+});
+
+describe('review notification entries', () => {
+  const record: ReviewRecord = {
+    tabId: 't1',
+    sessionId: 'sess-r',
+    hostId: 'local',
+    ptyId: null,
+    prUrl: 'https://github.com/O/R/pull/1/files',
+    originScope: 'claude:abc',
+    status: 'reviewing',
+    startedAt: 1,
+    finishedAt: null,
+    terminalOpen: true,
+  };
+  const add = (list: AppNotification[], r: ReviewRecord, id: string) =>
+    addNotification(list, reviewNotification(r, 'approved', 5), id);
+
+  it('builds the exact entry for each verdict', () => {
+    const titles = {
+      approved: 'Review: approved',
+      changes: 'Review: changes requested',
+      discussion: 'Review: needs discussion',
+    } as const;
+    for (const verdict of ['approved', 'changes', 'discussion'] as const) {
+      expect(reviewNotification(record, verdict, 7)).toEqual({
+        kind: 'review',
+        source: 'claude',
+        ownerUserId: null,
+        sessionId: 'sess-r',
+        sessionTitle: 'O/R#1',
+        prUrl: 'https://github.com/O/R/pull/1',
+        scope: 'claude:abc',
+        reviewVerdict: verdict,
+        title: titles[verdict],
+        body: 'O/R#1',
+        createdAt: 7,
+      });
+    }
+  });
+  it('collapses PR url variants (case, /files) into one entry', () => {
+    const a = add([], { ...record, prUrl: 'https://github.com/O/R/pull/1' }, 'a');
+    const b = add(a, { ...record, prUrl: 'https://github.com/o/r/pull/1/files' }, 'b');
+    expect(b.map((n) => n.id)).toEqual(['b']);
+  });
+  it('keeps distinct PRs apart', () => {
+    const a = add([], record, 'a');
+    const b = add(a, { ...record, prUrl: 'https://github.com/O/R/pull/2' }, 'b');
+    expect(b).toHaveLength(2);
+  });
+  it('pruneForeign keeps review entries', () => {
+    const list = add([], record, 'a');
+    expect(pruneForeign(list, 'u1')).toEqual(list);
+    expect(pruneForeign(list, null)).toEqual(list);
+  });
+  it('round-trips through the persisted schema', () => {
+    const list = add([], record, 'a');
+    const parsed = AppNotificationSchema.array().parse(JSON.parse(JSON.stringify(list)));
+    expect(parsed).toEqual(list);
+    expect(parsed[0]?.reviewVerdict).toBe('approved');
+    expect(parsed[0]?.scope).toBe('claude:abc');
   });
 });

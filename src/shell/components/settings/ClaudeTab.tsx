@@ -9,6 +9,7 @@ import {
   WslDistroSelect,
   fieldInputClass,
 } from './fields';
+import { inputClass } from './styles';
 
 // Mirrors the Notifications-tab checkbox: not a draft field — it commits
 // immediately through setSettings, exactly like NotificationSettings does.
@@ -32,6 +33,33 @@ function HooksMirror() {
       </label>
       <span className="text-xs text-[#7f8ca0]">Also shown under Notifications.</span>
     </div>
+  );
+}
+
+// Tab Review runs its pty on this PC or inside a WSL distro; no WSL on macOS.
+function ReviewHostSelect({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const shell = useShellState();
+  const wslIds = (shell?.hosts ?? []).filter((host) => host.kind === 'wsl').map((host) => host.id);
+  // Keep a configured distro that is no longer enumerated selectable.
+  if (value.startsWith('wsl:') && !wslIds.includes(value)) wslIds.push(value);
+  if (window.agentworkspace.platform === 'darwin') return null;
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-[#aeb9c8]">Run reviews on</span>
+      <select
+        id="reviewHostSelect"
+        className={inputClass}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="local">This PC</option>
+        {wslIds.map((id) => (
+          <option key={id} value={id}>
+            {id.slice('wsl:'.length)}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -153,6 +181,7 @@ export function ClaudeTab() {
         value={draft.claudeDefaultWslDistro}
         onChange={(next) => updateDraft({ claudeDefaultWslDistro: next })}
       />
+      <ReviewHostSelect value={draft.reviewHost} onChange={(next) => updateDraft({ reviewHost: next })} />
       <PickerFolderField
         id="claudePickerFolderInput"
         browseId="claudePickerFolderBrowse"

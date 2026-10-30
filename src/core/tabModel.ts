@@ -96,6 +96,11 @@ export const emptyTabState = (): TabState => ({
   lastSeenByScope: {},
 });
 
+// `/owner/repo/pull/N` path of a GitHub PR URL (sub-paths allowed). Owner and
+// repo are limited to GitHub's name characters — never `%`, which cmd.exe
+// would expand in a review prompt passed through a `.cmd` shim.
+export const PULL_REQUEST_PATH = /^\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)(?:\/|$)/;
+
 // `owner/repo/pull/N` identity of a GitHub PR URL, ignoring sub-paths (/files,
 // /commits, ...), query and hash. Null for anything else.
 export function pullRequestKey(rawUrl: string): string | null {
@@ -105,7 +110,7 @@ export function pullRequestKey(rawUrl: string): string | null {
   } catch {
     return null;
   }
-  const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/.exec(url.pathname);
+  const match = PULL_REQUEST_PATH.exec(url.pathname);
   if (!match) return null;
   const host = url.host.toLowerCase().replace(/\.$/, '');
   return `${host}/${match[1]}/${match[2]}/pull/${match[3]}`.toLowerCase();
