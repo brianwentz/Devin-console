@@ -59,7 +59,7 @@ class ReviewController {
   // Devin reviews: the pty-output scanner and its quiescence timer, by session id.
   private readonly scanners = new Map<string, ReviewOutputScanner>();
   private readonly quietTimers = new Map<string, NodeJS.Timeout>();
-  // Resolvers of releaseFinishedInWorkspace, by session id — fired on pty exit.
+  // Resolvers of releaseFinishedInWorkspace, by session id â€” fired on pty exit.
   private readonly exitWaiters = new Map<string, () => void>();
   private disposed = false;
 
@@ -291,7 +291,7 @@ class ReviewController {
   }
 
   /**
-   * Devin reviews: the CLI picks its own session id, so it is unknown here —
+   * Devin reviews: the CLI picks its own session id, so it is unknown here â€”
    * loading any session in the review workspace first releases the finished
    * reviews' idle ptys there. Resolves once each pty has exited (3 s cap total).
    */

@@ -193,10 +193,16 @@ export function setupLocal(): void {
   );
   handleResult(IpcChannels.localSessionLoad, LocalSessionLoadArg, async ({ workspace, sessionId }) => {
     // A finished Devin review's idle pty still holds the CLI's per-session lock,
-    // and its session id is unknown to us — so any load in that workspace
+    // and its session id is unknown to us â€” so any load in that workspace
     // releases the finished ones first. A running review is left alone: it is
     // still working, and loading its own session hits the usual session_locked path.
-    await reviews().releaseFinishedInWorkspace(normalizeWorkspacePath(workspace, resolve, { existing: true }));
+    let normalized: string | null = null;
+    try {
+      normalized = normalizeWorkspacePath(workspace, resolve, { existing: true });
+    } catch {
+      // Malformed payload: skip the release; loadSession fails exactly as before.
+    }
+    if (normalized !== null) await reviews().releaseFinishedInWorkspace(normalized);
     await requireHost().loadSession(workspace, sessionId);
     return null;
   });
