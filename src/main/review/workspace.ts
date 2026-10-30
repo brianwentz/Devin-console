@@ -5,7 +5,7 @@
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { normalizeWorkspacePath, toWindowsPath, type HostId } from '../../core/execHost';
+import { hostIdForPath, normalizeWorkspacePath, toWindowsPath, type HostId } from '../../core/execHost';
 import { reviewCwdMatchesHost } from '../../core/reviewSettings';
 import { reviewsDirFor } from '../../core/tabReview';
 import { hosts } from '../hosts';
@@ -19,6 +19,21 @@ export type ReviewsWorkspaceResult =
 
 const REVIEWS_LABEL = 'Reviews';
 const MKDIR_TIMEOUT_MS = 10_000;
+
+/** execFile rejected because the command ran and exited non-zero (not a
+ * spawn error, which has a string code, nor a timeout kill). */
+function exitedNonZero(error: unknown): boolean {
+  const e = error as { code?: unknown; killed?: boolean } | null;
+  return typeof e?.code === 'number' && e.code !== 0 && !e.killed;
+}
+
+/** A listed workspace that is the same folder: local paths compare
+ * case-insensitively (win32 semantics, as workspaceTree does); others verbatim. */
+function listedAs(list: readonly string[], path: string): string | undefined {
+  if (hostIdForPath(path) !== 'local') return list.find((p) => p === path);
+  const key = path.toLowerCase();
+  return list.find((p) => hostIdForPath(p) === 'local' && p.toLowerCase() === key);
+}
 
 export async function ensureReviewWorkspace(
   hostId: HostId,
@@ -35,12 +50,24 @@ export async function ensureReviewWorkspace(
       cwd = customCwd;
       if (hostId === 'local') {
         workspacePath = cwd;
+        if (!(await hosts().pathExists(workspacePath))) return { ok: false, reason: 'cwd-missing' };
       } else {
         const host = hosts().hostById(hostId);
         if (!host || host.kind === 'local') return { ok: false, reason: 'not-probed' };
         workspacePath = toWindowsPath(host, cwd);
+        // An explicit exec like the default folder's mkdir, not pathExists: a
+        // distro the controller just started has no ready helper channel yet.
+        try {
+          await hosts().execOn(
+            host,
+            { file: 'test', args: ['-d', cwd], cwd: host.home ?? '/' },
+            MKDIR_TIMEOUT_MS,
+            { explicit: true },
+          );
+        } catch (error) {
+          return { ok: false, reason: exitedNonZero(error) ? 'cwd-missing' : 'io' };
+        }
       }
-      if (!(await hosts().pathExists(workspacePath))) return { ok: false, reason: 'cwd-missing' };
     } else if (hostId === 'local') {
       const home = (testMode && process.env.AGENT_WORKSPACE_TEST_REVIEWS_HOME?.trim()) || homedir();
       cwd = reviewsDirFor(home, process.platform === 'win32' ? 'win32' : 'posix');
@@ -62,17 +89,20 @@ export async function ensureReviewWorkspace(
     return { ok: false, reason: 'io' };
   }
 
-  const normalized = normalizeWorkspacePath(workspacePath, resolve);
+  let normalized = normalizeWorkspacePath(workspacePath, resolve);
   let created: boolean;
   if (agent === 'devin') {
     const settings = state.settings?.current;
-    created = !(settings?.workspaces ?? []).includes(normalized);
-    if (created) {
+    const listed = listedAs(settings?.workspaces ?? [], normalized);
+    created = listed === undefined;
+    if (listed !== undefined) {
+      normalized = listed;
+    } else {
       const devin = localHost();
       if (!devin) return { ok: false, reason: 'io' };
       try {
         // Persists settings.workspaces and syncs the Devin Local roster.
-        devin.addWorkspace(normalized);
+        normalized = devin.addWorkspace(normalized);
       } catch {
         return { ok: false, reason: 'io' };
       }
@@ -83,7 +113,9 @@ export async function ensureReviewWorkspace(
   } else {
     const claude = state.settings?.current.claude;
     const current = claude?.workspaces ?? [];
-    created = !current.includes(normalized);
+    const listed = listedAs(current, normalized);
+    created = listed === undefined;
+    if (listed !== undefined) normalized = listed;
     if (created) {
       state.settings?.merge({
         claude: {

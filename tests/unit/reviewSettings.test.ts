@@ -9,6 +9,16 @@ describe('isValidReviewCommand', () => {
     expect(isValidReviewCommand('{github-url}' + 'a'.repeat(489))).toBe(false);
     expect(isValidReviewCommand('{github-url}' + 'a'.repeat(488))).toBe(true);
   });
+
+  it('rejects cmd.exe-unsafe " and %, and a leading - (read as a CLI flag)', () => {
+    expect(isValidReviewCommand('/cb:review {github-url} focus on "auth')).toBe(false);
+    expect(isValidReviewCommand('/cb:review "{github-url}"')).toBe(false);
+    expect(isValidReviewCommand('/cb:review {github-url} %PATH%')).toBe(false);
+    expect(isValidReviewCommand('--foo {github-url}')).toBe(false);
+    expect(isValidReviewCommand('  -x {github-url}')).toBe(false);
+    expect(isValidReviewCommand('/cb:review {github-url} --strict')).toBe(true);
+    expect(isValidReviewCommand("/cb:review {github-url} focus on 'auth'")).toBe(true);
+  });
 });
 
 describe('reviewCwdMatchesHost', () => {

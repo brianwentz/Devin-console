@@ -74,7 +74,7 @@ export function ReviewSection() {
           }
         >
           <option value="claude">Claude Code</option>
-          <option value="devin">Devin</option>
+          <option value="devin">Devin Local</option>
         </select>
       </label>
       <label className="flex flex-col gap-1 text-sm">
@@ -88,7 +88,7 @@ export function ReviewSection() {
         />
         <FieldError inputId="reviewCommandInput" message={errors.reviewCommand} />
         <span id="reviewCommandHint" className="text-xs text-[#7f8ca0]">
-          Slash commands must exist in the chosen agent
+          Slash commands must exist in the chosen agent. Don't start with - or use " or %.
         </span>
         {previewable && (
           <span id="reviewCommandPreview" className="whitespace-pre-wrap text-xs text-[#7f8ca0]">

@@ -40,8 +40,9 @@ import { ensureReviewWorkspace } from './workspace';
 
 export type ReviewStartResult = { ok: true } | { ok: false; reason: ReviewRefusalReason };
 
-/** A Devin verdict settles once the pty has been quiet this long after a
- * committed marker (the TUI may still redraw — the last marker wins). */
+/** A Devin verdict settles this long after the last output chunk that commits
+ * a verdict line — only such chunks re-arm the timer, other output does not
+ * (the TUI may still redraw the line — the last marker wins). */
 const PTY_VERDICT_QUIET_MS = 2000;
 
 /** Upper bound on waiting for released review ptys to exit before a load. */

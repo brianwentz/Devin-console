@@ -765,6 +765,14 @@ describe('review draft fields', () => {
     }
   });
 
+  it('rejects a command with " or %, or starting with -, and says so', () => {
+    for (const reviewCommand of ['/a "{github-url}"', '/a {github-url} %X%', '-a {github-url}']) {
+      const r = validateDraft(draft({ reviewCommand }));
+      expect(!r.ok && r.errors.reviewCommand).toContain("not start with '-'");
+      expect(!r.ok && r.errors.reviewCommand).toContain('" or %');
+    }
+  });
+
   it('commits an empty cwd as null and a path as itself', () => {
     const empty = validateDraft(draft({ reviewCwd: '' }));
     expect(empty.ok && empty.patch.review?.cwd).toBeNull();

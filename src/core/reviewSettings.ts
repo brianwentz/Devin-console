@@ -20,13 +20,19 @@ export const DEVIN_CLI_PERMISSION_MODES = [
 
 export type DevinCliPermissionMode = (typeof DEVIN_CLI_PERMISSION_MODES)[number]['id'];
 
-/** 1..500 chars, contains the URL token, single line. */
+/**
+ * 1..500 chars, contains the URL token, single line. No `"` or `%`: on a
+ * `.cmd`/`.bat` shim cmd.exe re-parses the command line, where node-pty's `\"`
+ * escape ends the quoted region early and `%VAR%` expands even inside quotes.
+ * No leading `-`: the prompt would be read as a CLI flag.
+ */
 export function isValidReviewCommand(value: string): boolean {
   return (
     value.length >= 1 &&
     value.length <= MAX_REVIEW_COMMAND_LENGTH &&
     value.includes(REVIEW_URL_TOKEN) &&
-    !/[\r\n]/.test(value)
+    !/[\r\n"%]/.test(value) &&
+    !value.trimStart().startsWith('-')
   );
 }
 

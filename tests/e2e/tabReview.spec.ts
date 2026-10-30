@@ -913,6 +913,37 @@ test('9. WSL host: a Stopped review distro is started by the review', async () =
   }
 });
 
+test('9b. WSL host: an existing custom cwd on a Stopped distro is found (no false cwd-missing)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-review-wsl-stopped-cwd-'));
+  const distros = join(root, 'distros.txt');
+  writeFileSync(distros, 'Fake:Stopped:default');
+  mkdirSync(join(root, 'home', 'u', 'proj'), { recursive: true });
+  const ctx = await launchReviewApp({
+    FAKE_WSL_DISTROS_FILE: distros,
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '300',
+  });
+  const { app } = ctx;
+  const HOST = 'wsl:Fake';
+  try {
+    await expect
+      .poll(async () => (await call<{ state: string } | null>(app, 'hostStatus', HOST))?.state, { timeout: 30_000 })
+      .toBe('stopped');
+    await setSettings(app, { review: { host: HOST, cwd: '/home/u/proj' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.cwd).toBe('/home/u/proj');
+    await toGlobalScope(app);
+    const tab = await openTab(app, prUrl(162));
+    writeFileSync(distros, 'Fake:Running:default');
+    const record = await startReview(app, tab);
+    expect(record.hostId).toBe(HOST);
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('--cd /home/u/proj');
+    expect((await readEvents(ctx.logFile)).some((e) => e.event === 'review-refused')).toBe(false);
+    expect(await call<number>(app, 'remoteFsViolations')).toBe(0);
+  } finally {
+    await closeApp(ctx.app);
+  }
+});
+
 // --- 10. Devin review: a finished review's idle pty is released before a session
 // in the Reviews workspace loads; a running review is left alone.
 for (const finished of [true, false]) {

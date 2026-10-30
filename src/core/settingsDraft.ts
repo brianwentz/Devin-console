@@ -69,7 +69,7 @@ export interface SettingsDraft {
   // 'local' or 'wsl:<distro>' — where Tab Review ptys run.
   reviewHost: string;
   reviewAgent: 'claude' | 'devin';
-  // Single line containing the {github-url} token.
+  // Single line containing the {github-url} token; no `"`/`%`, no leading `-`.
   reviewCommand: string;
   reviewClaudeMode: ClaudePermissionMode;
   reviewDevinMode: DevinCliPermissionMode;
@@ -343,7 +343,7 @@ export function validateDraft(
     errors.claudePickerFolder = 'Enter an absolute folder path';
   }
   if (!isValidReviewCommand(draft.reviewCommand)) {
-    errors.reviewCommand = `Enter a single-line command (up to 500 characters) containing ${REVIEW_URL_TOKEN}`;
+    errors.reviewCommand = `Enter a single-line command (up to 500 characters) containing ${REVIEW_URL_TOKEN} that does not start with '-' and does not use " or %`;
   }
   const reviewCwd = draft.reviewCwd.trim();
   if (reviewCwd) {

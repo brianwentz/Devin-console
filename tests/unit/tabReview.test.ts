@@ -360,13 +360,13 @@ describe('reviewPromptArg', () => {
 
 describe('reviewRefusalText', () => {
   it('names the host for a missing Devin CLI', () => {
-    expect(reviewRefusalText('no-devin', 'Ubuntu')).toBe('Devin CLI not found on Ubuntu');
-    expect(reviewRefusalText('no-devin', null)).toBe('Devin CLI not found on this PC');
+    expect(reviewRefusalText('no-devin', 'Ubuntu')).toBe('Devin CLI not found on Ubuntu.');
+    expect(reviewRefusalText('no-devin', null)).toBe('Devin CLI not found on this PC.');
   });
 
   it('reports a missing review folder', () => {
-    expect(reviewRefusalText('cwd-missing', 'Ubuntu')).toBe('Review folder not found');
-    expect(reviewRefusalText('cwd-missing', null)).toBe('Review folder not found');
+    expect(reviewRefusalText('cwd-missing', 'Ubuntu')).toBe('Review folder not found.');
+    expect(reviewRefusalText('cwd-missing', null)).toBe('Review folder not found.');
   });
 
   it('keeps the existing texts', () => {

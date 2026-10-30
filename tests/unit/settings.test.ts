@@ -836,6 +836,15 @@ describe('review agent settings', () => {
     });
   });
 
+  it('drops a command with a quote, keeping the raw value', () => {
+    const raw = { review: { command: '/x "{github-url}"' } };
+    const { settings, dropped, invalid } = parseSettingsFile(raw);
+    expect(settings.review.command).toBe('/cb:review {github-url}');
+    expect(dropped).toContain('review.command');
+    const out = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect((out.review as { command: string }).command).toBe('/x "{github-url}"');
+  });
+
   it('drops an unknown devin mode', () => {
     const r = parseSettingsFile({ review: { devinMode: 'plan' } });
     expect(r.dropped).toContain('review.devinMode');

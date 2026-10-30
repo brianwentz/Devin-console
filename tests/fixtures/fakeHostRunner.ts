@@ -44,13 +44,14 @@
 //                                 $FAKE_CLAUDE_AGENTS
 //   /usr/bin/printf '%s\n' args…  one arg per line (hosts:probe argv round-trip)
 //   mkdir -p [-m mode] <dir>      creates <root><dir> (the Tab Review workspace)
+//   test -d <dir>                 exit 0 iff <root><dir> is a directory (review cwd)
 //   curl … %{http_code}           canned: 200 only when FAKE_WSL_HOOKS=ok;
 //                                 `realCurl` (ssh): a real GET of the URL
 //   */claude …                    --version → a canned string; agents --json
 //                                 → $FAKE_CLAUDE_AGENTS; other argv → echo
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const STAY_ALIVE = -1; // process keeps running until killed
@@ -425,6 +426,12 @@ export function createRunner(cfg: RunnerConfig) {
       const dirs = tail.filter((arg, i) => !arg.startsWith('-') && tail[i - 1] !== '-m');
       for (const dir of dirs) mkdirSync(dir.startsWith('/') ? linuxFile(dir) : join(cwd, dir), { recursive: true });
       return 0;
+    }
+    // `test -d <dir>` — the Tab Review custom-cwd existence check.
+    if ((file === 'test' || file.endsWith('/test')) && tail[0] === '-d' && tail.length === 2) {
+      const dir = tail[1]!;
+      const local = dir.startsWith('/') ? linuxFile(dir) : join(cwd, dir);
+      return existsSync(local) && statSync(local).isDirectory() ? 0 : 1;
     }
     // `/usr/bin/printf '%s\n' args…` — the hosts:probe argv round-trip.
     if (file.endsWith('/printf') && tail[0] === '%s\\n') {

@@ -385,6 +385,13 @@ test('Linked Context tab hosts the pull request review section', async () => {
       'Slash commands must exist in the chosen agent',
     );
 
+    expect(
+      await shell(
+        app,
+        `[...document.getElementById('reviewAgentSelect').options].map((o) => o.textContent).join('|')`,
+      ),
+    ).toBe('Claude Code|Devin Local');
+
     // Each agent keeps its own mode.
     expect(await val('reviewAgentSelect')).toBe('claude');
     expect(await optionValues('reviewModeSelect')).toEqual([...CLAUDE_PERMISSION_MODES]);
@@ -405,6 +412,13 @@ test('Linked Context tab hosts the pull request review section', async () => {
     expect(
       await shell(app, `document.getElementById('reviewCommandInput').getAttribute('aria-invalid')`),
     ).toBe('true');
+    expect(await selectedTab(app)).toBe('links');
+    // A quote is refused too (cmd.exe shims re-parse the command line).
+    expect(await setInputValue(app, 'reviewCommandInput', '/x "{github-url}"')).toBe(true);
+    await clickTab(app, 'notifications');
+    await expect
+      .poll(async () => shell(app, `document.getElementById('reviewCommandInputError')?.textContent`))
+      .toContain('" or %');
     expect(await selectedTab(app)).toBe('links');
 
     expect(await setInputValue(app, 'reviewCommandInput', '/x {github-url}')).toBe(true);

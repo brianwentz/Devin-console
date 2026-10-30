@@ -97,12 +97,42 @@ describe('ensureReviewWorkspace', () => {
     expect(mocks.pathExists).not.toHaveBeenCalled();
   });
 
-  it('wsl custom cwd checks existence on the UNC form via pathExists', async () => {
+  it('wsl custom cwd checks existence with an explicit `test -d` exec (works on a just-started distro)', async () => {
     const res = await ensureReviewWorkspace('wsl:Ubuntu', 'claude', '/home/u/proj');
     expect(res.ok).toBe(true);
-    expect(mocks.pathExists).toHaveBeenCalledTimes(1);
-    expect(String(mocks.pathExists.mock.calls[0]![0])).toMatch(/^\\\\wsl\.localhost\\Ubuntu\\/);
-    expect(mocks.execOn).not.toHaveBeenCalled();
+    expect(res.ok && res.workspacePath).toMatch(/^\\\\wsl\.localhost\\Ubuntu\\/);
+    expect(mocks.pathExists).not.toHaveBeenCalled();
+    expect(mocks.execOn).toHaveBeenCalledTimes(1);
+    expect(mocks.execOn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'wsl:Ubuntu' }),
+      { file: 'test', args: ['-d', '/home/u/proj'], cwd: '/home/u' },
+      expect.any(Number),
+      { explicit: true },
+    );
+  });
+
+  it('wsl custom cwd: non-zero exit -> cwd-missing, spawn/timeout error -> io', async () => {
+    mocks.execOn.mockRejectedValueOnce(Object.assign(new Error('Command failed'), { code: 1 }));
+    expect(await ensureReviewWorkspace('wsl:Ubuntu', 'claude', '/home/u/nope')).toEqual({ ok: false, reason: 'cwd-missing' });
+    mocks.execOn.mockRejectedValueOnce(Object.assign(new Error('spawn'), { code: 'ENOENT' }));
+    expect(await ensureReviewWorkspace('wsl:Ubuntu', 'claude', '/home/u/x')).toEqual({ ok: false, reason: 'io' });
+    mocks.execOn.mockRejectedValueOnce(
+      Object.assign(new Error('timeout'), { code: null, killed: true, signal: 'SIGTERM' }),
+    );
+    expect(await ensureReviewWorkspace('wsl:Ubuntu', 'claude', '/home/u/x')).toEqual({ ok: false, reason: 'io' });
+    expect(mocks.merge).not.toHaveBeenCalled();
+  });
+
+  it('a local folder already listed with different case is not pinned again', async () => {
+    const listed = CWD.toUpperCase();
+    mocks.current.claude.workspaces = [listed];
+    mocks.current.workspaces = [listed];
+    const claude = await ensureReviewWorkspace('local', 'claude', CWD);
+    expect(claude).toMatchObject({ ok: true, created: false, workspacePath: listed });
+    const devin = await ensureReviewWorkspace('local', 'devin', CWD);
+    expect(devin).toMatchObject({ ok: true, created: false, workspacePath: listed });
+    expect(mocks.merge).not.toHaveBeenCalled();
+    expect(mocks.addWorkspace).not.toHaveBeenCalled();
   });
 
   it('already pinned -> created:false, no pin writes', async () => {
