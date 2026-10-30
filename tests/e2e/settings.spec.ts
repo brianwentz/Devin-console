@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
+import { CLAUDE_PERMISSION_MODES } from '../../src/core/settingsDraft';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
   evaluateInShell,
@@ -72,10 +73,10 @@ test('settings has eight tabs and switches panels', async () => {
         app,
         `[...document.querySelectorAll('#settingsTabs [role="tab"]')].map((el) => el.textContent).join('|')`,
       ),
-    ).toBe('General|Devin|Claude Code|OpenHands|Link Handling|Passwords|Notifications|Updates');
+    ).toBe('General|Devin|Claude Code|OpenHands|Linked Context|Passwords|Notifications|Updates');
     expect(await selectedTab(app)).toBe('general');
     // General keeps the hosts, sessions column and shell rows; the GitHub tab
-    // pool moved to Link Handling and the Cloud rows to Devin.
+    // pool moved to Linked Context and the Cloud rows to Devin.
     await expect.poll(async () => hasEl(app, 'terminalShellInput')).toBe(true);
     expect(await hasEl(app, 'keepAliveInput')).toBe(false);
     expect(await hasEl(app, 'tenantUrlInput')).toBe(false);
@@ -121,7 +122,7 @@ test('settings has eight tabs and switches panels', async () => {
 });
 
 // Each moved field lives in its section; devin-cloud renders before devin-local.
-test('moved fields sit in their Devin and Link Handling sections', async () => {
+test('moved fields sit in their Devin and Linked Context sections', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile, { FAKE_WSL_DISTROS: 'Fake:Running:default' });
@@ -311,7 +312,7 @@ test('a validation failure blocks leaving Settings via the rail', async () => {
       .toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect((await state(app)).surface).toBe('settings');
-    // The error routes to Link Handling (DRAFT_TAB.maxLiveTabs === 'links').
+    // The error routes to Linked Context (DRAFT_TAB.maxLiveTabs === 'links').
     expect(await selectedTab(app)).toBe('links');
     expect(
       await shell(app, `document.getElementById('maxLiveTabsInput')?.getAttribute('aria-invalid')`),
@@ -348,7 +349,100 @@ test('an invalid user id routes the error to the Devin tab', async () => {
   }
 });
 
-test('the PR auto-open checkbox on Link Handling saves instantly', async () => {
+test('Linked Context tab hosts the pull request review section', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launch(profile, logFile, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    AGENT_WORKSPACE_TEST_PICKER_CANCEL: '1',
+  });
+  const optionValues = (id: string) =>
+    shell(app, `[...document.querySelectorAll('#${id} option')].map((o) => o.value)`);
+  const val = (id: string) => shell(app, `document.getElementById('${id}')?.value`);
+  try {
+    await expect
+      .poll(async () => (await state(app)).hosts.some((h) => h.id === 'wsl:Fake'), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.setSurface('settings'));
+    await clickTab(app, 'claude');
+    await expect.poll(async () => hasEl(app, 'claudePathInput')).toBe(true);
+    expect(
+      await shell(app, `document.querySelectorAll('#settingsPanel-claude #reviewHostSelect').length`),
+    ).toBe(0);
+
+    await clickTab(app, 'links');
+    await expect
+      .poll(async () =>
+        shell(
+          app,
+          `Boolean(document.querySelector('[data-settings-section="links-review"] #reviewHostSelect'))`,
+        ),
+      )
+      .toBe(true);
+    expect(await shell(app, `document.getElementById('reviewCommandHint').textContent`)).toContain(
+      'Slash commands must exist in the chosen agent',
+    );
+
+    // Each agent keeps its own mode.
+    expect(await val('reviewAgentSelect')).toBe('claude');
+    expect(await optionValues('reviewModeSelect')).toEqual([...CLAUDE_PERMISSION_MODES]);
+    expect(await setSelectValue(app, 'reviewModeSelect', 'plan')).toBe(true);
+    expect(await setSelectValue(app, 'reviewAgentSelect', 'devin')).toBe(true);
+    await expect
+      .poll(async () => optionValues('reviewModeSelect'))
+      .toEqual(['auto', 'accept-edits', 'smart', 'dangerous']);
+    expect(await val('reviewModeSelect')).toBe('auto');
+    expect(await setSelectValue(app, 'reviewModeSelect', 'smart')).toBe(true);
+    expect(await setSelectValue(app, 'reviewAgentSelect', 'claude')).toBe(true);
+    await expect.poll(async () => val('reviewModeSelect')).toBe('plan');
+
+    // An invalid command refuses the tab switch and shows the error.
+    expect(await setInputValue(app, 'reviewCommandInput', '/x')).toBe(true);
+    await clickTab(app, 'notifications');
+    await expect.poll(async () => hasEl(app, 'reviewCommandInputError')).toBe(true);
+    expect(
+      await shell(app, `document.getElementById('reviewCommandInput').getAttribute('aria-invalid')`),
+    ).toBe('true');
+    expect(await selectedTab(app)).toBe('links');
+
+    expect(await setInputValue(app, 'reviewCommandInput', '/x {github-url}')).toBe(true);
+    await expect
+      .poll(async () => shell(app, `document.getElementById('reviewCommandPreview')?.textContent`))
+      .toContain('/x https://github.com/owner/repo/pull/1');
+    expect(await shell(app, `document.getElementById('reviewCommandPreview').textContent`)).toContain(
+      'AW_REVIEW_VERDICT',
+    );
+    expect(await setSelectValue(app, 'reviewAgentSelect', 'devin')).toBe(true);
+
+    // Browse only for the local host; its dialog goes through the shared seam.
+    expect(await hasEl(app, 'reviewCwdBrowse')).toBe(true);
+    await shell(app, `document.getElementById('reviewCwdBrowse').click()`);
+    await expect
+      .poll(async () =>
+        app.evaluate(() => (globalThis as any).__agentworkspace.lastOpenDialogOptions()),
+      )
+      .not.toBeNull();
+    expect(await setSelectValue(app, 'reviewHostSelect', 'wsl:Fake')).toBe(true);
+    await expect.poll(async () => hasEl(app, 'reviewCwdBrowse')).toBe(false);
+    expect(await setSelectValue(app, 'reviewHostSelect', 'local')).toBe(true);
+    await expect.poll(async () => hasEl(app, 'reviewCwdBrowse')).toBe(true);
+
+    // Commit persists.
+    await clickTab(app, 'notifications');
+    await expect.poll(async () => selectedTab(app)).toBe('notifications');
+    await expect
+      .poll(
+        () => (JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) as { review?: unknown }).review,
+      )
+      .toMatchObject({ agent: 'devin', command: '/x {github-url}', devinMode: 'smart', claudeMode: 'plan' });
+  } finally {
+    await quit(app, profile);
+  }
+});
+
+test('the PR auto-open checkbox on Linked Context saves instantly', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-settings-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);

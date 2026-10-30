@@ -5,6 +5,7 @@ import type { FavoritesProfilesReply, LinkRule } from '../../../shared/ipc';
 import { updateDraft, useSettingsDraft } from '../../settingsDraft';
 import { useShellState } from '../../store';
 import { FieldError, fieldInputClass } from './fields';
+import { ReviewSection } from './ReviewSection';
 import {
   errorTextClass,
   inputClass,
@@ -230,7 +231,7 @@ export function LinksTab() {
         data-settings-section="links-linked-context"
         className={`flex flex-col gap-5 ${sectionSeparatorClass}`}
       >
-        <h3 className={sectionHeadingClass}>Linked Context</h3>
+        <h3 className={sectionHeadingClass}>Tabs</h3>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-[#aeb9c8]">
             Keep hidden GitHub tabs live for (hours, 0 = discard on switch)
@@ -280,6 +281,7 @@ export function LinksTab() {
           <span>Open a tab when a session creates a PR</span>
         </label>
       </section>
+      <ReviewSection />
       <FavoritesSection value={draft.favoritesChromeProfile} error={errors.favoritesChromeProfile} />
     </div>
   );
