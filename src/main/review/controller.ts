@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { ClaudeHookEvent } from '../../core/claudeActivity';
 import type { HostId } from '../../core/execHost';
 import { reviewNotification } from '../../core/notificationModel';
+import { DEFAULT_REVIEW_COMMAND } from '../../core/reviewSettings';
 import { scopeOf } from '../../core/tabModel';
 import {
   buildReviewPrompt,
@@ -89,6 +90,8 @@ class ReviewController {
         tabId,
         sessionId,
         hostId: host.hostId,
+        agent: 'claude',
+        workspacePath: workspace.workspacePath,
         ptyId: null,
         prUrl,
         originScope: scopeOf(tab),
@@ -108,7 +111,7 @@ class ReviewController {
         extraArgs: [
           ...(injection?.extraArgs ?? []),
           reviewPromptArg(
-            buildReviewPrompt(prUrl),
+            buildReviewPrompt(DEFAULT_REVIEW_COMMAND, prUrl),
             host.hostId === 'local' ? claudeSessions().claudeCliPath() : null,
           ),
         ],

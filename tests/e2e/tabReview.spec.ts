@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
+import { DEFAULT_REVIEW_COMMAND } from '../../src/core/reviewSettings';
 import { buildReviewPrompt } from '../../src/core/tabReview';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
@@ -259,7 +260,7 @@ test.describe('tab review (local host)', () => {
   });
 
   const local = (sessionId: string, text: string | null, url: string) =>
-    writeTranscript(join(ctx.claudeHome, 'projects'), reviewsDir, sessionId, buildReviewPrompt(url), text);
+    writeTranscript(join(ctx.claudeHome, 'projects'), reviewsDir, sessionId, buildReviewPrompt(DEFAULT_REVIEW_COMMAND, url), text);
 
   test('1. menu: enabled for a PR, disabled otherwise, no-claude refusal spawns nothing', async () => {
     const { app } = ctx;
@@ -831,7 +832,7 @@ test('8. WSL host: workspace in the distro, --cd, verdict over the channel, hook
       join(root, 'home', 'u', '.claude', 'projects'),
       LINUX_REVIEWS,
       record.sessionId,
-      buildReviewPrompt(url),
+      buildReviewPrompt(DEFAULT_REVIEW_COMMAND, url),
       'Reviewed in the distro.\nAW_REVIEW_VERDICT: approved',
     );
     await postHook(app, 'Stop', { session_id: record.sessionId });

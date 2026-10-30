@@ -1,5 +1,6 @@
 import { posix, win32 } from 'node:path';
 import type { HostId } from './execHost';
+import { REVIEW_URL_TOKEN } from './reviewSettings';
 import { PULL_REQUEST_PATH, pullRequestKey } from './tabModel';
 
 export type ReviewVerdict = 'approved' | 'changes' | 'discussion';
@@ -9,6 +10,9 @@ export interface ReviewRecord {
   tabId: string;
   sessionId: string;
   hostId: HostId;
+  agent: 'claude' | 'devin';
+  /** Review workspace directory (host path flavour). */
+  workspacePath: string;
   ptyId: string | null;
   prUrl: string;
   originScope: string;
@@ -66,9 +70,11 @@ export function parseVerdict(
   return last ? { verdict: last, via: 'assessment' } : null;
 }
 
-export function buildReviewPrompt(prUrl: string): string {
+/** Replaces every `{github-url}` in the command template (literally) and appends the verdict instruction. */
+export function buildReviewPrompt(template: string, prUrl: string): string {
   return (
-    `/cb:review ${prUrl}\n\n` +
+    template.split(REVIEW_URL_TOKEN).join(prUrl) +
+    '\n\n' +
     'When the review is complete, end your final message with exactly one line:\n' +
     'AW_REVIEW_VERDICT: approved | changes | discussion'
   );
