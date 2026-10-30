@@ -4,7 +4,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, win32 } from 'node:path';
 import { hostIdForPath, normalizeWorkspacePath, toWindowsPath, type HostId } from '../../core/execHost';
 import { reviewCwdMatchesHost } from '../../core/reviewSettings';
 import { reviewsDirFor } from '../../core/tabReview';
@@ -89,7 +89,8 @@ export async function ensureReviewWorkspace(
     return { ok: false, reason: 'io' };
   }
 
-  let normalized = normalizeWorkspacePath(workspacePath, resolve);
+  // A WSL workspace is a UNC path (double backslash prefix): resolve it with win32 rules so a posix runner doesn't prefix the cwd.
+  let normalized = normalizeWorkspacePath(workspacePath, workspacePath.startsWith('\\\\') ? win32.resolve : resolve);
   let created: boolean;
   if (agent === 'devin') {
     const settings = state.settings?.current;
