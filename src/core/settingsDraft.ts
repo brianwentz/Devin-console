@@ -2,6 +2,12 @@ import { normalizeBaseUrl } from './openhands';
 import { isAllowedAppUrl } from './sessions';
 import { validateLinkRule } from './linkRules';
 import { isValidProfileDir } from './chromeBookmarks';
+import {
+  REVIEW_URL_TOKEN,
+  isValidReviewCommand,
+  reviewCwdMatchesHost,
+  type DevinCliPermissionMode,
+} from './reviewSettings';
 import type { ClaudePermissionMode, LinkRule, Settings, SettingsPatch } from '../shared/ipc';
 
 // Mirrors ClaudePermissionModeSchema (kept here so the shell bundle needs no
@@ -62,6 +68,13 @@ export interface SettingsDraft {
   claudePickerFolder: string;
   // 'local' or 'wsl:<distro>' — where Tab Review ptys run.
   reviewHost: string;
+  reviewAgent: 'claude' | 'devin';
+  // Single line containing the {github-url} token; no `"`/`%`, no leading `-`.
+  reviewCommand: string;
+  reviewClaudeMode: ClaudePermissionMode;
+  reviewDevinMode: DevinCliPermissionMode;
+  // '' = <home>/.agent-workspace/reviews (null in settings).
+  reviewCwd: string;
   openhandsBaseUrl: string;
   openhandsPollSeconds: string;
   openhandsMaxLiveViews: string;
@@ -111,7 +124,12 @@ export const DRAFT_TAB: Record<DraftField, SettingsTabId> = {
   claudeMaxLiveAgents: 'claude',
   claudeDefaultWslDistro: 'claude',
   claudePickerFolder: 'claude',
-  reviewHost: 'claude',
+  reviewHost: 'links',
+  reviewAgent: 'links',
+  reviewCommand: 'links',
+  reviewClaudeMode: 'links',
+  reviewDevinMode: 'links',
+  reviewCwd: 'links',
   openhandsBaseUrl: 'openhands',
   openhandsPollSeconds: 'openhands',
   openhandsMaxLiveViews: 'openhands',
@@ -157,6 +175,11 @@ export function draftFromSettings(settings: Settings): SettingsDraft {
     claudeDefaultWslDistro: settings.claude.defaultWslDistro ?? '',
     claudePickerFolder: settings.claude.pickerFolder ?? '',
     reviewHost: settings.review.host,
+    reviewAgent: settings.review.agent,
+    reviewCommand: settings.review.command,
+    reviewClaudeMode: settings.review.claudeMode,
+    reviewDevinMode: settings.review.devinMode,
+    reviewCwd: settings.review.cwd ?? '',
     openhandsBaseUrl: settings.openhands.baseUrl,
     openhandsPollSeconds: String(settings.openhands.pollSeconds),
     openhandsMaxLiveViews: String(settings.openhands.maxLiveViews),
@@ -203,6 +226,11 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
     draft.claudeDefaultWslDistro !== base.claudeDefaultWslDistro ||
     draft.claudePickerFolder.trim() !== base.claudePickerFolder ||
     draft.reviewHost !== base.reviewHost ||
+    draft.reviewAgent !== base.reviewAgent ||
+    draft.reviewCommand !== base.reviewCommand ||
+    draft.reviewClaudeMode !== base.reviewClaudeMode ||
+    draft.reviewDevinMode !== base.reviewDevinMode ||
+    draft.reviewCwd.trim() !== base.reviewCwd ||
     draft.openhandsBaseUrl.trim() !== base.openhandsBaseUrl ||
     Number(draft.openhandsPollSeconds) !== Number(base.openhandsPollSeconds) ||
     Number(draft.openhandsMaxLiveViews) !== Number(base.openhandsMaxLiveViews) ||
@@ -217,6 +245,7 @@ export function isDraftDirty(draft: SettingsDraft, settings: Settings): boolean 
 
 export function validateDraft(
   draft: SettingsDraft,
+  platform: string = 'win32',
 ): { ok: true; patch: SettingsPatch } | { ok: false; errors: DraftErrors } {
   const errors: DraftErrors = {};
   const tenantUrl = draft.tenantUrl.trim();
@@ -313,6 +342,19 @@ export function validateDraft(
   if (claudePickerFolder && !isAbsolutePickerPath(claudePickerFolder)) {
     errors.claudePickerFolder = 'Enter an absolute folder path';
   }
+  if (!isValidReviewCommand(draft.reviewCommand)) {
+    errors.reviewCommand = `Enter a single-line command (up to 500 characters) containing ${REVIEW_URL_TOKEN} that does not start with '-' and does not use " or %`;
+  }
+  const reviewCwd = draft.reviewCwd.trim();
+  if (reviewCwd) {
+    if (!isAbsolutePickerPath(reviewCwd)) {
+      errors.reviewCwd = 'Enter an absolute folder path';
+    } else if (!reviewCwdMatchesHost(reviewCwd, draft.reviewHost, platform)) {
+      errors.reviewCwd = draft.reviewHost.startsWith('wsl:')
+        ? 'Use a Linux path for a WSL distro'
+        : 'Choose the distro under Run reviews on and use its Linux path';
+    }
+  }
   const chromeProfile = draft.favoritesChromeProfile;
   if (chromeProfile && !isValidProfileDir(chromeProfile)) {
     errors.favoritesChromeProfile = 'Choose a Chrome profile from the list';
@@ -351,7 +393,14 @@ export function validateDraft(
         defaultWslDistro: draft.claudeDefaultWslDistro || null,
         pickerFolder: claudePickerFolder || null,
       },
-      review: { host: draft.reviewHost },
+      review: {
+        host: draft.reviewHost,
+        agent: draft.reviewAgent,
+        command: draft.reviewCommand,
+        claudeMode: draft.reviewClaudeMode,
+        devinMode: draft.reviewDevinMode,
+        cwd: reviewCwd || null,
+      },
       openhands: {
         baseUrl: openhandsBaseUrl,
         pollSeconds: openhandsPoll,
@@ -387,6 +436,11 @@ const PATH_TO_FIELD: Record<string, DraftField> = {
   'claude.maxLiveAgents': 'claudeMaxLiveAgents',
   'claude.defaultWslDistro': 'claudeDefaultWslDistro',
   'review.host': 'reviewHost',
+  'review.agent': 'reviewAgent',
+  'review.command': 'reviewCommand',
+  'review.claudeMode': 'reviewClaudeMode',
+  'review.devinMode': 'reviewDevinMode',
+  'review.cwd': 'reviewCwd',
   'openhands.baseUrl': 'openhandsBaseUrl',
   'openhands.pollSeconds': 'openhandsPollSeconds',
   'openhands.maxLiveViews': 'openhandsMaxLiveViews',

@@ -11,6 +11,7 @@ import { NotificationSourceSchema, PROVIDER_ANALYTICS_TABS, PROVIDER_SURFACES } 
 import { isAllowedAppUrl } from '../core/sessions';
 import { normalizeBaseUrl } from '../core/openhands';
 import { isValidProfileDir } from '../core/chromeBookmarks';
+import { DEFAULT_REVIEW_COMMAND, REVIEW_URL_TOKEN, isValidReviewCommand } from '../core/reviewSettings';
 import {
   OpenHandsChannels,
   OpenHandsConnectionSchema,
@@ -354,9 +355,18 @@ const LayoutFields = {
   // Tab Review strip height (px); the splitter clamps to 0.7 x the pane height.
   reviewTerminalHeight: z.number().int().min(MIN_REVIEW_TERMINAL_HEIGHT).max(MAX_REVIEW_TERMINAL_HEIGHT),
 };
-// Tab Review: which host runs review ptys ('local' or a WSL distro host id).
+// Tab Review: which agent/command/mode/host/cwd runs review ptys (host is 'local'
+// or a WSL distro host id; cwd null = <home>/.agent-workspace/reviews). The cwd
+// family check lives in the draft only, so a host switch never drops a saved cwd.
 const ReviewFields = {
   host: z.string().max(200).regex(/^(local|wsl:.+)$/, 'must be local or wsl:<distro>'),
+  agent: z.enum(['claude', 'devin']),
+  command: z
+    .string()
+    .refine(isValidReviewCommand, `must be one line containing ${REVIEW_URL_TOKEN} (1-500 characters)`),
+  claudeMode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto']),
+  devinMode: z.enum(['auto', 'accept-edits', 'smart', 'dangerous']),
+  cwd: z.string().max(1024).nullable(),
 };
 // Cloud session sidebar: open/width are persisted via syncFromState;
 // collapsedFolders is patched by the shell through settings:set/commit.
@@ -649,8 +659,22 @@ export const SettingsObject = z.object({
       reviewTerminalHeight: DEFAULT_REVIEW_TERMINAL_HEIGHT,
     }),
   review: z
-    .object({ host: ReviewFields.host.default('local') })
-    .default({ host: 'local' }),
+    .object({
+      host: ReviewFields.host.default('local'),
+      agent: ReviewFields.agent.default('claude'),
+      command: ReviewFields.command.default(DEFAULT_REVIEW_COMMAND),
+      claudeMode: ReviewFields.claudeMode.default('auto'),
+      devinMode: ReviewFields.devinMode.default('auto'),
+      cwd: ReviewFields.cwd.default(null),
+    })
+    .default({
+      host: 'local',
+      agent: 'claude',
+      command: DEFAULT_REVIEW_COMMAND,
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+    }),
   sessions: z
     .object({
       open: SessionsFields.open.default(true),

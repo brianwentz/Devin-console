@@ -414,6 +414,8 @@ describe('review notification entries', () => {
     tabId: 't1',
     sessionId: 'sess-r',
     hostId: 'local',
+    agent: 'claude',
+    workspacePath: '/home/u/.agent-workspace/reviews',
     ptyId: null,
     prUrl: 'https://github.com/O/R/pull/1/files',
     originScope: 'claude:abc',

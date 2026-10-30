@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication } from 'playwright';
+import { DEFAULT_REVIEW_COMMAND } from '../../src/core/reviewSettings';
 import { buildReviewPrompt } from '../../src/core/tabReview';
 import { startFixtureServers, type FixtureServers } from '../fixtures/http';
 import {
@@ -259,7 +260,7 @@ test.describe('tab review (local host)', () => {
   });
 
   const local = (sessionId: string, text: string | null, url: string) =>
-    writeTranscript(join(ctx.claudeHome, 'projects'), reviewsDir, sessionId, buildReviewPrompt(url), text);
+    writeTranscript(join(ctx.claudeHome, 'projects'), reviewsDir, sessionId, buildReviewPrompt(DEFAULT_REVIEW_COMMAND, url), text);
 
   test('1. menu: enabled for a PR, disabled otherwise, no-claude refusal spawns nothing', async () => {
     const { app } = ctx;
@@ -831,7 +832,7 @@ test('8. WSL host: workspace in the distro, --cd, verdict over the channel, hook
       join(root, 'home', 'u', '.claude', 'projects'),
       LINUX_REVIEWS,
       record.sessionId,
-      buildReviewPrompt(url),
+      buildReviewPrompt(DEFAULT_REVIEW_COMMAND, url),
       'Reviewed in the distro.\nAW_REVIEW_VERDICT: approved',
     );
     await postHook(app, 'Stop', { session_id: record.sessionId });
@@ -911,3 +912,301 @@ test('9. WSL host: a Stopped review distro is started by the review', async () =
     await closeApp(ctx.app);
   }
 });
+
+test('9b. WSL host: an existing custom cwd on a Stopped distro is found (no false cwd-missing)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-review-wsl-stopped-cwd-'));
+  const distros = join(root, 'distros.txt');
+  writeFileSync(distros, 'Fake:Stopped:default');
+  mkdirSync(join(root, 'home', 'u', 'proj'), { recursive: true });
+  const ctx = await launchReviewApp({
+    FAKE_WSL_DISTROS_FILE: distros,
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '300',
+  });
+  const { app } = ctx;
+  const HOST = 'wsl:Fake';
+  try {
+    await expect
+      .poll(async () => (await call<{ state: string } | null>(app, 'hostStatus', HOST))?.state, { timeout: 30_000 })
+      .toBe('stopped');
+    await setSettings(app, { review: { host: HOST, cwd: '/home/u/proj' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.cwd).toBe('/home/u/proj');
+    await toGlobalScope(app);
+    const tab = await openTab(app, prUrl(162));
+    writeFileSync(distros, 'Fake:Running:default');
+    const record = await startReview(app, tab);
+    expect(record.hostId).toBe(HOST);
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('--cd /home/u/proj');
+    expect((await readEvents(ctx.logFile)).some((e) => e.event === 'review-refused')).toBe(false);
+    expect(await call<number>(app, 'remoteFsViolations')).toBe(0);
+  } finally {
+    await closeApp(ctx.app);
+  }
+});
+
+// --- 10. Devin review: a finished review's idle pty is released before a session
+// in the Reviews workspace loads; a running review is left alone.
+for (const finished of [true, false]) {
+  test(`10. Devin review ${finished ? 'finished: released' : 'running: kept'} on a Reviews session load`, async () => {
+    const ctx = await launchReviewApp({
+      AGENT_WORKSPACE_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+      FAKE_ACP_LIST: '1',
+      FAKE_ACP_LOAD: '1',
+      ...(finished ? { FAKE_PTY_SAY: 'AW_REVIEW_VERDICT: changes\nok' } : {}),
+    });
+    const { app } = ctx;
+    try {
+      await setSettings(app, { review: { agent: 'devin' } });
+      await expect.poll(() => readSettings(ctx.profile).review?.agent).toBe('devin');
+      await toGlobalScope(app);
+      const tab = await openTab(app, prUrl(finished ? 171 : 172));
+      const record = await startReview(app, tab);
+      const workspace = (record as ReviewRecord & { workspacePath: string }).workspacePath;
+      if (finished) await expect.poll(() => reviewStatus(app, tab), { timeout: 15_000 }).toBe('changes');
+      await expect
+        .poll(async () => (await call<any>(app, 'localState')).agents[workspace]?.status)
+        .toBe('ready');
+      const sessionId = await call<string>(app, 'localNewSession', workspace);
+      const ptyId = record.ptyId!;
+      const alive = async () => (await terminals(app)).some((t) => t.id === ptyId && t.exitCode === null);
+      expect(await alive()).toBe(true);
+
+      // Through the shell's IPC (the sidebar row click path), not the test hook.
+      const loaded = await shell(
+        app,
+        `window.agentworkspace.localLoadSession(${JSON.stringify(workspace)}, ${JSON.stringify(sessionId)})`,
+      );
+      expect((loaded as { ok: boolean }).ok).toBe(true);
+
+      const released = (await readEvents(ctx.logFile)).some(
+        (e) => e.event === 'review-terminal' && (e.detail as any)?.op === 'release',
+      );
+      if (finished) {
+        expect(released).toBe(true);
+        expect((await reviewState(app, tab))?.ptyId).toBeNull();
+        await expect.poll(alive).toBe(false);
+      } else {
+        expect(released).toBe(false);
+        expect(await alive()).toBe(true);
+        expect(await reviewStatus(app, tab)).toBe('reviewing');
+        await call(app, 'reviewPtyExit', tab);
+      }
+    } finally {
+      await closeApp(app);
+    }
+  });
+}
+
+// --- 11. Configurable review agent: custom Claude command + mode, Devin Local
+// reviews (mode, prompt, pty verdict, pinned workspace, WSL), custom cwd and
+// missing-CLI refusals.
+const ESC = String.fromCharCode(27);
+const MARKER_LINE = (verdict: string) => `${ESC}[1m● AW_REVIEW_VERDICT: ${verdict}${ESC}[0m`;
+const pinnedWorkspaces = (profile: string): string[] => readSettings(profile).workspaces ?? [];
+
+test('11a. custom claude command and mode', async () => {
+  const ctx = await launchReviewApp();
+  const { app } = ctx;
+  try {
+    await setSettings(app, { review: { command: '/x {github-url}', claudeMode: 'plan' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.claudeMode).toBe('plan');
+    await toGlobalScope(app);
+    const url = prUrl(181);
+    const tab = await openTab(app, url);
+    const record = await startReview(app, tab);
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('env:AGENT_WORKSPACE_CLAUDE_HOOK_TOKEN=');
+    const echo = await ptyText(app, record.ptyId!);
+    expect(echo).toMatch(/--permission-mode\W+plan\b/);
+    expect(echo).toContain(`/x ${url}`);
+    expect(echo).not.toContain('/cb:review');
+    await call(app, 'reviewPtyExit', tab);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('11b. devin review: mode, prompt, pty verdict, notification, pinned Reviews, no new tab', async () => {
+  const ctx = await launchReviewApp({
+    AGENT_WORKSPACE_LOCAL_AGENT_CMD: 'node out/fixtures/fakeAcpAgent.cjs',
+    FAKE_PTY_SAY: MARKER_LINE('changes'),
+  });
+  const { app } = ctx;
+  try {
+    await setSettings(app, { review: { agent: 'devin', devinMode: 'smart' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.devinMode).toBe('smart');
+    await toGlobalScope(app);
+    const url = prUrl(182);
+    const tab = await openTab(app, url);
+    const tabsBefore = (await st(app)).tabs.tabs.map((t) => t.id).sort();
+    const record = await startReview(app, tab);
+    const workspace = (record as ReviewRecord & { workspacePath: string }).workspacePath;
+
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('env:WT_SESSION=set');
+    const echo = await ptyText(app, record.ptyId!);
+    expect(echo).toContain(`--permission-mode smart -- /cb:review ${url}`);
+    expect(echo).not.toContain('--session-id');
+
+    // The marker commits when the next line lands, then settles after 2 s quiet.
+    await expect.poll(() => reviewStatus(app, tab), { timeout: 15_000 }).toBe('changes');
+    await expect.poll(async () => (await reviewEntries(app, url)).map((n) => n.title)).toEqual([
+      'Review: changes requested',
+    ]);
+    expect(
+      (await readEvents(ctx.logFile))
+        .filter((e) => e.event === 'review-verdict')
+        .map((e) => (e.detail as { via: string }).via),
+    ).toEqual(['pty']);
+    expect((await st(app)).tabs.tabs.map((t) => t.id).sort()).toEqual(tabsBefore);
+
+    // Pinned in Devin Local: settings + a `Reviews` header in the Local sidebar.
+    expect(pinnedWorkspaces(ctx.profile).length).toBe(1);
+    expect(pinnedWorkspaces(ctx.profile)[0]!.toLowerCase()).toContain('reviews');
+    await setSurface(app, 'local');
+    await expect
+      .poll(() =>
+        shell(
+          app,
+          `Array.from(document.querySelectorAll('[data-sidebar="local"] [data-workspace]')).some(el => el.getAttribute('data-workspace') === ${JSON.stringify(workspace)} && /Reviews/.test(el.textContent || ''))`,
+        ),
+      )
+      .toBe(true);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('11c. devin review without a marker ends', async () => {
+  const ctx = await launchReviewApp();
+  const { app } = ctx;
+  try {
+    await setSettings(app, { review: { agent: 'devin' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.agent).toBe('devin');
+    await toGlobalScope(app);
+    const url = prUrl(183);
+    const tab = await openTab(app, url);
+    await startReview(app, tab);
+    await call(app, 'reviewPtyExit', tab);
+    await expect.poll(() => reviewStatus(app, tab)).toBe('ended');
+    expect(await reviewEntries(app, url)).toEqual([]);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('11d. devin review settles at pty exit before the quiet period', async () => {
+  const ctx = await launchReviewApp({ FAKE_PTY_SAY: MARKER_LINE('discussion') });
+  const { app } = ctx;
+  try {
+    await setSettings(app, { review: { agent: 'devin' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.agent).toBe('devin');
+    await toGlobalScope(app);
+    const url = prUrl(184);
+    const tab = await openTab(app, url);
+    const record = await startReview(app, tab);
+    // Output has reached the scanner (the marker is committed by the lines after
+    // it); exit well inside the 2 s quiet period so only the exit flush settles it.
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('env:WT_SESSION=');
+    await call(app, 'reviewPtyExit', tab);
+    await expect.poll(() => reviewStatus(app, tab), { timeout: 15_000 }).toBe('discussion');
+    await expect.poll(async () => (await reviewEntries(app, url)).length).toBe(1);
+    await sleep(2500);
+    expect((await reviewEntries(app, url)).length).toBe(1);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('11e. devin CLI missing refuses and pins nothing', async () => {
+  const ctx = await launchReviewApp({ AGENT_WORKSPACE_TEST_REVIEW_NO_DEVIN: '1' });
+  const { app } = ctx;
+  try {
+    await setSettings(app, { review: { agent: 'devin' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.agent).toBe('devin');
+    await toGlobalScope(app);
+    const tab = await openTab(app, prUrl(185));
+    const before = (await terminals(app)).length;
+    const items = await openTabMenu(app, tab);
+    const review = items.find((i) => i.label === 'Review pull request')!;
+    expect(await call(app, 'tabMenuClick', review.id)).toEqual({ action: 'review' });
+    expect(await call(app, 'lastReviewRefusal')).toBe('no-devin');
+    expect(await reviewState(app, tab)).toBeNull();
+    expect((await terminals(app)).length).toBe(before);
+    expect(pinnedWorkspaces(ctx.profile)).toEqual([]);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('11f. custom cwd missing refuses on this PC', async () => {
+  const ctx = await launchReviewApp();
+  const { app } = ctx;
+  try {
+    const missing = join(ctx.profile, 'no-such-review-dir');
+    await setSettings(app, { review: { agent: 'devin', cwd: missing } });
+    await expect.poll(() => readSettings(ctx.profile).review?.cwd).toBe(missing);
+    await toGlobalScope(app);
+    const tab = await openTab(app, prUrl(186));
+    const items = await openTabMenu(app, tab);
+    const review = items.find((i) => i.label === 'Review pull request')!;
+    expect(await call(app, 'tabMenuClick', review.id)).toEqual({ action: 'review' });
+    expect(await call(app, 'lastReviewRefusal')).toBe('cwd-missing');
+    expect(await reviewState(app, tab)).toBeNull();
+    expect(pinnedWorkspaces(ctx.profile)).toEqual([]);
+    expect(await call<number>(app, 'remoteFsViolations')).toBe(0);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('11g. WSL: devin review runs through wsl, verdict detected; missing custom cwd refuses', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-review-wsl-devin-'));
+  const ctx = await launchReviewApp({
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_ROOT: root,
+    AGENT_WORKSPACE_TEST_HELPER_BACKOFF_MS: '300',
+    FAKE_PTY_SAY: MARKER_LINE('approved'),
+  });
+  const { app } = ctx;
+  const HOST = 'wsl:Fake';
+  try {
+    await expect
+      .poll(async () => (await call<{ state: string } | null>(app, 'hostChannelState', HOST))?.state, {
+        timeout: 30_000,
+      })
+      .toBe('ready');
+    await expect
+      .poll(async () => (await call<{ devin: { path: string | null } } | null>(app, 'hostStatus', HOST))?.devin.path)
+      .toBeTruthy();
+
+    await setSettings(app, { review: { host: HOST, agent: 'devin' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.host).toBe(HOST);
+    await toGlobalScope(app);
+    const url = prUrl(187);
+    const tab = await openTab(app, url);
+    const record = await startReview(app, tab);
+    expect(record.hostId).toBe(HOST);
+    await expect.poll(() => ptyText(app, record.ptyId!)).toContain('env:WT_SESSION=');
+    const echo = await ptyText(app, record.ptyId!);
+    expect(echo).toContain('--cd /home/u/.agent-workspace/reviews');
+    expect(echo).toContain('--permission-mode auto');
+    expect(echo).toContain(`/cb:review ${url}`);
+    await expect.poll(() => reviewStatus(app, tab), { timeout: 15_000 }).toBe('approved');
+    await expect.poll(async () => (await reviewEntries(app, url))[0]?.title).toBe('Review: approved');
+
+    // A custom cwd that does not exist in the distro refuses; nothing new pinned.
+    const pinned = pinnedWorkspaces(ctx.profile);
+    await setSettings(app, { review: { cwd: '/home/u/nope' } });
+    await expect.poll(() => readSettings(ctx.profile).review?.cwd).toBe('/home/u/nope');
+    const other = await openTab(app, prUrl(188));
+    const items = await openTabMenu(app, other);
+    const review = items.find((i) => i.label === 'Review pull request')!;
+    expect(await call(app, 'tabMenuClick', review.id)).toEqual({ action: 'review' });
+    expect(await call(app, 'lastReviewRefusal')).toBe('cwd-missing');
+    expect(await reviewState(app, other)).toBeNull();
+    expect(pinnedWorkspaces(ctx.profile)).toEqual(pinned);
+    expect(await call<number>(app, 'remoteFsViolations')).toBe(0);
+  } finally {
+    await closeApp(app);
+  }
+});
+

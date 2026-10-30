@@ -42,6 +42,9 @@ export type TerminalOpenOptions =
       sessionId: string;
       // 'review': a Tab Review pty — args as 'new'; owned by reviewGate, not claudeGate.
       mode: 'resume' | 'new' | 'attach' | 'review';
+      // Review mode only: the CLI the review runs (default 'claude'). A devin
+      // review keeps kind 'claude' — review ptys live only in the review strip.
+      agent?: 'claude' | 'devin' | undefined;
       agentId?: string | undefined;
       // Review mode: the review host (a fresh session id is unknown to resolveHost).
       hostId?: HostId | undefined;
@@ -144,9 +147,17 @@ export class TerminalHost {
     isReview: (sessionId: string) => boolean;
     // Ends a finished review's idle pty before the session opens elsewhere.
     releaseFinished: (sessionId: string) => void;
+    // Every flushed chunk of a review pty's output (verdict scanning); never logged.
+    onOutput: (sessionId: string, data: string) => void;
   } | null = null;
 
   constructor(private readonly testMode: boolean) {}
+
+  // A Tab Review pty running the devin CLI. Its entry kind stays 'claude', so
+  // `kind === 'claude'` no longer implies the Claude CLI for review ptys.
+  private isDevinReview(options: TerminalOpenOptions): boolean {
+    return options.kind === 'claude' && options.mode === 'review' && options.agent === 'devin';
+  }
 
   private resolveCommand(options: TerminalOpenOptions): ResolvedCommand | { error: string } {
     const kind = options.kind;
@@ -167,7 +178,7 @@ export class TerminalHost {
         return { file: resolvedFile, args: resolvedArgs, label: null, appendCwd: false };
       }
     }
-    if (kind === 'devin') {
+    if (kind === 'devin' || this.isDevinReview(options)) {
       const devinPath = resolveDevinPath(state.settings?.current.local.devinPath);
       if (!devinPath) return { error: INSTALL_GUIDANCE };
       return { file: devinPath, args: [], label: null, appendCwd: false };
@@ -375,6 +386,9 @@ export class TerminalHost {
     const wslExec = isRemoteHost(execHost);
     // A review pty is owned by reviewGate (open and exit); its cwd is never logged.
     const reviewMode = options.kind === 'claude' && options.mode === 'review';
+    // Only binary, args and env branch on the review agent; host, cwd, allow-list,
+    // gates, PR-scan skip and exit routing are the shared review path.
+    const devinReview = this.isDevinReview(options);
     const normalized =
       options.kind === 'devin'
         ? resolve(options.workspace)
@@ -430,15 +444,25 @@ export class TerminalHost {
       // The binary lives inside the distro: probed path, else a login-shell
       // PATH lookup via the `-ilc` wrapper.
       const status = hosts().status(execHost.id);
-      command = {
-        file:
-          options.kind === 'claude'
-            ? (status?.claude.path ?? 'claude')
-            : (status?.devin.path ?? 'devin'),
-        args: [],
-        label: isWslHost(execHost) ? execHost.distro : isSshHost(execHost) ? execHost.alias : null,
-        appendCwd: false,
-      };
+      const label = isWslHost(execHost) ? execHost.distro : isSshHost(execHost) ? execHost.alias : null;
+      if (devinReview) {
+        // The controller probed the review host explicitly; no probed devin
+        // path means no devin CLI there.
+        const devinPath = status?.devin.path;
+        command = devinPath
+          ? { file: devinPath, args: [], label, appendCwd: false }
+          : { error: INSTALL_GUIDANCE };
+      } else {
+        command = {
+          file:
+            options.kind === 'claude'
+              ? (status?.claude.path ?? 'claude')
+              : (status?.devin.path ?? 'devin'),
+          args: [],
+          label,
+          appendCwd: false,
+        };
+      }
     } else {
       command = this.resolveCommand(options);
     }
@@ -497,11 +521,14 @@ export class TerminalHost {
         ...(options.kind === 'devin' ? ['-r', options.sessionId] : []),
         ...(options.kind === 'claude'
           ? [
-              ...(options.mode === 'attach'
-                ? ['attach', options.agentId ?? '']
-                : options.mode === 'resume'
-                  ? ['-r', options.sessionId]
-                  : ['--session-id', options.sessionId]),
+              // A devin review takes its args (prompt, mode) from extraArgs alone.
+              ...(devinReview
+                ? []
+                : options.mode === 'attach'
+                  ? ['attach', options.agentId ?? '']
+                  : options.mode === 'resume'
+                    ? ['-r', options.sessionId]
+                    : ['--session-id', options.sessionId]),
               ...(options.extraArgs ?? []),
             ]
           : []),
@@ -509,7 +536,8 @@ export class TerminalHost {
       let spawnFile = command.file;
       let spawnCwd: string = normalized;
       let spawnEnv: Record<string, string | undefined> = {
-        ...this.ptyEnv(options.kind),
+        // A devin review keeps devin's WT_SESSION/TERM_PROGRAM handling.
+        ...this.ptyEnv(devinReview ? 'devin' : options.kind),
         ...(options.kind === 'claude' ? options.extraEnv : {}),
       };
       if (wslExec) {
@@ -712,6 +740,7 @@ export class TerminalHost {
     if (!entry.pending) return;
     const data = entry.pending;
     entry.pending = '';
+    if (entry.review && entry.sessionId) this.reviewGate?.onOutput(entry.sessionId, data);
     if (entry.linkScanner && entry.sessionId && this.onPullRequestUrl) {
       for (const url of entry.linkScanner.scan(data)) {
         this.onPullRequestUrl(url, this.prTarget(entry));

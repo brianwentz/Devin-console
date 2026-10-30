@@ -139,7 +139,8 @@ function reviewTerminalState(): ShellState['reviewTerminal'] {
     ptyId: record.ptyId,
     prLabel: prLabel(record.prUrl),
     status: record.status,
-    hooksReachable: reviews().hooksReachable(record.hostId),
+    // Devin reviews take their verdict from the pty — no hooks to warn about.
+    hooksReachable: record.agent !== 'claude' || reviews().hooksReachable(record.hostId),
   };
 }
 

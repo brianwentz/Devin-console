@@ -90,6 +90,13 @@ describe('mergeSettings', () => {
     expect(again.tabs).toEqual({ keepAliveHours: 6, maxLiveTabs: 20 });
   });
 
+  it('updates only the patched review field', () => {
+    const next = mergeSettings(current, { review: { host: 'wsl:Ubuntu' } });
+    expect(next.review).toEqual({ ...current.review, host: 'wsl:Ubuntu' });
+    expect(next.review.agent).toBe('claude');
+    expect(next.review.cwd).toBeNull();
+  });
+
   it('updates only the patched routing field', () => {
     const next = mergeSettings(current, { routing: { allowExternal: false } });
     expect(next.routing.allowExternal).toBe(false);
@@ -145,7 +152,15 @@ describe('tab review settings', () => {
     expect(settings.review.host).toBe('local');
     expect(dropped).toContain('review.host');
     const out = serializeSettingsFile(raw, settings, invalid, new Set());
-    expect(out.review).toEqual({ host: 'ssh:x', future: 1 });
+    expect(out.review).toEqual({
+      host: 'ssh:x',
+      agent: 'claude',
+      command: '/cb:review {github-url}',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+      future: 1,
+    });
   });
 
   it('caps review.host at 200 characters', () => {
@@ -788,5 +803,51 @@ describe('R40 L1: hosts.ssh raw entries keep their form and unknown fields (ux3 
     const value = { ...settings, hosts: { ...settings.hosts, ssh: [] } };
     const out = serializeSettingsFile(raw, value, {}, new Set(['hosts.ssh'])) as { hosts: { ssh: unknown[] } };
     expect(out.hosts.ssh).toEqual([{ alias: '-bad', enabled: true }]);
+  });
+});
+
+describe('review agent settings', () => {
+  it('defaults the six review fields', () => {
+    expect(parseSettingsFile({}).settings.review).toEqual({
+      host: 'local',
+      agent: 'claude',
+      command: '/cb:review {github-url}',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+    });
+  });
+
+  it('drops a command without the token, keeping the raw value on save', () => {
+    const raw = { review: { command: '/x', future: 1 } };
+    const { settings, dropped, invalid } = parseSettingsFile(raw);
+    expect(settings.review.command).toBe('/cb:review {github-url}');
+    expect(dropped).toContain('review.command');
+    expect(invalid['review.command']).toBe('/x');
+    const out = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect(out.review).toEqual({
+      host: 'local',
+      agent: 'claude',
+      command: '/x',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+      future: 1,
+    });
+  });
+
+  it('drops a command with a quote, keeping the raw value', () => {
+    const raw = { review: { command: '/x "{github-url}"' } };
+    const { settings, dropped, invalid } = parseSettingsFile(raw);
+    expect(settings.review.command).toBe('/cb:review {github-url}');
+    expect(dropped).toContain('review.command');
+    const out = serializeSettingsFile(raw, settings, invalid, new Set());
+    expect((out.review as { command: string }).command).toBe('/x "{github-url}"');
+  });
+
+  it('drops an unknown devin mode', () => {
+    const r = parseSettingsFile({ review: { devinMode: 'plan' } });
+    expect(r.dropped).toContain('review.devinMode');
+    expect(r.settings.review.devinMode).toBe('auto');
   });
 });

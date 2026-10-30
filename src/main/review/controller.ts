@@ -1,6 +1,7 @@
-// Tab Review: one `claude` pty per reviewed GitHub PR tab, keyed by tab id.
-// The verdict comes from the review session's Stop hook (or its transcript),
-// with the pty's exit as the backstop. Review ptys are not chat sessions: they
+// Tab Review: one `claude` or `devin` pty per reviewed GitHub PR tab, keyed by
+// tab id. A Claude verdict comes from the review session's Stop hook (or its
+// transcript), a Devin verdict from the pty output (ReviewOutputScanner); the
+// pty's exit is the backstop for both. Review ptys are not chat sessions: they
 // skip the claudeGate handoff, every PR side effect and the generic hook
 // notifications (terminalHost.reviewGate, hooks.ts onEvent).
 
@@ -8,10 +9,12 @@ import { randomUUID } from 'node:crypto';
 import type { ClaudeHookEvent } from '../../core/claudeActivity';
 import type { HostId } from '../../core/execHost';
 import { reviewNotification } from '../../core/notificationModel';
+import { ReviewOutputScanner } from '../../core/reviewOutput';
 import { scopeOf } from '../../core/tabModel';
 import {
   buildReviewPrompt,
   canonicalPrUrl,
+  finishedDevinReviewsIn,
   lastAssistantText,
   parseVerdict,
   reduceReview,
@@ -20,36 +23,32 @@ import {
   verdictSource,
   type ReviewEvent,
   type ReviewRecord,
+  type ReviewRefusalReason,
   type ReviewStatus,
+  type ReviewVerdict,
 } from '../../core/tabReview';
 import { claudeSessions } from '../claude/sessions';
 import { hosts } from '../hosts';
+import { resolveDevinPath } from '../local/acpHost';
 import { terminalHost } from '../local/terminalHost';
 import { log } from '../log';
 import { notificationStore } from '../notifications';
 import { state, testMode } from '../state';
 import { applyLayout } from '../window';
 import { resolveReviewHost } from './host';
-import { ensureReviewsWorkspace } from './workspace';
+import { ensureReviewWorkspace } from './workspace';
 
-/** Reviews run unattended in a strip, so they must not park on permission prompts. */
-const REVIEW_PERMISSION_MODE = 'auto';
+export type ReviewStartResult = { ok: true } | { ok: false; reason: ReviewRefusalReason };
 
-export type ReviewStartResult =
-  | { ok: true }
-  | {
-      ok: false;
-      reason:
-        | 'not-pr'
-        | 'running'
-        | 'distro-unavailable'
-        | 'distro-stopped'
-        | 'helper-not-ready'
-        | 'no-claude'
-        | 'spawn';
-    };
+/** A Devin verdict settles this long after the last output chunk that commits
+ * a verdict line — only such chunks re-arm the timer, other output does not
+ * (the TUI may still redraw the line — the last marker wins). */
+const PTY_VERDICT_QUIET_MS = 2000;
 
-type Verdict = NonNullable<ReturnType<typeof parseVerdict>>;
+/** Upper bound on waiting for released review ptys to exit before a load. */
+const RELEASE_EXIT_CAP_MS = 3000;
+
+type Verdict = { verdict: ReviewVerdict; via: 'marker' | 'assessment' | 'pty' };
 export type ReviewStopPayload = ClaudeHookEvent & { last_assistant_message?: string };
 
 class ReviewController {
@@ -58,6 +57,11 @@ class ReviewController {
   private readonly sessionIds = new Set<string>();
   private readonly starting = new Set<string>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout[]>();
+  // Devin reviews: the pty-output scanner and its quiescence timer, by session id.
+  private readonly scanners = new Map<string, ReviewOutputScanner>();
+  private readonly quietTimers = new Map<string, NodeJS.Timeout>();
+  // Resolvers of releaseFinishedInWorkspace, by session id — fired on pty exit.
+  private readonly exitWaiters = new Map<string, () => void>();
   private disposed = false;
 
   async start(tabId: string): Promise<ReviewStartResult> {
@@ -66,19 +70,25 @@ class ReviewController {
     if (!tab || !prUrl) return this.refuse('not-pr');
     const previous = this.records.get(tabId);
     if (this.starting.has(tabId) || previous?.status === 'reviewing') return this.refuse('running');
+    const review = state.settings?.current.review;
+    if (!review) return this.refuse('spawn');
+    const agent = review.agent;
     const host = resolveReviewHost();
     if (!host.ok) return this.refuse(host.reason);
     this.starting.add(tabId);
     try {
       if (host.start && !(await this.startDistro(host.hostId))) return this.refuse('distro-stopped');
-      if (!this.claudeResolvable(host.hostId)) return this.refuse('no-claude');
+      if (agent === 'claude' && !this.claudeResolvable(host.hostId)) return this.refuse('no-claude');
+      if (agent === 'devin' && !this.devinResolvable(host.hostId)) return this.refuse('no-devin');
       // The mkdir is an explicit exec — on a Stopped distro it is what boots it.
-      const workspace = await ensureReviewsWorkspace(host.hostId);
+      // After the resolvability checks, so a refusal pins no workspace.
+      const workspace = await ensureReviewWorkspace(host.hostId, agent, review.cwd);
       if (!workspace.ok) {
+        if (workspace.reason === 'cwd-missing') return this.refuse('cwd-missing');
         if (host.start) return this.refuse('distro-stopped');
         return this.refuse(workspace.reason === 'io' ? 'spawn' : 'helper-not-ready');
       }
-      if (workspace.created) claudeSessions().workspacesChanged();
+      if (workspace.created && agent === 'claude') claudeSessions().workspacesChanged();
       if (this.disposed) return this.refuse('spawn');
       // Re-run: the earlier pty (and any pending verdict read) goes first.
       const old = this.records.get(tabId);
@@ -89,6 +99,8 @@ class ReviewController {
         tabId,
         sessionId,
         hostId: host.hostId,
+        agent,
+        workspacePath: workspace.workspacePath,
         ptyId: null,
         prUrl,
         originScope: scopeOf(tab),
@@ -98,23 +110,36 @@ class ReviewController {
         terminalOpen: true,
       };
       this.records.set(tabId, record);
-      const injection = claudeSessions().hookInjection(sessionId, 'new', host.hostId, REVIEW_PERMISSION_MODE);
+      const prompt = buildReviewPrompt(review.command, prUrl);
+      let extraArgs: string[];
+      let extraEnv: Record<string, string>;
+      if (agent === 'devin') {
+        // The review id stays ours: the CLI picks its own session id. No Claude
+        // hook injection — the verdict comes from the pty output.
+        this.scanners.set(sessionId, new ReviewOutputScanner());
+        const devinBinary = host.hostId === 'local' ? this.localDevinPath() : null;
+        extraArgs = ['--permission-mode', review.devinMode, '--', reviewPromptArg(prompt, devinBinary)];
+        extraEnv = {};
+      } else {
+        const injection = claudeSessions().hookInjection(sessionId, 'new', host.hostId, review.claudeMode);
+        extraArgs = [
+          ...(injection?.extraArgs ?? []),
+          reviewPromptArg(prompt, host.hostId === 'local' ? claudeSessions().claudeCliPath() : null),
+        ];
+        extraEnv = injection?.extraEnv ?? {};
+      }
       const opened = await terminalHost.open({
         kind: 'claude',
         mode: 'review',
+        agent,
         sessionId,
         hostId: host.hostId,
         cwd: workspace.cwd,
-        extraArgs: [
-          ...(injection?.extraArgs ?? []),
-          reviewPromptArg(
-            buildReviewPrompt(prUrl),
-            host.hostId === 'local' ? claudeSessions().claudeCliPath() : null,
-          ),
-        ],
-        extraEnv: injection?.extraEnv ?? {},
+        extraArgs,
+        extraEnv,
       });
       if (!opened.ok) {
+        this.clearScanner(sessionId);
         this.update(tabId, sessionId, { type: 'exit', at: Date.now() });
         log('claude', 'review-ended', { detail: { sessionId, reason: 'exit' } });
         return this.refuse('spawn');
@@ -130,7 +155,7 @@ class ReviewController {
         return this.refuse('spawn');
       }
       this.records.set(tabId, { ...current, ptyId: opened.id });
-      log('claude', 'review-start', { detail: { tabId, sessionId, host: host.hostId } });
+      log('claude', 'review-start', { detail: { tabId, sessionId, host: host.hostId, agent } });
       applyLayout();
       return { ok: true };
     } finally {
@@ -139,7 +164,8 @@ class ReviewController {
   }
 
   async onStop(sessionId: string, payload: ReviewStopPayload): Promise<void> {
-    if (!this.reviewing(sessionId)) return;
+    // Devin reviews read their verdict from the pty, never from a Claude hook.
+    if (!this.reviewing(sessionId) || this.recordFor(sessionId)?.agent !== 'claude') return;
     const stopAt = Date.now();
     this.cancelRetries(sessionId);
     const source = verdictSource(payload);
@@ -167,11 +193,22 @@ class ReviewController {
   }
 
   async onPtyExit(sessionId: string): Promise<void> {
+    this.exitWaiters.get(sessionId)?.();
     if (this.disposed) return;
     const record = this.recordFor(sessionId);
     if (!record) return;
     this.cancelRetries(sessionId);
-    if (record.status === 'reviewing') {
+    if (record.agent === 'devin') {
+      // Settle first (the carried tail counts at exit); never a transcript read.
+      const scanner = this.scanners.get(sessionId);
+      this.clearScanner(sessionId);
+      if (record.status === 'reviewing') {
+        scanner?.flush();
+        const verdict = scanner?.settle() ?? null;
+        if (verdict) this.applyVerdict(sessionId, { verdict, via: 'pty' });
+        else log('claude', 'review-ended', { detail: { sessionId, reason: 'exit' } });
+      }
+    } else if (record.status === 'reviewing') {
       const verdict = await this.readTranscript(sessionId);
       if (verdict) this.applyVerdict(sessionId, verdict);
       else if (this.reviewing(sessionId)) {
@@ -179,7 +216,7 @@ class ReviewController {
       }
     }
     this.update(record.tabId, sessionId, { type: 'exit', at: Date.now() });
-    void claudeSessions().refresh('review', [record.hostId]);
+    if (record.agent === 'claude') void claudeSessions().refresh('review', [record.hostId]);
     applyLayout();
   }
 
@@ -189,6 +226,7 @@ class ReviewController {
     const running = record.status === 'reviewing';
     if (running) {
       this.cancelRetries(record.sessionId);
+      this.clearScanner(record.sessionId);
       if (record.ptyId) terminalHost.close(record.ptyId, { reclaim: false });
       log('claude', 'review-ended', { detail: { sessionId: record.sessionId, reason: 'closed' } });
     }
@@ -253,6 +291,53 @@ class ReviewController {
     applyLayout();
   }
 
+  /**
+   * Devin reviews: the CLI picks its own session id, so it is unknown here —
+   * loading any session in the review workspace first releases the finished
+   * reviews' idle ptys there. Resolves once each pty has exited (3 s cap total).
+   */
+  async releaseFinishedInWorkspace(workspacePath: string): Promise<void> {
+    const ids = finishedDevinReviewsIn(this.records.values(), workspacePath);
+    if (ids.length === 0) return;
+    const exits = ids.map((id) => new Promise<void>((resolve) => this.exitWaiters.set(id, resolve)));
+    for (const id of ids) this.releaseFinished(id);
+    let timer: NodeJS.Timeout | undefined;
+    const cap = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, RELEASE_EXIT_CAP_MS);
+    });
+    try {
+      await Promise.race([Promise.all(exits), cap]);
+    } finally {
+      clearTimeout(timer);
+      for (const id of ids) this.exitWaiters.delete(id);
+    }
+  }
+
+  /**
+   * A flushed chunk of a review pty's output (the data is never logged). Devin
+   * reviews only: a committed marker (re)arms the quiescence timer, which
+   * settles the verdict. Called unguarded from terminalHost — never throws.
+   */
+  onPtyOutput(id: string, data: string): void {
+    try {
+      const scanner = this.scanners.get(id);
+      if (!scanner || !this.reviewing(id) || !scanner.scan(data)) return;
+      const previous = this.quietTimers.get(id);
+      if (previous) clearTimeout(previous);
+      const timer = setTimeout(() => {
+        this.quietTimers.delete(id);
+        const verdict = this.scanners.get(id)?.settle() ?? null;
+        if (verdict) this.applyVerdict(id, { verdict, via: 'pty' });
+      }, PTY_VERDICT_QUIET_MS);
+      timer.unref?.();
+      this.quietTimers.set(id, timer);
+    } catch (error) {
+      log('claude', 'review-output-error', {
+        detail: { code: error instanceof Error ? error.name : 'unknown' },
+      });
+    }
+  }
+
   hooksReachable(hostId: HostId): boolean {
     if (hostId === 'local') return claudeSessions().hookInfo() !== null;
     return hosts().status(hostId)?.hooks !== 'unreachable';
@@ -262,6 +347,7 @@ class ReviewController {
   dispose(): void {
     this.disposed = true;
     for (const sessionId of [...this.retryTimers.keys()]) this.cancelRetries(sessionId);
+    for (const sessionId of [...this.scanners.keys()]) this.clearScanner(sessionId);
   }
 
   private refuse(reason: Extract<ReviewStartResult, { ok: false }>['reason']): ReviewStartResult {
@@ -298,6 +384,28 @@ class ReviewController {
     );
   }
 
+  // Local: the resolved devin binary (local.devinPath, else PATH) — in test mode
+  // the fake pty command stands in unless AGENT_WORKSPACE_TEST_REVIEW_NO_DEVIN=1.
+  // WSL: the probe's CLI path.
+  private devinResolvable(hostId: HostId): boolean {
+    if (testMode && process.env.AGENT_WORKSPACE_TEST_TERMINAL_CMD) {
+      return process.env.AGENT_WORKSPACE_TEST_REVIEW_NO_DEVIN !== '1';
+    }
+    if (hostId !== 'local') return Boolean(hosts().status(hostId)?.devin.path);
+    return this.localDevinPath() !== null;
+  }
+
+  private localDevinPath(): string | null {
+    return resolveDevinPath(state.settings?.current.local.devinPath);
+  }
+
+  private clearScanner(sessionId: string): void {
+    const timer = this.quietTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.quietTimers.delete(sessionId);
+    this.scanners.delete(sessionId);
+  }
+
   private recordFor(sessionId: string): ReviewRecord | null {
     for (const record of this.records.values()) {
       if (record.sessionId === sessionId) return record;
@@ -316,6 +424,7 @@ class ReviewController {
 
   private stopRecord(record: ReviewRecord): void {
     this.cancelRetries(record.sessionId);
+    this.clearScanner(record.sessionId);
     if (record.ptyId) terminalHost.close(record.ptyId, { reclaim: false });
   }
 
@@ -359,7 +468,7 @@ class ReviewController {
     if ((notifications?.collect ?? true) && (notifications?.kinds.review ?? true)) {
       notificationStore().add(reviewNotification(record, verdict.verdict, now));
     }
-    void claudeSessions().refresh('review', [record.hostId]);
+    if (record.agent === 'claude') void claudeSessions().refresh('review', [record.hostId]);
     applyLayout();
   }
 }

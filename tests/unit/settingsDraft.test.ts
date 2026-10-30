@@ -92,6 +92,11 @@ describe('draftFromSettings', () => {
       claudeDefaultWslDistro: 'Ubuntu-24.04',
       claudePickerFolder: '/home/u/ws',
       reviewHost: 'local',
+      reviewAgent: 'claude',
+      reviewCommand: '/cb:review {github-url}',
+      reviewClaudeMode: 'auto',
+      reviewDevinMode: 'auto',
+      reviewCwd: '',
       openhandsBaseUrl: 'https://oh.example.com/app',
       openhandsPollSeconds: '45',
       openhandsMaxLiveViews: '3',
@@ -133,7 +138,14 @@ describe('isDraftDirty', () => {
   it('round-trips reviewHost into review.host and flags a change as dirty', () => {
     expect(draftFromSettings(defaults).reviewHost).toBe('local');
     const result = validateDraft(draft({ reviewHost: 'wsl:Ubuntu' }));
-    expect(result.ok && result.patch.review).toEqual({ host: 'wsl:Ubuntu' });
+    expect(result.ok && result.patch.review).toEqual({
+      host: 'wsl:Ubuntu',
+      agent: 'claude',
+      command: '/cb:review {github-url}',
+      claudeMode: 'auto',
+      devinMode: 'auto',
+      cwd: null,
+    });
     expect(isDraftDirty(draft({ reviewHost: 'wsl:Ubuntu' }), defaults)).toBe(true);
     const withHost = mergeSettings(defaults, { review: { host: 'wsl:Ubuntu' } });
     expect(draftFromSettings(withHost).reviewHost).toBe('wsl:Ubuntu');
@@ -264,7 +276,14 @@ describe('validateDraft', () => {
         defaultWslDistro: null,
         pickerFolder: null,
       },
-      review: { host: 'local' },
+      review: {
+        host: 'local',
+        agent: 'claude',
+        command: '/cb:review {github-url}',
+        claudeMode: 'auto',
+        devinMode: 'auto',
+        cwd: null,
+      },
       openhands: {
         baseUrl: 'https://app.all-hands.dev',
         pollSeconds: 30,
@@ -729,5 +748,52 @@ describe('favorites.chromeProfile draft field', () => {
     const { errors } = fieldErrorsFromIssues([{ path: ['favorites', 'chromeProfile'], message: 'x' }]);
     expect(errors.favoritesChromeProfile).toBe('x');
     expect(DRAFT_TAB.favoritesChromeProfile).toBe('links');
+  });
+});
+
+describe('review draft fields', () => {
+  it('routes every review field to the links tab', () => {
+    for (const f of ['reviewHost', 'reviewAgent', 'reviewCommand', 'reviewClaudeMode', 'reviewDevinMode', 'reviewCwd'] as const) {
+      expect(DRAFT_TAB[f]).toBe('links');
+    }
+  });
+
+  it('rejects a command without the token or with a newline', () => {
+    for (const reviewCommand of ['/x', '/a {github-url}\nb']) {
+      const r = validateDraft(draft({ reviewCommand }));
+      expect(!r.ok && r.errors.reviewCommand).toBeTruthy();
+    }
+  });
+
+  it('rejects a command with " or %, or starting with -, and says so', () => {
+    for (const reviewCommand of ['/a "{github-url}"', '/a {github-url} %X%', '-a {github-url}']) {
+      const r = validateDraft(draft({ reviewCommand }));
+      expect(!r.ok && r.errors.reviewCommand).toContain("not start with '-'");
+      expect(!r.ok && r.errors.reviewCommand).toContain('" or %');
+    }
+  });
+
+  it('commits an empty cwd as null and a path as itself', () => {
+    const empty = validateDraft(draft({ reviewCwd: '' }));
+    expect(empty.ok && empty.patch.review?.cwd).toBeNull();
+    const set = validateDraft(draft({ reviewCwd: 'C:\\r' }));
+    expect(set.ok && set.patch.review?.cwd).toBe('C:\\r');
+  });
+
+  it('rejects a cwd of the wrong path family for the host', () => {
+    const wsl = validateDraft(draft({ reviewCwd: 'C:\\r', reviewHost: 'wsl:Ubuntu' }));
+    expect(!wsl.ok && wsl.errors.reviewCwd).toBe('Use a Linux path for a WSL distro');
+    const unc = validateDraft(draft({ reviewCwd: '\\\\wsl.localhost\\Ubuntu\\r', reviewHost: 'local' }));
+    expect(!unc.ok && unc.errors.reviewCwd).toBe('Choose the distro under Run reviews on and use its Linux path');
+    const ok = validateDraft(draft({ reviewCwd: '/home/u/r', reviewHost: 'wsl:Ubuntu' }));
+    expect(ok.ok).toBe(true);
+  });
+
+  it('flags a changed review field as dirty', () => {
+    expect(isDraftDirty(draft({ reviewAgent: 'devin' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewCwd: '/x' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewCommand: '/y {github-url}' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewClaudeMode: 'plan' }), defaults)).toBe(true);
+    expect(isDraftDirty(draft({ reviewDevinMode: 'smart' }), defaults)).toBe(true);
   });
 });

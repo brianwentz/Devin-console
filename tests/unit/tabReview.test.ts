@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_REVIEW_COMMAND } from '../../src/core/reviewSettings';
 import {
   REVIEW_VERDICT_RETRY_MS,
   buildReviewPrompt,
   canonicalPrUrl,
+  finishedDevinReviewsIn,
   lastAssistantText,
   reviewPromptArg,
   reviewRetryDelays,
@@ -11,6 +13,7 @@ import {
   reduceReview,
   resolveReviewHostPure,
   reviewDotLabel,
+  reviewRefusalText,
   tabMenuModel,
   verdictSource,
   type ReviewRecord,
@@ -20,6 +23,8 @@ const rec = (over: Partial<ReviewRecord> = {}): ReviewRecord => ({
   tabId: 't1',
   sessionId: 's1',
   hostId: 'local',
+  agent: 'claude',
+  workspacePath: '/home/u/.agent-workspace/reviews',
   ptyId: 'p1',
   prUrl: 'https://github.com/o/r/pull/12',
   originScope: 'claude:abc',
@@ -77,16 +82,29 @@ describe('parseVerdict', () => {
     expect(parseVerdict('looks fine to me')).toBeNull();
   });
   it('the built prompt carries no standalone marker', () => {
-    expect(parseVerdict(buildReviewPrompt('https://github.com/o/r/pull/1'))).toBeNull();
+    expect(parseVerdict(buildReviewPrompt(DEFAULT_REVIEW_COMMAND, 'https://github.com/o/r/pull/1'))).toBeNull();
   });
 });
 
 describe('buildReviewPrompt', () => {
   it('starts with the command and has the marker instruction', () => {
     const u = 'https://github.com/o/r/pull/12';
-    const p = buildReviewPrompt(u);
+    const p = buildReviewPrompt(DEFAULT_REVIEW_COMMAND, u);
     expect(p.startsWith(`/cb:review ${u}\n`)).toBe(true);
     expect(p).toContain('AW_REVIEW_VERDICT: approved | changes | discussion');
+  });
+  it('replaces every placeholder', () => {
+    const p = buildReviewPrompt('/a {github-url} b {github-url}', 'U');
+    expect(p.startsWith('/a U b U\n\nWhen the review is complete')).toBe(true);
+  });
+  it('treats replacement patterns literally', () => {
+    expect(buildReviewPrompt('$& $1 {github-url}', 'U').startsWith('$& $1 U\n')).toBe(true);
+  });
+  it('default template equals the original prompt', () => {
+    expect(buildReviewPrompt(DEFAULT_REVIEW_COMMAND, 'U')).toBe(
+      '/cb:review U\n\nWhen the review is complete, end your final message with exactly one line:\n' +
+        'AW_REVIEW_VERDICT: approved | changes | discussion',
+    );
   });
 });
 
@@ -324,7 +342,7 @@ describe('reviewRetryDelays', () => {
 });
 
 describe('reviewPromptArg', () => {
-  const prompt = buildReviewPrompt('https://github.com/o/r/pull/7');
+  const prompt = buildReviewPrompt(DEFAULT_REVIEW_COMMAND, 'https://github.com/o/r/pull/7');
 
   it('passes the prompt unchanged to an executable', () => {
     expect(reviewPromptArg(prompt, 'C:\\Users\\u\\.local\\bin\\claude.exe')).toBe(prompt);
@@ -337,5 +355,61 @@ describe('reviewPromptArg', () => {
     expect(arg).toContain('/cb:review https://github.com/o/r/pull/7');
     expect(arg).toContain('AW_REVIEW_VERDICT: approved | changes | discussion');
     expect(reviewPromptArg('a\r\n\r\nb', 'x.bat')).toBe('a b');
+  });
+});
+
+describe('reviewRefusalText', () => {
+  it('names the host for a missing Devin CLI', () => {
+    expect(reviewRefusalText('no-devin', 'Ubuntu')).toBe('Devin CLI not found on Ubuntu.');
+    expect(reviewRefusalText('no-devin', null)).toBe('Devin CLI not found on this PC.');
+  });
+
+  it('reports a missing review folder', () => {
+    expect(reviewRefusalText('cwd-missing', 'Ubuntu')).toBe('Review folder not found.');
+    expect(reviewRefusalText('cwd-missing', null)).toBe('Review folder not found.');
+  });
+
+  it('keeps the existing texts', () => {
+    expect(reviewRefusalText('not-pr', null)).toBe('This tab is not a pull request.');
+    expect(reviewRefusalText('running', null)).toBe('A review of this tab is already running.');
+    expect(reviewRefusalText('distro-unavailable', 'Ubuntu')).toBe(
+      'The WSL distro chosen for reviews is not available.',
+    );
+    expect(reviewRefusalText('distro-stopped', 'Ubuntu')).toBe(
+      "The WSL distro Ubuntu is stopped and couldn't be started. Start it and try again.",
+    );
+    expect(reviewRefusalText('distro-stopped', null)).toBe(
+      "The WSL distro chosen for reviews is stopped and couldn't be started. Start it and try again.",
+    );
+    expect(reviewRefusalText('helper-not-ready', 'Ubuntu')).toBe(
+      'The WSL distro chosen for reviews is not ready yet. Try again in a moment.',
+    );
+    expect(reviewRefusalText('no-claude', 'Ubuntu')).toBe('The claude CLI was not found on the review host.');
+    expect(reviewRefusalText('spawn', null)).toBe('The review terminal could not be started.');
+  });
+});
+
+describe('finishedDevinReviewsIn', () => {
+  const ws = 'C:\\Users\\u\\.agent-workspace\\reviews-devin';
+  const devin = (over: Partial<ReviewRecord> = {}) =>
+    rec({ agent: 'devin', status: 'changes', workspacePath: ws, ...over });
+
+  it('returns only finished devin reviews with a live pty in the workspace', () => {
+    const records = [
+      devin({ sessionId: 'ok' }),
+      devin({ sessionId: 'claude', agent: 'claude' }),
+      devin({ sessionId: 'running', status: 'reviewing' }),
+      devin({ sessionId: 'elsewhere', workspacePath: 'C:\\other' }),
+      devin({ sessionId: 'exited', ptyId: null }),
+    ];
+    expect(finishedDevinReviewsIn(records, ws)).toEqual(['ok']);
+  });
+
+  it('compares local paths case-insensitively and WSL UNC paths exactly', () => {
+    expect(finishedDevinReviewsIn([devin({ sessionId: 'a' })], ws.toUpperCase())).toEqual(['a']);
+    const unc = '\\\\wsl.localhost\\Ubuntu\\home\\u\\reviews';
+    const wsl = devin({ sessionId: 'w', workspacePath: unc });
+    expect(finishedDevinReviewsIn([wsl], unc)).toEqual(['w']);
+    expect(finishedDevinReviewsIn([wsl], unc.toUpperCase())).toEqual([]);
   });
 });

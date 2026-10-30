@@ -101,6 +101,11 @@ const FIELD_INPUT: Record<DraftField, string> = {
   claudeDefaultWslDistro: 'claudeDefaultWslDistroSelect',
   claudePickerFolder: 'claudePickerFolderInput',
   reviewHost: 'reviewHostSelect',
+  reviewAgent: 'reviewAgentSelect',
+  reviewCommand: 'reviewCommandInput',
+  reviewClaudeMode: 'reviewModeSelect',
+  reviewDevinMode: 'reviewModeSelect',
+  reviewCwd: 'reviewCwdInput',
   openhandsBaseUrl: 'openhandsBaseUrlInput',
   openhandsPollSeconds: 'openhandsPollSecondsInput',
   openhandsMaxLiveViews: 'openhandsMaxLiveViewsInput',
@@ -122,7 +127,7 @@ function focusErrorField(errors: DraftErrors): void {
 
 export async function commitDraft(reason: CommitReason, settings: Settings): Promise<boolean> {
   if (!current.draft || !isDraftDirty(current.draft, settings)) return true;
-  const validated = validateDraft(current.draft);
+  const validated = validateDraft(current.draft, window.agentworkspace.platform);
   if (!validated.ok) {
     set({
       errors: validated.errors,

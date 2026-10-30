@@ -1,5 +1,6 @@
 import { posix, win32 } from 'node:path';
 import type { HostId } from './execHost';
+import { REVIEW_URL_TOKEN } from './reviewSettings';
 import { PULL_REQUEST_PATH, pullRequestKey } from './tabModel';
 
 export type ReviewVerdict = 'approved' | 'changes' | 'discussion';
@@ -9,6 +10,9 @@ export interface ReviewRecord {
   tabId: string;
   sessionId: string;
   hostId: HostId;
+  agent: 'claude' | 'devin';
+  /** Review workspace directory (host path flavour). */
+  workspacePath: string;
   ptyId: string | null;
   prUrl: string;
   originScope: string;
@@ -66,9 +70,11 @@ export function parseVerdict(
   return last ? { verdict: last, via: 'assessment' } : null;
 }
 
-export function buildReviewPrompt(prUrl: string): string {
+/** Replaces every `{github-url}` in the command template (literally) and appends the verdict instruction. */
+export function buildReviewPrompt(template: string, prUrl: string): string {
   return (
-    `/cb:review ${prUrl}\n\n` +
+    template.split(REVIEW_URL_TOKEN).join(prUrl) +
+    '\n\n' +
     'When the review is complete, end your final message with exactly one line:\n' +
     'AW_REVIEW_VERDICT: approved | changes | discussion'
   );
@@ -140,6 +146,39 @@ export function tabMenuModel(
   return items;
 }
 
+export type ReviewRefusalReason =
+  | 'not-pr'
+  | 'running'
+  | 'distro-unavailable'
+  | 'distro-stopped'
+  | 'helper-not-ready'
+  | 'no-claude'
+  | 'no-devin'
+  | 'cwd-missing'
+  | 'spawn';
+
+const REFUSAL_TEXT: Record<ReviewRefusalReason, string> = {
+  'not-pr': 'This tab is not a pull request.',
+  running: 'A review of this tab is already running.',
+  'distro-unavailable': 'The WSL distro chosen for reviews is not available.',
+  'distro-stopped': "The WSL distro chosen for reviews is stopped and couldn't be started. Start it and try again.",
+  'helper-not-ready': 'The WSL distro chosen for reviews is not ready yet. Try again in a moment.',
+  'no-claude': 'The claude CLI was not found on the review host.',
+  'no-devin': 'Devin CLI not found on this PC.',
+  'cwd-missing': 'Review folder not found.',
+  spawn: 'The review terminal could not be started.',
+};
+
+/** The menu's refusal dialog text. `hostLabel`: the review WSL distro's name,
+ * null for this PC. */
+export function reviewRefusalText(reason: ReviewRefusalReason, hostLabel: string | null): string {
+  if (hostLabel !== null && reason === 'distro-stopped') {
+    return `The WSL distro ${hostLabel} is stopped and couldn't be started. Start it and try again.`;
+  }
+  if (hostLabel !== null && reason === 'no-devin') return `Devin CLI not found on ${hostLabel}.`;
+  return REFUSAL_TEXT[reason];
+}
+
 /**
  * `start: true` = the enumeration reports the distro Stopped: a review is a
  * user action, so the controller starts it (an explicit probe / exec boots it)
@@ -179,7 +218,8 @@ export function reviewRetryDelays(elapsedMs: number): number[] {
  * (an npm `claude.cmd` set as `claude.path`) through cmd.exe, which ends the
  * command at a raw line break — so a shim gets the prompt on one line (the
  * slash command takes the rest of the line as its arguments either way).
- * Quoted `|` is literal to cmd.exe.
+ * Quoted `|` is literal to cmd.exe; the user's template can't break out of the
+ * quotes because `isValidReviewCommand` refuses `"` and `%`.
  */
 export function reviewPromptArg(prompt: string, binary: string | null): string {
   return binary && /\.(cmd|bat)$/i.test(binary) ? prompt.replace(/(?:\r?\n)+/g, ' ') : prompt;
@@ -221,4 +261,21 @@ export function lastAssistantText(messages: readonly unknown[]): string | null {
     if (texts.length > 0) return texts.join('\n');
   }
   return null;
+}
+
+const isUncPath = (p: string): boolean => /^(\\|\/\/)/.test(p);
+
+/** Ids (session ids) of finished Devin reviews whose idle pty still holds the
+ * CLI's per-session lock in `workspacePath` — the paths are already normalised;
+ * local ones compare case-insensitively, WSL UNC ones exactly. */
+export function finishedDevinReviewsIn(records: Iterable<ReviewRecord>, workspacePath: string): string[] {
+  const unc = isUncPath(workspacePath);
+  const same = (p: string): boolean => (unc ? p === workspacePath : p.toLowerCase() === workspacePath.toLowerCase());
+  const ids: string[] = [];
+  for (const r of records) {
+    if (r.agent === 'devin' && r.status !== 'reviewing' && r.ptyId !== null && same(r.workspacePath)) {
+      ids.push(r.sessionId);
+    }
+  }
+  return ids;
 }
