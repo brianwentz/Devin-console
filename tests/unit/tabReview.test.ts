@@ -12,6 +12,7 @@ import {
   reduceReview,
   resolveReviewHostPure,
   reviewDotLabel,
+  reviewRefusalText,
   tabMenuModel,
   verdictSource,
   type ReviewRecord,
@@ -353,5 +354,36 @@ describe('reviewPromptArg', () => {
     expect(arg).toContain('/cb:review https://github.com/o/r/pull/7');
     expect(arg).toContain('AW_REVIEW_VERDICT: approved | changes | discussion');
     expect(reviewPromptArg('a\r\n\r\nb', 'x.bat')).toBe('a b');
+  });
+});
+
+describe('reviewRefusalText', () => {
+  it('names the host for a missing Devin CLI', () => {
+    expect(reviewRefusalText('no-devin', 'Ubuntu')).toBe('Devin CLI not found on Ubuntu');
+    expect(reviewRefusalText('no-devin', null)).toBe('Devin CLI not found on this PC');
+  });
+
+  it('reports a missing review folder', () => {
+    expect(reviewRefusalText('cwd-missing', 'Ubuntu')).toBe('Review folder not found');
+    expect(reviewRefusalText('cwd-missing', null)).toBe('Review folder not found');
+  });
+
+  it('keeps the existing texts', () => {
+    expect(reviewRefusalText('not-pr', null)).toBe('This tab is not a pull request.');
+    expect(reviewRefusalText('running', null)).toBe('A review of this tab is already running.');
+    expect(reviewRefusalText('distro-unavailable', 'Ubuntu')).toBe(
+      'The WSL distro chosen for reviews is not available.',
+    );
+    expect(reviewRefusalText('distro-stopped', 'Ubuntu')).toBe(
+      "The WSL distro Ubuntu is stopped and couldn't be started. Start it and try again.",
+    );
+    expect(reviewRefusalText('distro-stopped', null)).toBe(
+      "The WSL distro chosen for reviews is stopped and couldn't be started. Start it and try again.",
+    );
+    expect(reviewRefusalText('helper-not-ready', 'Ubuntu')).toBe(
+      'The WSL distro chosen for reviews is not ready yet. Try again in a moment.',
+    );
+    expect(reviewRefusalText('no-claude', 'Ubuntu')).toBe('The claude CLI was not found on the review host.');
+    expect(reviewRefusalText('spawn', null)).toBe('The review terminal could not be started.');
   });
 });

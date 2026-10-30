@@ -146,6 +146,39 @@ export function tabMenuModel(
   return items;
 }
 
+export type ReviewRefusalReason =
+  | 'not-pr'
+  | 'running'
+  | 'distro-unavailable'
+  | 'distro-stopped'
+  | 'helper-not-ready'
+  | 'no-claude'
+  | 'no-devin'
+  | 'cwd-missing'
+  | 'spawn';
+
+const REFUSAL_TEXT: Record<ReviewRefusalReason, string> = {
+  'not-pr': 'This tab is not a pull request.',
+  running: 'A review of this tab is already running.',
+  'distro-unavailable': 'The WSL distro chosen for reviews is not available.',
+  'distro-stopped': "The WSL distro chosen for reviews is stopped and couldn't be started. Start it and try again.",
+  'helper-not-ready': 'The WSL distro chosen for reviews is not ready yet. Try again in a moment.',
+  'no-claude': 'The claude CLI was not found on the review host.',
+  'no-devin': 'Devin CLI not found on this PC',
+  'cwd-missing': 'Review folder not found',
+  spawn: 'The review terminal could not be started.',
+};
+
+/** The menu's refusal dialog text. `hostLabel`: the review WSL distro's name,
+ * null for this PC. */
+export function reviewRefusalText(reason: ReviewRefusalReason, hostLabel: string | null): string {
+  if (hostLabel !== null && reason === 'distro-stopped') {
+    return `The WSL distro ${hostLabel} is stopped and couldn't be started. Start it and try again.`;
+  }
+  if (hostLabel !== null && reason === 'no-devin') return `Devin CLI not found on ${hostLabel}`;
+  return REFUSAL_TEXT[reason];
+}
+
 /**
  * `start: true` = the enumeration reports the distro Stopped: a review is a
  * user action, so the controller starts it (an explicit probe / exec boots it)

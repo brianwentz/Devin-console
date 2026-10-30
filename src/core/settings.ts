@@ -310,6 +310,7 @@ export function mergeSettings(current: Settings, patch: unknown): Settings {
     claude,
     openhands,
     hosts,
+    review,
     ...rest
   } = parsed.data;
   const topLevel = Object.fromEntries(
@@ -335,6 +336,7 @@ export function mergeSettings(current: Settings, patch: unknown): Settings {
     sessions: mergeDefined(current.sessions, sessions),
     claude: mergeDefined(current.claude, claude),
     openhands: mergeDefined(current.openhands, openhands),
+    review: mergeDefined(current.review, review),
     hosts: hosts
       ? {
           ...mergeDefined(current.hosts, { ...hosts, overrides: undefined }),

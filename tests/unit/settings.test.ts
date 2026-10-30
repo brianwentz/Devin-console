@@ -90,6 +90,13 @@ describe('mergeSettings', () => {
     expect(again.tabs).toEqual({ keepAliveHours: 6, maxLiveTabs: 20 });
   });
 
+  it('updates only the patched review field', () => {
+    const next = mergeSettings(current, { review: { host: 'wsl:Ubuntu' } });
+    expect(next.review).toEqual({ ...current.review, host: 'wsl:Ubuntu' });
+    expect(next.review.agent).toBe('claude');
+    expect(next.review.cwd).toBeNull();
+  });
+
   it('updates only the patched routing field', () => {
     const next = mergeSettings(current, { routing: { allowExternal: false } });
     expect(next.routing.allowExternal).toBe(false);

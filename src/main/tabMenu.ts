@@ -3,9 +3,14 @@
 // src/main/favoritesMenu.ts: in test mode the menu is described (ids m0…) instead of
 // popped, and tabMenuClick(id) runs the action. URLs are never logged here.
 import { clipboard, dialog, Menu } from 'electron';
-import { tabMenuModel, type TabMenuItem } from '../core/tabReview';
+import {
+  reviewRefusalText,
+  tabMenuModel,
+  type ReviewRefusalReason,
+  type TabMenuItem,
+} from '../core/tabReview';
 import { log } from './log';
-import { reviews, type ReviewStartResult } from './review/controller';
+import { reviews } from './review/controller';
 import { state, testMode } from './state';
 
 export type TabMenuAction = TabMenuItem['action'] | null;
@@ -14,24 +19,14 @@ export interface TabMenuItemDesc {
   label: string;
   enabled: boolean;
 }
-type RefusalReason = Extract<ReviewStartResult, { ok: false }>['reason'];
+type RefusalReason = ReviewRefusalReason;
 
-const REFUSAL_TEXT: Record<RefusalReason, string> = {
-  'not-pr': 'This tab is not a pull request.',
-  running: 'A review of this tab is already running.',
-  'distro-unavailable': 'The WSL distro chosen for reviews is not available.',
-  'distro-stopped': "The WSL distro chosen for reviews is stopped and couldn't be started. Start it and try again.",
-  'helper-not-ready': 'The WSL distro chosen for reviews is not ready yet. Try again in a moment.',
-  'no-claude': 'The claude CLI was not found on the review host.',
-  spawn: 'The review terminal could not be started.',
-};
-
+// The resolved review host's label: the distro name for a wsl: setting on
+// Windows (elsewhere reviews run on this PC), else null.
 function refusalText(reason: RefusalReason): string {
   const host = state.settings?.current.review.host ?? '';
-  if (reason === 'distro-stopped' && host.startsWith('wsl:')) {
-    return `The WSL distro ${host.slice('wsl:'.length)} is stopped and couldn't be started. Start it and try again.`;
-  }
-  return REFUSAL_TEXT[reason];
+  const label = process.platform === 'win32' && host.startsWith('wsl:') ? host.slice('wsl:'.length) : null;
+  return reviewRefusalText(reason, label);
 }
 
 // "Copy address" (tab context menu + test hook). Returns false when the tab is gone.
