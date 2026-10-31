@@ -276,6 +276,17 @@ test('clicking the active tab logs a blank-pane diagnostic before re-attaching',
     expect(typeof detail.sinceAttachMs).toBe('number');
     if (process.platform === 'win32') expect(detail.pixels).toEqual(expect.any(Object));
     else expect(detail.pixels).toBeNull();
+    expect(detail.trigger).toBe('click-active');
+    expect(detail.history).toEqual(expect.any(Object));
+    expect(typeof (detail.history as Record<string, unknown>).sinceLoadMs).toBe('number');
+    // The diag runs before the re-attach, so its history is that of the previous attach:
+    // the switch from tab b (not active then, hidden for a while).
+    expect(detail.history).toMatchObject({ shownSinceLoad: true, wasActive: false });
+    // Windows are invisible in tests: never assert a specific colour, only the format.
+    const pixels = detail.pixels as Record<string, unknown> | null;
+    if (pixels && typeof pixels === 'object' && !('error' in pixels)) {
+      expect(pixels.topColour).toMatch(/^#[0-9a-f]{6}$/);
+    }
     // Numbers and booleans only: no URL, title or page text.
     const line = JSON.stringify(events[0]);
     expect(events[0]!.url).toBeUndefined();
@@ -284,9 +295,159 @@ test('clicking the active tab logs a blank-pane diagnostic before re-attaching',
     // The activation still runs after the snapshot.
     await waitForEventCount(logFile, 'tab-activate', 2);
     await expect.poll(async () => (await state(app)).tabs.activeId).toBe(a);
+
+    // A second click: the previous attach was the click-active re-attach of the already-active tab.
+    await shell.click(`[data-tab-id="${a}"] .tabTitle`);
+    await waitForEventCount(logFile, 'tab-reactivate-diag', 2);
+    const second = (await readEvents(logFile)).filter((entry) => entry.event === 'tab-reactivate-diag')[1]!;
+    const secondDetail = second.detail as Record<string, unknown>;
+    expect(secondDetail.trigger).toBe('click-active');
+    expect(secondDetail.history).toMatchObject({ shownSinceLoad: true, wasActive: true, hiddenMs: 0 });
+    expect(typeof (secondDetail.history as Record<string, unknown>).sinceLoadMs).toBe('number');
   } finally {
     await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
     await app.close().catch(() => undefined);
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   }
+});
+
+type TabEvent = Record<string, unknown> & { detail?: Record<string, unknown>; ts: string };
+
+async function eventsNamed(logFile: string, name: string): Promise<TabEvent[]> {
+  return (await readEvents(logFile)).filter((entry) => entry.event === name) as TabEvent[];
+}
+
+const RELOAD_CASES = [
+  { name: 'test hook', source: 'test' },
+  { name: 'Ctrl+R via sendInputEvent', source: 'ctrl-r' },
+] as const;
+
+async function withApp(
+  prefix: string,
+  body: (app: ElectronApplication, logFile: string) => Promise<void>,
+): Promise<void> {
+  const profile = mkdtempSync(join(tmpdir(), prefix));
+  const logFile = join(profile, 'events.jsonl');
+  const app = await launchApp(profile, logFile, join(profile, 'downloads'), fixtures);
+  try {
+    await expect.poll(async () => app.evaluate(() => Boolean((globalThis as any).__agentworkspace))).toBe(true);
+    await setPaneFraction(app, WIDE_PANE);
+    await body(app, logFile);
+  } finally {
+    await app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined);
+    await app.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  }
+}
+
+for (const reloadCase of RELOAD_CASES) {
+  test(`reloading the active tab (${reloadCase.name}) logs the reload and a diag before the load starts`, async () => {
+    await withApp('agent-workspace-strip-reload-', async (app, logFile) => {
+      await openTab(app, `${fixtures.githubUrl}/page/reload-a`);
+      await waitForTabTitle(app, 'reload-a');
+      // Main-process clock of the next load start on the active tab.
+      await app.evaluate(({ webContents }) => {
+        const g = globalThis as any;
+        const contents = webContents.fromId(g.__agentworkspace.activeTabWebContentsId());
+        g.__loadStartedAt = null;
+        contents!.once('did-start-loading', () => {
+          g.__loadStartedAt = Date.now();
+        });
+      });
+      if (reloadCase.source === 'test') {
+        await app.evaluate(() => (globalThis as any).__agentworkspace.navigate('reload'));
+      } else {
+        // page.keyboard bypasses before-input-event; sendInputEvent takes the native path.
+        await app.evaluate(({ webContents }) => {
+          const g = globalThis as any;
+          const contents = webContents.fromId(g.__agentworkspace.activeTabWebContentsId())!;
+          contents.sendInputEvent({ type: 'keyDown', keyCode: 'R', modifiers: ['control'] });
+          contents.sendInputEvent({ type: 'keyUp', keyCode: 'R', modifiers: ['control'] });
+        });
+      }
+      await expect
+        .poll(async () => app.evaluate(() => (globalThis as any).__loadStartedAt as number | null))
+        .not.toBeNull();
+      const loadStartedAt = (await app.evaluate(() => (globalThis as any).__loadStartedAt)) as number;
+
+      const reloads = await eventsNamed(logFile, 'tab-reload');
+      expect(reloads).toHaveLength(1);
+      expect(reloads[0]!.detail).toMatchObject({ source: reloadCase.source, tab: true });
+      const diags = (await eventsNamed(logFile, 'tab-reactivate-diag')).filter(
+        (entry) => entry.detail?.trigger === 'reload',
+      );
+      expect(diags).toHaveLength(1);
+      expect(Date.parse(reloads[0]!.ts)).toBeLessThanOrEqual(loadStartedAt);
+      expect(Date.parse(diags[0]!.ts)).toBeLessThanOrEqual(loadStartedAt);
+      for (const entry of [reloads[0]!, diags[0]!]) {
+        const line = JSON.stringify(entry);
+        expect(entry.url).toBeUndefined();
+        expect(line).not.toContain('reload-a');
+        expect(line).not.toContain('GitHub fixture');
+      }
+    });
+  });
+}
+
+test('a background tab activated later reports loadedHidden and not shownSinceLoad', async () => {
+  await withApp('agent-workspace-strip-bg-', async (app, logFile) => {
+    const front = await openTab(app, `${fixtures.githubUrl}/page/bg-front`);
+    await waitForTabTitle(app, 'bg-front');
+    const bg = await app.evaluate(
+      (_e, url: string) => (globalThis as any).__agentworkspace.openBackground(url),
+      `${fixtures.githubUrl}/page/bg-loaded`,
+    );
+    expect(typeof bg).toBe('string');
+    expect(bg).not.toBe('');
+    await waitForTabTitle(app, 'bg-loaded');
+    expect((await state(app)).tabs.activeId).toBe(front);
+
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), bg as string);
+    await expect.poll(async () => (await state(app)).tabs.activeId).toBe(bg);
+    const activations = (await eventsNamed(logFile, 'tab-activate')).filter((entry) => entry.detail?.id === bg);
+    expect(activations).toHaveLength(1);
+    expect(activations[0]!.detail!.history).toMatchObject({ loadedHidden: true, shownSinceLoad: false });
+  });
+});
+
+test('re-attaching a hidden tab logs its history; pane hide/show logs tab-pane-shown', async () => {
+  await withApp('agent-workspace-strip-reattach-', async (app, logFile) => {
+    const a = await openTab(app, `${fixtures.githubUrl}/page/re-a`);
+    const b = await openTab(app, `${fixtures.githubUrl}/page/re-b`);
+    await waitForTabTitle(app, 're-a');
+    await waitForTabTitle(app, 're-b');
+    const activate = (id: string) =>
+      app.evaluate((_e, tabId: string) => (globalThis as any).__agentworkspace.activate(tabId), id);
+
+    await activate(a);
+    await activate(b);
+    await activate(a);
+    const activations = (await eventsNamed(logFile, 'tab-activate')).filter((entry) => entry.detail?.id === a);
+    const last = activations[activations.length - 1]!;
+    const history = last.detail!.history as Record<string, unknown>;
+    expect(history.wasActive).toBe(false);
+    expect(history.hiddenMs).toBeGreaterThanOrEqual(0);
+    expect(typeof history.hiddenMs).toBe('number');
+
+    // A surface round trip leaves the pane (and so the tab view) laid out: no re-attach, no pane-shown.
+    const activationsBefore = (await eventsNamed(logFile, 'tab-activate')).length;
+    const setSurface = (value: string) =>
+      app.evaluate((_e, v: string) => (globalThis as any).__agentworkspace.setSurface(v), value);
+    await setSurface('settings');
+    await setSurface('cloud');
+    expect(await eventsNamed(logFile, 'tab-pane-shown')).toHaveLength(0);
+    expect((await eventsNamed(logFile, 'tab-activate')).length).toBe(activationsBefore);
+
+    // Hiding and re-showing the pane keeps the view attached at 0x0: pane-shown, not tab-activate.
+    const setPaneOpen = (value: boolean) =>
+      app.evaluate((_e, v: boolean) => (globalThis as any).__agentworkspace.setPaneOpen(v), value);
+    await setPaneOpen(false);
+    await setPaneOpen(true);
+    await waitForEvent(logFile, 'tab-pane-shown');
+    const shown = (await eventsNamed(logFile, 'tab-pane-shown'))[0]!;
+    expect(shown.detail).toMatchObject({ id: a });
+    expect(typeof shown.detail!.hiddenMs).toBe('number');
+    expect(shown.detail!.hiddenMs as number).toBeGreaterThanOrEqual(0);
+    expect((await eventsNamed(logFile, 'tab-activate')).length).toBe(activationsBefore);
+  });
 });
