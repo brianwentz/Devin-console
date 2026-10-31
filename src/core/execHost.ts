@@ -812,26 +812,78 @@ export function sshProbeSpec(alias: string, hash: string | null, home: string | 
   return sshCommandSpec(alias, ['/bin/sh', '-c', probeLine(hash, home)]);
 }
 
-/** Marker between the node version and the CLI lookups in sshEnvSpec's output. */
+/** Marker before the CLI lookups in a login-probe output (sshEnvSpec, wslEnvCaptureCommand). */
 export const CLI_MARKER = '__DW_CLI__';
+
+// Env capture + node version, the shared head of every login-probe command.
+const ENV_NODE_CAPTURE =
+  `printf "\\0__DW_ENV__\\0"; env -0; printf "\\0${NODE_MARKER}\\0"; ` +
+  'command -v node >/dev/null && node -p process.versions.node || echo NONODE; ';
+
+// `claude`/`devin`/`gh` lookups as `name=<path>` lines after CLI_MARKER.
+// Plain `cmd || cmd` and `;` only, so POSIX shells and fish ≥ 3 parse it alike.
+const CLI_LOOKUPS =
+  `printf "\\0${CLI_MARKER}\\0"; ` +
+  'printf "claude="; command -v claude || echo; ' +
+  'printf "devin="; command -v devin || echo; ' +
+  'printf "gh="; command -v gh || echo';
+
+/**
+ * WSL probe's one interactive-login run: env, node version and the CLI
+ * lookups together. Every `-ilc` spawn runs the user's rc files, and one that
+ * daemonizes (`eval $(ssh-agent -s)`) leaks a process per spawn — plus a
+ * wslhost.exe + conhost.exe that WSL keeps alive for it — so lookups never
+ * get a shell of their own.
+ */
+export function wslEnvCaptureCommand(): string {
+  return ENV_NODE_CAPTURE + CLI_LOOKUPS;
+}
+
+/** The CLI lookups alone — one login shell when the probe captures no env (ready channel / envCaptureDisabled). */
+export function wslCliLookupCommand(): string {
+  return CLI_LOOKUPS;
+}
 
 /**
  * One interactive-login run per ssh probe (each ssh.exe is a full handshake):
  * the env capture, the node version, then `claude`/`devin`/`gh` lookups and
- * `claude --version`. Plain `cmd || cmd` and `;` only, so POSIX shells and
- * fish ≥ 3 parse it alike.
+ * `claude --version`.
  */
 export function sshEnvSpec(alias: string, shell: string): HostSpawnSpec {
   assertAbs(shell, 'shell');
-  const cmd =
-    `printf "\\0__DW_ENV__\\0"; env -0; printf "\\0${NODE_MARKER}\\0"; ` +
-    'command -v node >/dev/null && node -p process.versions.node || echo NONODE; ' +
-    `printf "\\0${CLI_MARKER}\\0"; ` +
-    'printf "claude="; command -v claude || echo; ' +
-    'printf "devin="; command -v devin || echo; ' +
-    'printf "gh="; command -v gh || echo; ' +
-    'printf "version="; claude --version 2>/dev/null || echo';
+  const cmd = `${ENV_NODE_CAPTURE}${CLI_LOOKUPS}; printf "version="; claude --version 2>/dev/null || echo`;
   return sshSpec(alias, ['-T'], `exec ${sshQuote(shell)} -ilc ${sshQuote(cmd)}`);
+}
+
+export interface CliLookups {
+  claude: string | null;
+  devin: string | null;
+  gh: boolean;
+}
+
+function cliSection(text: string): string[] | null {
+  const sep = `\0${CLI_MARKER}\0`;
+  const at = text.lastIndexOf(sep);
+  return at === -1 ? null : text.slice(at + sep.length).split('\n');
+}
+
+function cliField(lines: string[], key: string): string | null {
+  const value = lines.find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1).trim() ?? '';
+  return value || null;
+}
+
+const absPath = (value: string | null): string | null => (value && value.startsWith('/') ? value : null);
+
+/** CLI lookups after CLI_MARKER; only absolute paths count (an alias/function prints a non-path). Null without the marker. */
+export function parseCliLookups(stdout: Uint8Array | string): CliLookups | null {
+  const text = typeof stdout === 'string' ? stdout : new TextDecoder('utf-8').decode(stdout);
+  const lines = cliSection(text);
+  if (lines === null) return null;
+  return {
+    claude: absPath(cliField(lines, 'claude')),
+    devin: absPath(cliField(lines, 'devin')),
+    gh: absPath(cliField(lines, 'gh')) !== null,
+  };
 }
 
 export interface SshEnvProbe {
@@ -851,20 +903,12 @@ export function parseSshEnvProbe(stdout: Uint8Array | string): SshEnvProbe {
   const head = at === -1 ? text : text.slice(0, at);
   const env = parseShellEnv(head, '__DW_ENV__');
   const node = env === null ? null : parseNodeVersion(head, NODE_MARKER);
-  const lines = at === -1 ? [] : text.slice(at + sep.length).split('\n');
-  const field = (key: string): string | null => {
-    const line = lines.find((l) => l.startsWith(`${key}=`));
-    const value = line?.slice(key.length + 1).trim() ?? '';
-    return value || null;
-  };
-  const abs = (value: string | null): string | null => (value && value.startsWith('/') ? value : null);
-  const version = field('version')?.split(/\s+/)[0] ?? null;
+  const cli = parseCliLookups(text) ?? { claude: null, devin: null, gh: false };
+  const version = cliField(cliSection(text) ?? [], 'version')?.split(/\s+/)[0] ?? null;
   return {
     env,
     node,
-    claude: abs(field('claude')),
-    devin: abs(field('devin')),
-    gh: abs(field('gh')) !== null,
+    ...cli,
     version: version && SEMVER_LINE.test(version) ? version : null,
   };
 }

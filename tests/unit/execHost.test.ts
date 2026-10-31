@@ -11,6 +11,9 @@ import {
   isSshPathLike,
   normalizeSshPath,
   parseSshEnvProbe,
+  parseCliLookups,
+  wslCliLookupCommand,
+  wslEnvCaptureCommand,
   sshCommandSpec,
   sshEnvSpec,
   sshProbeSpec,
@@ -774,6 +777,61 @@ describe('ssh host kind — P3 canonical alias, path normalisation, probe specs'
       devin: null,
       gh: false,
       version: null,
+    });
+  });
+});
+
+// Every interactive-login spawn runs the user's rc files; one that starts a
+// daemon (e.g. `eval $(ssh-agent -s)`) leaves it behind per spawn, and WSL
+// keeps a wslhost.exe + conhost.exe alive for each — so the WSL probe folds
+// its CLI lookups into the one env-capture shell instead of one shell per CLI.
+describe('WSL login-shell probe commands', () => {
+  const ENV_OUT = 'motd\n\0__DW_ENV__\0HOME=/home/u\0PATH=/usr/bin\0\0__DW_NODE__\0/usr/bin/node\n22.12.0\n';
+
+  it('wslEnvCaptureCommand captures env, node and every CLI lookup in one command', () => {
+    const cmd = wslEnvCaptureCommand();
+    expect(cmd).toContain('__DW_ENV__');
+    expect(cmd).toContain('__DW_NODE__');
+    expect(cmd).toContain('__DW_CLI__');
+    for (const bin of ['claude', 'devin', 'gh']) expect(cmd).toContain(`command -v ${bin}`);
+    // CLI section comes after the env so parseShellEnv / parseNodeVersion stay unaffected.
+    expect(cmd.indexOf('__DW_CLI__')).toBeGreaterThan(cmd.indexOf('__DW_NODE__'));
+  });
+
+  it('wslCliLookupCommand is the CLI section alone (fallback when the env is not captured)', () => {
+    const cmd = wslCliLookupCommand();
+    expect(cmd).toContain('__DW_CLI__');
+    expect(cmd).not.toContain('__DW_ENV__');
+    for (const bin of ['claude', 'devin', 'gh']) expect(cmd).toContain(`command -v ${bin}`);
+  });
+
+  it('runs under a real POSIX shell and round-trips through the parsers', () => {
+    if (process.platform === 'win32') return; // no /bin/sh on the Windows runner
+    const bin = mkdtempSync(join(tmpdir(), 'aw-cli-'));
+    const claude = join(bin, 'claude');
+    writeFileSync(claude, '#!/bin/sh\n', { mode: 0o755 });
+    const run = spawnSync('/bin/sh', ['-c', wslEnvCaptureCommand()], {
+      env: { PATH: `${bin}:/usr/bin:/bin` },
+      encoding: 'utf8',
+    });
+    expect(parseShellEnv(run.stdout, '__DW_ENV__')?.PATH).toBe(`${bin}:/usr/bin:/bin`);
+    expect(parseCliLookups(run.stdout)).toMatchObject({ claude, devin: null });
+  });
+
+  it('parseCliLookups reads absolute paths only and null without the marker', () => {
+    const out = `${ENV_OUT}\0__DW_CLI__\0claude=/home/u/.local/bin/claude\ndevin=\ngh=/usr/bin/gh\n`;
+    expect(parseCliLookups(out)).toEqual({ claude: '/home/u/.local/bin/claude', devin: null, gh: true });
+    // an alias / function prints a non-path — treated as not found
+    expect(parseCliLookups("\0__DW_CLI__\0claude=alias claude='x'\ndevin=devin\ngh=\n")).toEqual({
+      claude: null,
+      devin: null,
+      gh: false,
+    });
+    expect(parseCliLookups(ENV_OUT)).toBeNull();
+    expect(parseCliLookups(new TextEncoder().encode('\0__DW_CLI__\0gh=/bin/gh\n'))).toEqual({
+      claude: null,
+      devin: null,
+      gh: true,
     });
   });
 });

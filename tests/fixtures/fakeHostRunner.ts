@@ -15,7 +15,9 @@
 //                                 (default 22.12.0; NONODE when
 //                                 FAKE_WSL_NO_NODE=1); with __DW_CLI__ in the
 //                                 command also `claude=`/`devin=`/`gh=` paths
-//                                 and `version=` (the ssh probe);
+//                                 (+ `version=` when asked — the ssh probe);
+//                                 __DW_CLI__ alone → just that section (the
+//                                 WSL probe without an env capture);
 //                                 `command -v <bin>` → canned PATH answers;
 //                                 'exec "$0" "$@"'/'exec $argv' → run the argv
 //   probe line + HELPER_PRESENT   prints the token when the bundle file named in
@@ -294,6 +296,16 @@ export function createRunner(cfg: RunnerConfig) {
       if (mode !== '--stdio') return helperOnce(posargs[0] ?? '', mode, cwd);
       return helperLaunch(posargs[0] ?? '', cwd);
     }
+    // `\0__DW_CLI__\0claude=…\ndevin=…\ngh=…` (+ `version=` only when asked — sshEnvSpec).
+    const cliSection = (): void => {
+      const claude = commandV('claude');
+      process.stdout.write(
+        `\0__DW_CLI__\0claude=${claude ?? ''}\ndevin=${commandV('devin') ?? ''}\ngh=${commandV('gh') ?? ''}\n`,
+      );
+      if (cmd.includes('version=')) {
+        process.stdout.write(`version=${claude ? `${sdkTargetVersion()} (Claude Code)` : ''}\n`);
+      }
+    };
     if (cmd.includes('__DW_ENV__')) {
       const body = Object.entries(cannedEnv())
         .map(([k, v]) => `${k}=${v}`)
@@ -301,13 +313,12 @@ export function createRunner(cfg: RunnerConfig) {
       const node =
         process.env.FAKE_WSL_NO_NODE === '1' ? 'NONODE' : (process.env.FAKE_WSL_NODE_VERSION ?? '22.12.0');
       process.stdout.write(`\0__DW_ENV__\0${body}\0\0__DW_NODE__\0${node}\n`);
-      if (cmd.includes('__DW_CLI__')) {
-        const claude = commandV('claude');
-        process.stdout.write(
-          `\0__DW_CLI__\0claude=${claude ?? ''}\ndevin=${commandV('devin') ?? ''}\ngh=${commandV('gh') ?? ''}\n` +
-            `version=${claude ? `${sdkTargetVersion()} (Claude Code)` : ''}\n`,
-        );
-      }
+      if (cmd.includes('__DW_CLI__')) cliSection();
+      return 0;
+    }
+    // The WSL probe's lookups-only login shell (no env capture this probe).
+    if (cmd.includes('__DW_CLI__')) {
+      cliSection();
       return 0;
     }
     if (cmd.includes('command -v')) {
