@@ -407,8 +407,11 @@ variable that selects it.
 
 ### Notification center (P6)
 - `src/core/notificationModel.ts` (derive/list ops, pure) + `src/main/notifications.ts` (persisted store in `notifications.json`; 'update' entries are
-  runtime-only). IPC: `notifications:list|markRead|markAllRead|remove|clear|open|panel|identity|identityReset`, push `notifications:banner`. While the
+  runtime-only). IPC: `notifications:list|markAllRead|remove|clear|open|panel|identity|identityReset`, push `notifications:banner`. While the
   panel is open main raises the shell view (`setNotificationsPanel`/`raiseShell`); the raise must survive `applyLayout` and surface switches close it.
+- Opening an entry (panel row, banner, `notifications:open`) removes it: `openNotification` calls `store.remove` before dispatching on the captured
+  entry. Persisted kinds leave `notifications.json`; runtime-only kinds just leave memory.
+- Rows have no per-item read control; read state changes only through Mark all read (the PR panel keeps its own checkbox).
 - Taskbar overlay = unread count (`badge` log event); no OS toasts. The badge PNG is drawn on an offscreen canvas in the shell (`src/shell/badge.ts`, spec
   from `src/core/badge.ts` — Slack red `#e01e5a`, 16 px × display scale): main sends `badge:render {count,size}`, the shell replies over
   `badge:rendered {dataUrl}` whose handler returns the desired `{count,size}` so a late-mounting shell converges (nativeImage cannot rasterise SVG).
@@ -441,9 +444,10 @@ variable that selects it.
   logged for settings/manual sources only; focus/resume skips in dev builds are silent): settings 60 s / resume 15 min / focus 1 h; startup/timer/manual
   are never throttled; each run logs `update-check` `{ source }`. In testMode checks are simulated (no network) and `update.enabled` reports true.
 - `update:releaseNotes` (guardedHandle, no payload) returns `{ current, available }` ReleaseNotes — lazy, only fetched when the tab asks.
-  `src/core/releaseNotes.ts` parses GitHub release JSON / electron-updater UpdateInfo; `src/main/releases.ts` caches fetches (`net.fetch`, no cookies;
-  ok 6 h / miss 10 min; `release-notes` log event — version/ok/status/length, never body) and stores the UpdateInfo-derived notes via
-  `setAvailableReleaseNotes`. Repo coordinates are the `RELEASE_REPO` constant mirroring `build.publish` in package.json. Test hooks:
+  `src/core/releaseNotes.ts` parses GitHub release JSON; `src/main/releases.ts` caches fetches (`net.fetch`, no cookies;
+  ok 6 h / miss 10 min; `release-notes` log event — version/ok/status/length, never body). Both cards (current and
+  available version) are fetched from the API through `releaseNotesCache` in parallel; electron-updater's UpdateInfo notes (HTML from the
+  releases feed) are not used, and an API miss shows the card's `missing`/`error` state. Repo coordinates are the `RELEASE_REPO` constant mirroring `build.publish` in package.json. Test hooks:
   `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume`.
 
 ### Settings page

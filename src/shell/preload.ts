@@ -426,7 +426,6 @@ const api = {
   // P6 notification center
   notificationsList: () =>
     ipcRenderer.invoke(IpcChannels.notificationsList) as Promise<AppNotification[]>,
-  notificationsMarkRead: (id: string) => ipcRenderer.send(IpcChannels.notificationsMarkRead, { id }),
   notificationsMarkAllRead: () => ipcRenderer.send(IpcChannels.notificationsMarkAllRead),
   notificationsRemove: (id: string) => ipcRenderer.send(IpcChannels.notificationsRemove, { id }),
   notificationsClear: () => ipcRenderer.send(IpcChannels.notificationsClear),

@@ -121,15 +121,7 @@ export function NotificationPanel() {
                   {entry.sessionTitle} · {relativeTime(entry.createdAt, now)}
                 </div>
               </button>
-              <div className="flex flex-col items-center gap-1 pt-0.5">
-                <input
-                  type="checkbox"
-                  aria-label="Mark as read"
-                  title="Mark as read"
-                  checked={entry.readAt !== null}
-                  disabled={entry.readAt !== null}
-                  onChange={() => window.agentworkspace.notificationsMarkRead(entry.id)}
-                />
+              <div className="pt-0.5">
                 <button
                   type="button"
                   aria-label="Delete"

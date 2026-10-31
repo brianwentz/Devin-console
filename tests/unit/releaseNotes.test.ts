@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseReleaseResponse,
-  releaseNotesFromUpdateInfo,
   releaseTagUrl,
   releasesPageUrl,
   RELEASE_BODY_MAX,
@@ -76,55 +75,5 @@ describe('parseReleaseResponse', () => {
     expect(notes?.body.length).toBe(RELEASE_BODY_MAX + 1);
     expect(notes?.body.endsWith('…')).toBe(true);
     expect(notes?.body.startsWith('x'.repeat(100))).toBe(true);
-  });
-});
-
-describe('releaseNotesFromUpdateInfo', () => {
-  const base = {
-    version: '9.9.9',
-    releaseName: 'Big release',
-    releaseDate: '2025-06-01',
-  };
-
-  it('uses the string form as-is', () => {
-    const notes = releaseNotesFromUpdateInfo(
-      { ...base, releaseNotes: 'notes here' },
-      'acme',
-      'widgets',
-    );
-    expect(notes).toEqual({
-      version: '9.9.9',
-      name: 'Big release',
-      publishedAt: '2025-06-01',
-      body: 'notes here',
-      htmlUrl: 'https://github.com/acme/widgets/releases/tag/v9.9.9',
-    });
-  });
-
-  it('joins the array form', () => {
-    const notes = releaseNotesFromUpdateInfo(
-      {
-        ...base,
-        releaseNotes: [
-          { version: '9.9.9', note: 'first' },
-          { version: '9.9.8', note: null },
-          { version: '9.9.8', note: 'second' },
-        ],
-      },
-      'acme',
-      'widgets',
-    );
-    expect(notes?.body).toBe('first\n\nsecond');
-  });
-
-  it('returns null when there are no notes', () => {
-    for (const info of [
-      { ...base },
-      { ...base, releaseNotes: null },
-      { ...base, releaseNotes: '' },
-      { ...base, releaseNotes: [{ version: '9.9.9', note: null }] },
-    ]) {
-      expect(releaseNotesFromUpdateInfo(info, 'acme', 'widgets')).toBeNull();
-    }
   });
 });

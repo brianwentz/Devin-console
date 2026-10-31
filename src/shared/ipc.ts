@@ -116,7 +116,6 @@ export const IpcChannels = {
   prsPanel: 'prs:panel',
   // P6 notification center
   notificationsList: 'notifications:list',
-  notificationsMarkRead: 'notifications:markRead',
   notificationsMarkAllRead: 'notifications:markAllRead',
   notificationsRemove: 'notifications:remove',
   notificationsClear: 'notifications:clear',
