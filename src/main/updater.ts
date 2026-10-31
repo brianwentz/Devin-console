@@ -7,11 +7,9 @@ import { log } from './log';
 import { notificationStore } from './notifications';
 import {
   RELEASE_REPO,
-  getAvailableReleaseNotes,
   releaseNotesCache,
-  setAvailableReleaseNotes,
 } from './releases';
-import { releaseNotesFromUpdateInfo, releasesPageUrl } from '../core/releaseNotes';
+import { releasesPageUrl } from '../core/releaseNotes';
 import { testMode } from './state';
 import type { ReleaseNotesReply, UpdateState } from '../shared/ipc';
 import { notifyShell } from './window';
@@ -127,10 +125,11 @@ export function availableUpdateVersion(): string | null {
 // Lazy release-notes lookup for the Updates tab — fetches on demand so a
 // settings view that is never opened never touches the network.
 export async function releaseNotesReply(): Promise<ReleaseNotesReply> {
-  const current = await releaseNotesCache.get(app.getVersion());
-  const available = availableVersion
-    ? (getAvailableReleaseNotes() ?? (await releaseNotesCache.get(availableVersion)))
-    : null;
+  const version = availableVersion;
+  const [current, available] = await Promise.all([
+    releaseNotesCache.get(app.getVersion()),
+    version ? releaseNotesCache.get(version) : Promise.resolve(null),
+  ]);
   return { current, available };
 }
 
@@ -233,9 +232,6 @@ export function setupUpdater(): void {
 
   autoUpdater.on('update-available', (info) => {
     log('shell', 'update-available', { detail: { version: info.version } });
-    setAvailableReleaseNotes(
-      releaseNotesFromUpdateInfo(info, RELEASE_REPO.owner, RELEASE_REPO.repo),
-    );
     updateAvailable(info.version);
   });
   autoUpdater.on('update-not-available', (info) =>

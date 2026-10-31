@@ -83,15 +83,3 @@ export class ReleaseNotesCache {
 }
 
 export const releaseNotesCache = new ReleaseNotesCache();
-
-// Notes extracted from electron-updater's UpdateInfo — preferred over the
-// network fetch for the pending update.
-let availableNotes: ReleaseNotes | null = null;
-
-export function setAvailableReleaseNotes(notes: ReleaseNotes | null): void {
-  availableNotes = notes;
-}
-
-export function getAvailableReleaseNotes(): ReleaseNotes | null {
-  return availableNotes;
-}

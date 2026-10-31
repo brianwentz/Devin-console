@@ -441,9 +441,10 @@ variable that selects it.
   logged for settings/manual sources only; focus/resume skips in dev builds are silent): settings 60 s / resume 15 min / focus 1 h; startup/timer/manual
   are never throttled; each run logs `update-check` `{ source }`. In testMode checks are simulated (no network) and `update.enabled` reports true.
 - `update:releaseNotes` (guardedHandle, no payload) returns `{ current, available }` ReleaseNotes — lazy, only fetched when the tab asks.
-  `src/core/releaseNotes.ts` parses GitHub release JSON / electron-updater UpdateInfo; `src/main/releases.ts` caches fetches (`net.fetch`, no cookies;
-  ok 6 h / miss 10 min; `release-notes` log event — version/ok/status/length, never body) and stores the UpdateInfo-derived notes via
-  `setAvailableReleaseNotes`. Repo coordinates are the `RELEASE_REPO` constant mirroring `build.publish` in package.json. Test hooks:
+  `src/core/releaseNotes.ts` parses GitHub release JSON; `src/main/releases.ts` caches fetches (`net.fetch`, no cookies;
+  ok 6 h / miss 10 min; `release-notes` log event — version/ok/status/length, never body). Both cards (current and
+  available version) are fetched from the API through `releaseNotesCache` in parallel; electron-updater's UpdateInfo notes (HTML from the
+  releases feed) are not used, and an API miss shows the card's `missing`/`error` state. Repo coordinates are the `RELEASE_REPO` constant mirroring `build.publish` in package.json. Test hooks:
   `simulateUpdateAvailable` / `simulateUpdateDownloaded` / `simulateUpdateFocus` / `simulateUpdateResume`.
 
 ### Settings page

@@ -531,6 +531,17 @@ test('updates tab renders release notes for current and available versions', asy
         ),
       )
       .toBe('ok');
+    await expect
+      .poll(async () =>
+        shell(app, `Boolean(document.querySelector('#releaseNotesAvailable strong'))`),
+      )
+      .toBe(true);
+    expect(
+      await shell(app, `document.querySelector('#releaseNotesAvailable strong').textContent`),
+    ).toBe('bold');
+    expect(
+      await shell(app, `document.getElementById('releaseNotesAvailable').textContent`),
+    ).not.toContain('**');
     const order = (await shell(
       app,
       `[...document.querySelectorAll('[data-notes-state]')].map((el) => el.id).join(',')`,
