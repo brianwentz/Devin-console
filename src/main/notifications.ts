@@ -7,7 +7,6 @@ import {
   clearNotifications,
   collapseSuperseded,
   markAllRead,
-  markRead,
   MAX_NOTIFICATIONS,
   pruneForeign,
   removeNotification,
@@ -99,13 +98,6 @@ export class NotificationStore {
       detail: { id: entry.id, kind: entry.kind, sessionId: entry.sessionId },
     });
     return entry;
-  }
-
-  markRead(id: string): void {
-    this.list = markRead(this.list, id, Date.now());
-    this.persist();
-    this.changed();
-    this.updateBadge();
   }
 
   markAllRead(): void {

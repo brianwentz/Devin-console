@@ -407,10 +407,11 @@ variable that selects it.
 
 ### Notification center (P6)
 - `src/core/notificationModel.ts` (derive/list ops, pure) + `src/main/notifications.ts` (persisted store in `notifications.json`; 'update' entries are
-  runtime-only). IPC: `notifications:list|markRead|markAllRead|remove|clear|open|panel|identity|identityReset`, push `notifications:banner`. While the
+  runtime-only). IPC: `notifications:list|markAllRead|remove|clear|open|panel|identity|identityReset`, push `notifications:banner`. While the
   panel is open main raises the shell view (`setNotificationsPanel`/`raiseShell`); the raise must survive `applyLayout` and surface switches close it.
 - Opening an entry (panel row, banner, `notifications:open`) removes it: `openNotification` calls `store.remove` before dispatching on the captured
   entry. Persisted kinds leave `notifications.json`; runtime-only kinds just leave memory.
+- Rows have no per-item read control; read state changes only through Mark all read (the PR panel keeps its own checkbox).
 - Taskbar overlay = unread count (`badge` log event); no OS toasts. The badge PNG is drawn on an offscreen canvas in the shell (`src/shell/badge.ts`, spec
   from `src/core/badge.ts` — Slack red `#e01e5a`, 16 px × display scale): main sends `badge:render {count,size}`, the shell replies over
   `badge:rendered {dataUrl}` whose handler returns the desired `{count,size}` so a late-mounting shell converges (nativeImage cannot rasterise SVG).

@@ -813,7 +813,7 @@ test('auto-opens a lazy background tab in the session scope when a session gains
   }
 });
 
-test('notification panel: badge, banner, open/read/delete, update entry, restart persistence', async () => {
+test('notification panel: badge, banner, open/delete, update entry, restart persistence', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agent-workspace-e2e-notifcenter-'));
   const logFile = join(profile, 'events.jsonl');
   const app = await launch(profile, logFile);
@@ -852,10 +852,16 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
       .poll(async () => shell(`document.querySelector('[data-notification-id]')?.hasAttribute('data-unread')`))
       .toBe(true);
 
-    // Checkbox marks read without navigating; badge drops to hidden.
-    await shell(
-      `document.querySelector('[data-notification-id] input[aria-label="Mark as read"]').click()`,
-    );
+    // No per-row read checkbox; Delete stays. Mark all read drops the badge to hidden.
+    expect(
+      await shell(
+        `document.querySelectorAll('#notificationsPanel [data-notification-id] input[type="checkbox"]').length`,
+      ),
+    ).toBe(0);
+    expect(
+      await shell(`Boolean(document.querySelector('[data-notification-id] [aria-label="Delete"]'))`),
+    ).toBe(true);
+    await shell(`document.getElementById('markAllRead').click()`);
     await expect.poll(async () => (await state(app)).notifications.unreadCount).toBe(0);
     await expect
       .poll(async () => shell(`Boolean(document.getElementById('notificationsBadge'))`))
@@ -863,7 +869,7 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
     await expect.poll(async () => shell(`Boolean(document.getElementById('notificationsPanel'))`)).toBe(true); // still open
 
     // Push a blocked + update entries; body click opens the session notification.
-    // The blocked entry supersedes the read waiting one for the same session.
+    // The blocked entry supersedes the waiting one (read via Mark all read) for the same session.
     await h.pushNotification({ kind: 'blocked', sessionId: 'sess-1', sessionTitle: 'Fix login bug', title: 'Fix login bug', body: 'Blocked — needs your input' });
     await h.simulateUpdate('9.9.9');
     await expect.poll(async () => (await h.notifications()).then ? 0 : ((await h.notifications()) as any[]).length).toBe(2);

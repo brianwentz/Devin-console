@@ -565,10 +565,6 @@ function setupExtrasIpc(): void {
   });
   // P6 notification center
   guardedHandle(IpcChannels.notificationsList, () => notificationStore().entries());
-  guardedOn(IpcChannels.notificationsMarkRead, (_e, arg: unknown) => {
-    const parsed = NotificationIdArg.safeParse(arg);
-    if (parsed.success) notificationStore().markRead(parsed.data.id);
-  });
   guardedOn(IpcChannels.notificationsMarkAllRead, () => notificationStore().markAllRead());
   guardedOn(IpcChannels.notificationsRemove, (_e, arg: unknown) => {
     const parsed = NotificationIdArg.safeParse(arg);
