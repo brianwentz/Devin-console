@@ -106,6 +106,7 @@ export function registerTestHooks(): void {
         process.env.AGENT_WORKSPACE_TEST_BEFOREUNLOAD = value;
       },
       getShellWebContents: () => state.shellView?.webContents ?? null,
+      activeTabWebContentsId: () => state.tabManager?.activeWebContents?.id ?? null,
       getWebContentsCount: () => webContents.getAllWebContents().length,
       getWindowBounds: () => state.windowRef?.getBounds() ?? null,
       getContentBounds: () => state.windowRef?.getContentBounds() ?? null,

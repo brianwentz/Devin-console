@@ -422,7 +422,11 @@ export function lowerShell(): void {
   if (active) windowRef.contentView.addChildView(active);
   if (analyticsHostedVisible() && analyticsView)
     windowRef.contentView.addChildView(analyticsView);
-  if (state.paneOpen && !state.paneCollapsed) addAtTop(tabManager?.activeView ?? null);
+  const tabView = tabManager?.activeView ?? null;
+  if (state.paneOpen && !state.paneCollapsed && tabView) {
+    addAtTop(tabView);
+    log('shell', 'tab-reparent', { detail: { id: tabManager?.activeId ?? null } });
+  }
 }
 
 // The tab strip's scope follows the visible surface: the selected session of
