@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureRect, overlaps, pixelStats, processGoneDetail, sameRect, stackInfo, tabHistory } from '../../src/core/tabPaintDiag';
+import { captureRect, overlaps, pixelStats, loadStartReset, processGoneDetail, sameRect, stackInfo, tabHistory } from '../../src/core/tabPaintDiag';
 
 const full = { x: 0, y: 0, width: 1400, height: 900 };
 const devin = { x: 48, y: 36, width: 680, height: 864 };
@@ -177,5 +177,16 @@ describe('processGoneDetail', () => {
     expect(
       processGoneDetail({ type: 'GPU', reason: 'crashed', exitCode: 139, serviceName: 'svc', name: 'GPU Process' }),
     ).toEqual({ type: 'GPU', reason: 'crashed', exitCode: 139 });
+  });
+});
+
+describe('loadStartReset', () => {
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+    [false, false, false],
+  ] as const)('attached=%s paneVisible=%s -> shownSinceLoad=%s', (attached, paneVisible, shown) => {
+    expect(loadStartReset({ now: 5000, attached, paneVisible })).toEqual({ loadedAt: 5000, shownSinceLoad: shown });
   });
 });

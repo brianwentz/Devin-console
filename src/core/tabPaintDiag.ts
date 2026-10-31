@@ -163,6 +163,19 @@ export function tabHistory(i: TabHistoryInput): TabHistory {
   };
 }
 
+export interface LoadStartInput {
+  now: number;
+  // The tab's view is the attached active view.
+  attached: boolean;
+  // The pane has non-empty bounds.
+  paneVisible: boolean;
+}
+
+// Tab load bookkeeping reset at the start of every main-frame load.
+export function loadStartReset(i: LoadStartInput): { loadedAt: number; shownSinceLoad: boolean } {
+  return { loadedAt: i.now, shownSinceLoad: i.attached && i.paneVisible };
+}
+
 // Structural subset of Electron's child-process-gone Details (core stays electron-free).
 export interface ProcessGoneInput {
   type: string;

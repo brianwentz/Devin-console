@@ -23,7 +23,7 @@ import {
   type PersistedTabs,
   type TabState,
 } from '../core/tabModel';
-import { tabHistory, type TabHistory } from '../core/tabPaintDiag';
+import { loadStartReset, tabHistory, type TabHistory } from '../core/tabPaintDiag';
 
 interface ManagedTab extends BrowserTab {
   view: WebContentsView | null;
@@ -547,6 +547,18 @@ export class TabManager {
       this.log('favicon', { id: tabId, favicon: entry.favicon }, contents.getURL());
       this.onChange();
     });
+    // Every main-frame load (first load, reload, in-tab navigation) restarts the
+    // load clock; it counts as shown only if it starts while visible in the pane.
+    contents.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame || details.isSameDocument || entry.view !== view) return;
+      const reset = loadStartReset({
+        now: Date.now(),
+        attached: this.activeViewId === tabId && this.parent.children.includes(view),
+        paneVisible: this.lastBounds !== null,
+      });
+      entry.loadedAt = reset.loadedAt;
+      entry.shownSinceLoad = reset.shownSinceLoad;
+    });
     contents.on('did-start-loading', () => {
       entry.loading = true;
       this.log('did-start-loading', { id: tabId }, contents.getURL());
@@ -663,7 +675,13 @@ export class TabManager {
         }),
       };
       entry.lastActiveAt = now;
-      entry.shownSinceLoad = true;
+      if (this.lastBounds !== null) {
+        entry.shownSinceLoad = true;
+      } else if (this.paneHidden?.id !== tabId) {
+        // Attached into a hidden pane (0x0): not shown yet; the next pane show
+        // logs `tab-pane-shown` for this tab, timed from this attach.
+        this.paneHidden = { id: tabId, at: now };
+      }
     }
   }
 
@@ -718,6 +736,8 @@ export class TabManager {
     this.paneHidden = null;
     if (hidden.id !== activeId) return;
     const hiddenMs = Date.now() - hidden.at;
+    const entry = this.entries.get(hidden.id);
+    if (entry) entry.shownSinceLoad = true;
     this.log('tab-pane-shown', { id: hidden.id, hiddenMs });
     const last = this.lastAttachHistoryValue;
     if (last && last.id === hidden.id) last.history.paneHiddenMs = hiddenMs;

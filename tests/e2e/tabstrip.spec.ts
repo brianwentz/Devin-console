@@ -372,11 +372,12 @@ for (const reloadCase of RELOAD_CASES) {
 
       const reloads = await eventsNamed(logFile, 'tab-reload');
       expect(reloads).toHaveLength(1);
-      expect(reloads[0]!.detail).toMatchObject({ source: reloadCase.source, tab: true });
+      expect(reloads[0]!.detail).toMatchObject({ source: reloadCase.source, tab: true, view: 'tab' });
       const diags = (await eventsNamed(logFile, 'tab-reactivate-diag')).filter(
         (entry) => entry.detail?.trigger === 'reload',
       );
       expect(diags).toHaveLength(1);
+      expect(diags[0]!.detail!.id).toBe(reloads[0]!.detail!.id);
       expect(Date.parse(reloads[0]!.ts)).toBeLessThanOrEqual(loadStartedAt);
       expect(Date.parse(diags[0]!.ts)).toBeLessThanOrEqual(loadStartedAt);
       for (const entry of [reloads[0]!, diags[0]!]) {
@@ -449,5 +450,71 @@ test('re-attaching a hidden tab logs its history; pane hide/show logs tab-pane-s
     expect(typeof shown.detail!.hiddenMs).toBe('number');
     expect(shown.detail!.hiddenMs as number).toBeGreaterThanOrEqual(0);
     expect((await eventsNamed(logFile, 'tab-activate')).length).toBe(activationsBefore);
+  });
+});
+
+test('a tab activated while the pane is hidden logs tab-pane-shown when the pane opens', async () => {
+  await withApp('agent-workspace-strip-hidden-attach-', async (app, logFile) => {
+    const a = await openTab(app, `${fixtures.githubUrl}/page/ha-a`);
+    const b = await openTab(app, `${fixtures.githubUrl}/page/ha-b`);
+    await waitForTabTitle(app, 'ha-a');
+    await waitForTabTitle(app, 'ha-b');
+    const setPaneOpen = (value: boolean) =>
+      app.evaluate((_e, v: boolean) => (globalThis as any).__agentworkspace.setPaneOpen(v), value);
+
+    await setPaneOpen(false);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), a);
+    await expect.poll(async () => (await state(app)).tabs.activeId).toBe(a);
+    const attach = (await eventsNamed(logFile, 'tab-activate')).filter((entry) => entry.detail?.id === a).pop()!;
+    // Attached into the hidden pane, at 0x0.
+    expect(attach.detail!.history).toMatchObject({ wasActive: false });
+    expect(await eventsNamed(logFile, 'tab-pane-shown')).toHaveLength(0);
+
+    await setPaneOpen(true);
+    await waitForEvent(logFile, 'tab-pane-shown');
+    const shown = await eventsNamed(logFile, 'tab-pane-shown');
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.detail).toMatchObject({ id: a });
+    expect(typeof shown[0]!.detail!.hiddenMs).toBe('number');
+
+    // The pane show is what made it shown: a later re-attach reports shownSinceLoad.
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), b);
+    await app.evaluate((_e, id: string) => (globalThis as any).__agentworkspace.activate(id), a);
+    const again = (await eventsNamed(logFile, 'tab-activate')).filter((entry) => entry.detail?.id === a).pop()!;
+    expect(again.detail!.history).toMatchObject({ shownSinceLoad: true, loadedHidden: false });
+  });
+});
+
+test('a hidden tab reloaded in the background reports loadedHidden on its next activation', async () => {
+  await withApp('agent-workspace-strip-bg-reload-', async (app, logFile) => {
+    const front = await openTab(app, `${fixtures.githubUrl}/page/bgr-front`);
+    const back = await openTab(app, `${fixtures.githubUrl}/page/bgr-back`);
+    await waitForTabTitle(app, 'bgr-front');
+    await waitForTabTitle(app, 'bgr-back');
+    expect((await state(app)).tabs.activeId).toBe(back);
+    const activate = (id: string) =>
+      app.evaluate((_e, tabId: string) => (globalThis as any).__agentworkspace.activate(tabId), id);
+
+    // `back` was shown; capture its webContents, then hide it behind `front`.
+    const backContentsId = (await app.evaluate(() =>
+      (globalThis as any).__agentworkspace.activeTabWebContentsId(),
+    )) as number;
+    await activate(front);
+    await expect.poll(async () => (await state(app)).tabs.activeId).toBe(front);
+
+    await app.evaluate(({ webContents }, id: number) => {
+      const g = globalThis as any;
+      g.__backReloaded = false;
+      webContents.fromId(id)!.once('did-stop-loading', () => {
+        g.__backReloaded = true;
+      });
+    }, backContentsId);
+    await app.evaluate(() => (globalThis as any).__agentworkspace.reloadScope());
+    await expect.poll(async () => app.evaluate(() => (globalThis as any).__backReloaded as boolean)).toBe(true);
+
+    await activate(back);
+    await expect.poll(async () => (await state(app)).tabs.activeId).toBe(back);
+    const last = (await eventsNamed(logFile, 'tab-activate')).filter((entry) => entry.detail?.id === back).pop()!;
+    expect(last.detail!.history).toMatchObject({ loadedHidden: true, shownSinceLoad: false, wasActive: false });
   });
 });

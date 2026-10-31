@@ -90,6 +90,7 @@ export async function diagnoseActiveTab(trigger: DiagTrigger): Promise<void> {
     const history = tabManager.lastAttachHistory;
     const sync = {
       trigger,
+      id: tabManager.activeId,
       history: history ? { ...history } : null,
       ...stack,
       width: bounds.width,
@@ -121,7 +122,7 @@ export async function diagnoseActiveTab(trigger: DiagTrigger): Promise<void> {
     });
   } catch (error) {
     log('shell', 'tab-reactivate-diag', {
-      detail: { trigger, error: error instanceof Error ? error.name : 'unknown', ms: Date.now() - started },
+      detail: { trigger, id: tabManager.activeId, error: error instanceof Error ? error.name : 'unknown', ms: Date.now() - started },
     });
   }
 }
