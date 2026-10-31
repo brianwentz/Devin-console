@@ -579,6 +579,7 @@ test.describe('tab review (local host)', () => {
     await expect.poll(async () => (await st(app)).claudeSessionId).toBe(UA);
     await expect.poll(async () => (await st(app)).tabs.activeId).toBe(tabC);
     expect((await st(app)).paneOpen).toBe(true);
+    await expect.poll(async () => (await reviewEntries(app, urlC)).length).toBe(0);
     await shell(app, `window.agentworkspace.notificationsPanel(false)`);
 
     // Devin Local scope.

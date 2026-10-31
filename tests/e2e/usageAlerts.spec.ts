@@ -250,7 +250,7 @@ test('claude session-limit alert opens Analytics on the Claude tab', async () =>
     expect(
       ((await state(app)).settings.analytics as { tab: string }).tab,
     ).toBe('claude');
-    expect((await h.usageEntries())[0]!.readAt).not.toBeNull();
+    await expect.poll(async () => (await h.usageEntries()).length).toBe(0);
   } finally {
     if (previous === undefined) delete process.env.FAKE_USAGE_JSON;
     else process.env.FAKE_USAGE_JSON = previous;

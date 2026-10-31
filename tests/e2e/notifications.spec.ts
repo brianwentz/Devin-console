@@ -212,24 +212,38 @@ test('stores the PAT encrypted, polls with it, notifies in-app on waiting_for_us
     await h.pollNow();
     expect((await readEvents(logFile)).filter((e) => e.event === 'notification-added')).toHaveLength(1);
 
-    // Opening the notification navigates devinView to the session + reads it.
+    // Opening the notification navigates devinView to the session and removes the entry.
+    const notificationsFile = join(profile, 'notifications.json');
+    const persistedIds = () => {
+      try {
+        return existsSync(notificationsFile)
+          ? (JSON.parse(readFileSync(notificationsFile, 'utf8')) as { id: string }[]).map((e) => e.id)
+          : [];
+      } catch {
+        return [];
+      }
+    };
     await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => (await state(app)).surface).toBe('settings');
     const list = (await h.notifications()) as { id: string; sessionId: string | null; readAt: number | null }[];
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ sessionId: 'sess-1', readAt: null });
+    await expect.poll(persistedIds).toContain(list[0]!.id);
     await evaluateInShell(app, `window.agentworkspace.notificationsOpen('${list[0]!.id}')`);
     await expect.poll(async () => (await state(app)).surface).toBe('cloud');
     await expect.poll(() => h.devinUrl()).toBe(`${fixtures.devinUrl}/sessions/sess-1`);
     await expect.poll(async () => (await state(app)).currentSessionId).toBe('sess-1');
     await expect.poll(async () => (await state(app)).notifications.unreadCount).toBe(0);
+    await expect.poll(() => h.notifications()).toEqual([]);
+    await expect.poll(persistedIds).not.toContain(list[0]!.id);
 
-    // Session resumes working; unread count unchanged (read entries stay).
+    // Session resumes working; the removed entry does not come back.
     fixtures.api.setSessions([
       { session_id: 'sess-1', title: 'Fix login bug', status: 'running', status_detail: 'working', updated_at: 12 },
     ]);
     await h.pollNow();
     expect((await state(app)).notifications.unreadCount).toBe(0);
+    expect(await h.notifications()).toEqual([]);
 
     // Secrets at rest: encrypted blob only, no plaintext anywhere on disk or in the log.
     const secretsFile = join(profile, 'secrets.json');
@@ -860,6 +874,11 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
     await shell(`document.querySelector('[data-notification-id="${blocked.id}"] > button').click()`);
     await expect.poll(async () => (await state(app)).notifications.panelOpen).toBe(false);
     await expect.poll(async () => (await state(app)).currentSessionId).toBe('sess-1');
+    // Opening removed the blocked entry; only the update entry is left.
+    await expect
+      .poll(async () => ((await h.notifications()) as { id: string }[]).map((e) => e.id))
+      .not.toContain(blocked.id);
+    expect(((await h.notifications()) as unknown[]).length).toBe(1);
     await expect.poll(async () => (await h.tabInfo?.(blocked.id) ?? null)).toBeDefined();
     // hosted views get input again — shell back at index 0
     const viewsAfter = (await h.childViews()) as { url: string }[];
@@ -877,13 +896,13 @@ test('notification panel: badge, banner, open/read/delete, update entry, restart
     await h.pushNotification({ kind: 'waiting', sessionId: 'sess-2', sessionTitle: 's', title: 'w1', body: 'b' });
     await h.pushNotification({ kind: 'waiting', sessionId: 'sess-3', sessionTitle: 's', title: 'w2', body: 'b2' });
     await evaluateInShell(app, `window.agentworkspace.notificationsPanel(true)`);
-    await expect.poll(async () => shell(`document.querySelectorAll('[data-notification-id]').length`)).toBe(3);
+    await expect.poll(async () => shell(`document.querySelectorAll('[data-notification-id]').length`)).toBe(2); // w1, w2 (blocked was removed on open)
     await shell(`document.getElementById('markAllRead').click()`);
     await expect.poll(async () => (await state(app)).notifications.unreadCount).toBe(0);
     // Trash one entry; clear-all empties the rest.
     const rest = (await h.notifications()) as { id: string }[];
     await shell(`document.querySelector('[data-notification-id="${rest[0]!.id}"] [aria-label="Delete"]').click()`);
-    await expect.poll(async () => ((await h.notifications()) as any[]).length).toBe(2);
+    await expect.poll(async () => ((await h.notifications()) as any[]).length).toBe(1);
     await shell(`document.getElementById('clearAll').click()`);
     await expect.poll(async () => ((await h.notifications()) as any[]).length).toBe(0);
     await expect.poll(async () => shell(`document.getElementById('markAllRead').disabled`)).toBe(true);
@@ -1451,6 +1470,9 @@ test('clicking an auth notification row opens Settings on the Devin tab', async 
     await expect
       .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('settingsPanel-devin'))`))
       .toBe(true);
+    await expect
+      .poll(async () => ((await h.notifications()) as { id: string }[]).some((e) => e.id === id))
+      .toBe(false);
   } finally {
     await quit(app, profile);
   }
@@ -1483,12 +1505,15 @@ test('clicking the banner for an identity notification opens the Devin tab', asy
   const h = hooks(app);
   try {
     await openSettingsTab(app, 'general');
-    await h.pushNotification({ kind: 'identity', title: 'Devin user not identified', body: 'Open Settings' });
+    const id = (await h.pushNotification({ kind: 'identity', title: 'Devin user not identified', body: 'Open Settings' })) as string;
     await expect
       .poll(async () => evaluateInShell(app, `Boolean(document.getElementById('notificationBanner'))`))
       .toBe(true);
     await evaluateInShell(app, `document.getElementById('notificationBanner').click()`);
     await expect.poll(async () => activeSettingsTab(app)).toBe('devin');
+    await expect
+      .poll(async () => ((await h.notifications()) as { id: string }[]).some((e) => e.id === id))
+      .toBe(false);
   } finally {
     await quit(app, profile);
   }
@@ -1508,6 +1533,9 @@ test('opening a non-auth notification leaves the Settings tab alone', async () =
     await expect.poll(async () => (await state(app)).surface).not.toBe('settings');
     await evaluateInShell(app, `window.agentworkspace.setSurface('settings')`);
     await expect.poll(async () => activeSettingsTab(app)).toBe('links');
+    await expect
+      .poll(async () => ((await h.notifications()) as { id: string }[]).some((e) => e.id === id))
+      .toBe(false);
   } finally {
     await quit(app, profile);
   }

@@ -50,6 +50,7 @@ Sessions inside a WSL distro need **Node.js 18 or newer installed in that distro
 - Toggle the **terminal dock** with the **>_** rail button or `` Ctrl+` ``.
 - The **Local** and **Claude** surfaces manage workspaces from the session column — add a folder and start sessions on it (each surface keeps its own list).
 - **Notifications** and the **PR panel** poll the Devin API — create a personal or service-user token and save it under **Settings → Devin**.
+- Clicking a notification, in the notification panel or the banner, opens what it points to and removes it from the list; the trash button removes one without opening it, and **Mark all read** / **Clear all** act on the whole list.
 - **OpenHands** conversations live on their own rail button — see [OpenHands](#openhands) below; its settings are under **Settings → OpenHands**.
 - The **Analytics** rail button shows your Devin ACU usage, Claude plan limits and — on its **OpenHands** tab — your OpenHands credits, today's sandbox quota, the last 30 days' spend and the most expensive conversations; the rail dot warns at 50 %/80 % of a limit (the OpenHands daily quota included, with a notification that opens that tab). Claude token totals include your WSL distros, counted inside each distro.
 

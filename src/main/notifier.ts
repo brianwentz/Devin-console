@@ -574,14 +574,16 @@ export function openSessionPr(sessionId: string, prUrl: string): void {
   focusContents(state.devinView?.webContents, 'session-pr');
 }
 
-// P6: opening a notification marks it read, navigates the devin view to the
-// session (or installs the downloaded update), and a PR notification also
-// focuses the PR tab in that session's pane.
+// P6: opening a notification consumes it (removes the entry, persisted kinds
+// from notifications.json too), then navigates to its target: the devin view's
+// session, the downloaded update's install, Settings / Analytics, a review
+// scope, or the provider runtime; a PR notification also focuses the PR tab in
+// that session's pane.
 export function openNotification(id: string): void {
   const store = notificationStore();
   const entry = store.entries().find((item) => item.id === id);
   if (!entry) return;
-  store.markRead(id);
+  store.remove(id);
   setNotificationsPanel(false);
   log('shell', 'notification-open', {
     detail: { id, kind: entry.kind, sessionId: entry.sessionId },
