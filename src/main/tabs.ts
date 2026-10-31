@@ -224,10 +224,15 @@ export class TabManager {
     }
     this.activeViewId = null;
     this.scope = scope;
-    this.log('tabs-scope-switch', { scope });
 
     const activeId = activeIdFor(this.state, scope);
     if (activeId) this.attachActive(activeId);
+    const attached = this.lastAttachHistoryValue;
+    if (activeId && this.activeViewId === activeId && attached?.id === activeId) {
+      this.log('tabs-scope-switch', { scope, id: activeId, history: { ...attached.history } });
+    } else {
+      this.log('tabs-scope-switch', { scope });
+    }
     this.enforceLiveCap();
     if (this.keepAliveMs === 0) {
       // Discard every live tab belonging to a now-hidden scope (state-safe).

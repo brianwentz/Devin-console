@@ -137,13 +137,9 @@ export function withActiveTabDiag(trigger: DiagTrigger, then: () => void): void 
     then();
   };
   const timer = setTimeout(finish, DIAG_BUDGET_MS);
-  let diag: Promise<void>;
-  try {
-    diag = diagnoseActiveTab(trigger);
-  } catch {
-    diag = Promise.resolve();
-  }
-  void diag.catch(() => undefined).finally(finish);
+  void diagnoseActiveTab(trigger)
+    .catch(() => undefined)
+    .finally(finish);
 }
 
 // The normal activation after a tab click. Only a click on the already-active

@@ -545,14 +545,14 @@ app
 app.on('activate', () => {
   if (!state.windowRef) void createWindow();
 });
-// During shutdown the window destroy() re-enters window-all-closed — let the
-// shutdown tail issue the single quit instead of starting an in-flight quit
-// sequence mid-destroy that can stall (Windows: quit starts, the loop tears
-// down, the process never exits).
 // Renderer/GPU/utility process exits (type/reason/exitCode only).
 app.on('child-process-gone', (_event, details) => {
   log('shell', 'child-process-gone', { detail: processGoneDetail(details) });
 });
+// During shutdown the window destroy() re-enters window-all-closed — let the
+// shutdown tail issue the single quit instead of starting an in-flight quit
+// sequence mid-destroy that can stall (Windows: quit starts, the loop tears
+// down, the process never exits).
 app.on('window-all-closed', () => {
   if (!state.shuttingDown) app.quit();
 });
