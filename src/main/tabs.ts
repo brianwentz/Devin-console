@@ -125,7 +125,7 @@ export class TabManager {
   private sweepTimer: NodeJS.Timeout | null = null;
   // Attached views get the last layout rect so a scope switch never shows a 0x0 view.
   private lastBounds: Electron.Rectangle | null = null;
-  // When the active view was last (re-)attached — read by the blank-pane diagnostics.
+  // When the active view was last (re-)attached â€” read by the blank-pane diagnostics.
   private lastAttachAt = 0;
 
   constructor(options: TabManagerOptions) {
