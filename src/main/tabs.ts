@@ -23,6 +23,7 @@ import {
   type PersistedTabs,
   type TabState,
 } from '../core/tabModel';
+import { tabHistory, type TabHistory } from '../core/tabPaintDiag';
 
 interface ManagedTab extends BrowserTab {
   view: WebContentsView | null;
@@ -36,6 +37,10 @@ interface ManagedTab extends BrowserTab {
   discarded: boolean;
   discarding: boolean;
   lastActiveAt: number;
+  // When the current webContents started loading (0 = no view yet) and whether
+  // it has been attached since — read by the blank-pane diagnostics.
+  loadedAt: number;
+  shownSinceLoad: boolean;
 }
 
 export interface TabOpenOptions {
@@ -127,6 +132,10 @@ export class TabManager {
   private lastBounds: Electron.Rectangle | null = null;
   // When the active view was last (re-)attached — read by the blank-pane diagnostics.
   private lastAttachAt = 0;
+  // History of the most recent attachActive (blank-pane diagnostics).
+  private lastAttachHistoryValue: { id: string; history: TabHistory } | null = null;
+  // Pane hidden (setBounds(null)) while this tab was active; cleared when shown again.
+  private paneHidden: { id: string; at: number } | null = null;
 
   constructor(options: TabManagerOptions) {
     this.parent = options.parent;
@@ -155,6 +164,8 @@ export class TabManager {
         discarded: true, // restored tabs are state-safe placeholders; load on activation
         discarding: false,
         lastActiveAt: Date.now(),
+        loadedAt: 0,
+        shownSinceLoad: false,
       });
     }
     this.scheduleSweep();
@@ -373,6 +384,12 @@ export class TabManager {
     return this.lastAttachAt;
   }
 
+  // Hidden history of the active tab's most recent attach, or null.
+  get lastAttachHistory(): TabHistory | null {
+    const last = this.lastAttachHistoryValue;
+    return last && last.id === this.activeViewId ? last.history : null;
+  }
+
   get currentState(): TabState {
     return this.state;
   }
@@ -450,6 +467,8 @@ export class TabManager {
       discarded: lazy,
       discarding: false,
       lastActiveAt: Date.now(),
+      loadedAt: 0,
+      shownSinceLoad: false,
     };
     this.entries.set(result.id, entry);
     if (lazy) {
@@ -507,6 +526,8 @@ export class TabManager {
       this.log('tab-restore', { id: tabId }, entry.url);
     }
     entry.loading = true;
+    entry.loadedAt = Date.now();
+    entry.shownSinceLoad = false;
     view.setBackgroundColor('#111827');
     const contents = view.webContents;
 
@@ -571,6 +592,13 @@ export class TabManager {
         contents.getURL(),
       );
     });
+    // No url argument: these carry the tab id only.
+    contents.on('unresponsive', () => {
+      this.log('tab-unresponsive', { id: tabId });
+    });
+    contents.on('responsive', () => {
+      this.log('tab-responsive', { id: tabId });
+    });
     contents.on('destroyed', () => {
       this.log('webcontents-destroyed', { id: tabId }, entry.url);
       // Identity check: a later ensureView may already own a fresh view for this tab.
@@ -591,6 +619,15 @@ export class TabManager {
 
   // Swap the attached view to `tabId`'s view (creating/restoring as needed).
   private attachActive(tabId: string): void {
+    // Captured before anything below mutates the entry (ensureView, lastActiveAt).
+    const before = this.entries.get(tabId);
+    const createdOnAttach = !before?.view || before.view.webContents.isDestroyed();
+    const wasActive = this.activeViewId === tabId;
+    const lastActiveAt = before?.lastActiveAt ?? 0;
+    const loadedAt = before?.loadedAt ?? 0;
+    const shownSinceLoad = before?.shownSinceLoad ?? false;
+    // A failed attach must not leave an older attach's history behind for this activation.
+    if (this.lastAttachHistoryValue?.id === tabId) this.lastAttachHistoryValue = null;
     this.ensureView(tabId);
     const view = this.entries.get(tabId)?.view;
     if (!view || view.webContents.isDestroyed()) return;
@@ -606,7 +643,23 @@ export class TabManager {
     this.lastAttachAt = Date.now();
     this.activeViewId = tabId;
     const entry = this.entries.get(tabId);
-    if (entry) entry.lastActiveAt = Date.now();
+    if (entry) {
+      const now = Date.now();
+      this.lastAttachHistoryValue = {
+        id: tabId,
+        history: tabHistory({
+          now,
+          lastActiveAt,
+          // A view created by this attach: its fresh load, never shown yet.
+          loadedAt: createdOnAttach ? entry.loadedAt : loadedAt,
+          shownSinceLoad: createdOnAttach ? false : shownSinceLoad,
+          createdOnAttach,
+          wasActive,
+        }),
+      };
+      entry.lastActiveAt = now;
+      entry.shownSinceLoad = true;
+    }
   }
 
   activate(tabId: string): void {
@@ -623,7 +676,11 @@ export class TabManager {
       this.parent.removeChildView(current);
     }
     this.attachActive(tabId);
-    this.log('tab-activate', { id: tabId });
+    const attached = this.lastAttachHistoryValue;
+    this.log('tab-activate', {
+      id: tabId,
+      history: attached && attached.id === tabId ? { ...attached.history } : null,
+    });
     this.enforceLiveCap();
     this.onChange();
     this.onActiveChanged?.();
@@ -631,6 +688,7 @@ export class TabManager {
 
   setBounds(bounds: Electron.Rectangle | null): void {
     this.lastBounds = bounds;
+    this.notePaneVisibility(bounds !== null);
     const active = this.activeView;
     if (!active) return;
     active.setBounds(
@@ -641,6 +699,23 @@ export class TabManager {
         height: 0,
       },
     );
+  }
+
+  // Pane hide/show while the same tab stays active: logs how long it was hidden.
+  private notePaneVisibility(visible: boolean): void {
+    const activeId = this.activeView ? this.activeViewId : null;
+    if (!visible) {
+      if (!this.paneHidden && activeId) this.paneHidden = { id: activeId, at: Date.now() };
+      return;
+    }
+    const hidden = this.paneHidden;
+    if (!hidden) return;
+    this.paneHidden = null;
+    if (hidden.id !== activeId) return;
+    const hiddenMs = Date.now() - hidden.at;
+    this.log('tab-pane-shown', { id: hidden.id, hiddenMs });
+    const last = this.lastAttachHistoryValue;
+    if (last && last.id === hidden.id) last.history.paneHiddenMs = hiddenMs;
   }
 
   async close(tabId: string): Promise<boolean> {
