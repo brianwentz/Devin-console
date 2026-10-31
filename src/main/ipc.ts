@@ -275,7 +275,7 @@ export function setupIpc(): void {
     const parsed = NavActionArg.safeParse(action);
     if (!parsed.success) return;
     const contents = navigationTarget();
-    if (contents) historyAction(parsed.data, contents);
+    if (contents) historyAction(parsed.data, contents, 'button');
   });
   guardedOn(IpcChannels.surfaceSet, (_event, next: unknown) => {
     const parsed = SurfaceArg.safeParse(next);
