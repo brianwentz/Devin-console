@@ -38,6 +38,11 @@ import {
   HELPER_MISSING_EXIT,
   sanitizeEnv,
   NODE_MARKER,
+  CLI_MARKER,
+  parseCliLookups,
+  wslCliLookupCommand,
+  wslEnvCaptureCommand,
+  type CliLookups,
   statusesChanged,
 } from '../core/execHost';
 import type { HostStatus, Settings } from '../shared/ipc';
@@ -686,6 +691,8 @@ export class HostsRegistry {
         return;
       }
       const shell = overrides.shell ?? entry.status.shell ?? '/bin/bash';
+      // CLI lookups under the login PATH; they ride the env capture's spawn.
+      let cli: CliLookups | null = null;
       // §1.4 shell environment capture (escape hatch: envCaptureDisabled). A
       // ready channel already holds the login env — re-read it, no -ilc spawn.
       if (overrides.envCaptureDisabled === true) {
@@ -699,20 +706,27 @@ export class HostsRegistry {
         entry.channelEnv = null;
         await this.fetchChannelEnv(entry);
       } else {
-        await this.captureEnv(entry, shell);
+        cli = await this.captureEnv(entry, shell);
       }
-      // CLI resolution under the captured PATH; settings overrides win.
-      const resolve = async (bin: string): Promise<string | null> => {
+      // No capture ran (or it failed): ONE login shell for all lookups — never
+      // one per CLI, each -ilc spawn re-runs the user's rc files (a daemon
+      // started there leaks per spawn). Settings overrides win.
+      if (cli === null) {
         try {
-          const out = await this.execWsl(['-d', distro, '-e', shell, '-ilc', `command -v ${bin}`], 'probe', id);
-          return out.trim().split('\n')[0]?.trim() || null;
+          // exit code ignored: an rc file may exit non-zero after printing.
+          const { stdout } = await this.runWsl(['-d', distro, '-e', shell, '-ilc', wslCliLookupCommand()], {
+            kind: 'probe',
+            host: id,
+            requireSuccess: false,
+          });
+          cli = parseCliLookups(stdout);
         } catch {
-          return null;
+          cli = null;
         }
-      };
-      const claudePath = overrides.claudePath ?? (await resolve('claude'));
-      const devinPath = overrides.devinPath ?? (await resolve('devin'));
-      const gh = (await resolve('gh')) !== null;
+      }
+      const claudePath = overrides.claudePath ?? cli?.claude ?? null;
+      const devinPath = overrides.devinPath ?? cli?.devin ?? null;
+      const gh = cli?.gh ?? false;
       let version: string | null = null;
       if (claudePath) {
         try {
@@ -1007,22 +1021,26 @@ export class HostsRegistry {
     return this.entries.get(id as HostId)?.channel?.info() ?? null;
   }
 
-  /** §1.4 capture: `<shell> -ilc 'printf "\0__DW_ENV__\0"; env -0'`. */
-  private async captureEnv(entry: WslEntry, shell: string): Promise<void> {
+  /**
+   * §1.4 capture: `<shell> -ilc 'printf "\0__DW_ENV__\0"; env -0; …'`. The
+   * node version and the claude/devin/gh lookups ride the same spawn
+   * (`wslEnvCaptureCommand`) — returned for the probe; null when the output
+   * carried no CLI section (capture failed).
+   */
+  private async captureEnv(entry: WslEntry, shell: string): Promise<CliLookups | null> {
     const t0 = Date.now();
     const id = entry.host.id;
     try {
-      // The node probe rides this same interactive-login spawn (nvm and
-      // ~/.local/bin are only on a login PATH); node null = unknown when
-      // capture is disabled or fails.
-      const cmd =
-        `printf "\\0${ENV_MARKER}\\0"; env -0; printf "\\0${NODE_MARKER}\\0"; ` +
-        'command -v node >/dev/null && node -p process.versions.node || echo NONODE';
       // exit code ignored: an rc file may exit non-zero after printing.
-      const { stdout } = await this.runWsl(
-        ['-d', entry.host.distro, '-e', shell, '-ilc', cmd],
+      const { stdout: raw } = await this.runWsl(
+        ['-d', entry.host.distro, '-e', shell, '-ilc', wslEnvCaptureCommand()],
         { kind: 'env', host: id, requireSuccess: false },
       );
+      const text = typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
+      const cli = parseCliLookups(text);
+      // env / node parse only the part before the CLI section.
+      const cliAt = text.lastIndexOf(`\0${CLI_MARKER}\0`);
+      const stdout = cliAt === -1 ? text : text.slice(0, cliAt);
       const env = parseShellEnv(stdout, ENV_MARKER);
       if (env === null) {
         entry.env = null;
@@ -1032,7 +1050,7 @@ export class HostsRegistry {
         log('host', 'host-env', {
           detail: { host: id, ok: false, ms: Date.now() - t0, count: 0, reason: 'no-marker' },
         });
-        return;
+        return cli;
       }
       entry.env = env;
       entry.envAt = Date.now();
@@ -1045,6 +1063,7 @@ export class HostsRegistry {
       log('host', 'host-env', {
         detail: { host: id, ok: true, ms: Date.now() - t0, count: Object.keys(env).length },
       });
+      return cli;
     } catch (error) {
       entry.env = null;
       entry.envAt = Date.now();
@@ -1059,6 +1078,7 @@ export class HostsRegistry {
           reason: error instanceof Error ? error.message.slice(0, 80) : 'error',
         },
       });
+      return null;
     }
   }
 

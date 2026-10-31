@@ -997,6 +997,54 @@ test('envCaptureDisabled: the probe completes and an explicit refresh resolves',
   }
 });
 
+// Every `-ilc` spawn runs the user's rc files; an rc file that daemonizes
+// (`eval $(ssh-agent -s)`) leaks one process — and a wslhost.exe + conhost.exe
+// on Windows — per spawn, so the probe keeps interactive logins to a minimum.
+// (The helper launch — `test -f … || exit 86; exec node …` — is the other one.)
+const interactiveLogins = (spawnLog: string): string[][] =>
+  spawnLines(spawnLog).filter((argv) => argv.includes('-ilc') && !argv.some((a) => a.includes('exit 86;')));
+
+test('a probe runs one interactive login shell for env, node and every CLI lookup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const spawnLog = join(root, 'spawn.log');
+  const { app } = await launchWithClaudeFixture(fixtures, {
+    FAKE_WSL_DISTROS: 'Fake:Running:default',
+    FAKE_WSL_ROOT: root,
+    FAKE_WSL_SPAWN_LOG: spawnLog,
+  });
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    const host = (await state(app)).hosts.find((h) => h.id === 'wsl:Fake');
+    expect(host?.claude.path).toBeTruthy();
+    expect(host?.gh).toBe(true);
+    const logins = interactiveLogins(spawnLog);
+    expect(logins).toHaveLength(1);
+    expect(logins[0]!.some((a) => a.includes('__DW_ENV__') && a.includes('__DW_CLI__'))).toBe(true);
+  } finally {
+    await closeApp(app);
+  }
+});
+
+test('envCaptureDisabled: the CLI lookups share one interactive login shell', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
+  const spawnLog = join(root, 'spawn.log');
+  const { app } = await launchSeeded(
+    { hosts: { overrides: { 'wsl:Fake': { envCaptureDisabled: true } } } },
+    { FAKE_WSL_DISTROS: 'Fake:Running:default', FAKE_WSL_ROOT: root, FAKE_WSL_SPAWN_LOG: spawnLog },
+  );
+  try {
+    await expect.poll(() => hostState(app), { timeout: 30_000 }).toBe('ready');
+    const host = (await state(app)).hosts.find((h) => h.id === 'wsl:Fake');
+    expect(host?.claude.path).toBeTruthy();
+    expect(host?.gh).toBe(true);
+    const logins = interactiveLogins(spawnLog);
+    expect(logins).toHaveLength(1);
+    expect(logins[0]!.some((a) => a.includes('__DW_CLI__') && !a.includes('__DW_ENV__'))).toBe(true);
+  } finally {
+    await closeApp(app);
+  }
+});
+
 test('an explicit start on a stopped distro re-reads its state promptly', async () => {
   const uncRoot = mkdtempSync(join(tmpdir(), 'agent-workspace-unc-'));
   const distros = join(uncRoot, 'distros.txt');
