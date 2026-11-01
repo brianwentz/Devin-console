@@ -69,6 +69,7 @@ import { SecretStore } from './secrets';
 import { requestSettingsFlush } from './settingsFlush';
 import { cancelFolderPrompt } from './folderPrompt';
 import { noteWindowFocus } from './tabPaintDiag';
+import { processGoneDetail } from '../core/tabPaintDiag';
 
 // Windows toasts require an AppUserModelID; match electron-builder's appId.
 if (process.platform === 'win32') app.setAppUserModelId('io.github.brianwentz.agent-workspace');
@@ -543,6 +544,10 @@ app
 
 app.on('activate', () => {
   if (!state.windowRef) void createWindow();
+});
+// Renderer/GPU/utility process exits (type/reason/exitCode only).
+app.on('child-process-gone', (_event, details) => {
+  log('shell', 'child-process-gone', { detail: processGoneDetail(details) });
 });
 // During shutdown the window destroy() re-enters window-all-closed — let the
 // shutdown tail issue the single quit instead of starting an in-flight quit

@@ -95,6 +95,8 @@ export interface PixelStats {
   darkFraction: number;
   // Share of pixels equal to the most common sampled colour.
   uniformFraction: number;
+  // The most common sampled colour as #rrggbb (first to reach the top count wins ties); null without samples.
+  topColour: string | null;
 }
 
 export const PANE_BG = { r: 0x11, g: 0x18, b: 0x27 };
@@ -105,6 +107,8 @@ export function pixelStats(bitmap: Uint8Array, step = 7, bg = PANE_BG, tolerance
   let bgCount = 0;
   let darkCount = 0;
   const colours = new Map<number, number>();
+  let top = 0;
+  let topKey = -1;
   for (let i = 0; i + 3 < bitmap.length; i += 4 * step) {
     const b = bitmap[i] ?? 0;
     const g = bitmap[i + 1] ?? 0;
@@ -114,10 +118,73 @@ export function pixelStats(bitmap: Uint8Array, step = 7, bg = PANE_BG, tolerance
       bgCount++;
     if (0.299 * r + 0.587 * g + 0.114 * b < 48) darkCount++;
     const key = (r << 16) | (g << 8) | b;
-    colours.set(key, (colours.get(key) ?? 0) + 1);
+    const count = (colours.get(key) ?? 0) + 1;
+    colours.set(key, count);
+    if (count > top) {
+      top = count;
+      topKey = key;
+    }
   }
-  let top = 0;
-  for (const count of colours.values()) if (count > top) top = count;
   const frac = (n: number) => (samples ? Math.round((n / samples) * 100) / 100 : 0);
-  return { samples, bgFraction: frac(bgCount), darkFraction: frac(darkCount), uniformFraction: frac(top) };
+  return {
+    samples,
+    bgFraction: frac(bgCount),
+    darkFraction: frac(darkCount),
+    uniformFraction: frac(top),
+    topColour: topKey < 0 ? null : `#${topKey.toString(16).padStart(6, '0')}`,
+  };
+}
+
+export interface TabHistoryInput {
+  now: number;
+  lastActiveAt: number;
+  loadedAt: number;
+  shownSinceLoad: boolean;
+  createdOnAttach: boolean;
+  wasActive: boolean;
+}
+
+export interface TabHistory {
+  hiddenMs: number;
+  sinceLoadMs: number;
+  shownSinceLoad: boolean;
+  loadedHidden: boolean;
+  wasActive: boolean;
+  paneHiddenMs?: number;
+}
+
+export function tabHistory(i: TabHistoryInput): TabHistory {
+  return {
+    hiddenMs: i.createdOnAttach || i.wasActive ? 0 : i.now - i.lastActiveAt,
+    sinceLoadMs: i.now - i.loadedAt,
+    shownSinceLoad: i.shownSinceLoad,
+    loadedHidden: !i.createdOnAttach && !i.shownSinceLoad,
+    wasActive: i.wasActive,
+  };
+}
+
+export interface LoadStartInput {
+  now: number;
+  // The tab's view is the attached active view.
+  attached: boolean;
+  // The pane has non-empty bounds.
+  paneVisible: boolean;
+}
+
+// Tab load bookkeeping reset at the start of every main-frame load.
+export function loadStartReset(i: LoadStartInput): { loadedAt: number; shownSinceLoad: boolean } {
+  return { loadedAt: i.now, shownSinceLoad: i.attached && i.paneVisible };
+}
+
+// Structural subset of Electron's child-process-gone Details (core stays electron-free).
+export interface ProcessGoneInput {
+  type: string;
+  reason: string;
+  exitCode: number;
+  serviceName?: string;
+  name?: string;
+}
+
+export function processGoneDetail(d: ProcessGoneInput): { type: string; reason: string; exitCode: number } {
+  return { type: d.type, reason: d.reason, exitCode: d.exitCode };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureRect, overlaps, pixelStats, sameRect, stackInfo } from '../../src/core/tabPaintDiag';
+import { captureRect, overlaps, pixelStats, loadStartReset, processGoneDetail, sameRect, stackInfo, tabHistory } from '../../src/core/tabPaintDiag';
 
 const full = { x: 0, y: 0, width: 1400, height: 900 };
 const devin = { x: 48, y: 36, width: 680, height: 864 };
@@ -93,7 +93,7 @@ function bitmap(pixels: Array<[number, number, number]>): Uint8Array {
 describe('pixelStats', () => {
   it('flags a pane showing only the dark background', () => {
     const stats = pixelStats(bitmap(Array.from({ length: 100 }, () => [0x11, 0x18, 0x27] as [number, number, number])), 1);
-    expect(stats).toEqual({ samples: 100, bgFraction: 1, darkFraction: 1, uniformFraction: 1 });
+    expect(stats).toEqual({ samples: 100, bgFraction: 1, darkFraction: 1, uniformFraction: 1, topColour: '#111827' });
   });
 
   it('tells a dark-themed page from the blank background', () => {
@@ -108,7 +108,7 @@ describe('pixelStats', () => {
       ...Array.from({ length: 75 }, () => [255, 255, 255] as [number, number, number]),
       ...Array.from({ length: 25 }, () => [0x11, 0x18, 0x27] as [number, number, number]),
     ];
-    expect(pixelStats(bitmap(px), 1)).toEqual({ samples: 100, bgFraction: 0.25, darkFraction: 0.25, uniformFraction: 0.75 });
+    expect(pixelStats(bitmap(px), 1)).toEqual({ samples: 100, bgFraction: 0.25, darkFraction: 0.25, uniformFraction: 0.75, topColour: '#ffffff' });
   });
 
   it('samples every step-th pixel', () => {
@@ -117,6 +117,76 @@ describe('pixelStats', () => {
   });
 
   it('handles an empty bitmap', () => {
-    expect(pixelStats(new Uint8Array(0))).toEqual({ samples: 0, bgFraction: 0, darkFraction: 0, uniformFraction: 0 });
+    expect(pixelStats(new Uint8Array(0))).toEqual({ samples: 0, bgFraction: 0, darkFraction: 0, uniformFraction: 0, topColour: null });
+  });
+});
+
+describe('pixelStats topColour', () => {
+  type Px = [number, number, number];
+  const rep = (n: number, c: Px): Px[] => Array.from({ length: n }, () => c);
+
+  it('is the pane background for an all-#111827 bitmap', () => {
+    expect(pixelStats(bitmap(rep(40, [0x11, 0x18, 0x27])), 1).topColour).toBe('#111827');
+  });
+
+  it('is the dominant colour amid other pixels', () => {
+    const px = [...rep(60, [0x0d, 0x11, 0x17]), ...rep(10, [255, 255, 255]), ...rep(5, [1, 2, 3])];
+    expect(pixelStats(bitmap(px), 1).topColour).toBe('#0d1117');
+  });
+
+  it('breaks a tie in favour of the colour that first reached the top count', () => {
+    // a reaches 2 first (index 1); b reaches 2 later (index 3).
+    const a: Px = [0xaa, 0, 0];
+    const b: Px = [0, 0xbb, 0];
+    expect(pixelStats(bitmap([a, a, b, b]), 1).topColour).toBe('#aa0000');
+    // interleaved: b reaches 2 first
+    expect(pixelStats(bitmap([a, b, b, a]), 1).topColour).toBe('#00bb00');
+  });
+});
+
+describe('tabHistory', () => {
+  const now = 10_000_000;
+  it.each([
+    [
+      'created on attach',
+      { now, lastActiveAt: now - 5000, loadedAt: now - 100, shownSinceLoad: false, createdOnAttach: true, wasActive: false },
+      { hiddenMs: 0, sinceLoadMs: 100, shownSinceLoad: false, loadedHidden: false, wasActive: false },
+    ],
+    [
+      'preloaded, never shown',
+      { now, lastActiveAt: now - 30_000, loadedAt: now - 60_000, shownSinceLoad: false, createdOnAttach: false, wasActive: false },
+      { hiddenMs: 30_000, sinceLoadMs: 60_000, shownSinceLoad: false, loadedHidden: true, wasActive: false },
+    ],
+    [
+      'shown, hidden 20 min, re-attach',
+      { now, lastActiveAt: now - 1_200_000, loadedAt: now - 3_600_000, shownSinceLoad: true, createdOnAttach: false, wasActive: false },
+      { hiddenMs: 1_200_000, sinceLoadMs: 3_600_000, shownSinceLoad: true, loadedHidden: false, wasActive: false },
+    ],
+    [
+      'wasActive with stale lastActiveAt',
+      { now, lastActiveAt: now - 9_000_000, loadedAt: now - 9_500_000, shownSinceLoad: true, createdOnAttach: false, wasActive: true },
+      { hiddenMs: 0, sinceLoadMs: 9_500_000, shownSinceLoad: true, loadedHidden: false, wasActive: true },
+    ],
+  ])('%s', (_name, input, expected) => {
+    expect(tabHistory(input)).toEqual(expected);
+  });
+});
+
+describe('processGoneDetail', () => {
+  it('keeps type, reason and exitCode only', () => {
+    expect(
+      processGoneDetail({ type: 'GPU', reason: 'crashed', exitCode: 139, serviceName: 'svc', name: 'GPU Process' }),
+    ).toEqual({ type: 'GPU', reason: 'crashed', exitCode: 139 });
+  });
+});
+
+describe('loadStartReset', () => {
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+    [false, false, false],
+  ] as const)('attached=%s paneVisible=%s -> shownSinceLoad=%s', (attached, paneVisible, shown) => {
+    expect(loadStartReset({ now: 5000, attached, paneVisible })).toEqual({ loadedAt: 5000, shownSinceLoad: shown });
   });
 });
