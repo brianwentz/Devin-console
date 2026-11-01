@@ -5,6 +5,6 @@
   "description": "Lint-only workspace: typescript-eslint needs the TypeScript JS compiler API (typescript <6.1), which the root's typescript@7 (native, tsgo) no longer ships. Keeping both here lets npm nest typescript@5 and the @typescript-eslint packages under tools/lint/node_modules without touching the root toolchain.",
   "devDependencies": {
     "typescript": "5.9.3",
-    "typescript-eslint": "8.71.2"
+    "typescript-eslint": "8.72.0"
   }
 }
